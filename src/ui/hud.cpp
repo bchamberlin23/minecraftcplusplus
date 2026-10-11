@@ -87,14 +87,18 @@ void Ui::State::tickHud() {
     lastHealthInt = hp;
     // Camera.tickFov with AbstractClientPlayer.getFieldOfViewModifier: flying, and the movement speed attribute
     // (the server's value with effects and equipment, x1.3 sprinting) against the ability's walking speed.
+    // The FOV Effects option scales the change (Mth.lerp(effectScale, 1, modifier)), except the spyglass's 0.1; a
+    // camera on another entity keeps 1.
     float target = 1.0f;
     if (p.flying) target *= 1.1f;
     if (p.walkingSpeed != 0.0f) {
         const float speed = float(p.attr.moveSpeed * (p.sprinting ? 1.3 : 1.0)) / p.walkingSpeed;
         target *= (speed + 1.0f) / 2.0f;
     }
-    target *= game->useFovModifier();                         // bow drawing (game/game.h)
+    target *= game->useFovModifier();  // bow drawing (game/game.h)
+    target = 1.0f + (target - 1.0f) * settings.fovEffectScale;
     if (game->scoping() && game->cameraMode == 0) target = 0.1f;  // spyglass
+    if (game->cameraEntity >= 0) target = 1.0f;
     oldFovModifier = fovModifier;
     fovModifier = std::clamp(fovModifier + (target - fovModifier) * 0.5f, 0.1f, 1.5f);
     for (const UiModule& m : uiModules())  // modules.h

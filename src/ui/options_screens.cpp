@@ -669,7 +669,18 @@ void accessibilityBuild(UiState& s) {
     narrator.label = optionLabel(s, "options.narrator", Text(s.res.translate("options.narrator.notavailable")));
     narrator.active = false;
     l.half(std::move(narrator), screenButton(s, "options.controls", Screen::Controls));
-    l.half(onOffButton(s, "options.viewBobbing", &s.settings.bobView));
+    // FOV Effects: UnitDouble mapped through square / sqrt, shown as a percentage or Off.
+    UiState* p = &s;
+    Button fovEffects = sliderButton(std::sqrt(s.settings.fovEffectScale),
+                                     [p] {
+                                         const float v = p->settings.fovEffectScale;
+                                         if (v == 0.0f) return optionLabel(*p, "options.fovEffectScale", Text(p->res.translate("options.off")));
+                                         return translatable("options.percent_value",
+                                                             {Text(p->res.translate("options.fovEffectScale")), Text(std::to_string(int(v * 100.0f)))},
+                                                             p->lang());
+                                     },
+                                     [p](float v) { p->settings.fovEffectScale = v * v; });
+    l.half(onOffButton(s, "options.viewBobbing", &s.settings.bobView), std::move(fovEffects));
     l.footer();
 }
 
