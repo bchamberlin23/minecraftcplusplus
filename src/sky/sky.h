@@ -6,6 +6,7 @@
 // Time and weather come from the save (local mode) or from set_time / game_event packets (connected);
 // --time / --weather / --dimension / --biome force them for screenshots.
 #include "core/common.h"
+#include "render/renderer.h"
 #include "sky/environment.h"
 
 #include <functional>
@@ -65,6 +66,8 @@ public:
     // Level ticks per second (the server's tick rate; 0 while frozen, ClientLevel.tickTime then stands still): the
     // clocks and the cloud / weather animation time advance at it.
     void setTickRate(double ticksPerSecond) { tickRate_ = ticksPerSecond; }
+    // The camera's mob effects (blindness, darkness, night vision, water vision), before update().
+    void setViewEffects(const ViewEffects& fx) { fx_ = fx; }
 
     // Shared with the render passes.
     struct Frame;
@@ -110,6 +113,8 @@ private:
     const WorldBorder* border_ = nullptr;
     float borderPartial_ = 0, borderRange_ = 512;
     double tickRate_ = 20.0;
+    ViewEffects fx_;
+    float cloudFogLimit_ = 1e30f;  // the fog environment's cloud end (FogData.cloudEnd) when it is not the atmosphere
     float darken_ = 0, darkenO_ = 0;  // GameRenderer.bossOverlayWorldDarkening (per tick)
     double tickAccumulator_ = 0;
 

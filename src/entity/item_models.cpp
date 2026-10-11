@@ -2,6 +2,7 @@
 
 #include "entity/entity_assets.h"
 #include "ui/resources.h"
+#include "ui/sprites.h"
 
 #include <algorithm>
 #include <cmath>
@@ -181,6 +182,13 @@ struct ItemModels::Impl {
         int rect = -1;
         ui::Image img;  // first frame
     };
+    struct Animated {  // .mcmeta animations (SpriteContents.AnimatedTexture): the current frame is copied in each tick
+        ui::Sprites::Animation anim;
+        ui::Image strip;
+        int x = 0, y = 0;
+        u64 shown = 0;
+    };
+    std::vector<Animated> animated;
     std::unordered_map<std::string, Tex> textures;
     std::unordered_map<std::string, std::shared_ptr<JModel>> models;
     std::unordered_map<u64, ItemMesh> meshes;
@@ -210,15 +218,28 @@ struct ItemModels::Impl {
         Tex& t = textures[key];
         ui::Image img;
         if (!res->image("assets/minecraft/textures/" + key + ".png", img) || img.w <= 0 || img.h <= 0) return nullptr;
-        const int w = img.w, h = (img.h > img.w && img.h % img.w == 0) ? img.w : img.h;  // animated strips: first frame
-        t.img.w = w, t.img.h = h;
-        t.img.rgba.assign(img.rgba.begin(), img.rgba.begin() + size_t(w) * h * 4);
+        const std::string meta = "assets/minecraft/textures/" + key + ".png.mcmeta";
+        ui::Sprites::Animation anim;
+        const bool animatedTex = res->exists(meta) && ui::Sprites::parseAnimation(img, res->json(meta), anim);
+        int w = img.w, h = (img.h > img.w && img.h % img.w == 0) ? img.w : img.h;  // strips without .mcmeta: first frame
+        if (animatedTex) {
+            w = anim.fw, h = anim.fh;
+            anim.frameAt(img, 0, t.img.rgba);
+            t.img.w = w, t.img.h = h;
+        } else {
+            t.img.w = w, t.img.h = h;
+            t.img.rgba.assign(img.rgba.begin(), img.rgba.begin() + size_t(w) * h * 4);
+        }
         int x, y;
         if (!self->atlas_.alloc(w, h, x, y)) {
             LOG("visuals: item atlas full (%s not loaded)", key.c_str());
             return nullptr;
         }
         self->atlas_.blit(x, y, w, h, t.img.rgba.data(), w * 4);
+        if (animatedTex) {
+            const u64 shown = anim.stateAt(0);
+            animated.push_back({std::move(anim), std::move(img), x, y, shown});
+        }
         bool translucent = false;
         for (size_t i = 3; i < t.img.rgba.size(); i += 4) translucent |= t.img.rgba[i] > 25 && t.img.rgba[i] < 230;
         const float W = float(self->atlas_.width()), H = float(self->atlas_.height());
@@ -723,6 +744,17 @@ bool ItemModels::init(const ui::Resources& res, const EntityAssets& assets, cons
 int ItemModels::texture(const std::string& path) {
     Impl::Tex* t = impl_->tex(path);
     return t ? t->rect : -1;
+}
+
+void ItemModels::tick(u64 tick) {
+    std::vector<u8> pixels;
+    for (Impl::Animated& a : impl_->animated) {
+        const u64 state = a.anim.stateAt(tick);
+        if (state == a.shown) continue;
+        a.shown = state;
+        a.anim.frameAt(a.strip, tick, pixels);
+        atlas_.blit(a.x, a.y, a.anim.fw, a.anim.fh, pixels.data(), a.anim.fw * 4);
+    }
 }
 
 const ItemMesh& ItemModels::mesh(int item, i32 dye, bool flat) {

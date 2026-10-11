@@ -179,6 +179,9 @@ struct Entity {
     int useTicks = 0;     // ticks the current item use has lasted (getTicksUsingItem)
     u8 chargedCrossbow = 0;  // bit 0: the main hand holds a charged crossbow, bit 1: the off hand (local player only)
     int attachedTo = -1;     // firework rocket: the entity it is attached to (DATA_ATTACHED_TO_TARGET), -1 none
+    std::string fireworks;   // firework rocket: its item's "fireworks" component (encoded), "" without one
+    bool silent = false;     // DATA_SILENT
+    bool staysStill = false; // happy ghast: STAYS_STILL (holding still: its rider does not steer)
     int unloadedTicks = 0;  // ticks spent outside the loaded world
     // ItemPickupParticle: a collected item flies to its collector (entity id; the local player when it is not one of
     // the tracked entities) for 3 ticks, then goes. INT_MIN: not being picked up.
@@ -272,7 +275,8 @@ public:
     // blockDistance (< 0: no block targeted) is targeted; it then takes the click (attack / use when pressed).
     bool click(const double eye[3], const double dir[3], bool attack, bool use, double blockDistance, double reach,
                bool sneaking = false);  // sneaking: sent with interactions (sneak + use opens a mount's inventory)
-    // Client effects for the visuals (particles), main thread: entity events (ClientboundEntityEventPacket ids) and
+    // Client effects for the visuals (particles), main thread: entity events (ClientboundEntityEventPacket ids, after
+    // they are applied; 17 makes a firework rocket explode) and
     // animate actions (ClientboundAnimatePacket: 0 wake up, 1 critical hit, 2 magic critical hit).
     std::function<void(const Entity&, int event)> onEntityEvent;
     std::function<void(const Entity&, int action)> onAnimate;
@@ -290,7 +294,8 @@ public:
            tameFlags = -1, collar = -1, anger = -1, standFlags = -1, standPose = -1, hurt = -1, hurtDir = -1,
            damage = -1, mainGene = -1, hiddenGene = -1, mobFlags = -1, noGravity = 5, inGround = -1, rotation = -1,
            painting = -1, nameVisible = 3, livingFlags = -1, attachedTo = -1, sleepPos = -1, ticksFrozen = -1,
-           paddleLeft = -1, paddleRight = -1, chest = -1, color = -1, attachFace = -1, peek = -1;
+           paddleLeft = -1, paddleRight = -1, chest = -1, color = -1, attachFace = -1, peek = -1, fireworksItem = -1,
+           silent = 4, staysStill = -1;
         // Display entities.
         i8 dStart = -1, dDuration = -1, dPosRot = -1, dTranslation = -1, dScale = -1, dLeft = -1, dRight = -1,
            dBillboard = -1, dBrightness = -1, dViewRange = -1, dWidth = -1, dHeight = -1, dBlock = -1, dItem = -1,

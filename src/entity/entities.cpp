@@ -71,7 +71,8 @@ const ui::Items* gItems = nullptr;  // EntityWorld::setItemDecoder
 
 // ItemStack.OPTIONAL_STREAM_CODEC. Component patches are not length-prefixed: without the item registry a stack
 // with added components cannot be skipped and returns false (after reading the item id); the caller stops there.
-bool readItemStack(net::Reader& r, i64& item, int& count, i32* dye = nullptr, bool* foil = nullptr, i32* mapId = nullptr) {
+bool readItemStack(net::Reader& r, i64& item, int& count, i32* dye = nullptr, bool* foil = nullptr, i32* mapId = nullptr,
+                   std::string* fireworks = nullptr) {
     if (dye) *dye = -1;
     if (foil) *foil = false;
     if (mapId) *mapId = -1;
@@ -90,6 +91,11 @@ bool readItemStack(net::Reader& r, i64& item, int& count, i32* dye = nullptr, bo
                     const i32 id = v.varInt();
                     if (v.ok) *mapId = id;
                 }
+        if (fireworks) {
+            static const int type = gItems->componentType("fireworks");
+            for (const auto& c : st.added)
+                if (c.type == type) *fireworks = c.data;
+        }
         return ok && r.ok;
     }
     count = r.varInt();
@@ -223,6 +229,8 @@ EntityWorld::EntityWorld(EntityAssets& assets, World& world, BlockRegistry& regi
             d.dBackground = id({"DATA_BACKGROUND_COLOR_ID"}), d.dOpacity = id({"DATA_TEXT_OPACITY_ID"});
             d.dStyle = id({"DATA_STYLE_FLAGS_ID"});
         }
+        d.fireworksItem = id({"DATA_ID_FIREWORKS_ITEM"});
+        d.staysStill = id({"STAYS_STILL"});
         categories_[i] = categoryFor(t.name);
         // Synched data only carries values that differ from the default: start registry variants at the
         // default each entity defines (VariantUtils.getDefaultOrAny(..., DEFAULT)).
@@ -324,8 +332,10 @@ void readEntityData(net::Reader& r, EventQueue& q, int entityEffect) {
                 int count = 0;
                 i32 dye = -1, mapId = -1;
                 bool foil = false;
-                const bool complete = readItemStack(r, v.i, count, &dye, &foil, &mapId);
+                std::string fireworks;
+                const bool complete = readItemStack(r, v.i, count, &dye, &foil, &mapId, &fireworks);
                 v.f[0] = float(count), v.f[1] = float(dye), v.f[2] = foil ? 1.0f : 0.0f, v.f[3] = float(mapId);
+                if (!fireworks.empty()) q.strings.push_back(std::move(fireworks)), v.str = i32(q.strings.size() - 1);
                 stop = !complete;
                 break;
             }
@@ -889,6 +899,9 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
         const int idx = v.index;
         if (e.display.is && applyDisplayData(e, d, v, q)) continue;
         if (idx == d.flags) e.sharedFlags = u8(v.i);
+        else if (idx == d.silent && v.serializer == 8) e.silent = v.i != 0;
+        else if (idx == d.staysStill && v.serializer == 8) e.staysStill = v.i != 0;
+        else if (idx == d.fireworksItem && v.serializer == 7) e.fireworks = v.str >= 0 ? q.strings[size_t(v.str)] : std::string();
         else if (idx == d.mobFlags) e.mobFlags = u8(v.i);
         else if (idx == d.noGravity) e.noGravity = v.i != 0;
         else if (idx == d.inGround) e.inGround = v.i != 0;
@@ -917,7 +930,9 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
         else if (idx == d.mainHand) e.mainArm = int(v.i);
         else if (idx == d.skinParts) e.skinParts = int(v.i);
         else if (idx == d.villagerData) e.villagerType = int(v.i), e.variant2 = int(v.f[0]);
-        else if (idx == d.tameFlags && (name == "minecraft:wolf" || name == "minecraft:cat")) e.tame = (v.i & 4) != 0;
+        else if (idx == d.tameFlags && (name == "minecraft:wolf" || name == "minecraft:cat" || name == "minecraft:nautilus" ||
+                                        name == "minecraft:zombie_nautilus"))
+            e.tame = (v.i & 4) != 0;  // TamableAnimal.DATA_FLAGS_ID
         else if (idx == d.collar) e.collar = int(v.i);
         else if (idx == d.anger) e.angry = v.i > 0;
         else if (idx == d.standFlags) e.standFlags = int(v.i);

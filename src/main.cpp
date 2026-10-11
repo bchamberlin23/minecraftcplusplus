@@ -972,11 +972,13 @@ int wmain(int argc, wchar_t** argv) {
         sky.setTickRate(game.tickRate.runs ? 1.0 / game.tickRate.tickSeconds() : 0.0);
         sky.setWorldBorder(session ? &game.border : nullptr, game.partialTick(),
                            float(std::min(ui.settings().renderDistance, opt.detail) * 16));
+        sky.setViewEffects(ui.viewEffects());  // blindness, darkness, night vision, water vision (fog, lightmap)
         sky.update(cam, dt);
         ui.endFrame();
         if (haveReports) packs::updatePlayer(renderer, ui, game.selectedSlot(), reports, registry);  // held light
         renderer.upscalers().setMenuActive(ui.menuOpen());  // frame generation pauses in menus
         if (!opt.bench) cam.fovY = ui.fovRadians();
+        if (!opt.bench && !menu) ui.warpCamera(cam);  // nausea / nether portal
         const fs::path* uiShot = ui.screenshotRequest();
         // Animated block textures advance with the game's 20 ticks per second.
         static std::vector<u32> textureRemap;

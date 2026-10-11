@@ -5,9 +5,11 @@
 //    player's vehicle attachment point) and the camera follows the seat as the vehicle is drawn;
 //  - vehicles the player controls (Entity.isLocalInstanceAuthoritative) move on this client and are reported with
 //    ServerboundMoveVehiclePacket: boats (AbstractBoat physics, paddle_boat), saddled horses / donkeys / mules /
-//    camels and pigs / striders steered with their item (LivingEntity.travel with the ridden input and speed); others
-//    (minecarts, llamas, a second boat seat) follow the server;
-//  - jumping vehicles: the jump bar charge (LocalPlayer.aiStep) and START_RIDING_JUMP; the client's horse jump.
+//    camels and pigs / striders steered with their item (LivingEntity.travel with the ridden input and speed), saddled
+//    nautiluses / zombie nautiluses swimming where the rider looks, harnessed happy ghasts flying (unless holding still);
+//    others (minecarts, llamas, a second boat seat) follow the server;
+//  - jumping vehicles: the jump bar charge (LocalPlayer.aiStep) and START_RIDING_JUMP; the client's horse jump, the
+//    camel's and the nautilus's dash and its cooldown (Camel / AbstractNautilus.getJumpCooldown).
 // The player dismounts by sneaking (the server reads the shift key from player_input).
 #include "core/common.h"
 #include "game/player.h"
@@ -55,6 +57,7 @@ private:
     void vehicleTick(ent::Entity& e);      // EntityWorld local control tick
     void boatTick(ent::Entity& e);
     void livingTick(ent::Entity& e);
+    void swimFlyTick(ent::Entity& e);  // happy ghast, nautilus
     void sendVehicleMove(const ent::Entity& e);
     // Moves an axis-aligned box (vehicle) by delta with block collisions and an optional step up; returns the
     // movement done and the collision flags.
@@ -75,6 +78,7 @@ private:
     bool wasJumping_ = false;
     int jumpRidingTicks_ = 0;
     float jumpScale_ = 0, pendingJump_ = 0;
+    int dashCooldown_ = 0;  // camel (55 ticks) / nautilus (40 ticks) after a dash
     // AbstractBoat state.
     enum class Status { InWater, UnderWater, UnderFlowingWater, OnLand, InAir };
     Status status_ = Status::InAir, oldStatus_ = Status::InAir;

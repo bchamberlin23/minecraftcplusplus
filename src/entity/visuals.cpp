@@ -150,6 +150,8 @@ struct Visuals::Impl {
     std::unique_ptr<ui::Items> items;
     ItemModels models;
     std::unique_ptr<fx::Particles> particles;
+    double animClock = 0;  // seconds of updates: the client ticks of the item atlas animations
+    u64 rocketTicks = 0;   // firework rocket trails emitted up to this tick
     ui::Atlas fontAtlas;
     std::unique_ptr<ui::Font> font;
     ui::Canvas canvas;
@@ -361,8 +363,25 @@ bool Visuals::load(const fs::path& jar, const fs::path& minecraftDir, const Game
     if (!m.font->load(*m.res, m.fontAtlas)) m.font.reset();
     m.particles = std::make_unique<fx::Particles>(m.world.world(), m.world.registry(), reports, m.models);
     m.particles->init(*m.res);
-    m.world.onEntityEvent = [&m](const Entity& e, int event) { m.entityEffect(e, event, false); };
+    m.particles->readItem = [items = m.items.get()](net::Reader& r, int& item) {  // ItemParticleOption
+        ui::ItemStack stack;
+        const bool ok = items->readTemplate(r, stack);
+        item = stack.item;
+        return ok;
+    };
+    m.world.onEntityEvent = [&m](const Entity& e, int event) {
+        m.entityEffect(e, event, false);
+        // FireworkRocketEntity.handleEntityEvent: 17 explodes
+        if (event != 17 || !m.particles || !e.info || e.info->name != "minecraft:firework_rocket") return;
+        std::shared_lock lock(m.world.world().mutex());
+        m.particles->fireworks(e.pos, e.vel, e.fireworks, !e.silent);
+    };
     m.world.onAnimate = [&m](const Entity& e, int action) { m.entityEffect(e, action, true); };
+    m.particles->entityPosition = [&world = m.world](int id, double pos[3]) {  // vibrations travelling to an entity
+        const Entity* e = world.entity(id);
+        if (e) std::copy(e->pos, e->pos + 3, pos);
+        return e != nullptr;
+    };
     m.loaded = true;
     LOG("visuals %7.1f ms  item models, font and particles from the game", t.ms());
     return true;
@@ -1361,6 +1380,18 @@ void Visuals::Impl::update() {
         const bool spectator = gameMode && gameMode() == 3;
         er.setLocalPlayer(avatarReady && game->cameraMode != 0 && !spectator ? &avatar : nullptr);
         er.setLocalPlayerShadow(avatarReady && game->cameraMode == 0 && !spectator ? &avatar : nullptr);  // first person
+    }
+    animClock += dt;
+    models.tick(u64(animClock * 20.0));  // animated textures in the item atlas (block items, vibration particles)
+    // FireworkRocketEntity.tick on the client: a spark behind the rocket every tick.
+    for (; particles && rocketTicks < u64(animClock * 20.0); ++rocketTicks) {
+        static std::normal_distribution<double> gauss;
+        static std::mt19937 rng(17);
+        std::shared_lock lock(world.world().mutex());
+        for (const auto& [id, e] : world.entities())
+            if (e.info && e.info->name == "minecraft:firework_rocket")
+                particles->spawn("firework", e.pos[0], e.pos[1], e.pos[2], gauss(rng) * 0.05, -(e.pos[1] - e.prevPos[1]) * 0.5,
+                                 gauss(rng) * 0.05);
     }
     if (particles) {
         const CameraState c = game ? game->viewCamera() : CameraState{};

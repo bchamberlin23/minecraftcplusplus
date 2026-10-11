@@ -23,6 +23,10 @@ struct CameraState {
     // hurt tilt (GameRenderer.bobView / bobHurt) roll and nod the world view; yaw / pitch stay the unbobbed look.
     bool basisSet = false;
     float right[3] = {}, up[3] = {}, fwd[3] = {};
+    // Nausea / nether portal warp (GameRenderer.renderLevel): a linear map of view space (+x right, +y up, +z forward;
+    // row-major 3x3) applied before the projection of the world (not the first-person hand).
+    bool warpSet = false;
+    float warp[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
 };
 
 struct LineVertex {
@@ -145,12 +149,28 @@ struct Lightmap {
     }
 };
 
+// The camera entity's mob effects as the view shows them (FogRenderer's fog environments, the lightmap inputs),
+// gathered by the UI from the local player each frame and applied by the sky system.
+struct ViewEffects {
+    float blindFog = -1;      // BlindnessFogEnvironment: min(1, duration / 20) (1: infinite); < 0 without blindness
+    float blindDarkness = 0;  // BlindnessFogEnvironment.getModifiedDarkness (fog colour darkening)
+    bool darkness = false;    // has the darkness effect
+    float darknessBlend = 0;  // its blend factor (fade in / out)
+    float darknessScale = 0;  // LightmapRenderStateExtractor.calculateDarknessScale (the pulse)
+    float fogBrighten = 0;    // night vision scale when it brightens the fog (not with darkness)
+    float lightmapNightVision = 0;  // night vision scale, or the water vision with conduit power
+    float waterVision = 0;    // LocalPlayer.getWaterVision
+    bool fireResistance = false, spectator = false;
+};
+
 struct SkyLighting {
     float sunAngle = 0, moonAngle = 0;  // the game's celestial angles (radians; 0 = noon / midnight overhead)
     float skyColor[3] = {0.47f, 0.65f, 1.0f};  // vanilla sky colour (sRGB 0..1)
     float rain = 0, thunder = 0;
     bool overworld = true;   // sun / moon / weather exist
     bool cameraInWater = false;
+    bool skyHidden = false;  // a fog environment hides the sky (lava, powder snow, blindness, darkness, boss fog)
+    float dim = 1.0f;        // the darkness effect's pulse as a light scale (1: none)
 };
 
 struct RenderStats {

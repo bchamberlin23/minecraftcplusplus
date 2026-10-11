@@ -144,6 +144,7 @@ struct Ui::State {
         std::string name;  // "poison"
         int amplifier = 0, duration = 0;  // ticks, -1 infinite
         bool ambient = false, showIcon = true;
+        float blend = 0, blendO = 0;  // MobEffectInstance.BlendState factor (this / previous tick)
     };
     std::map<int, Effect> effects;  // by mob_effect network id
     bool hasEffect(const char* name) const {
@@ -151,6 +152,20 @@ struct Ui::State {
             if (e.name == name) return true;
         return false;
     }
+    const Effect* findEffect(const char* name) const {
+        for (const auto& [id, e] : effects)
+            if (e.name == name) return &e;
+        return nullptr;
+    }
+    // View effects (view_effects.cpp): the local player's state behind the fog, lightmap, warp and screen overlays.
+    int waterVisionTime = 0;                          // LocalPlayer.waterVisionTime
+    bool eyeInWater = false;                          // this tick
+    float portalIntensity = 0, portalIntensityO = 0;  // LocalPlayer.portalEffectIntensity (nether portal)
+    float spinTime = 0, spinSpeed = 0;                // LocalPlayer.spinningEffectTime / spinningEffectSpeed
+    bool onFire = false;                              // our shared flag 0 (Entity.isOnFire on the client)
+    bool invertPostEffect = false;                    // ClientboundPostEffectsPacket has minecraft:invert
+    void tickViewEffects(bool eyeInWater);
+    float effectBlend(const char* name) const;        // LivingEntity.getEffectBlendFactor at the partial tick
     bool hardcore = false;
     // The server's policy for this player (login, game_event, entity_event): F3 without positions, the death screen
     // (off: immediate respawn), limited crafting (stored; the recipe book does not use it yet); the level's difficulty.

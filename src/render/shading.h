@@ -54,6 +54,9 @@ struct Renderer::Shading {
         Vec3 fwd, right, up;
         float jitter[2];
         u32 frameIndex;  // ctx.frame slot
+        // Columns of the inverse view rotation (camera-relative position per view-space x, y, z): right, up and fwd
+        // unless a warp (CameraState::warp) skews the view.
+        Vec3 rayRight, rayUp, rayFwd;
     };
     void prepare(const FrameInput& in);  // constants for this frame
     void fillPassContext(PassContext& pc, const FrameInput& in) const;  // jitter, motion, shadow casters

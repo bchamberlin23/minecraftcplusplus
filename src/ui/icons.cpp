@@ -1,5 +1,7 @@
 #include "ui/icons.h"
 
+#include "ui/sprites.h"
+
 #include <cmath>
 #include <functional>
 
@@ -49,8 +51,13 @@ std::string strip(std::string s) {
 
 struct Tex {
     int w = 0, h = 0;
-    std::vector<u8> rgba;
+    std::vector<u8> rgba;  // the frame shown
     bool translucent = false;
+    // Animated (.mcmeta): the strip and the frame (state) in rgba.
+    bool animated = false;
+    Sprites::Animation anim;
+    Image strip;
+    u64 shown = 0;
 };
 
 struct Face {
@@ -92,6 +99,13 @@ struct ItemIcons::Impl {
     std::unordered_map<std::string, Tex> texCache;
     std::unordered_map<std::string, std::shared_ptr<Model>> models;
     std::unordered_map<u64, std::array<float, 4>> icons;  // key -> uv (u0 < 0: nothing)
+    // Icons drawn with animated textures: rasterized again into their atlas slot when a frame changes.
+    struct AnimatedIcon {
+        ItemStack stack;
+        int x, y;
+    };
+    std::vector<AnimatedIcon> animatedIcons;
+    bool touchedAnimated = false;  // set by texture() while an icon is rasterized
     Image grass, foliage;
     int size = 32;
 
@@ -104,11 +118,24 @@ struct ItemIcons::Impl {
     const Tex& texture(const std::string& name) {
         const std::string key = strip(name);
         auto it = texCache.find(key);
-        if (it != texCache.end()) return it->second;
+        if (it != texCache.end()) {
+            touchedAnimated |= it->second.animated;
+            return it->second;
+        }
         Tex& t = texCache[key];
         Image img;
-        if (res->image("assets/minecraft/textures/" + key + ".png", img) && img.w > 0) {
-            t.w = img.w, t.h = std::min(img.h, img.w);  // animated strips: first frame
+        const std::string path = "assets/minecraft/textures/" + key + ".png";
+        if (res->image(path, img) && img.w > 0) {
+            if (res->exists(path + ".mcmeta") && Sprites::parseAnimation(img, res->json(path + ".mcmeta"), t.anim)) {
+                t.animated = touchedAnimated = true;
+                t.w = t.anim.fw, t.h = t.anim.fh;
+                t.anim.frameAt(img, 0, t.rgba);
+                t.shown = t.anim.stateAt(0);
+                for (size_t i = 3; i < img.rgba.size(); i += 4) t.translucent |= img.rgba[i] > 25 && img.rgba[i] < 230;
+                t.strip = std::move(img);
+                return t;
+            }
+            t.w = img.w, t.h = std::min(img.h, img.w);  // strips without .mcmeta: first frame
             t.rgba.assign(img.rgba.begin(), img.rgba.begin() + size_t(t.w) * t.h * 4);
             for (size_t i = 3; i < t.rgba.size(); i += 4) t.translucent |= t.rgba[i] > 25 && t.rgba[i] < 230;
         }
@@ -546,12 +573,11 @@ struct ItemIcons::Impl {
         }
     }
 
-    bool render(const ItemStack& s, float uv[4]) {
+    bool rasterize(const ItemStack& s, Raster& r) {
         const std::string name = strip(items->name(s.item));
         const json& def = jsonAt("assets/minecraft/items/" + name + ".json");
         std::vector<Part> parts;
         if (def.is_object()) evaluate(def.value("model", json()), s, parts, 0);
-        Raster r;
         r.init(size);
         bool any = false;
         for (const Part& p : parts) {
@@ -566,14 +592,28 @@ struct ItemIcons::Impl {
             drawModel(r, *m, p.tints);
             any = true;
         }
-        if (!any) return false;
+        return any;
+    }
+
+    bool render(const ItemStack& s, float uv[4]) {
+        Raster r;
+        touchedAnimated = false;
+        if (!rasterize(s, r)) return false;
         int x, y;
         if (!atlas->alloc(size, size, x, y)) {
             if (!atlas->full()) return false;
             atlas->reset();  // full: start over (icons re-render on demand)
-            icons.clear();
+            icons.clear(), animatedIcons.clear();
             if (!atlas->alloc(size, size, x, y)) return false;
         }
+        if (touchedAnimated) animatedIcons.push_back({s, x, y});
+        write(r, x, y);
+        const float W = float(atlas->width()), H = float(atlas->height());
+        uv[0] = float(x) / W, uv[1] = float(y) / H, uv[2] = float(x + size) / W, uv[3] = float(y + size) / H;
+        return true;
+    }
+
+    void write(const Raster& r, int x, int y) {
         for (int py = 0; py < size; ++py)
             for (int px = 0; px < size; ++px) {
                 const float* c = &r.color[(size_t(py) * size + px) * 4];
@@ -581,9 +621,6 @@ struct ItemIcons::Impl {
                 for (int k = 0; k < 4; ++k) o[k] = u8(std::clamp(c[k], 0.f, 1.f) * 255.f + 0.5f);
             }
         atlas->markDirty(y, y + size);
-        const float W = float(atlas->width()), H = float(atlas->height());
-        uv[0] = float(x) / W, uv[1] = float(y) / H, uv[2] = float(x + size) / W, uv[3] = float(y + size) / H;
-        return true;
     }
 };
 
@@ -602,8 +639,27 @@ void ItemIcons::setScale(int guiScale) {
     const int size = std::clamp(16 * guiScale, 16, 160);
     if (size == size_) return;
     size_ = impl_->size = size;
-    impl_->icons.clear();
+    impl_->icons.clear(), impl_->animatedIcons.clear();
     impl_->atlas->reset();
+}
+
+void ItemIcons::tick(u64 tick) {
+    Impl& m = *impl_;
+    bool changed = false;
+    for (auto& [key, t] : m.texCache) {
+        if (!t.animated) continue;
+        const u64 state = t.anim.stateAt(tick);
+        if (state == t.shown) continue;
+        t.shown = state;
+        t.anim.frameAt(t.strip, tick, t.rgba);
+        changed = true;
+    }
+    if (!changed) return;
+    m.size = size_;
+    for (const Impl::AnimatedIcon& a : m.animatedIcons) {
+        Impl::Raster r;
+        if (m.rasterize(a.stack, r)) m.write(r, a.x, a.y);
+    }
 }
 
 bool ItemIcons::icon(const ItemStack& s, float uv[4]) {

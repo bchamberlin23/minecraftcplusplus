@@ -22,8 +22,11 @@ static void textureOverlay(Canvas& c, const Sprite* tex, float alpha) {
 void drawCameraOverlays(Ui::State& s, Canvas& c) {
     drawVignette(s, c);
     drawSpyglass(s, c);
+    const Game::ItemUse& use = s.game->use;
+    drawEffectOverlays(s, c, use.active && ItemRules::Anim(use.anim) == ItemRules::Anim::Spyglass);  // view_effects.cpp
     // Hud.extractCameraOverlays, after the scope: the powder snow frost by Entity.getPercentFrozen.
     if (s.ticksFrozen > 0) textureOverlay(c, s.sprites.texture("misc/powder_snow_outline"), float(std::min(s.ticksFrozen, 140)) / 140.0f);
+    drawPortalOverlay(s, c);
 }
 
 // Hud.extractVignette, the world border warning: red as the camera nears the border (or a moving border's reach
