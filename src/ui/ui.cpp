@@ -459,7 +459,7 @@ void Ui::registerHandlers(net::Client& client) {
         s->post([s, health, food, sat] {
             s->health = health, s->food = food, s->saturation = sat;
             s->game->player().canSprint = food > 6 || s->creative() || s->spectator();  // hasEnoughFoodToSprint
-            if (health <= 0 && s->screen != Screen::Death) s->openScreen(Screen::Death);
+            if (health <= 0 && s->showDeathScreen && s->screen != Screen::Death) s->openScreen(Screen::Death);
         });
     });
     client.onPlay("player_combat_kill", [s, lang](net::Reader& r) {  // DeathScreen with the cause of death
@@ -467,6 +467,14 @@ void Ui::registerHandlers(net::Client& client) {
         Text message = parseComponent(r.nbt(), lang);
         s->post([s, id, message] {
             if (s->session && id != s->session->entityId()) return;
+            if (!s->showDeathScreen) {  // handlePlayerCombatKill: LocalPlayer.respawn at once (doImmediateRespawn)
+                if (s->client) {
+                    net::Writer w;
+                    w.varInt(0);  // ServerboundClientCommandPacket.Action.PERFORM_RESPAWN
+                    s->client->sendPlay("client_command", w);
+                }
+                return;
+            }
             s->deathMessage = message;
             if (s->screen != Screen::Death) s->openScreen(Screen::Death);
         });
@@ -567,6 +575,39 @@ void Ui::registerHandlers(net::Client& client) {
             if (s->session && entity != s->session->entityId()) return;
             if (armor >= 0) s->armor = armor;
             if (maxHealth >= 0) s->maxHealth = maxHealth;
+        });
+    });
+    // ClientboundLoginPacket: hardcore, then after the level list, max players and distances, the player's flags.
+    client.onPlayPeek("login", [s](net::Reader& r) {
+        r.i32v();
+        const bool hardcore = r.boolean();
+        const i32 levels = r.varInt();
+        for (i32 i = 0; i < levels && r.ok; ++i) r.str();
+        r.varInt(), r.varInt(), r.varInt();  // max players, chunk radius, simulation distance
+        const bool reduced = r.boolean(), deathScreen = r.boolean(), limited = r.boolean();
+        if (r.ok) s->post([s, hardcore, reduced, deathScreen, limited] {
+            s->hardcore = hardcore, s->reducedDebugInfo = reduced, s->showDeathScreen = deathScreen, s->limitedCrafting = limited;
+            s->difficulty = 2, s->difficultyLocked = false;  // ClientLevelData starts at NORMAL; the server sends its own
+        });
+    });
+    client.onPlayPeek("change_difficulty", [s](net::Reader& r) {  // ClientboundChangeDifficultyPacket
+        const int difficulty = r.varInt();
+        const bool locked = r.boolean();
+        if (r.ok) s->post([s, difficulty, locked] { s->difficulty = difficulty, s->difficultyLocked = locked; });
+    });
+    client.onPlayPeek("game_event", [s](net::Reader& r) {  // IMMEDIATE_RESPAWN (11), LIMITED_CRAFTING (12)
+        const int event = r.u8v();
+        const float param = r.f32();
+        if (!r.ok || (event != 11 && event != 12)) return;
+        s->post([s, event, param] {
+            if (event == 11) s->showDeathScreen = param == 0.0f;
+            else s->limitedCrafting = param == 1.0f;
+        });
+    });
+    client.onPlayPeek("entity_event", [s](net::Reader& r) {  // EntityEvent.REDUCED_DEBUG_INFO (22) / FULL_DEBUG_INFO (23)
+        const int id = r.i32v(), event = r.u8v();
+        if (r.ok && (event == 22 || event == 23)) s->post([s, id, event] {
+            if (s->session && id == s->session->entityId()) s->reducedDebugInfo = event == 22;
         });
     });
     client.onPlayPeek("respawn", [s](net::Reader&) {  // a new player entity: no effects, no open screens
