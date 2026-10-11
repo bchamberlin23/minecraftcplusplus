@@ -38,6 +38,11 @@ public:
     // Used by input handling and by the scripted self-test.
     void retarget();
     const RayHit& target() const { return target_; }
+    // LocalPlayer.pick: blocks within blockReach are targeted; an entity is targeted when it is in front of the
+    // first block the ray meets (within max(blockReach, entityReach)) and within entityReach. The ranges are the
+    // block_interaction_range / entity_interaction_range attributes (gameplay layer); creative's until then.
+    double blockReach = 5.0, entityReach = 5.0;
+    double pickBlockDistance() const { return blockDistance_; }  // that first block's distance, < 0: none
     // The level's world border (ClientLevel.getWorldBorder): collisions, block targeting, the wall and the vignette.
     WorldBorder border;
     bool useTarget(bool place);  // break or place at the current target; true if the world changed
@@ -201,6 +206,7 @@ private:
     double tickAccumulator_ = 0, alpha_ = 0;
     double eyeHeight_ = 1.62, eyeHeightOld_ = 1.62;  // Camera.tick: the eye height eases to the pose's
     RayHit target_;
+    double blockDistance_ = -1;
     u16 hotbar_[9] = {};
     int selected_ = 0;
     double repeatTimer_ = 0;

@@ -12,7 +12,6 @@
 
 namespace {
 constexpr double kTick = 0.05;   // 20 ticks per second
-constexpr double kReach = 5.0;   // creative block reach
 constexpr double kPi = 3.14159265358979;
 constexpr int kDir[6][3] = {{0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}};
 constexpr const char* kFaceName[6] = {"down", "up", "north", "south", "west", "east"};
@@ -240,7 +239,9 @@ void Game::retarget() {
     const double origin[3] = {cam.x, cam.y, cam.z};
     const double cp = std::cos(cam.pitch);
     const double dir[3] = {-std::sin(cam.yaw) * cp, -std::sin(cam.pitch), std::cos(cam.yaw) * cp};
-    target_ = physics_.raycast(origin, dir, kReach);
+    target_ = physics_.raycast(origin, dir, std::max(blockReach, entityReach));
+    blockDistance_ = target_.hit ? target_.distance : -1.0;
+    if (target_.hit && !(target_.distance < blockReach)) target_.hit = false;  // filterHitResult: a miss
 }
 
 void Game::simulate(const PlayerInput& input, int ticks) {
@@ -275,7 +276,7 @@ void Game::handleClicks(Window& w, double dt, int rightPresses, int middlePresse
         use.active = false;  // Player.releaseUsingItem: the client stops at once
         if (onReleaseUseItem) onReleaseUseItem();
     }
-    if (doPlace && onEntityClick && onEntityClick(false, ev.right > 0, target_.hit ? target_.distance : -1.0)) {
+    if (doPlace && onEntityClick && onEntityClick(false, ev.right > 0, blockDistance_)) {
         repeatTimer_ = 0.3;
         if (ev.right > 0 && !usingItem_ && onUseItem) {  // e.g. a shield raised facing a mob
             onUseItem(nullptr, true);
@@ -490,7 +491,7 @@ bool Game::startAttack() {
     if (missTime_ > 0 || handsBusy) return false;
     if (gameMode == 3) return true;  // spectators: no attack, no digging
     // An entity in front of the targeted block takes the press (the attack packet carries its own punch).
-    if (onEntityClick && onEntityClick(true, false, target_.hit ? target_.distance : -1.0)) {
+    if (onEntityClick && onEntityClick(true, false, blockDistance_)) {
         attackStrengthTicker = 0;  // MultiPlayerGameMode.attack -> resetAttackStrengthTicker
         if (onSwing) onSwing();
         return false;

@@ -703,7 +703,7 @@ int wmain(int argc, wchar_t** argv) {
         const CameraState c = game.camera();
         const double eye[3] = {c.x, c.y, c.z}, cp = std::cos(c.pitch);
         const double dir[3] = {-std::sin(c.yaw) * cp, -std::sin(c.pitch), std::cos(c.yaw) * cp};
-        return entities.click(eye, dir, attack, use, blockDistance, 5.0, game.player().sneaking);
+        return entities.click(eye, dir, attack, use, blockDistance, game.entityReach, game.player().sneaking);
     };
     // Music, ambience, sky / fog colours and rain or snow follow the surface biome the world stores (from the
     // save, the server or our generator); where it has none, the generator's biome at that position.

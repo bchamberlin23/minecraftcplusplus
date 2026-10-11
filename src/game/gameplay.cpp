@@ -443,6 +443,10 @@ void Gameplay::frame() {
     const ui::ItemStack* feet = ui_ ? ui_->playerSlot(8) : nullptr;
     a.powderSnowWalker = feet && itemName(feet->item) == "minecraft:leather_boots";
     game_->attackSpeed = float(attribute("attack_speed", 4.0));
+    // Player.blockInteractionRange / entityInteractionRange (creative adds 0.5 / 2 as attribute modifiers).
+    const bool creative = game_->gameMode == 1;
+    game_->blockReach = attribute("block_interaction_range", creative ? 5.0 : 4.5);
+    game_->entityReach = attribute("entity_interaction_range", creative ? 5.0 : 3.0);
     {  // Player.tick: another item in the main hand resets the attack strength
         const ui::ItemStack* held = mainHand();
         const int item = held ? held->item : -1;
@@ -454,7 +458,8 @@ void Gameplay::frame() {
         const CameraState c = game_->camera();
         const double eye[3] = {c.x, c.y, c.z}, cp = std::cos(c.pitch);
         const double dir[3] = {-std::sin(c.yaw) * cp, -std::sin(c.pitch), std::cos(c.yaw) * cp};
-        const double limit = game_->target().hit ? std::min(game_->target().distance, 3.0) : 3.0;
+        const double block = game_->pickBlockDistance();
+        const double limit = block >= 0 ? std::min(block, game_->entityReach) : game_->entityReach;
         const ent::PickResult pick = entities_->pick(eye, dir, limit);
         if (pick.id >= 0)
             if (const ent::Entity* e = entities_->entity(pick.id))
