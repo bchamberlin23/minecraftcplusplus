@@ -8,6 +8,7 @@
 #include "entity/entities.h"
 #include "blockentity/block_entities.h"
 #include "entity/entity_render.h"
+#include "entity/visuals.h"
 #include "game/game.h"
 #include "mods/mod_manager.h"
 #include "net/local_server.h"
@@ -64,7 +65,8 @@ struct Options {
     fs::path script;                       // UI test script (timed input, screenshots)
     fs::path modsDir;                      // mods / packs folder (default %APPDATA%\minecraftCplusplus\mods)
     sky::DebugOptions sky;                 // --time / --weather / --dimension / --biome
-    std::string shaders = "off";           // TEMP (shaders agent testing; becomes "high") --shaders off|low|medium|high|ultra (built-in shader pipeline)
+    std::string shaders = "high";          // --shaders off|low|medium|high|ultra (built-in shader pipeline)
+    float renderScale = 1.0f;              // --render-scale: shader pipeline internal resolution (0.33..1, TAA upscaled)
 };
 
 void usage() {
@@ -74,7 +76,7 @@ void usage() {
         "                          [--cam x,y,z[,yaw,pitch]] [--readonly] [--selftest [--save]]\n"
         "                          [--no-gen] [--gen-radius <chunks>] [--far <blocks>] [--lod-quality <x, default 2>] [--gentest <region dir> <seed>]\n"
         "                          [--connect <host[:port]> [--name <player>]] [--play [--lan]] [--seconds <n>] [--mods-dir <dir>]\n"
-        "                          [--shaders off|low|medium|high|ultra (default high)]\n"
+        "                          [--shaders off|low|medium|high|ultra (default high)] [--render-scale <0.33..1>]\n"
         "controls: click to capture the mouse, WASD move, Space jump (double-tap: fly), Shift sneak / descend,\n"
         "          Ctrl sprint, left click break, right click place, middle click pick, 1-9 / wheel hotbar, Esc release");
 }
@@ -188,6 +190,7 @@ int wmain(int argc, wchar_t** argv) {
         else if (sky::isOption(a)) sky::parseOption(opt.sky, a, next());
         else if (ShaderPreset p; a == L"--shaders" && Renderer::parseShaderPreset(fs::path(next()).string(), p))
             opt.shaders = Renderer::shaderPresetName(p);
+        else if (a == L"--render-scale") opt.renderScale = float(_wtof(next().c_str()));
         else {
             usage();
             return 1;
@@ -296,6 +299,12 @@ int wmain(int argc, wchar_t** argv) {
     const bool haveEntities = entityTask.get();
     ent::EntityWorld entities(entityAssets, world, registry, reports);
     ent::EntityRenderer entityRenderer(entities);  // declared before the renderer: destroyed after it
+    // Hands, held / worn items, item frames, paintings, name tags, particles (same lifetime rule).
+    ent::Visuals visuals(entities, entityRenderer);
+    if (haveEntities)
+        visuals.load(jar, mc, reports,
+                     fs::path(local ? local : L".") / "minecraftCplusplus" / "reports" / version / "reports" / "minecraft" /
+                         "components" / "item");
     // Chests, sign text, banners, heads, ...: the game's block entity renderers (same lifetime rule).
     be::BlockEntityRenderer blockEntityRenderer(world, registry, reports, entityAssets, entityRenderer);
     if (haveEntities) blockEntityRenderer.load(jar, mc);
@@ -311,7 +320,7 @@ int wmain(int argc, wchar_t** argv) {
             port = u16(std::atoi(host.c_str() + c + 1)), host.resize(c);
         netClient = std::make_unique<net::Client>(reports, registry);
         audio.attachNet(*netClient);
-        if (haveEntities) entities.attach(*netClient), blockEntityRenderer.attach(*netClient);
+        if (haveEntities) entities.attach(*netClient), blockEntityRenderer.attach(*netClient), visuals.attach(*netClient);
         sky.attach(*netClient, haveReports ? &reports : nullptr);
         ui.registerHandlers(*netClient);
         if (!netClient->start({host, port, opt.name, jar})) return 1;
@@ -344,9 +353,15 @@ int wmain(int argc, wchar_t** argv) {
     if (!renderer.uploadTextures(registry.texturePixels(), registry.textureCount())) return 1;
     renderer.setTextureNames(registry.textureNames());
     if (ShaderPreset p; Renderer::parseShaderPreset(opt.shaders, p)) renderer.setShaderPreset(p);
+    if (opt.renderScale != 1.0f && renderer.shaderPreset() != ShaderPreset::Off) {
+        ShaderSettings s = renderer.shaderSettings();
+        s.renderScale = opt.renderScale;
+        renderer.setShaderSettings(s);
+    }
     if (haveEntities && !renderer.addPass(&entityRenderer, PassStage::World)) LOG("warning: entity rendering unavailable");
     if (haveEntities && !renderer.addPass(&blockEntityRenderer, PassStage::World))
         LOG("warning: block entity rendering unavailable");
+    if (haveEntities && !visuals.addPasses(renderer)) LOG("warning: hands / items / particles unavailable");
     if (sky.init(renderer, world, registry, jar, opt.sky) && !session) sky.loadSave(worldDir);
 
     CameraState cam;
@@ -453,6 +468,7 @@ int wmain(int argc, wchar_t** argv) {
     if (session) ui.attachSession(netClient.get(), session.get());
     if (!opt.script.empty()) ui.loadScript(opt.script);
     audio.attachGame(game, world, registry);
+    if (haveEntities) visuals.setPlayer(game, ui, opt.name, [&] { return session ? session->gameMode() : 1; });
     game.onEntityClick = [&](bool attack, bool use, double blockDistance) {  // attack / use entities first
         if (!session || !haveEntities) return false;
         const CameraState c = game.camera();
@@ -515,7 +531,7 @@ int wmain(int argc, wchar_t** argv) {
             net::Dimension dim;
             netClient = std::make_unique<net::Client>(reports, registry);
             audio.attachNet(*netClient);
-            if (haveEntities) entities.attach(*netClient), blockEntityRenderer.attach(*netClient);
+            if (haveEntities) entities.attach(*netClient), blockEntityRenderer.attach(*netClient), visuals.attach(*netClient);
             sky.attach(*netClient, haveReports ? &reports : nullptr);
             ui.registerHandlers(*netClient);
             if (netClient->start({"127.0.0.1", localServer->port(), opt.name, jar, localServer->stateTable()})) {
@@ -559,7 +575,7 @@ int wmain(int argc, wchar_t** argv) {
             cam = game.camera();
         } else {
             game.frame(window, dt);
-            cam = game.camera();
+            cam = game.viewCamera();  // F5: the detached camera
         }
         audio.update(dt, cam, {session ? session->gameMode() : 1,
                                session ? std::string_view(session->dimension().name) : "minecraft:overworld"});

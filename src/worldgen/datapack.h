@@ -17,6 +17,9 @@ public:
     // "material_condition", "configured_carver", "placed_feature", ... (folders under
     // data/minecraft/worldgen/). id may be "minecraft:x/y" or "x/y". Null if missing.
     const nlohmann::json* worldgen(std::string_view registry, std::string_view id) const;
+    // Every entry of a worldgen registry ("minecraft:x/y"), in the game's registration order (sorted by path, then
+    // namespace, like RegistryDataLoader).
+    std::vector<std::string> ids(std::string_view registry) const;
     // Tags: kind "block", "worldgen/biome", ... ; id without '#'. Expands nested tags.
     std::vector<std::string> tag(std::string_view kind, std::string_view id) const;
     // A tag file's own "values" (nested tags unexpanded, in file order), or null.

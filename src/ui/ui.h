@@ -23,6 +23,8 @@ class Session;
 
 namespace ui {
 
+struct ItemStack;
+
 struct Settings {
     float fov = 70;           // degrees (vertical), 30..110
     int renderDistance = 32;  // full-detail radius in chunks
@@ -70,6 +72,8 @@ public:
     // F3 biome name at a block position (local worlds with the generator); unset: not shown.
     void setBiomeLookup(std::function<std::string(int x, int y, int z)> fn);
     Settings& settings();
+    // Player inventory menu slot (5-8 armour, 36-44 hotbar, 45 offhand); nullptr when empty.
+    const ItemStack* playerSlot(int slot) const;
 
     struct State;  // ui_state.h
 

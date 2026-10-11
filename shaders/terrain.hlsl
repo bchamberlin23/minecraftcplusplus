@@ -131,25 +131,25 @@ GbufVSOut TerrainGbufVS(uint vid : SV_VertexID) {
 }
 
 struct GbufTargets {
-    float4 albedo : SV_Target0;  // sRGB albedo, a = ao (5 bits) << 3 | material (3 bits)
+    float4 albedo : SV_Target0;  // albedo (sRGB values in a UNORM target), a = ao (5 bits) << 3 | material (3 bits)
     float4 normal : SV_Target1;  // octahedral normal, sky / 15, block / 15
 };
 
 GbufTargets gbufWrite(float3 albedo, float3 n, float3 light, uint mat) {
     GbufTargets o;
     uint ao = uint(saturate(light.z) * 31.0 + 0.5);
-    o.albedo = float4(srgbToLinear(albedo), float((ao << 3) | (mat & 7)) / 255.0);  // the target encodes sRGB
+    o.albedo = float4(albedo, float((ao << 3) | (mat & 7)) / 255.0);  // sRGB values (decoded by the deferred pass)
     o.normal = float4(octEncode(n), light.x / 15.0, light.y / 15.0);
     return o;
 }
 
 GbufTargets TerrainGbufPS(GbufVSOut i) {
-    float4 c = gTextures.Sample(gSampler, i.uvl);
+    float4 c = sampleBlock(i.uvl);
     return gbufWrite(c.rgb * i.tint, kNormal[i.info & 7], i.light, i.info >> 4);
 }
 
 GbufTargets TerrainGbufPSCutout(GbufVSOut i) {
-    float4 c = gTextures.Sample(gSampler, i.uvl);
+    float4 c = sampleBlock(i.uvl);
     clip(c.a - 0.5);
     return gbufWrite(c.rgb * i.tint, kNormal[i.info & 7], i.light, i.info >> 4);
 }
@@ -319,7 +319,7 @@ float4 TerrainFwdPS(FwdVSOut i) : SV_Target {
         }
         skyRefl = skyRefl * skyCurve(i.light.x) + gBlockColor.w;
         float3 refl = skyRefl;
-        if ((gFlags.x & kFlagSsr) != 0) {
+        if ((gFlags.x & kFlagSsr) != 0 && fresnel > 0.04) {
             float4 ssr = traceReflection(i.rel, r, pixel);
             refl = lerp(skyRefl, ssr.rgb, ssr.a);
         }
@@ -335,7 +335,7 @@ float4 TerrainFwdPS(FwdVSOut i) : SV_Target {
     }
 
     // Glass, ice, other translucent blocks: lit like the G-buffer surfaces, with a little sky reflection.
-    float4 t = gTextures.Sample(gSampler, i.uvl);
+    float4 t = sampleBlock(i.uvl);
     Surface s;
     s.albedo = srgbToLinear(t.rgb * i.tint);
     s.n = kNormal[face];

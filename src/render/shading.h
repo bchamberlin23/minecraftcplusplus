@@ -16,19 +16,30 @@
 //   tonemap             exposure, bloom, sharpening, AgX -> swap chain; then overlays and the Hud stage
 #include "core/math.h"
 #include "render/renderer.h"
+#include "render/upscaler.h"
 
 struct Renderer::Shading {
     // Texture / UAV slots of the descriptor tables (shading.hlsli kTex* / kRw*).
     enum Tex : u32 { TexDepth, TexAlbedo, TexNormal, TexLdrSky, TexLdrFwd, TexScene, TexSceneCopy, TexLinDepth, TexVol,
-                     TexHist0, TexHist1, TexAo, TexBloom0, TexCount = 24 };
-    enum Rw : u32 { RwScene, RwSceneCopy, RwLinDepth, RwVol, RwHist0, RwHist1, RwAo, RwBloom0, RwCount = 24 };
+                     TexHist0, TexHist1, TexAo, TexBloom0, TexMotion = 18, TexExposure, TexUi, TexCount = 24 };
+    enum Rw : u32 { RwScene, RwSceneCopy, RwLinDepth, RwVol, RwHist0, RwHist1, RwAo, RwBloom0, RwMotion = 13, RwExposure,
+                    RwCount = 24 };
     static constexpr u32 kBloomLevels = 6;
     static constexpr u32 kShadowSegCap = 98304;  // indirect commands per (cascade, layer)
     static constexpr u32 kMaxMarks = 24;
     static constexpr u32 kConstantBytes = 1024;
 
     Renderer& r;
-    explicit Shading(Renderer& renderer) : r(renderer) {}
+    explicit Shading(Renderer& renderer) : r(renderer), taa_(*this) {}
+
+    // The built-in temporal upscaler (TAA at render scale 1).
+    struct Taa : Upscaler {
+        Shading& s;
+        explicit Taa(Shading& shading) : s(shading) {}
+        const char* name() const override { return "TAA"; }
+        void evaluate(const UpscaleInputs& in) override;
+    };
+    Taa taa_;
 
     bool create();                       // device objects that do not depend on the size or settings
     bool createTargets();                // size-dependent targets (also on resize)
@@ -48,6 +59,9 @@ struct Renderer::Shading {
     void record(ID3D12GraphicsCommandList* list, const FrameInput& in, bool haveWorld, D3D12_GPU_VIRTUAL_ADDRESS cb,
                 D3D12_GPU_VIRTUAL_ADDRESS activeVa, u32 activeCount, PassContext& pc, ID3D12Resource* backbuffer,
                 D3D12_CPU_DESCRIPTOR_HANDLE backbufferRtv);
+    void compositeUi(ID3D12GraphicsCommandList* list, D3D12_GPU_VIRTUAL_ADDRESS cb, D3D12_CPU_DESCRIPTOR_HANDLE backbufferRtv);
+    bool uiComposite();
+    u32 renderSize(u32 output) const;
     void readTimings(u32 frame);
     void logTimings() const;
 
@@ -68,7 +82,7 @@ struct Renderer::Shading {
     ComPtr<ID3D12PipelineState> psoGbuf_, psoGbufCutout_, psoGbufModel_, psoShadow_, psoShadowCutout_, psoShadowModel_,
         psoFwd_, psoTonemap_;
     ComPtr<ID3D12PipelineState> psoShadowCull_, psoDeferred_, psoVolumetric_, psoComposite_, psoTaa_, psoBloomDown_,
-        psoBloomUp_, psoExposure_, psoAo_;
+        psoBloomUp_, psoExposure_, psoAo_, psoMotion_, psoDepthUp_, psoUiComposite_;
     ComPtr<ID3D12DescriptorHeap> rtvHeap_, dsvHeap_;
     u32 rtvStride_ = 0, dsvStride_ = 0;
     u32 descBase_ = UINT32_MAX;  // [TexCount SRVs][shadow map][materials][RwCount UAVs][state buffer]
@@ -80,8 +94,9 @@ struct Renderer::Shading {
     const char* markNames_[Renderer::kFrames][kMaxMarks] = {};
     u32 markCount_[Renderer::kFrames] = {};
 
-    // Targets.
-    u32 width_ = 0, height_ = 0;
+    // Targets. width_ / height_ = render (internal) resolution; outW_ / outH_ = swap chain.
+    u32 width_ = 0, height_ = 0, renderW_ = 0, renderH_ = 0, outW_ = 0, outH_ = 0;
+    ComPtr<ID3D12Resource> sceneDepth_, motion_, exposureTex_, ui_;
     ComPtr<ID3D12Resource> albedo_, normal_, ldrSky_, ldrFwd_, scene_, sceneCopy_, linDepth_, vol_, hist_[2], ao_;
     ComPtr<ID3D12Resource> bloom_[kBloomLevels];
     u32 bloomW_[kBloomLevels] = {}, bloomH_[kBloomLevels] = {};
@@ -120,4 +135,6 @@ struct Renderer::Shading {
     std::vector<float> timingSamples_[RenderStats::kMaxPasses];
     const char* timingNames_[RenderStats::kMaxPasses] = {};
     u32 timingFrames_ = 0;
+    double cpuMs_ = 0, passCpuMs_ = 0;  // prepare + record, summed; the extension passes' share of it
+    u64 cpuFrames_ = 0;
 };

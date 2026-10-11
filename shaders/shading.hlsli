@@ -18,13 +18,14 @@ cbuffer Shade : register(b2) {
     float4 gFog;                 // x = density at sea level (1/block), y = 1/scale height, z = sea level, w = volumetric strength
     float4 gWater;               // rgb = absorption (1/block); w = 1 when the camera is underwater
     float4 gWaterScatter;        // rgb = in-scatter colour (HDR); w = water fog density
-    float4 gScreen;              // xy = size, zw = 1 / size
+    float4 gScreen;              // render (internal) resolution: xy = size, zw = 1 / size
     float4 gJitter;              // xy = jitter (NDC); zw = camera world x, z modulo 2048
     float4 gTime;                // x = seconds (wrapped), y = rain, z = thunder, w = camera world y
     float4 gSkyZenith;           // linear sky colour (HDR)
     float4 gSkyHorizon;          // linear fog colour (HDR); w = vanilla fog start
     float4 gShadeMisc;                // x = exposure compensation, y = bloom strength, z = emissive strength, w = vanilla fog end
     float4 gMoonDir;             // towards the moon; w = night factor (0 day .. 1 night)
+    float4 gOutput;              // output (swap chain) resolution: xy = size, zw = 1 / size
     uint4 gOpts;                 // x = cascades, y = shadow taps, z = ssr steps, w = volumetric steps
     uint4 gFlags;                // x = flags (kFlag*), y = frame index, z = previous history slot, w = this history slot
 };
@@ -40,8 +41,12 @@ cbuffer PassConstants : register(b3) {
 
 // Texture slots (Tex in shading.cpp).
 static const uint kTexDepth = 0, kTexAlbedo = 1, kTexNormal = 2, kTexLdrSky = 3, kTexLdrFwd = 4, kTexScene = 5,
-                  kTexSceneCopy = 6, kTexLinDepth = 7, kTexVol = 8, kTexHist0 = 9, kTexAo = 11, kTexBloom0 = 12;
-static const uint kRwScene = 0, kRwSceneCopy = 1, kRwLinDepth = 2, kRwVol = 3, kRwHist0 = 4, kRwAo = 6, kRwBloom0 = 7;
+                  kTexSceneCopy = 6, kTexLinDepth = 7, kTexVol = 8, kTexHist0 = 9, kTexAo = 11, kTexBloom0 = 12,
+                  kTexMotion = 18, kTexExposure = 19, kTexUi = 20;
+static const uint kRwScene = 0, kRwSceneCopy = 1, kRwLinDepth = 2, kRwVol = 3, kRwHist0 = 4, kRwAo = 6, kRwBloom0 = 7,
+                  kRwMotion = 13, kRwExposure = 14;
+// The content of a render pixel was sampled at its centre + this offset (render pixels, +y down): the jitter.
+float2 jitterPixels() { return float2(-gJitter.x, gJitter.y) * 0.5 * gScreen.xy; }
 
 Texture2D<float4> gTex[24] : register(t0, space1);
 Texture2DArray<float> gShadowMap : register(t0, space2);

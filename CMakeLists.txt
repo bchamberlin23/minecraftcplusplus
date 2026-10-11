@@ -45,6 +45,14 @@ add_shader(entity.hlsl EntityModelVS vs_6_0)
 add_shader(entity.hlsl EntityFreeVS vs_6_0)
 add_shader(entity.hlsl EntityCutoutPS ps_6_0)
 add_shader(entity.hlsl EntityTranslucentPS ps_6_0)
+add_shader(visuals.hlsl VisualsVS vs_6_0)
+add_shader(visuals.hlsl ParticleVS vs_6_0)
+add_shader(visuals.hlsl VisualsCutoutPS ps_6_0)
+add_shader(visuals.hlsl VisualsTranslucentPS ps_6_0)
+add_shader(visuals.hlsl VisualsTextPS ps_6_0)
+add_shader(visuals.hlsl VisualsGlintPS ps_6_0)
+add_shader(visuals.hlsl ParticleCutoutPS ps_6_0)
+add_shader(visuals.hlsl ParticleTranslucentPS ps_6_0)
 add_shader(blockentity.hlsl BlockEntityVS vs_6_0)
 add_shader(blockentity.hlsl BlockEntityPS ps_6_0)
 add_shader(blockentity.hlsl BlockEntityTranslucentPS ps_6_0)
@@ -75,12 +83,17 @@ add_shader(deferred.hlsl DeferredCS cs_6_0)
 add_shader(deferred.hlsl VolumetricCS cs_6_0)
 add_shader(deferred.hlsl CompositeCS cs_6_0)
 add_shader(deferred.hlsl AoCS cs_6_0)
+add_shader(deferred.hlsl MotionCS cs_6_0)
+add_shader(post.hlsl DepthUpsamplePS ps_6_0)
+add_shader(post.hlsl UiCompositePS ps_6_0)
 add_shader(post.hlsl TaaCS cs_6_0)
 add_shader(post.hlsl BloomDownCS cs_6_0)
 add_shader(post.hlsl BloomUpCS cs_6_0)
 add_shader(post.hlsl ExposureCS cs_6_0)
 add_shader(post.hlsl TonemapVS vs_6_0)
 add_shader(post.hlsl TonemapPS ps_6_0)
+# Vendor upscaler inputs (src/render/upscalers).
+add_shader(upscale_prep.hlsl ReactiveCS cs_6_0)
 
 # --- executable ---------------------------------------------------------------
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS src/*.cpp src/*.h)
@@ -91,6 +104,41 @@ add_executable(minecraftCplusplus ${SOURCES} ${SHADER_HEADERS})
 target_include_directories(minecraftCplusplus PRIVATE src third_party ${SHADER_OUT}
   third_party/libdeflate)
 target_link_libraries(minecraftCplusplus PRIVATE libdeflate_static d3d12 dxgi dxguid ws2_32 bcrypt)
+
+# --- vendor upscalers / frame generation (src/render/upscalers, SDKs from tools/fetch_sdks.ps1) ----------------
+# Headers live in third_party; the signed DLLs are loaded at runtime (each SDK optional). XeSS links its import
+# libraries delay-loaded, Streamline and the FidelityFX loader are resolved with GetProcAddress.
+target_include_directories(minecraftCplusplus PRIVATE third_party/streamline/include third_party/fidelityfx
+  third_party/xess/inc)
+if(EXISTS ${CMAKE_SOURCE_DIR}/third_party/xess/lib/libxess.lib)
+  target_link_libraries(minecraftCplusplus PRIVATE ${CMAKE_SOURCE_DIR}/third_party/xess/lib/libxess.lib
+    ${CMAKE_SOURCE_DIR}/third_party/xess/lib/libxess_fg.lib ${CMAKE_SOURCE_DIR}/third_party/xess/lib/libxell.lib
+    delayimp wintrust crypt32)
+  target_link_options(minecraftCplusplus PRIVATE /DELAYLOAD:libxess.dll /DELAYLOAD:libxess_fg.dll /DELAYLOAD:libxell.dll)
+  target_compile_definitions(minecraftCplusplus PRIVATE MCPP_HAVE_XESS=1)
+else()
+  target_link_libraries(minecraftCplusplus PRIVATE wintrust crypt32)
+endif()
+# Copy the SDK DLLs (and their licenses) next to the executable.
+file(GLOB VENDOR_DLLS CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/third_party/streamline/bin/*.dll
+  ${CMAKE_SOURCE_DIR}/third_party/fidelityfx/bin/*.dll ${CMAKE_SOURCE_DIR}/third_party/xess/bin/*.dll)
+foreach(dll ${VENDOR_DLLS})
+  get_filename_component(name ${dll} NAME)
+  add_custom_command(TARGET minecraftCplusplus POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${dll} $<TARGET_FILE_DIR:minecraftCplusplus>/${name} VERBATIM)
+endforeach()
+add_custom_command(TARGET minecraftCplusplus POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:minecraftCplusplus>/licenses VERBATIM)
+foreach(lic streamline/license.txt streamline/nvngx_dlss.license.txt streamline/reflex.license.txt
+            fidelityfx/license.md xess/LICENSE.txt)
+  if(EXISTS ${CMAKE_SOURCE_DIR}/third_party/${lic})
+    string(REPLACE "/" "_" licName ${lic})
+    add_custom_command(TARGET minecraftCplusplus POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/third_party/${lic}
+        $<TARGET_FILE_DIR:minecraftCplusplus>/licenses/${licName} VERBATIM)
+  endif()
+endforeach()
+
 target_compile_definitions(minecraftCplusplus PRIVATE
   WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE _CRT_SECURE_NO_WARNINGS)
 target_compile_options(minecraftCplusplus PRIVATE /W3 /permissive- /Zc:__cplusplus /utf-8 /EHsc

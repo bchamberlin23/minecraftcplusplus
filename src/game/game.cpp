@@ -49,6 +49,25 @@ CameraState Game::camera() const {
     return c;
 }
 
+CameraState Game::viewCamera() const {
+    CameraState c = camera();
+    if (cameraMode == 0) return c;
+    if (cameraMode == 2) c.yaw += float(kPi), c.pitch = -c.pitch;
+    const double cp = std::cos(c.pitch);
+    const double back[3] = {std::sin(c.yaw) * cp, std::sin(c.pitch), -std::cos(c.yaw) * cp};
+    double dist = 4.0;  // Camera.getMaxZoom: 8 rays from jittered eye positions
+    for (int i = 0; i < 8; ++i) {
+        const double o[3] = {c.x + ((i & 1) * 2 - 1) * 0.1, c.y + (((i >> 1) & 1) * 2 - 1) * 0.1,
+                             c.z + (((i >> 2) & 1) * 2 - 1) * 0.1};
+        const RayHit h = physics_.raycast(o, back, dist);
+        if (!h.hit) continue;
+        const double dx = h.point[0] - c.x, dy = h.point[1] - c.y, dz = h.point[2] - c.z;
+        dist = std::min(dist, std::sqrt(dx * dx + dy * dy + dz * dz));
+    }
+    c.x += back[0] * dist, c.y += back[1] * dist, c.z += back[2] * dist;
+    return c;
+}
+
 PlayerInput Game::readInput(Window& w) {
     PlayerInput in;
     if (!w.mouseCaptured()) return in;
@@ -68,6 +87,9 @@ void Game::frame(Window& w, double dt) {
     player_.yaw += mdx * sensitivity;
     player_.pitch = std::clamp(player_.pitch + mdy * sensitivity, -1.55f, 1.55f);
 
+    const bool f5 = !inputSuspended && w.keyDown(VK_F5);
+    if (f5 && !f5WasDown_) cameraMode = (cameraMode + 1) % 3;
+    f5WasDown_ = f5;
     const bool esc = w.keyDown(VK_ESCAPE);
     if (handleEscape && esc && !escWasDown_) w.setMouseCaptured(false);
     escWasDown_ = esc;
@@ -123,6 +145,7 @@ void Game::simulate(const PlayerInput& input, int ticks) {
 void Game::handleClicks(Window& w, double dt) {
     const Window::MouseEvents ev = w.takeMouseEvents();
     if (inputSuspended) return;
+    if (ev.left > 0 && onSwing) onSwing();  // Minecraft.startAttack swings on every press
     selected_ = ((selected_ - ev.wheel) % 9 + 9) % 9;
     const bool leftHeld = w.mouseCaptured() && w.keyDown(VK_LBUTTON);
     const bool rightHeld = w.mouseCaptured() && w.keyDown(VK_RBUTTON);
@@ -153,6 +176,7 @@ bool Game::useTarget(bool place) {
         const u16 old = world_.block(target_.x, target_.y, target_.z);
         edit(target_.x, target_.y, target_.z, 0);
         if (onBlockChanged && old) onBlockChanged(false, target_.x, target_.y, target_.z, old);
+        if (onSwing) onSwing();
         return true;
     }
     // Using a block that opens a screen (or acting with an item that is not a block) goes to the server as is.
@@ -180,6 +204,7 @@ bool Game::useTarget(bool place) {
     }
     edit(t[0], t[1], t[2], id);
     if (onBlockChanged) onBlockChanged(true, t[0], t[1], t[2], id);
+    if (onSwing) onSwing();
     return true;
 }
 
@@ -232,7 +257,7 @@ void Game::edit(int x, int y, int z, u16 id) {
 }
 
 void Game::buildOverlay() {
-    const CameraState cam = camera();
+    const CameraState cam = viewCamera();  // world lines are relative to the rendered camera
     std::vector<LineVertex> world, screen;
     std::vector<SpriteVertex> sprites;
 

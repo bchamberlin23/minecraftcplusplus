@@ -11,6 +11,8 @@
 #include <memory>
 
 struct SectionMesh;
+class Upscaler;
+class Upscalers;
 using Microsoft::WRL::ComPtr;
 
 struct CameraState {
@@ -78,6 +80,7 @@ struct ShaderSettings {
     float bloom = 0.25f;           // strength of the (thresholded) bloom
     float sharpen = 0.35f;
     float exposure = 1.0f;         // exposure compensation
+    float renderScale = 1.0f;      // internal resolution / output resolution (0.33..1), upscaled temporally
     float sunPathTilt = 0.6f;      // radians the sun / moon path is tilted towards the south (packs: ~30-40 deg)
     static ShaderSettings preset(ShaderPreset p);
 };
@@ -149,6 +152,18 @@ public:
     void setTextureNames(const std::vector<std::string>& names);
     // Animated block textures: layer -> current frame's layer (identity for static textures). Cheap when unchanged.
     void setTextureRemap(const std::vector<u32>& remap);
+    // Temporal upscaler for the shader pipeline (not owned; nullptr = the built-in TAA). See render/upscaler.h.
+    void setUpscaler(Upscaler* upscaler) { upscaler_ = upscaler; }
+    // Vendor upscalers / frame generation / low latency (render/upscalers/upscalers.h); created by init.
+    Upscalers& upscalers() { return *upscalers_; }
+    // Main loop, once per frame before input and simulation: latency sleep (Reflex / XeLL), frame limiter, markers.
+    void beginFrame();
+    // History of the temporal passes is invalid (camera cut, dimension change); the next frame resets it.
+    void resetTemporal();
+    void setVsync(bool vsync) { vsync_ = vsync; }
+    // Internal (render) resolution of the shader pipeline; the output size when shaders are off.
+    u32 renderWidth() const;
+    u32 renderHeight() const;
 
     // Extension passes (not owned; must outlive the renderer's last frame).
     bool addPass(RenderPass* pass, PassStage stage);
@@ -171,6 +186,7 @@ public:
     u64 arenaBytesTotal() const;
 
 private:
+    friend class Upscalers;
     static constexpr u64 kStagingBytes = u64(256) << 20;
     static constexpr u32 kMaxActive = 1 << 18;
 
@@ -184,7 +200,14 @@ private:
 
     ComPtr<ID3D12Resource> createBuffer(u64 size, D3D12_HEAP_TYPE heap,
                                         D3D12_RESOURCE_FLAGS flags = D3D12_RESOURCE_FLAG_NONE);
+    // Swap chain (one place for frame generation SDKs: factory_ creates it on queue_; R8G8B8A8_UNORM, kFrames
+    // buffers, flip-discard, tearing when available; back buffers fetched in createTargets).
+    static constexpr DXGI_FORMAT kSwapChainFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+    bool createSwapChain(HWND hwnd, u32 width, u32 height);
+    void resizeSwapChain(u32 width, u32 height);
+    void present();
     void createTargets();
+    void recreateSwapChain();  // frame generation changed: new (proxy) swap chain, same size
     bool createPipelines();
     void transition(ID3D12Resource* r, D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to);
     void waitFence(u64 value);
@@ -249,10 +272,11 @@ private:
     void submitAndWait();  // close + execute list_ (recorded from allocators_[0]) and wait
 
     std::unique_ptr<Shading> shading_;
-    ShaderPreset shaderPreset_ = ShaderPreset::Off;  // TEMP until the pipeline is wired; default High
+    ShaderPreset shaderPreset_ = ShaderPreset::High;
     ShaderSettings shaderSettings_;
     SkyLighting skyLighting_;
     std::vector<std::string> textureNames_;
+    Upscaler* upscaler_ = nullptr;
     static constexpr u32 kRemapCapacity = 16384;  // texture layers
     ComPtr<ID3D12Resource> remap_;                 // upload heap, one slice per frame
     u32* remapMapped_ = nullptr;
@@ -263,4 +287,7 @@ private:
     bool vsync_ = false, tearing_ = false;
     RenderStats stats_;
     std::string adapterName_;
+    HWND hwnd_ = nullptr;
+    u32 jitterPhase_ = 0;
+    std::unique_ptr<Upscalers> upscalers_;  // last: destroyed first (after ~Renderer released the swap chain)
 };

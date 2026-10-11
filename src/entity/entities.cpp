@@ -4,6 +4,7 @@
 #include "assets/game_reports.h"
 #include "net/client.h"
 #include "net/protocol.h"
+#include "ui/items.h"
 #include "world/world.h"
 
 #include <algorithm>
@@ -66,9 +67,22 @@ void writeLpVec3(net::Writer& w, const double v[3]) {
     if (partial) w.varInt(i32(scale >> 2));
 }
 
-// ItemStack.OPTIONAL_STREAM_CODEC. Component patches are not length-prefixed, so a stack with added
-// components cannot be skipped: returns false (after reading the item id) and the caller stops there.
-bool readItemStack(net::Reader& r, i64& item, int& count) {
+const ui::Items* gItems = nullptr;  // EntityWorld::setItemDecoder
+
+// ItemStack.OPTIONAL_STREAM_CODEC. Component patches are not length-prefixed: without the item registry a stack
+// with added components cannot be skipped and returns false (after reading the item id); the caller stops there.
+bool readItemStack(net::Reader& r, i64& item, int& count, i32* dye = nullptr, bool* foil = nullptr) {
+    if (dye) *dye = -1;
+    if (foil) *foil = false;
+    if (gItems) {
+        ui::ItemStack st;
+        const bool ok = gItems->read(r, st);
+        item = st.empty() ? -1 : st.item;
+        count = st.count;
+        if (dye) *dye = st.dyedColor >= 0 ? i32(st.dyedColor & 0xFFFFFF) : -1;
+        if (foil) *foil = gItems->foil(st);
+        return ok && r.ok;
+    }
     count = r.varInt();
     item = -1;
     if (count <= 0) return r.ok;
@@ -85,6 +99,8 @@ double decodeDelta(double base, i16 delta) {
 }
 
 }  // namespace
+
+void EntityWorld::setItemDecoder(const ui::Items* items) { gItems = items; }
 
 int defaultSkinIndex(const u8 u[16]) {
     u64 msb = 0, lsb = 0;
@@ -137,6 +153,9 @@ EntityWorld::EntityWorld(EntityAssets& assets, World& world, BlockRegistry& regi
         d.noGravity = id({"DATA_NO_GRAVITY"});
         d.inGround = id({"IN_GROUND"});
         d.hiddenGene = id({"HIDDEN_GENE_ID", "DATA_HIDDEN_GENE_ID"});
+        d.rotation = id({"DATA_ROTATION"});
+        d.painting = id({"DATA_PAINTING_VARIANT_ID"});
+        d.nameVisible = id({"DATA_CUSTOM_NAME_VISIBLE"});
         categories_[i] = categoryFor(t.name);
         // Synched data only carries values that differ from the default: start registry variants at the
         // default each entity defines (VariantUtils.getDefaultOrAny(..., DEFAULT)).
@@ -236,8 +255,10 @@ void readEntityData(net::Reader& r, EventQueue& q, int entityEffect) {
                 break;
             case 7: {  // item stack
                 int count = 0;
-                const bool complete = readItemStack(r, v.i, count);
-                v.f[0] = float(count);
+                i32 dye = -1;
+                bool foil = false;
+                const bool complete = readItemStack(r, v.i, count, &dye, &foil);
+                v.f[0] = float(count), v.f[1] = float(dye), v.f[2] = foil ? 1.0f : 0.0f;
                 stop = !complete;
                 break;
             }
@@ -423,12 +444,14 @@ void EntityWorld::attach(net::Client& client) {
             const u8 slot = r.u8v();
             i64 item;
             int count;
-            const bool complete = readItemStack(r, item, count);
+            i32 dye;
+            bool foil;
+            const bool complete = readItemStack(r, item, count, &dye, &foil);
             if (!r.ok) break;
-            q.ints.push_back(slot & 127), q.ints.push_back(i32(item));
+            q.ints.push_back(slot & 127), q.ints.push_back(i32(item)), q.ints.push_back(dye), q.ints.push_back(foil);
             if (!complete || !(slot & 0x80)) break;
         }
-        e.count = (u32(q.ints.size()) - e.first) / 2;
+        e.count = (u32(q.ints.size()) - e.first) / 4;
         if (e.count) q.events.push_back(e);
     });
     on("player_info_update", [](net::Reader& r, EventQueue& q) {
@@ -650,6 +673,7 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
         e.headYaw = e.prevHeadYaw = e.bodyYaw = e.prevBodyYaw = ev.f[2];
         e.lerpHeadYaw = ev.f[2];
         if (e.category == Category::Block) e.blockState = ev.b;
+        e.direction = ev.b;
         if (e.category == Category::Player) {
             auto it = players_.find(uuidKey(ev.uuid));
             const int skin = defaultSkinIndex(ev.uuid);
@@ -733,8 +757,11 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
         case EventType::Data: applyData(e, &q.meta[ev.first], ev.count, q); break;
         case EventType::Equipment:
             for (u32 i = 0; i < ev.count; ++i) {
-                const int slot = q.ints[ev.first + i * 2];
-                if (slot >= 0 && slot < 8) e.equipment[slot] = q.ints[ev.first + i * 2 + 1];
+                const int slot = q.ints[ev.first + i * 4];
+                if (slot < 0 || slot >= 8) continue;
+                e.equipment[slot] = q.ints[ev.first + i * 4 + 1];
+                e.equipDye[slot] = q.ints[ev.first + i * 4 + 2];
+                e.equipFoil = u8((e.equipFoil & ~(1 << slot)) | (q.ints[ev.first + i * 4 + 3] ? 1 << slot : 0));
             }
             break;
         case EventType::Swing: e.swingTime = 0; break;
@@ -785,7 +812,11 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
             if (verbose_) LOG("entities: %d %s variant %d", e.id, name.c_str(), e.variant);
         }
         else if (idx == d.horseVariant) e.variant = int(v.i & 0xFF), e.variant2 = int((v.i >> 8) & 0xFF);
-        else if (idx == d.item && v.serializer == 7) e.itemId = int(v.i), e.itemCount = std::max(1, int(v.f[0]));
+        else if (idx == d.item && v.serializer == 7)
+            e.itemId = int(v.i), e.itemCount = std::max(1, int(v.f[0])), e.itemDye = i32(v.f[1]), e.itemFoil = v.f[2] > 0.5f;
+        else if (idx == d.rotation && v.serializer == 1) e.rotation = int(v.i);
+        else if (idx == d.painting && v.serializer == 34) e.painting = int(v.i);
+        else if (idx == d.nameVisible && v.serializer == 8) e.nameVisible = v.i != 0;
         else if (idx == d.size) e.size = std::max(1, int(v.i));
         else if (idx == d.swellDir) e.swellDir = int(v.i);
         else if (idx == d.powered) e.powered = v.i != 0;

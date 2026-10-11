@@ -6,6 +6,7 @@
 
 #include "assets/assets.h"
 #include "worldgen/features_internal.h"
+#include "worldgen/structures.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -2405,6 +2406,7 @@ struct FeatureSystem::Impl {
     std::vector<Step> steps;
     std::vector<std::vector<std::vector<PlacedRef>>> biomeSteps;  // by biome id
     std::vector<bool> possible;                                   // by biome id
+    const StructureSystem* structures = nullptr;
 
     void buildFeatureOrder(const std::vector<u16>& sources);
 };
@@ -2522,8 +2524,12 @@ FeatureSystem::FeatureSystem(const NoiseState& noise, BlockRegistry& blocks, Bio
 
 FeatureSystem::~FeatureSystem() = default;
 
-// ChunkGenerator.applyBiomeDecoration (structures are not generated: their per-step indices are separate
-// from the features' global indices, so skipping them changes no feature seed).
+void FeatureSystem::setStructures(const StructureSystem* structures) { impl_->structures = structures; }
+const FeatureEnv& FeatureSystem::env() const { return *impl_->env; }
+float FeatureSystem::temperature(u16 biome, const BlockPos& p) const { return impl_->shared.temperature(biome, p); }
+
+// ChunkGenerator.applyBiomeDecoration: each step places its structures (when a StructureSystem is set; their
+// per-step indices are separate from the features' global indices), then its features.
 void FeatureSystem::decorate(const std::array<GenChunk*, 9>& chunks, const BiomeZoom& zoom,
                              const NoiseBiomeFn& noiseBiome) const {
     const Impl& im = *impl_;
@@ -2548,6 +2554,7 @@ void FeatureSystem::decorate(const std::array<GenChunk*, 9>& chunks, const Biome
     const size_t stepCount = std::max<size_t>(11, im.steps.size());  // GenerationStep.Decoration values
     std::vector<int> indices;
     for (size_t step = 0; step < stepCount; ++step) {
+        if (im.structures) im.structures->placeStep(int(step), level, centre.cx, centre.cz, random, decorationSeed);
         if (step >= im.steps.size()) continue;
         const Impl::Step& data = im.steps[step];
         indices.clear();

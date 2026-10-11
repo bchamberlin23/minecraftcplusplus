@@ -15,6 +15,9 @@ class GameReports;
 namespace net {
 class Client;
 }
+namespace ui {
+class Items;
+}
 
 namespace ent {
 
@@ -121,6 +124,14 @@ struct Entity {
     float vehicleDamage = 0;
     std::string name;  // custom name (or player name)
     int equipment[8] = {-1, -1, -1, -1, -1, -1, -1, -1};  // item ids by EquipmentSlot
+    i32 equipDye[8] = {-1, -1, -1, -1, -1, -1, -1, -1};   // dyed_color (RGB) by slot, -1 none
+    u8 equipFoil = 0;                                      // enchantment glint by slot (bits)
+    i32 itemDye = -1;                                      // item / item frame stack: dyed_color
+    bool itemFoil = false;
+    int rotation = 0;           // item frame rotation (0..7)
+    int direction = 0;          // add_entity data: facing of hanging entities (Direction 3D value)
+    int painting = -1;          // painting_variant network id
+    bool nameVisible = false;   // DATA_CUSTOM_NAME_VISIBLE
 
     // Animation timers (ticks).
     int age = 0, hurtTime = 0, deathTime = 0, swingTime = -1, swingDuration = 6;
@@ -157,6 +168,15 @@ public:
     void frame(double dt);
     void clear();
 
+    // Item stacks in entity data / equipment carry data components: decode them with the game's item registry
+    // (dyed colour, enchantment glint). Without it stacks with components end the packet's decoding. Before attach().
+    static void setItemDecoder(const ui::Items* items);
+    const PlayerInfo* playerNamed(const std::string& name) const {
+        for (const auto& [k, p] : players_)
+            if (p.name == name) return &p;
+        return nullptr;
+    }
+
     // Ray pick against entity bounding boxes (inflated by the target's pick radius); origin/dir in world space.
     PickResult pick(const double origin[3], const double dir[3], double maxDistance) const;
     // Sends attack (attack + punch) or use (interact) for an entity; false if not connected.
@@ -186,7 +206,8 @@ public:
         i8 flags = 0, pose = 6, customName = 2, health = -1, baby = -1, wool = -1, variant = -1, item = -1, size = -1,
            swellDir = -1, powered = -1, mainHand = -1, skinParts = -1, horseVariant = -1, villagerData = -1,
            tameFlags = -1, collar = -1, anger = -1, standFlags = -1, standPose = -1, hurt = -1, hurtDir = -1,
-           damage = -1, mainGene = -1, hiddenGene = -1, mobFlags = -1, noGravity = 5, inGround = -1;
+           damage = -1, mainGene = -1, hiddenGene = -1, mobFlags = -1, noGravity = 5, inGround = -1, rotation = -1,
+           painting = -1, nameVisible = 3;
     };
 
 private:

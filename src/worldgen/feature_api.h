@@ -198,6 +198,8 @@ void registerCoreFeatures(FeatureTypes& types);  // features.cpp
 void registerTreeFeatures(FeatureTypes& types);  // features_trees.cpp
 void registerMiscFeatures(FeatureTypes& types);  // features_misc.cpp
 
+class StructureSystem;  // structures.h
+
 // Biome decoration for a whole dimension (the game's ChunkGenerator.applyBiomeDecoration).
 class FeatureSystem {
 public:
@@ -207,6 +209,11 @@ public:
     ~FeatureSystem();
     // Decorates chunks[4] (its 8 neighbours must have terrain; features may write into them).
     void decorate(const std::array<GenChunk*, 9>& chunks, const BiomeZoom& zoom, const NoiseBiomeFn& noiseBiome) const;
+    // Structures placed in every decoration step before the step's features (null: none).
+    void setStructures(const StructureSystem* structures);
+    // For structures: the parsing environment (rule tests, providers, placed features) and Biome.getTemperature.
+    const FeatureEnv& env() const;
+    float temperature(u16 biome, const BlockPos& p) const;
 
     struct Impl;
 

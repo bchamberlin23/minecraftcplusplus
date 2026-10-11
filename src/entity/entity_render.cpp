@@ -28,7 +28,7 @@ constexpr u64 kRefOffset = kInstOffset + u64(kMaxInstances) * 32;
 constexpr u64 kFreeOffset = kRefOffset + u64(kMaxRefs) * 8;
 constexpr u64 kFrameBytes = (kFreeOffset + u64(kMaxFree) * 112 + 65535) & ~u64(65535);
 
-enum LayerFlags : u8 { Emissive = 1, Translucent = 2, TintWool = 8, TintCollar = 16 };
+enum LayerFlags : u8 { Emissive = 1, Translucent = 2, TintWool = 8, TintCollar = 16, Armor = 32, Elytra = 64 };
 enum Special : u8 {
     SpNone, SpCow, SpPig, SpChicken, SpSheep, SpWolf, SpCat, SpHorse, SpLlama, SpRabbit, SpParrot, SpFox, SpAxolotl,
     SpPanda, SpMooshroom, SpVillager, SpZombieVillager, SpSlime, SpPlayer, SpFrog, SpArmorStand, SpCreeper, SpBoat,
@@ -297,9 +297,20 @@ void EntityRenderer::buildDefs() {
             d.kind = Kind::None;  // invisible or effect-only
         else if (n == "item_frame" || n == "glow_item_frame" || n == "painting")
             d.kind = Kind::None;  // block-attached decorations: not drawn yet
+        {  // ArmorModelSet (HumanoidArmorLayer)
+            static const char* kPieces[4] = {"#helmet", "#chestplate", "#leggings", "#boots"};
+            const std::string set = n == "player" || n == "mannequin" ? "player" : n;
+            const std::string babySet = n == "armor_stand" ? "armor_stand_small" : n + "_baby";
+            for (int k = 0; k < 4; ++k) {
+                d.armor[k] = M(set + kPieces[k]);
+                d.armorBaby[k] = M(babySet + kPieces[k]);
+                d.armorSlim[k] = set == "player" ? M(std::string("player_slim") + kPieces[k]) : -1;
+            }
+        }
         if (d.kind == Kind::Mob && (d.base.model < 0 || d.base.tex < 0)) d.kind = Kind::Box;  // geometry fallback
         if (d.kind == Kind::Sprite && d.sprite < 0) d.kind = Kind::Box;
     }
+    elytraModel_ = M("elytra#main"), elytraBabyModel_ = M("elytra_baby#main");
     u32 boxes = 0;
     std::string names;
     for (size_t i = 0; i < defs_.size(); ++i)
@@ -618,11 +629,51 @@ bool EntityRenderer::create(Renderer& r) {
 // ---------------------------------------------------------------------------------------------------------
 // Per-frame building.
 
+// HumanoidArmorLayer + WingsLayer: armour pieces (equipment assets) and elytra as extra model layers.
+int EntityRenderer::equipmentLayers(const Entity& e, const TypeDef& d, Layer* out, int max) {
+    if (!items_ || max <= 0) return 0;
+    int n = 0;
+    const bool smallModel = d.special == SpArmorStand ? (e.standFlags & 1) != 0 : e.baby;
+    static const int kOrder[4] = {4, 3, 2, 5};  // chest, legs, feet, head (EquipmentSlot)
+    for (int slot : kOrder) {
+        const int item = e.equipment[slot];
+        if (item < 0) continue;
+        const ItemModels::Equippable& eq = items_->equippable(item);
+        if (eq.slot != slot || eq.asset.empty()) continue;
+        const int piece = 5 - slot;
+        const int model = smallModel ? d.armorBaby[piece] : (d.special == SpPlayer && e.slim) ? d.armorSlim[piece] : d.armor[piece];
+        if (model < 0) continue;
+        const char* type = smallModel && d.special != SpArmorStand ? "humanoid_baby" : slot == 3 ? "humanoid_leggings" : "humanoid";
+        for (const EquipmentLayer& l : items_->equipmentLayers(eq.asset, type)) {
+            if (l.tex < 0 || n >= max) continue;
+            u32 color = kWhite;
+            if (l.dyeable) {
+                const i32 dye = e.equipDye[slot] >= 0 ? e.equipDye[slot] : l.undyed;
+                if (dye < 0) continue;  // getColorForLayer: 0 = not drawn
+                color = abgr(u32(dye));
+            }
+            out[n++] = {model, l.tex, color, Armor};
+        }
+    }
+    const int chest = e.equipment[4];
+    const int elytra = smallModel ? elytraBabyModel_ : elytraModel_;
+    if (chest >= 0 && elytra >= 0 &&
+        (d.anim == Anim::Humanoid || d.anim == Anim::Zombie || d.anim == Anim::Skeleton || d.anim == Anim::ArmorStand)) {
+        const ItemModels::Equippable& eq = items_->equippable(chest);
+        if (!eq.asset.empty())
+            for (const EquipmentLayer& l : items_->equipmentLayers(eq.asset, "wings"))
+                if (l.tex >= 0 && n < max) out[n++] = {elytra, l.tex, kWhite, Elytra};
+    }
+    return n;
+}
+
 bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, const double cam[3], u32 light) {
-    Layer layers[6];
+    Layer layers[16];
     int layerCount = 0;
     if (d.kind == Kind::Mob) layerCount = resolve(e, d, layers);
     if (!layerCount) return false;
+    if (e.category == Category::Living || e.category == Category::Player)
+        layerCount += equipmentLayers(e, d, layers + layerCount, 16 - layerCount);
 
     double p[3];
     for (int a = 0; a < 3; ++a) p[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt - cam[a];
@@ -721,14 +772,51 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         mats_.resize(parts);
         hidden_.resize(parts);
         for (size_t i = 0; i < parts; ++i) poses_[i] = m.parts[i].pose;
-        const u64 hiddenRoles = living ? animate(d.anim, s, m, poses_.data()) : 0;
+        u64 hiddenRoles = 0;
+        M34 layerRoot = root;
+        if (L.flags & Elytra) {  // WingsLayer: translate(0, 0, 0.125); ElytraModel crouching pose
+            layerRoot = mul(root, translate(0, 0, 0.125f));
+            if (s.crouching) {
+                const i16 lw = m.role(LeftWing), rw = m.role(RightWing);
+                if (lw >= 0) poses_[size_t(lw)].y = 3, poses_[size_t(lw)].xRot = 0.6981317f, poses_[size_t(lw)].zRot = -kPi / 4;
+                if (rw >= 0) poses_[size_t(rw)].y = 3, poses_[size_t(rw)].xRot = 0.6981317f, poses_[size_t(rw)].zRot = kPi / 4;
+            }
+        } else if (living) {
+            AnimState sl = s;
+            if (L.flags & Armor) sl.skinParts = 0x7F;
+            hiddenRoles = animate(d.anim, sl, m, poses_.data());
+        }
         for (size_t i = 0; i < parts; ++i) {
             const ModelPart& part = m.parts[i];
             const M34 local = partLocal(poses_[i]);
-            const M34 parent = part.parent >= 0 ? *reinterpret_cast<const M34*>(&mats_[size_t(part.parent)]) : root;
+            const M34 parent = part.parent >= 0 ? *reinterpret_cast<const M34*>(&mats_[size_t(part.parent)]) : layerRoot;
             *reinterpret_cast<M34*>(&mats_[i]) = mul(parent, local);
             hidden_[i] = ((hiddenRoles >> part.role) & 1) && part.role != RoleNone ? 1 : 0;
             if (part.parent >= 0 && hidden_[size_t(part.parent)]) hidden_[i] = 1;
+        }
+        if (li == 0 && living && attachments_.size() < 4096) {  // ItemInHandLayer / CustomHeadLayer anchors
+            Attachment a{};
+            a.entity = &e == localPlayer_ ? kLocalPlayerId : e.id;
+            a.light = light;
+            a.babyOffset = e.baby && d.special != SpArmorStand;
+            const i16 arms[2] = {m.role(RightArm), m.role(LeftArm)};
+            for (int k = 0; k < 2; ++k) {
+                if (arms[k] < 0 || hidden_[size_t(arms[k])]) continue;
+                M34 hm = *reinterpret_cast<const M34*>(&mats_[size_t(arms[k])]);
+                if (d.special == SpPlayer && e.slim) {  // PlayerModel.translateToHand: slim arms move 0.5 px out
+                    const ModelPart& ap = m.parts[size_t(arms[k])];
+                    const M34 par = ap.parent >= 0 ? *reinterpret_cast<const M34*>(&mats_[size_t(ap.parent)]) : root;
+                    const float off = (k == 0 ? 0.5f : -0.5f) / 16.0f;
+                    for (int r = 0; r < 3; ++r) hm.m[r * 4 + 3] += par.m[r * 4] * off;
+                }
+                std::memcpy(a.hand[k], hm.m, sizeof(a.hand[k]));
+                a.valid |= u8(1 << k);
+            }
+            if (const i16 h = m.role(Head); h >= 0) {
+                std::memcpy(a.head, &mats_[size_t(h)], sizeof(a.head));
+                a.valid |= 4;
+            }
+            if (a.valid) attachments_.push_back(a);
         }
         const u32 base = matCount_;
         std::memcpy(frameBase_ + kMatOffset + u64(base) * 48, mats_.data(), parts * 48);
@@ -921,7 +1009,8 @@ void EntityRenderer::draw(const PassContext& ctx) {
     const auto& entities = world_.entities();
     stats_ = {};
     stats_.entities = u32(entities.size());
-    if (entities.empty() || !mapped_) return;
+    attachments_.clear();
+    if ((entities.empty() && !localPlayer_) || !mapped_) return;
     frameBase_ = mapped_ + u64(ctx.frame) * kFrameBytes;
     matCount_ = instCount_ = refCount_ = freeCount_ = 0;
     translucent_.clear();
@@ -948,11 +1037,12 @@ void EntityRenderer::draw(const PassContext& ctx) {
     const float maxDist = std::min(ctx.fogEnd, 192.0f);
     World& world = world_.world();
     std::shared_lock lock(world.mutex());
-    for (const auto& [id, e] : entities) {
-        if (e.type < 0 || size_t(e.type) >= defs_.size()) continue;
+    auto drawEntity = [&](const Entity& e) {
+        if (e.type < 0 || size_t(e.type) >= defs_.size()) return;
         const TypeDef& d = defs_[size_t(e.type)];
-        if (d.kind == Kind::None || !e.info) continue;
-        if (e.category == Category::Living && (e.sharedFlags & 0x20)) continue;  // invisible
+        if (d.kind == Kind::None || !e.info) return;
+        if (d.kind == Kind::Item && items_) return;  // 3D item models: the visuals pass
+        if (e.category == Category::Living && (e.sharedFlags & 0x20)) return;  // invisible
         double c[3];
         for (int a = 0; a < 3; ++a) c[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt - cam[a];
         float w = e.info->width, h = e.info->height;
@@ -960,7 +1050,7 @@ void EntityRenderer::draw(const PassContext& ctx) {
         const float radius = std::max(w, h) * 0.75f * d.scale + 0.5f;
         const float cx = float(c[0]), cy = float(c[1]) + h * 0.5f, cz = float(c[2]);
         const float dist = std::sqrt(cx * cx + cy * cy + cz * cz);
-        if (dist - radius > maxDist) continue;
+        if (dist - radius > maxDist) return;
         bool inside = true;
         for (const auto& pl : planes) {
             const float len = std::sqrt(pl[0] * pl[0] + pl[1] * pl[1] + pl[2] * pl[2]);
@@ -969,7 +1059,7 @@ void EntityRenderer::draw(const PassContext& ctx) {
                 break;
             }
         }
-        if (!inside) continue;
+        if (!inside) return;
         // Light at the entity's eye position (EntityRenderer samples getLightProbePosition = the eyes).
         const int lx = int(std::floor(e.pos[0])), ly = int(std::floor(e.pos[1] + e.info->eye)),
                   lz = int(std::floor(e.pos[2]));
@@ -1006,7 +1096,9 @@ void EntityRenderer::draw(const PassContext& ctx) {
             drawn = true;
         }
         stats_.drawn += drawn;
-    }
+    };
+    for (const auto& [id, e] : entities) drawEntity(e);
+    if (localPlayer_) drawEntity(*localPlayer_);
     lock.unlock();
     const u32 cutoutRefs = refCount_;
     u32* refs = reinterpret_cast<u32*>(frameBase_ + kRefOffset);

@@ -92,14 +92,14 @@ struct GbufTargets {
 };
 
 GbufTargets DetailGbufPS(DetailGbufVSOut i) {
-    float4 c = gTextures.Sample(gSampler, i.uvl);
+    float4 c = sampleBlock(i.uvl);
     clip(c.a - 0.5);
     float3 n = normalize(cross(ddy(i.rel), ddx(i.rel)));
     if (dot(n, i.rel) > 0) n = -n;
     uint mat = i.mat > 7 ? 0 : i.mat;
     if (mat == kMatPlant) n = float3(0, 1, 0);
     GbufTargets o;
-    o.albedo = float4(srgbToLinear(c.rgb * i.tint), float((31u << 3) | mat) / 255.0);  // the target encodes sRGB
+    o.albedo = float4(c.rgb * i.tint, float((31u << 3) | mat) / 255.0);  // sRGB values (decoded by the deferred pass)
     o.normal = float4(octEncode(n), i.light.x / 15.0, i.light.y / 15.0);
     return o;
 }

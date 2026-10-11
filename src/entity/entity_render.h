@@ -4,6 +4,7 @@
 // and CPU-built free quads (item entities, falling blocks, thrown-item sprites).
 #include "entity/entities.h"
 #include "entity/entity_anim.h"
+#include "entity/item_models.h"
 #include "render/renderer.h"
 
 namespace ent {
@@ -23,6 +24,23 @@ public:
     // Shader-visible descriptor of the entity texture atlas (after create(); UINT32_MAX before).
     u32 atlasDescriptor() const { return atlas_ ? atlasDescriptor_ : UINT32_MAX; }
 
+    // Equipment (armor, elytra) from the item models' equipment data; dropped items are left to the visuals pass.
+    void setItemModels(ItemModels* items) { items_ = items; }
+    // The local player, drawn like any other player while the camera is detached (F5); nullptr: not drawn.
+    void setLocalPlayer(const Entity* e) { localPlayer_ = e; }
+    static constexpr i32 kLocalPlayerId = INT32_MIN;
+    // Model attachment points of the entities drawn in the last frame (camera-relative part matrices, blocks):
+    // ItemInHandLayer / CustomHeadLayer of the visuals pass.
+    struct Attachment {
+        i32 entity;
+        float hand[2][12];  // right, left arm (ArmedModel.translateToHand)
+        float head[12];     // head part (HeadedModel.translateToHead)
+        u32 light;
+        u8 valid;           // 1 right arm, 2 left arm, 4 head
+        bool babyOffset;    // ItemInHandLayer baby offsets
+    };
+    const std::vector<Attachment>& attachments() const { return attachments_; }
+
     enum class Kind : u8 { None, Mob, Item, Block, Sprite, Box };
     struct LayerDef {
         int model = -1, babyModel = -1, tex = -1, babyTex = -1;
@@ -30,6 +48,8 @@ public:
     };
     struct TypeDef {
         Kind kind = Kind::None;
+        int armor[4] = {-1, -1, -1, -1}, armorBaby[4] = {-1, -1, -1, -1};  // helmet, chestplate, leggings, boots
+        int armorSlim[4] = {-1, -1, -1, -1};                                 // players: player_slim armor
         Anim anim = Anim::Head;
         u8 special = 0;  // variant / layer logic selector
         LayerDef base;
@@ -85,6 +105,11 @@ private:
         u8 count = 0;
     };
     std::unordered_map<u64, CachedLayers> layerCache_;  // resolved layers by type + variant state
+    int equipmentLayers(const Entity& e, const TypeDef& d, Layer* out, int max);
+    ItemModels* items_ = nullptr;
+    const Entity* localPlayer_ = nullptr;
+    std::vector<Attachment> attachments_;
+    int elytraModel_ = -1, elytraBabyModel_ = -1;
 
     Stats stats_;
     double cpuTotal_ = 0;

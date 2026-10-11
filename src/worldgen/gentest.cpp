@@ -179,6 +179,7 @@ int runDecorationTest(BlockRegistry& registry, wg::ChunkGenerator& gen, i64 seed
 }  // namespace
 
 int runGenTest(BlockRegistry& registry, const fs::path& jar, const fs::path& regionDir, i64 seed, int maxChunks) {
+    if (const char* mode = std::getenv("GENTEST_STRUCTURES")) return runStructureTest(registry, jar, regionDir, seed, mode);
     wg::DataPack data;
     if (!data.open(jar)) {
         LOG("gentest: cannot read game data");

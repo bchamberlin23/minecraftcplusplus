@@ -1,2 +1,6 @@
 build/
 *.png
+# Vendor SDK binaries (~230 MB): fetched by tools/fetch_sdks.ps1, copied next to the exe by CMake
+third_party/streamline/bin/
+third_party/fidelityfx/bin/
+third_party/xess/bin/

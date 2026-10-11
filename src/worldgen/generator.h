@@ -19,6 +19,14 @@ struct GenTimings {
     double biomes = 0, fill = 0, surface = 0, carve = 0;
 };
 
+// Extra final density per block, added after the noise router's final density (the game's Beardifier: terrain
+// adaptation around structures). density[v.index(x, y, z)] += value for the points it affects.
+class DensityAddition {
+public:
+    virtual ~DensityAddition() = default;
+    virtual void add(const Volume& v, float* density) const = 0;
+};
+
 class ChunkGenerator {
 public:
     ChunkGenerator(const DataPack& data, BlockRegistry& blocks, i64 seed, std::string_view settings = "overworld");
@@ -26,7 +34,12 @@ public:
     bool ok() const { return ok_; }
 
     // Thread-safe as long as each thread passes its own DensityContext.
-    void generate(int cx, int cz, GenChunk& out, DensityContext& ctx, GenTimings* timings = nullptr) const;
+    void generate(int cx, int cz, GenChunk& out, DensityContext& ctx, GenTimings* timings = nullptr,
+                  const DensityAddition* beardifier = nullptr) const;
+    // NoiseBasedChunkGenerator.iterateNoiseColumn: the base terrain column at block column (x, z) without surface,
+    // carvers or structures (default block, fluids from the aquifer, air), out[y - minY]. Thread-safe with a
+    // per-thread context.
+    void baseColumn(int x, int z, std::vector<u16>& out, DensityContext& ctx) const;
 
     // Far terrain of one 512x512 region at LOD `level` (columns of 2^level blocks with exact heights; see
     // generator.cpp). coarser: this region at level + 1, if any; then only the surface band is sampled.
@@ -44,7 +57,7 @@ public:
     std::vector<u16> possibleBiomes() const { return biomeSource_->possibleBiomes(); }
 
 private:
-    void fill(GenChunk& chunk, DensityContext& ctx, AquiferSampler& aquifer) const;
+    void fill(GenChunk& chunk, DensityContext& ctx, AquiferSampler& aquifer, const DensityAddition* beardifier) const;
     void applyCarvingMask(GenChunk& chunk, DensityContext& ctx, const CarvingMask& mask, AquiferSampler& aquifer,
                           const NoiseBiomeFn& noiseBiome) const;
     void updateHeightmaps(GenChunk& chunk) const;

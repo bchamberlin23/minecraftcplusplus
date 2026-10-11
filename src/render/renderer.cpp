@@ -1,5 +1,6 @@
 #include "render/renderer.h"
 #include "render/shading.h"
+#include "render/upscalers/upscalers.h"
 
 #include "assets/assets.h"
 #include "core/math.h"
@@ -69,6 +70,12 @@ Renderer::Renderer() = default;
 Renderer::~Renderer() {
     if (device_) waitIdle();
     if (shading_) shading_->logTimings();
+    if (upscalers_) {  // vendor swap chains / contexts go before the device (Streamline: slShutdown first)
+        upscalers_->logStats();
+        for (auto& b : backbuffers_) b.Reset();
+        upscalers_->releaseSwapChain(swapchain_);
+        upscalers_->shutdown();
+    }
     if (fenceEvent_) CloseHandle(fenceEvent_);
 }
 
@@ -129,7 +136,7 @@ void Renderer::waitIdle() {
 }
 
 bool Renderer::init(HWND hwnd, u32 width, u32 height, bool debug, bool vsync) {
-    width_ = width, height_ = height, vsync_ = vsync;
+    width_ = width, height_ = height, vsync_ = vsync, hwnd_ = hwnd;
     if (debug) {
         ComPtr<ID3D12Debug> dbg;
         if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&dbg)))) dbg->EnableDebugLayer();
@@ -157,31 +164,17 @@ bool Renderer::init(HWND hwnd, u32 width, u32 height, bool debug, bool vsync) {
         return false;
     }
     if (debug) device_.As(&infoQueue_);
+    // DLSS / FSR / XeSS: SDKs that hook the queue and swap chain (Streamline) initialise before both exist.
+    upscalers_ = std::make_unique<Upscalers>(*this);
+    upscalers_->initDevice(adapter.Get());
 
     D3D12_COMMAND_QUEUE_DESC qd{};
     qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-    if (!check(device_->CreateCommandQueue(&qd, IID_PPV_ARGS(&queue_)), "CreateCommandQueue")) return false;
-
-    ComPtr<IDXGIFactory5> f5;
-    BOOL allowTearing = FALSE;
-    if (SUCCEEDED(factory_.As(&f5)))
-        f5->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &allowTearing, sizeof(allowTearing));
-    tearing_ = allowTearing;
-
-    DXGI_SWAP_CHAIN_DESC1 sd{};
-    sd.Width = width;
-    sd.Height = height;
-    sd.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    sd.SampleDesc.Count = 1;
-    sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    sd.BufferCount = kFrames;
-    sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-    sd.Flags = tearing_ ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
-    ComPtr<IDXGISwapChain1> sc1;
-    if (!check(factory_->CreateSwapChainForHwnd(queue_.Get(), hwnd, &sd, nullptr, nullptr, &sc1), "CreateSwapChain"))
+    if (!upscalers_->createCommandQueue(qd, queue_) &&
+        !check(device_->CreateCommandQueue(&qd, IID_PPV_ARGS(&queue_)), "CreateCommandQueue"))
         return false;
-    sc1.As(&swapchain_);
-    factory_->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
+
+    if (!createSwapChain(hwnd, width, height)) return false;
 
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
@@ -248,6 +241,61 @@ bool Renderer::init(HWND hwnd, u32 width, u32 height, bool debug, bool vsync) {
     return true;
 }
 
+// ---- swap chain: everything that creates, resizes or presents it is here (frame generation SDKs wrap / replace the
+// factory, the swap chain and Present at these three points; back buffers are re-fetched in createTargets) ----
+
+bool Renderer::createSwapChain(HWND hwnd, u32 width, u32 height) {
+    ComPtr<IDXGIFactory5> f5;
+    BOOL allowTearing = FALSE;
+    if (SUCCEEDED(factory_.As(&f5)))
+        f5->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &allowTearing, sizeof(allowTearing));
+    tearing_ = allowTearing;
+
+    DXGI_SWAP_CHAIN_DESC1 sd{};
+    sd.Width = width;
+    sd.Height = height;
+    sd.Format = kSwapChainFormat;
+    sd.SampleDesc.Count = 1;
+    sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    sd.BufferCount = kFrames;
+    sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+    sd.Flags = tearing_ ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
+    // Frame generation SDKs create their proxy swap chain here; otherwise (or if that fails) a plain one.
+    if (!upscalers_->createSwapChain(hwnd, sd, swapchain_)) {
+        ComPtr<IDXGISwapChain1> sc1;
+        if (!check(factory_->CreateSwapChainForHwnd(queue_.Get(), hwnd, &sd, nullptr, nullptr, &sc1), "CreateSwapChain"))
+            return false;
+        sc1.As(&swapchain_);
+    }
+    factory_->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
+    return true;
+}
+
+// Frame generation switched (or its SDK wants a fresh swap chain): same size, new (proxy) swap chain.
+void Renderer::recreateSwapChain() {
+    waitIdle();
+    for (auto& b : backbuffers_) b.Reset();
+    depth_.Reset();
+    upscalers_->releaseSwapChain(swapchain_);
+    if (!createSwapChain(hwnd_, width_, height_)) LOG("error: could not re-create the swap chain");
+    for (u64& f : frameFence_) f = 0;
+    createTargets();
+    if (shading_) shading_->createTargets();
+}
+
+void Renderer::resizeSwapChain(u32 width, u32 height) {
+    upscalers_->resizeSwapChain(swapchain_.Get(), width, height, kSwapChainFormat,
+                                tearing_ ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0);
+}
+
+void Renderer::present() { upscalers_->present(swapchain_.Get(), vsync_, tearing_); }
+
+void Renderer::beginFrame() { upscalers_->beginFrame(); }
+
+void Renderer::resetTemporal() {
+    if (shading_) shading_->historyValid_ = false;
+}
+
 void Renderer::createTargets() {
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtvHeap_->GetCPUDescriptorHandleForHeapStart();
     for (u32 i = 0; i < kFrames; ++i) {
@@ -281,8 +329,7 @@ void Renderer::resize(u32 width, u32 height) {
     waitIdle();
     for (auto& b : backbuffers_) b.Reset();
     depth_.Reset();
-    swapchain_->ResizeBuffers(kFrames, width, height, DXGI_FORMAT_R8G8B8A8_UNORM,
-                              tearing_ ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0);
+    resizeSwapChain(width, height);
     width_ = width, height_ = height;
     createTargets();
     if (shading_) shading_->createTargets();
@@ -637,6 +684,7 @@ u64 Renderer::arenaBytesTotal() const {
 }
 
 void Renderer::render(const CameraState& cam, float viewDistance, const fs::path* screenshot) {
+    upscalers_->submitStart();
     const u32 fi = swapchain_->GetCurrentBackBufferIndex();
     waitFence(frameFence_[fi]);
 
@@ -670,16 +718,16 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     const Mat4 view = viewFromBasis(right, up, fwd);
     const Mat4 vpNoJitter = proj * view;
     float jitter[2] = {0, 0};
-    if (shaded) {  // TAA: sub-pixel Halton (2, 3) jitter, 8 phases
-        static u32 phase = 0;
-        phase = (phase + 1) & 7;
+    if (shaded) {  // TAA / upscalers: sub-pixel Halton (2, 3) jitter, 8 * (output / render)^2 phases (vendor guidance)
+        const u32 phases = upscalers_->jitterPhases(shading_->renderW_, width_);
+        const u32 phase = jitterPhase_ = (jitterPhase_ + 1) % phases;
         auto halton = [](u32 i, u32 b) {
             float f = 1, r = 0;
             for (; i > 0; i /= b) f /= float(b), r += f * float(i % b);
             return r;
         };
-        jitter[0] = (halton(phase + 1, 2) - 0.5f) * 2.0f / float(width_);
-        jitter[1] = (halton(phase + 1, 3) - 0.5f) * 2.0f / float(height_);
+        jitter[0] = (halton(phase + 1, 2) - 0.5f) * 2.0f / float(shading_->renderW_);
+        jitter[1] = (halton(phase + 1, 3) - 0.5f) * 2.0f / float(shading_->renderH_);
         proj(0, 2) = jitter[0], proj(1, 2) = jitter[1];
     }
     Mat4 vp = proj * view;
@@ -705,6 +753,10 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     std::memcpy(fc.segCap, segCap_, sizeof(segCap_));
     const u32 activeCount = u32(std::min<size_t>(active_.size(), kMaxActive));
     fc.misc[0] = activeCount;
+    {  // texture LOD bias for the upscaler's render scale (common.hlsli sampleBlock)
+        const float bias = shaded ? upscalers_->mipBias() : 0.0f;
+        std::memcpy(&fc.misc[1], &bias, 4);
+    }
     std::memcpy(constantsMapped_ + size_t(fi) * kConstantSlotBytes, &fc, sizeof(fc));
     const D3D12_GPU_VIRTUAL_ADDRESS cb = constants_->GetGPUVirtualAddress() + u64(fi) * kConstantSlotBytes;
     // Overlays (block outline) draw after TAA: unjittered copy of the constants.
@@ -716,7 +768,23 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
         std::memcpy(fc.viewProj, vp.m, sizeof(fc.viewProj));
     }
     Shading::FrameInput shadeIn{&cam, viewDistance, vp, vpNoJitter, fwd, right, up, {jitter[0], jitter[1]}, fi};
+    if (shaded) {  // camera for the vendor SDKs (DLSS / FSR / XeSS constants, frame generation)
+        upscale::CameraFrame c;
+        c.pos[0] = cam.x, c.pos[1] = cam.y, c.pos[2] = cam.z;
+        const Vec3 basis[3] = {right, up, fwd};
+        for (int k = 0; k < 3; ++k) c.right[k] = (&basis[0].x)[k], c.up[k] = (&basis[1].x)[k], c.fwd[k] = (&basis[2].x)[k];
+        c.view = view;
+        c.proj = perspectiveReverseZ(cam.fovY, float(width_) / float(std::max(height_, 1u)), 0.05f);
+        c.fovY = cam.fovY, c.aspect = float(width_) / float(std::max(height_, 1u));
+        c.renderSize[0] = shading_->renderW_, c.renderSize[1] = shading_->renderH_;
+        c.outputSize[0] = width_, c.outputSize[1] = height_;
+        c.jitterPx[0] = -jitter[0] * 0.5f * float(shading_->renderW_);
+        c.jitterPx[1] = jitter[1] * 0.5f * float(shading_->renderH_);
+        upscalers_->setCamera(c);
+    }
+    Timer shadeTimer;
     if (shaded) shading_->prepare(shadeIn);
+    double shadeCpu = shadeTimer.ms();
     if (activeCount) std::memcpy(activeMapped_ + size_t(fi) * kMaxActive, active_.data(), size_t(activeCount) * 4);
     const D3D12_GPU_VIRTUAL_ADDRESS activeVa = activeLists_->GetGPUVirtualAddress() + u64(fi) * kMaxActive * 4;
     const bool haveWorld = sections_ && activeCount;
@@ -772,15 +840,18 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     pc.textureRemap = remapVa;
     if (shaded) {
         shading_->mark(list_.Get(), "cull");
+        shadeTimer = Timer();
         shading_->record(list_.Get(), shadeIn, haveWorld, cb, activeVa, activeCount, pc, bb, rtv);
-        // Overlays and the Hud stage on the tonemapped image, unjittered.
+        shading_->cpuMs_ += shadeCpu + shadeTimer.ms();  // includes the extension passes the pipeline runs
+        ++shading_->cpuFrames_;
+        // Overlays and the Hud stage draw into the pipeline's UI layer (bound by record), unjittered, then
+        // compositeUi blends it over the tonemapped image.
         list_->SetDescriptorHeaps(1, heaps);
         list_->SetGraphicsRootSignature(rootSig_.Get());
         list_->SetGraphicsRootConstantBufferView(1, overlayCb);
         list_->SetGraphicsRootDescriptorTable(4, srvHeap_->GetGPUDescriptorHandleForHeapStart());
         list_->RSSetViewports(1, &vpRect);
         list_->RSSetScissorRects(1, &scissor);
-        list_->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
     } else {
     list_->ClearRenderTargetView(rtv, fogColor_, 0, nullptr);
     list_->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
@@ -861,7 +932,20 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
              put(screenLines_.data(), screenLines_.size() * sizeof(LineVertex)), u32(screenLines_.size()), 1);
     }
     runPasses(PassStage::Hud, pc);
-    if (shaded) shading_->mark(list_.Get(), "overlays+hud");
+    if (shaded) {
+        upscalers_->beforeUiComposite(list_.Get(), bb);  // frame generation: keep the hudless image
+        if (upscalers_->uiComposedBySwapChain()) {       // FSR FG blends the UI layer itself (real + generated frames)
+            D3D12_RESOURCE_BARRIER b{};
+            b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            b.Transition.pResource = shading_->ui_.Get();
+            b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            b.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+            b.Transition.StateAfter = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
+            list_->ResourceBarrier(1, &b);
+        } else {
+            shading_->compositeUi(list_.Get(), overlayCb, rtv);
+        }
+    }
 
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT shotFp{};
     if (screenshot) {
@@ -894,10 +978,12 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     } else {
         std::memset(stats_.commands, 0, sizeof(stats_.commands));
     }
+    if (shaded) upscalers_->endFrame(list_.Get(), bb);  // frame generation inputs (tags / prepare pass)
     list_->Close();
     ID3D12CommandList* lists[] = {list_.Get()};
     queue_->ExecuteCommandLists(1, lists);
-    swapchain_->Present(vsync_ ? 1 : 0, (!vsync_ && tearing_) ? DXGI_PRESENT_ALLOW_TEARING : 0);
+    upscalers_->submitEnd();
+    present();
     frameFence_[fi] = ++fenceCounter_;
     queue_->Signal(fence_.Get(), fenceCounter_);
     printDebugMessages();
@@ -925,6 +1011,9 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
         }
     }
 }
+
+u32 Renderer::renderWidth() const { return shading_ && shaderPreset_ != ShaderPreset::Off ? shading_->renderW_ : width_; }
+u32 Renderer::renderHeight() const { return shading_ && shaderPreset_ != ShaderPreset::Off ? shading_->renderH_ : height_; }
 
 void Renderer::setTextureRemap(const std::vector<u32>& remap) {
     const size_t n = std::min<size_t>(remap.size(), kRemapCapacity);

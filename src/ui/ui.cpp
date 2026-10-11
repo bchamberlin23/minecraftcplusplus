@@ -712,6 +712,12 @@ void Ui::attachSession(net::Client* client, net::Session* session) {
     if (s.screen != Screen::None && s.screen != Screen::Chat) s.closeScreen(false);
 }
 
+const ItemStack* Ui::playerSlot(int slot) const {
+    const auto& slots = s_->inventory.slots;
+    if (slot < 0 || size_t(slot) >= slots.size() || slots[size_t(slot)].empty()) return nullptr;
+    return &slots[size_t(slot)];
+}
+
 bool Ui::loadScript(const fs::path& file) {
     std::ifstream f(file);
     if (!f) {

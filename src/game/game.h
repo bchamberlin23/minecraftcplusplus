@@ -20,7 +20,13 @@ public:
 
     // Reads input, advances the simulation in fixed 20 Hz ticks and builds the HUD.
     void frame(Window& window, double dt);
-    CameraState camera() const;
+    CameraState camera() const;  // the player's eyes (targeting, sounds)
+    // F5 perspective: 0 first person, 1 third person back, 2 third person front. viewCamera() is the rendered
+    // camera (Camera.setup: pulled back up to 4 blocks, stopped by blocks); camera() stays at the eyes.
+    int cameraMode = 0;
+    CameraState viewCamera() const;
+    // The player's arm swings (attack press, block broken / placed): drives the hand animation.
+    std::function<void()> onSwing;
     std::string status() const;
     Player& player() { return player_; }
 
@@ -81,6 +87,6 @@ private:
     int selected_ = 0;
     double repeatTimer_ = 0;
     double lastJumpPress_ = -1, clock_ = 0;
-    bool jumpWasDown_ = false, escWasDown_ = false;
+    bool jumpWasDown_ = false, escWasDown_ = false, f5WasDown_ = false;
     bool keyWasDown_[9] = {};
 };

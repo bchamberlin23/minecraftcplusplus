@@ -9,7 +9,7 @@ cbuffer Frame : register(b0) {
     float4 gTints[8];
     uint4 gSegBase;      // first indirect command of each pass
     uint4 gSegCap;       // command capacity of each pass
-    uint4 gMisc;         // x = active slot count
+    uint4 gMisc;         // x = active slot count, y = texture LOD bias (float bits)
 };
 
 struct DrawConstants {
@@ -33,6 +33,8 @@ float3 tintColor(uint index) {
     return float3((c >> 16) & 255, (c >> 8) & 255, c & 255) / 255.0;
 }
 SamplerState gSampler : register(s0);
+// Block textures with the texture LOD bias of the active upscaler (gMisc.y, float bits; 0 at native resolution).
+float4 sampleBlock(float3 uvl) { return gTextures.SampleBias(gSampler, uvl, asfloat(gMisc.y)); }
 
 struct VSOut {
     float4 pos : SV_Position;
@@ -61,7 +63,7 @@ float fogFactor(float3 rel) {
 }
 
 float4 shadePixel(VSOut i) {
-    float4 c = gTextures.Sample(gSampler, i.uvl);
+    float4 c = sampleBlock(i.uvl);
     c.rgb = lerp(c.rgb * i.color, gFogColor.rgb, i.fog);
     return c;
 }

@@ -35,53 +35,58 @@ float3 sampleHistory(uint tex, float2 uv, float2 size) {
     return max(c / wsum, 0);
 }
 
-// gPassA.x = history valid (0 after a reset or resize).
+// Temporal anti-aliasing and upscaling (render -> output resolution). The current frame is reconstructed at the
+// output pixel from the 3x3 render pixels around it, each weighted by the distance of its jittered sample to the
+// pixel (Gaussian); the history is reprojected with the motion vector of the nearest surface and clipped to the
+// neighbourhood's variance box. gPassA.x = history valid (0 after a reset or resize).
 [numthreads(8, 8, 1)]
 void TaaCS(uint2 px : SV_DispatchThreadID) {
-    if (any(px >= uint2(gScreen.xy))) return;
+    if (any(px >= uint2(gOutput.xy))) return;
     int2 maxp = int2(gScreen.xy) - 1;
-    float3 cur = 0, m1 = 0, m2 = 0, mn = 1e9, mx = -1e9;
-    float bestD = 0;
-    int2 bestP = int2(px);
+    float2 uvOut = (float2(px) + 0.5) * gOutput.zw;
+    float2 target = uvOut * gScreen.xy;  // render pixel space
+    float2 jit = jitterPixels();
+    int2 base = int2(floor(target - jit));
+    float3 sum = 0, m1 = 0, m2 = 0, mn = 1e9, mx = -1e9;
+    float wsum = 0, wmax = 0, bestD = 0;
+    int2 bestP = clamp(base, 0, maxp);
     [unroll] for (int y = -1; y <= 1; ++y)
         [unroll] for (int x = -1; x <= 1; ++x) {
-            int2 q = clamp(int2(px) + int2(x, y), 0, maxp);
+            int2 q = clamp(base + int2(x, y), 0, maxp);
             float3 s = rgbToYcocg(tmWeight(gTex[kTexScene].Load(int3(q, 0)).rgb));
-            if (x == 0 && y == 0) cur = s;
+            float2 d = float2(q) + 0.5 + jit - target;
+            float w = exp(-2.9 * dot(d, d));
+            sum += s * w;
+            wsum += w;
+            wmax = max(wmax, w);
             m1 += s;
             m2 += s * s;
             mn = min(mn, s);
             mx = max(mx, s);
-            float d = gTex[kTexDepth].Load(int3(q, 0)).r;
-            if (d > bestD) bestD = d, bestP = q;
+            float dz = gTex[kTexDepth].Load(int3(q, 0)).r;
+            if (dz > bestD) bestD = dz, bestP = q;
         }
-    float2 pixel = float2(px) + 0.5;
-    // Reproject the nearest surface of the neighbourhood (sharper edges under motion).
-    float4 prevClip;
-    if (bestD > 0) prevClip = mul(gPrevViewProj, float4(relPosition(float2(bestP) + 0.5, bestD), 1));
-    else prevClip = mul(gPrevViewProj, float4(viewRay(pixelNdc(pixel)), 0));
-    float2 prevUv = float2(prevClip.x / prevClip.w * 0.5 + 0.5, 0.5 - prevClip.y / prevClip.w * 0.5);
-    // The current sample sits at the jittered position; the history is unjittered.
+    float3 cur = sum / max(wsum, 1e-5);
+    float2 prevUv = uvOut + gTex[kTexMotion].Load(int3(bestP, 0)).xy;
     float3 result = cur;
-    bool valid = gPassA.x != 0 && prevClip.w > 0 && all(prevUv > 0) && all(prevUv < 1);
+    bool valid = gPassA.x != 0 && all(prevUv > 0) && all(prevUv < 1);
     if (valid) {
-        float3 hist = rgbToYcocg(tmWeight(sampleHistory(kTexHist0 + gFlags.z, prevUv, gScreen.xy)));
+        float3 hist = rgbToYcocg(tmWeight(sampleHistory(kTexHist0 + gFlags.z, prevUv, gOutput.xy)));
         float3 mean = m1 / 9.0;
         float3 sigma = sqrt(max(m2 / 9.0 - mean * mean, 0));
-        bool dynamic = gTex[kTexLdrFwd].Load(int3(px, 0)).a > 0;  // entities move on their own
+        bool dynamic = gTex[kTexLdrFwd].Load(int3(clamp(int2(target), 0, maxp), 0)).a > 0;  // entities move on their own
         float gamma = dynamic ? 0.75 : 1.25;
         float3 lo = max(mn, mean - gamma * sigma), hi = min(mx, mean + gamma * sigma);
-        // Clip towards the mean (variance clipping).
         float3 center = (lo + hi) * 0.5, ext = max((hi - lo) * 0.5, 1e-5);
         float3 off = hist - center;
         float3 ts = abs(off / ext);
         float tmax = max(ts.x, max(ts.y, ts.z));
         if (tmax > 1) hist = center + off / tmax;
-        // Less history when the reprojected position moved a lot (sub-pixel motion keeps it sharp).
-        float2 motion = (prevUv - pixel * gScreen.zw) * gScreen.xy;
-        float feedback = lerp(0.92, 0.82, saturate(length(motion) * 0.25));
-        if (dynamic) feedback = min(feedback, 0.75);
-        result = lerp(cur, hist, feedback);
+        // Less history under fast motion; when upscaling, a render sample far from this pixel counts for less.
+        float motionPx = length((prevUv - uvOut) * gOutput.xy);
+        float alpha = lerp(0.08, 0.18, saturate(motionPx * 0.25)) * saturate(wmax * 1.6);
+        if (dynamic) alpha = max(alpha, 0.25);
+        result = lerp(hist, cur, alpha);
     }
     gRW[kRwHist0 + gFlags.w][px] = float4(tmUnweight(ycocgToRgb(result)), 1);
 }
@@ -96,10 +101,10 @@ void BloomDownCS(uint2 px : SV_DispatchThreadID) {
     float3 c = 0;
     if (gPassA.z) {
         // 2x2 bilinear taps of the full resolution history, Karis-weighted against fireflies.
-        float2 uv = (float2(px) * 2.0 + 1.0) * gScreen.zw;
+        float2 uv = (float2(px) * 2.0 + 1.0) * gOutput.zw;
         float wsum = 0;
         [unroll] for (int k = 0; k < 4; ++k) {
-            float2 o = float2(k & 1 ? 1 : -1, k & 2 ? 1 : -1) * gScreen.zw;
+            float2 o = float2(k & 1 ? 1 : -1, k & 2 ? 1 : -1) * gOutput.zw;
             float3 s = gTex[gPassA.x].SampleLevel(gLinearClamp, uv + o, 0).rgb;
             float w = 1.0 / (1.0 + luminance(s));
             c += s * w;
@@ -188,6 +193,7 @@ void ExposureCS(uint index : SV_GroupIndex) {
         float speed = target > prev ? 1.6 : 2.4;
         float e = gPassA.z || !(prev > 0) ? target : exp(lerp(log(target), log(prev), exp(-dt * speed)));
         gState[0] = float4(e, avg, target, 0);
+        gRW[kRwExposure][uint2(0, 0)] = e;  // 1x1 texture for external upscalers
     }
 }
 
@@ -254,7 +260,7 @@ float4 TonemapPS(ScreenOut i) : SV_Target {
     // Contrast-adaptive sharpening (cross neighbourhood) to counter the TAA blur.
     float sharp = asfloat(gPassA.y);
     if (sharp > 0) {
-        int2 maxp = int2(gScreen.xy) - 1;
+        int2 maxp = int2(gOutput.xy) - 1;
         float3 n = gTex[tex].Load(int3(clamp(px + int2(0, -1), 0, maxp), 0)).rgb;
         float3 s = gTex[tex].Load(int3(clamp(px + int2(0, 1), 0, maxp), 0)).rgb;
         float3 w = gTex[tex].Load(int3(clamp(px + int2(-1, 0), 0, maxp), 0)).rgb;
@@ -273,7 +279,7 @@ float4 TonemapPS(ScreenOut i) : SV_Target {
     c = lerp(c, lum * float3(0.62, 0.78, 1.15), scotopic * 0.65 * saturate(1.0 - lum * exposure * 4.0));
     if (debugView() == 1) return float4(linearToSrgb(saturate(c)), 1);
     if (debugView() >= 2) return float4(linearToSrgb(saturate(c)), 1);
-    float2 uv = i.pos.xy * gScreen.zw;
+    float2 uv = i.pos.xy * gOutput.zw;
     float3 bloom = gTex[kTexBloom0].SampleLevel(gLinearClamp, uv, 0).rgb;
     c = (c + bloom * gShadeMisc.y) * exposure;
     // Gentle vignette.
@@ -287,4 +293,17 @@ float4 TonemapPS(ScreenOut i) : SV_Target {
     float n1 = ign(i.pos.xy, gFlags.y), n2 = ign(i.pos.xy + 17.3, gFlags.y + 7);
     srgb += (n1 + n2 - 1.0) / 255.0;
     return float4(srgb, 1);
+}
+
+// ---- after tonemapping ------------------------------------------------------------------------------------
+
+// Output-resolution depth for the overlays (block outline) when rendering below the output resolution.
+float DepthUpsamplePS(ScreenOut i) : SV_Depth {
+    float2 uv = i.pos.xy * gOutput.zw;
+    return gTex[kTexDepth].Load(int3(min(uint2(uv * gScreen.xy), uint2(gScreen.xy) - 1), 0)).r;
+}
+
+// The UI layer (overlays + Hud stage, premultiplied) over the tonemapped image; blend ONE, INV_SRC_ALPHA.
+float4 UiCompositePS(ScreenOut i) : SV_Target {
+    return gTex[kTexUi].Load(int3(i.pos.xy, 0));
 }

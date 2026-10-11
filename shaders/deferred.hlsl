@@ -100,7 +100,7 @@ void DeferredCS(uint2 px : SV_DispatchThreadID) {
             float4 nl = gTex[kTexNormal].Load(int3(px, 0));
             uint code = uint(round(a.a * 255.0));
             Surface s;
-            s.albedo = a.rgb;
+            s.albedo = srgbToLinear(a.rgb);
             s.n = octDecode(nl.xy);
             s.sky = nl.z * 15.0;
             s.block = nl.w * 15.0;
@@ -168,15 +168,25 @@ void VolumetricCS(uint2 px : SV_DispatchThreadID) {
     float3 scatter = 0;
     float trans = 1;
     float dt = marchDist / float(steps);
+    // Light-space positions are linear along the ray: camera position + t * direction per cascade.
+    float3 origin[4], delta[4];
+    [unroll] for (uint k = 0; k < 4; ++k) {
+        origin[k] = float3(gShadowMat[k][0].w, gShadowMat[k][1].w, gShadowMat[k][2].w);
+        delta[k] = mul((float3x3)gShadowMat[k], dir);
+    }
     [loop] for (uint i = 0; i < steps; ++i) {
         float t = (float(i) + jitter) * dt;
-        float3 p = dir * t;
-        float height = under ? 1.0 : exp(-gFog.y * max(gTime.w + p.y - gFog.z, -64.0));
+        float py = dir.y * t;
+        float height = under ? 1.0 : exp(-gFog.y * max(gTime.w + py - gFog.z, -64.0));
         float s = sigma * height;
-        float3 sp;
-        int c = shadowCascade(p, sp);
         float vis = 1;
-        if (c >= 0) vis = gShadowMap.SampleCmpLevelZero(gShadowCmp, float3(sp.xy * float2(0.5, -0.5) + 0.5, c), sp.z);
+        [loop] for (uint c = 0; c < gOpts.x; ++c) {
+            float3 sp = origin[c] + delta[c] * t;
+            if (all(abs(sp.xy) < 0.97)) {
+                vis = gShadowMap.SampleCmpLevelZero(gShadowCmp, float3(sp.xy * float2(0.5, -0.5) + 0.5, c), sp.z);
+                break;
+            }
+        }
         float stepT = exp(-s * dt);
         scatter += trans * (1 - stepT) * vis;
         trans *= stepT;
@@ -184,6 +194,21 @@ void VolumetricCS(uint2 px : SV_DispatchThreadID) {
     float3 tint = under ? gWaterScatter.rgb : 1.0;
     float strength = under ? 1.0 : 1.0;
     gRW[kRwVol][px] = float4(scatter * light * phase * tint * strength, under ? 1 : trans);
+}
+
+// ---- motion vectors (for TAA and external upscalers) ----------------------------------------------------
+// previous UV - current UV, both unjittered (UV units, +y down). Camera motion only: the world is static;
+// entities and waving foliage are not in it (TAA treats entity pixels as reactive instead).
+[numthreads(8, 8, 1)]
+void MotionCS(uint2 px : SV_DispatchThreadID) {
+    if (any(px >= uint2(gScreen.xy))) return;
+    float2 pixel = float2(px) + 0.5;
+    float d = gTex[kTexDepth].Load(int3(px, 0)).r;
+    float4 prevClip = d > 0 ? mul(gPrevViewProj, float4(relPosition(pixel, d), 1))
+                            : mul(gPrevViewProj, float4(viewRay(pixelNdc(pixel)), 0));
+    float2 prevUv = float2(prevClip.x / prevClip.w * 0.5 + 0.5, 0.5 - prevClip.y / prevClip.w * 0.5);
+    float2 curUv = (pixel + jitterPixels()) * gScreen.zw;
+    gRW[kRwMotion][px] = float4(prevClip.w > 0 ? prevUv - curUv : 0, 0, 0);
 }
 
 // ---- composite ------------------------------------------------------------------------------------------

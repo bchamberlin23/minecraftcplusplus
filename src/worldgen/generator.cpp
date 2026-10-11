@@ -65,11 +65,12 @@ bool ChunkGenerator::uncarvable(u16 id) const {
 }
 
 // NoiseBasedChunkGenerator.doFill: final density over the column, top to bottom, through the aquifer.
-void ChunkGenerator::fill(GenChunk& chunk, DensityContext& ctx, AquiferSampler& aquifer) const {
+void ChunkGenerator::fill(GenChunk& chunk, DensityContext& ctx, AquiferSampler& aquifer, const DensityAddition* beardifier) const {
     const Volume v{16, height_, 16, chunk.minBlockX(), minY_, chunk.minBlockZ()};
     thread_local std::vector<float> density;
     density.resize(size_t(v.size()));
     noise_->sampleVolume(finalDensity_, ctx, v, density.data());
+    if (beardifier) beardifier->add(v, density.data());  // final_density's "minecraft:beardifier" term
     for (int z = 0; z < 16; ++z)
         for (int x = 0; x < 16; ++x)
             for (int y = height_ - 1; y >= 0; --y) {
@@ -388,7 +389,23 @@ void ChunkGenerator::generateCoarse(int rx, int rz, int level, FarColumns& out, 
     if (phaseMs) phaseMs[1] += phase.ms();
 }
 
-void ChunkGenerator::generate(int cx, int cz, GenChunk& chunk, DensityContext& ctx, GenTimings* timings) const {
+void ChunkGenerator::baseColumn(int x, int z, std::vector<u16>& out, DensityContext& ctx) const {
+    const Volume v{1, height_, 1, x, minY_, z};
+    thread_local std::vector<float> density;
+    density.resize(size_t(height_));
+    ctx.clear();
+    noise_->sampleVolume(finalDensity_, ctx, v, density.data());
+    AquiferSampler aquifer(*noise_, ctx, hasAquifers_ ? &aquifers_ : nullptr, v, seaLevel_, water_, lava_, GenChunk::kAir);
+    out.assign(size_t(height_), GenChunk::kAir);
+    for (int y = height_ - 1; y >= 0; --y) {
+        u16 state = aquifer.computeSubstance(x, minY_ + y, z, density[size_t(y)]);
+        if (state == AquiferSampler::kDefaultBlock) state = defaultBlock_;
+        out[size_t(y)] = state;
+    }
+}
+
+void ChunkGenerator::generate(int cx, int cz, GenChunk& chunk, DensityContext& ctx, GenTimings* timings,
+                              const DensityAddition* beardifier) const {
     Timer t;
     chunk.init(cx, cz, minY_, height_);
     ctx.clear();
@@ -399,7 +416,7 @@ void ChunkGenerator::generate(int cx, int cz, GenChunk& chunk, DensityContext& c
     const Volume volume{16, height_, 16, chunk.minBlockX(), minY_, chunk.minBlockZ()};
     AquiferSampler aquifer(*noise_, ctx, hasAquifers_ ? &aquifers_ : nullptr, volume, seaLevel_, water_, lava_,
                            GenChunk::kAir);
-    fill(chunk, ctx, aquifer);
+    fill(chunk, ctx, aquifer, beardifier);
     updateHeightmaps(chunk);
     if (timings) timings->fill += t.ms();
 

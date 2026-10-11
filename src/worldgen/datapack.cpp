@@ -73,6 +73,21 @@ const nlohmann::json* DataPack::worldgen(std::string_view registry, std::string_
     return it == files_.end() ? nullptr : &it->second;
 }
 
+std::vector<std::string> DataPack::ids(std::string_view registry) const {
+    const std::string prefix = "worldgen/" + std::string(registry) + "/";
+    std::vector<std::pair<std::string, std::string>> found;  // (path, namespace)
+    for (const auto& [key, j] : files_) {
+        if (!key.starts_with(prefix)) continue;
+        std::string rest = key.substr(prefix.size()), ns = "minecraft";
+        if (const size_t colon = rest.find(':'); colon != std::string::npos) ns = rest.substr(0, colon), rest = rest.substr(colon + 1);
+        found.emplace_back(std::move(rest), std::move(ns));
+    }
+    std::sort(found.begin(), found.end());
+    std::vector<std::string> out;
+    for (const auto& [path, ns] : found) out.push_back(ns + ":" + path);
+    return out;
+}
+
 std::vector<std::string> DataPack::tag(std::string_view kind, std::string_view id) const {
     std::vector<std::string> out;
     std::vector<std::string> pending{normalize(id)};
