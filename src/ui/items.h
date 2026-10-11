@@ -59,6 +59,7 @@ struct ItemStack {
     };
     bool hasAttributeModifiers = false;  // attribute_modifiers patched (an empty list removes the defaults)
     std::vector<AttributeModifier> attributeModifiers;
+    int bundleSelected = -1;  // BundleContents.selectedItem: client-side state (not part of the component), -1 none
 
     bool empty() const { return item < 0 || count <= 0; }
     bool sameItemSameComponents(const ItemStack& o) const;
@@ -107,6 +108,9 @@ public:
     const std::vector<RegistryInfo>& paintings() const { return paintings_; }
     const std::vector<RegistryInfo>& instruments() const { return instruments_; }
     const std::vector<std::string>& bannerPatterns() const { return bannerPatterns_; }
+    const std::vector<std::string>& trimMaterials() const { return trimMaterials_; }  // trim_material ids
+    const std::string& potionName(int id) const { return entry(potions_, id); }       // "minecraft:healing", "" unknown
+    const std::string& mobEffectName(int id) const { return entry(mobEffects_, id); }
     int mobEffectId(std::string_view name) const;  // static registry protocol id, -1 if unknown
 
     // Protocol. Item stacks: ItemStack.OPTIONAL_STREAM_CODEC / OPTIONAL_UNTRUSTED (delimited components).
@@ -129,7 +133,11 @@ private:
     std::vector<std::string> consumeEffects_;  // consume_effect_type names by network id
     std::unordered_map<std::string, int> mobEffectIds_;
     std::vector<RegistryInfo> enchantments_, paintings_, instruments_;
-    std::vector<std::string> bannerPatterns_;
+    std::vector<std::string> bannerPatterns_, trimMaterials_;
+    static const std::string& entry(const std::vector<std::string>& v, int id) {
+        static const std::string kNone;
+        return id >= 0 && size_t(id) < v.size() ? v[size_t(id)] : kNone;
+    }
     bool registriesSet_ = false;
     std::vector<bool> blockItem_;
     const Lang* lang_ = nullptr;

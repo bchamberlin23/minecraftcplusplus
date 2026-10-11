@@ -326,6 +326,13 @@ struct Visuals::Impl {
     const PaintingInfo* painting(int id);
     void heldStack(int slot, int& item, i32& dye, bool& foil) const;
     int chargeOf(int menuSlot) const;
+    // Item model contexts (ItemModelResolver.updateForLiving / updateForNonLiving): the stack an entity shows (its
+    // whole stack when the packets carried one) and the entity as the item's owner.
+    ui::ItemStack plainScratch;
+    const ui::ItemStack& stackOf(const std::shared_ptr<const ui::ItemStack>& full, int item, i32 dye);
+    ui::ItemContext contextOf(const Entity& e, ui::ItemDisplay display, float pt) const;
+    void updateItemOwner(float pt);  // ui::itemWorld().player and the local player's per-stack state
+    net::Client* client = nullptr;
 
     // --- shader packs (PassContext::pack): lists and particles as vanilla-style vertices -----------------
     std::vector<MeshQuad> cpuStore;  // CPU copy of the static quad store (packs pull quads on the CPU)
@@ -356,6 +363,8 @@ bool Visuals::load(const fs::path& jar, const fs::path& minecraftDir, const Game
     std::vector<std::string> names(size_t(std::max(0, m.items->count())));
     for (int i = 0; i < m.items->count(); ++i) names[size_t(i)] = m.items->name(i);
     m.models.init(*m.res, m.assets, names, componentReports);
+    m.models.setItems(m.items.get());
+    ui::setItemComponentReports(componentReports);
     m.er.setItemModels(&m.models);
     m.glintRect = m.models.texture("misc/enchanted_glint_item");
     m.fontAtlas.init(1024, 1024);
@@ -388,6 +397,7 @@ bool Visuals::load(const fs::path& jar, const fs::path& minecraftDir, const Game
 }
 
 void Visuals::attach(net::Client& client) {
+    impl_->client = &client;
     if (impl_->particles) impl_->particles->attach(client);
 }
 
@@ -1086,6 +1096,85 @@ void Visuals::Impl::heldStack(int slot, int& item, i32& dye, bool& foil) const {
     }
 }
 
+const ui::ItemStack& Visuals::Impl::stackOf(const std::shared_ptr<const ui::ItemStack>& full, int item, i32 dye) {
+    if (full && full->item == item) return *full;
+    plainScratch = ItemModels::plainStack(item, dye);
+    return plainScratch;
+}
+
+ui::ItemContext Visuals::Impl::contextOf(const Entity& e, ui::ItemDisplay display, float pt) const {
+    ui::ItemContext c;
+    c.display = display;
+    if (e.id == EntityRenderer::kLocalPlayerId) {
+        c.owner = ui::itemWorld().player;
+        c.seed = ui::itemWorld().localId + int(display);
+        return c;
+    }
+    ui::ItemOwner& o = c.owner;
+    o.present = true;
+    o.id = e.id;
+    o.type = e.info ? e.info->name : std::string();
+    o.living = e.category == Category::Living || e.category == Category::Player;
+    o.player = e.category == Category::Player;
+    o.local = false;
+    o.viewEntity = e.id == world.viewEntity;
+    for (int a = 0; a < 3; ++a) o.pos[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt;
+    o.mainArm = e.mainArm;
+    static const int frame = assets.typeId("minecraft:item_frame"), glowFrame = assets.typeId("minecraft:glow_item_frame");
+    if (o.living) {  // LivingEntity.getVisualRotationYInDegrees: the body rotation
+        o.yaw = e.prevBodyYaw + (e.bodyYaw - e.prevBodyYaw) * pt;
+    } else if (e.type == frame || e.type == glowFrame) {  // ItemFrame.getVisualRotationYInDegrees
+        static const int k2d[6] = {-1, -1, 2, 0, 1, 3};  // Direction 3D -> 2D data value (down / up: -1)
+        const int dir = std::clamp(e.direction, 0, 5);
+        const int correction = dir == 0 ? -90 : dir == 1 ? 90 : 0;
+        o.yaw = wrapDegrees(float(180 + k2d[dir] * 90 + e.rotation * 45 + correction));
+    } else if (e.category == Category::Item) {  // ItemEntity: 180 - getSpin(age + 0.5) in degrees
+        o.yaw = 180.0f - ((float(e.age) + 0.5f) / 20.0f + e.bobOffset) / (2.0f * kPi) * 360.0f;
+    } else {
+        o.yaw = e.prevYaw + (e.yaw - e.prevYaw) * pt;
+    }
+    c.seed = o.living ? e.id + int(display) : e.id;
+    return c;
+}
+
+void Visuals::Impl::updateItemOwner(float pt) {
+    ui::ItemWorld& w = ui::itemWorld();
+    ui::updateItemWorld();
+    if (client && items && client->inPlay() && !items->registriesSet()) items->setRegistries(*client);
+    ui::ItemOwner& o = w.player;
+    if (!game || !avatarReady) {
+        o.present = false;
+        return;
+    }
+    o.present = true;
+    o.living = o.player = o.local = true;
+    o.id = w.localId;
+    o.type = "minecraft:player";
+    std::copy(avatar.pos, avatar.pos + 3, o.pos);
+    o.yaw = avatar.prevBodyYaw + (avatar.bodyYaw - avatar.prevBodyYaw) * pt;
+    o.mainArm = avatar.mainArm;
+    o.viewEntity = world.viewEntity < 0 || world.viewEntity == w.localId;
+    o.usingThis = o.fishing = o.selected = o.carried = false;  // per stack
+    w.selectedSlot = 36 + game->selectedSlot();
+    w.useSlot = game->use.active ? (game->use.hand ? 45 : w.selectedSlot) : -1;
+    w.useTicks = float(game->use.ticksUsing());
+    w.useRemaining = float(game->use.remaining);
+    // FishingHookRenderer.getHoldingArm: the main hand when it holds a fishing rod, else the off hand; only while our
+    // hook is out.
+    w.fishingSlot = -1;
+    static const int bobber = assets.typeId("minecraft:fishing_bobber");
+    for (const auto& [id, e] : world.entities())
+        if (e.type == bobber && e.direction == w.localId && w.localId >= 0) {
+            int item;
+            i32 dye;
+            bool foil;
+            heldStack(w.selectedSlot, item, dye, foil);
+            w.fishingSlot = models.itemName(item) == "fishing_rod" ? w.selectedSlot : 45;
+            break;
+        }
+    w.cooldown = [g = game, it = items.get(), pt](const ui::ItemStack& s) { return g->cooldownPercent(it->cooldownGroup(s), pt); };
+}
+
 const Visuals::Impl::PaintingInfo* Visuals::Impl::painting(int id) {
     if (id < 0 || id > 4096) return nullptr;
     if (paintings.size() <= size_t(id)) paintings.resize(size_t(id) + 1);
@@ -1373,6 +1462,9 @@ void Visuals::Impl::update() {
             bool foil;
             heldStack(menuSlot, e.equipment[slot], e.equipDye[slot], foil);
             e.equipFoil = u8((e.equipFoil & ~(1 << slot)) | (foil ? 1 << slot : 0));
+            const ui::ItemStack* st = ui ? ui->playerSlot(menuSlot) : nullptr;
+            if (!st) e.equipStack[slot] = nullptr;
+            else if (!e.equipStack[slot] || !e.equipStack[slot]->sameItemSameComponents(*st)) e.equipStack[slot] = std::make_shared<ui::ItemStack>(*st);
         };
         equip(0, 36 + game->selectedSlot());
         equip(1, 45);
@@ -1381,6 +1473,7 @@ void Visuals::Impl::update() {
         er.setLocalPlayer(avatarReady && game->cameraMode != 0 && !spectator ? &avatar : nullptr);
         er.setLocalPlayerShadow(avatarReady && game->cameraMode == 0 && !spectator ? &avatar : nullptr);  // first person
     }
+    updateItemOwner(partial);
     animClock += dt;
     models.tick(u64(animClock * 20.0));  // animated textures in the item atlas (block items, vibration particles)
     // FireworkRocketEntity.tick on the client: a spark behind the rocket every tick.
@@ -1422,6 +1515,16 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
             const int slot = (k == 0) == rightHanded ? 0 : 1;  // right arm holds the main hand when right handed
             const int item = e->equipment[slot];
             if (item < 0) continue;
+            ui::ItemContext ic = contextOf(*e, k == 0 ? ui::ItemDisplay::ThirdRight : ui::ItemDisplay::ThirdLeft, pt);
+            ic.owner.usingThis = (e->livingFlags & 1) && ((e->livingFlags & 2) ? 1 : 0) == slot;
+            ic.owner.useTicks = float(e->useTicks);
+            if (e->id == EntityRenderer::kLocalPlayerId) {  // the local player: its own use state
+                const ui::ItemWorld& w = ui::itemWorld();
+                ic.owner.usingThis = w.useSlot >= 0 && w.useSlot == (slot == 0 ? w.selectedSlot : 45);
+                ic.owner.useTicks = w.useTicks, ic.owner.remaining = w.useRemaining;
+                ic.owner.fishing = w.fishingSlot >= 0 && w.fishingSlot == (slot == 0 ? w.selectedSlot : 45);
+                ic.owner.selected = slot == 0;
+            }
             Xf m;
             std::memcpy(m.m, a.hand[k], sizeof(m.m));
             m = xfMul(m, xfRotX(-90.0f * kDeg));
@@ -1429,8 +1532,8 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
             const float ox = a.babyOffset ? 0.0f : 1.0f, oy = a.babyOffset ? 1.0f : 2.0f, oz = a.babyOffset ? -4.5f : -10.0f;
             m = xfMul(m, xfTranslate((k == 1 ? -1.0f : 1.0f) * ox / 16.0f, oy / 16.0f, oz / 16.0f));
             L.begin((u64(u32(a.entity)) << 4 | u64(k)) + 1);
-            pushItem(L, models.mesh(item, e->equipDye[slot], false), k == 0 ? Display::ThirdRight : Display::ThirdLeft,
-                     m, a.light, (e->equipFoil >> slot) & 1);
+            pushItem(L, models.mesh(stackOf(e->equipStack[slot], item, e->equipDye[slot]), ic),
+                     k == 0 ? Display::ThirdRight : Display::ThirdLeft, m, a.light, (e->equipFoil >> slot) & 1);
         }
         const int head = e->equipment[5];
         if ((a.valid & 4) && head >= 0) {
@@ -1452,7 +1555,8 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
                     m = xfMul(m, xfTranslate(0, -0.25f, 0));
                     m = xfMul(m, xfRotY(180.0f * kDeg));
                     m = xfMul(m, xfScale(0.625f, -0.625f, -0.625f));
-                    pushItem(L, models.mesh(head, e->equipDye[5], false), Display::Head, m, a.light, (e->equipFoil >> 5) & 1);
+                    pushItem(L, models.mesh(stackOf(e->equipStack[5], head, e->equipDye[5]), contextOf(*e, ui::ItemDisplay::Head, pt)),
+                             Display::Head, m, a.light, (e->equipFoil >> 5) & 1);
                 }
             }
         }
@@ -1516,9 +1620,9 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
                                                  Display::FirstRight, Display::Head, Display::Gui,     Display::Ground,
                                                  Display::Fixed, Display::None};
             const Display ctxt = kContext[std::clamp(s.itemContext, 0, 9)];
-            const bool flat = ctxt == Display::Gui || ctxt == Display::Ground || ctxt == Display::Fixed;
             worldLists.begin(u64(u32(id)) << 4 | 3);
-            pushItem(worldLists, models.mesh(e.itemId, e.itemDye, flat), ctxt, xfMul(m, xfRotY(kPi)),
+            const ui::ItemContext ic = contextOf(e, ui::ItemDisplay(std::clamp(s.itemContext, 0, 9)), pt);
+            pushItem(worldLists, models.mesh(stackOf(e.itemStack, e.itemId, e.itemDye), ic), ctxt, xfMul(m, xfRotY(kPi)),
                      displayLight(e, lightAt(e.pos[0], e.pos[1], e.pos[2])), e.itemFoil);
             continue;
         }
@@ -1585,7 +1689,8 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
                 Xf im = xfMul(m, xfTranslate(0, 0, invisible ? 0.5f : 0.4375f));
                 im = xfMul(im, xfRotZ(float(e.rotation % 8) * 45.0f * kDeg));
                 im = xfMul(im, xfScale(0.5f, 0.5f, 0.5f));
-                pushItem(L, models.mesh(e.itemId, e.itemDye, true), Display::Fixed, im, glow ? 0xFFu : light, e.itemFoil);
+                pushItem(L, models.mesh(stackOf(e.itemStack, e.itemId, e.itemDye), contextOf(e, ui::ItemDisplay::Fixed, pt)),
+                         Display::Fixed, im, glow ? 0xFFu : light, e.itemFoil);
             }
             continue;
         }
@@ -1617,7 +1722,7 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
         }
         // ItemEntityRenderer: bob, spin and several copies for larger stacks (GROUND display).
         if (e.itemId < 0) continue;
-        const ItemMesh& mesh = models.mesh(e.itemId, e.itemDye, true);
+        const ItemMesh& mesh = models.mesh(stackOf(e.itemStack, e.itemId, e.itemDye), contextOf(e, ui::ItemDisplay::Ground, pt));
         if (mesh.empty()) continue;
         const float age = float(e.age) + pt;
         Xf m;
@@ -2090,14 +2195,21 @@ void Visuals::Impl::buildHand(const PassContext& ctx, float viewProj[16], bool j
         // isUsingItem && useItemRemainingTicks > 0 && the use is this hand's
         const bool usingThis = use.active && use.remaining > 0 && use.hand == hand && use.item == h.item;
         const float remaining = float(use.remaining), duration = float(use.duration);
-        ItemModels::UseState us;  // the item model's using_item / use_duration / crossbow/pull / use_cycle
-        if (use.active && use.hand == hand && use.item == h.item) {
-            us.usingItem = true;
-            us.useTicks = float(use.ticksUsing());
-            us.pull = us.useTicks / 25.0f;  // CrossbowItem.getChargeDuration (no Quick Charge)
-            us.remaining = remaining;
-        }
-        us.charge = charge;
+        // The item model's context: the local player holding this hand's stack (using_item, use_duration, crossbow/pull,
+        // use_cycle, fishing_rod/cast, compass needles ...).
+        const ui::ItemWorld& w = ui::itemWorld();
+        const int menuSlot = hand == 0 ? 36 + game->selectedSlot() : 45;
+        const ui::ItemStack* live = ui->playerSlot(menuSlot);
+        const ui::ItemStack& stack = live && live->item == h.item ? *live : stackOf(nullptr, h.item, h.dye);
+        ui::ItemContext ic;
+        ic.display = rightArm ? ui::ItemDisplay::FirstRight : ui::ItemDisplay::FirstLeft;
+        ic.owner = w.player;
+        ic.seed = w.localId + int(ic.display);
+        if (use.active && use.hand == hand && use.item == h.item)
+            ic.owner.usingThis = true, ic.owner.useTicks = float(use.ticksUsing()), ic.owner.remaining = remaining;
+        ic.owner.fishing = w.fishingSlot == menuSlot;
+        ic.owner.selected = hand == 0;
+        ic.owner.cooldown = w.cooldown ? w.cooldown(stack) : 0.0f;
         if (name == "crossbow") {
             applyItemArm(ps, inv, inverseArmHeight);
             if (usingThis && !charge) {
@@ -2184,8 +2296,7 @@ void Visuals::Impl::buildHand(const PassContext& ctx, float viewProj[16], bool j
             applyItemArm(ps, inv, inverseArmHeight);
             if (att > 0) swingArm(ps, inv, att);
         }
-        pushItem(hudLists, models.mesh(h.item, h.dye, false, us), rightArm ? Display::FirstRight : Display::FirstLeft, ps, light,
-                 h.foil);
+        pushItem(hudLists, models.mesh(stack, ic), rightArm ? Display::FirstRight : Display::FirstLeft, ps, light, h.foil);
     };
     // LocalPlayer.isScoping: the spyglass overlay replaces the hands.
     if (use.active && ItemRules::Anim(use.anim) == ItemRules::Anim::Spyglass) return;

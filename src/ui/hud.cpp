@@ -2,6 +2,7 @@
 #include "assets/assets.h"
 #include "ui/gameplay_hud.h"
 #include "render/renderer.h"
+#include "ui/item_props.h"
 #include "ui/ui_state.h"
 #include "world/terrain.h"
 #include "world/world.h"
@@ -108,8 +109,27 @@ void Ui::State::tickHud() {
 
 void Ui::State::drawItem(Canvas& c, const ItemStack& s, float x, float y, bool decorations, const char* countOverride) {
     if (s.empty()) return;
+    // The item model context: GUI, the local player as the owner and what its state says about this stack (the game
+    // compares stack identity; slots are drawn from copies here, so equal stacks stand in for the same one).
+    const ItemWorld& w = itemWorld();
+    ItemContext ctx;
+    ctx.owner = w.player;
+    ctx.seed = int(x) + int(y) * 1000;  // GuiGraphics.renderItem seed: varies per slot position
+    auto is = [&](int slot) {
+        if (slot < 0 || size_t(slot) >= inventory.slots.size()) return false;
+        const ItemStack& o = inventory.slots[size_t(slot)];
+        return &o == &s || (o.count == s.count && o.sameItemSameComponents(s));
+    };
+    if (ctx.owner.present) {
+        ctx.owner.selected = is(w.selectedSlot);
+        ctx.owner.carried = &s == &carried;
+        if (w.useSlot >= 0 && is(w.useSlot))
+            ctx.owner.usingThis = true, ctx.owner.useTicks = w.useTicks, ctx.owner.remaining = w.useRemaining;
+        ctx.owner.fishing = w.fishingSlot >= 0 && is(w.fishingSlot);
+        ctx.owner.cooldown = w.cooldown ? w.cooldown(s) : 0.0f;
+    }
     float uv[4];
-    if (icons.icon(s, uv)) {
+    if (icons.icon(s, uv, &ctx)) {
         c.quad(x, y, x + 16, y + 16, uv[0], uv[1], uv[2], uv[3], kWhite, ModeIcon);
         if (items.foil(s)) {  // enchantment glint (glintStrength 0.75)
             c.setBlend(2);

@@ -9,6 +9,7 @@
 
 #include <climits>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <unordered_map>
 
@@ -20,6 +21,7 @@ class Client;
 }
 namespace ui {
 class Items;
+struct ItemStack;
 }
 
 namespace ent {
@@ -30,6 +32,7 @@ struct MetaValue {
     i64 i = 0;          // byte / int / long / bool / enum / holder id / item id (-1 = empty) / block state
     float f[4] = {};    // float, rotations, vector, quaternion; f[0] = item count for item stacks
     i32 str = -1;       // index into the event string pool (names)
+    i32 stack = -1;     // item stacks: index into the event stack pool (the whole stack with its components)
 };
 
 enum class EventType : u8 {
@@ -62,9 +65,10 @@ struct EventQueue {
     std::vector<MetaValue> meta;
     std::vector<i32> ints;
     std::vector<std::string> strings;
+    std::vector<std::shared_ptr<const ui::ItemStack>> stacks;
     void clear() {
         events.clear(), steps.clear(), meta.clear(), ints.clear();
-        strings.clear();
+        strings.clear(), stacks.clear();
     }
 };
 
@@ -162,6 +166,8 @@ struct Entity {
     i32 equipDye[8] = {-1, -1, -1, -1, -1, -1, -1, -1};   // dyed_color (RGB) by slot, -1 none
     u8 equipFoil = 0;                                      // enchantment glint by slot (bits)
     i32 itemDye = -1;                                      // item / item frame stack: dyed_color
+    // The whole stacks (data components: item models, trims, profiles, banner patterns ...); null when unknown.
+    std::shared_ptr<const ui::ItemStack> itemStack, equipStack[8];
     bool itemFoil = false;
     int mapId = -1;             // item / item frame stack: map_id component (-1 none)
     int rotation = 0;           // item frame rotation (0..7)

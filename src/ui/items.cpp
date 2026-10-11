@@ -146,6 +146,8 @@ void Items::setRegistries(const net::Client& client) {
     load("minecraft:instrument", instruments_);
     bannerPatterns_.clear();
     for (const net::Client::RegistryEntry& e : client.registryEntries("minecraft:banner_pattern")) bannerPatterns_.push_back(e.id);
+    trimMaterials_.clear();
+    for (const net::Client::RegistryEntry& e : client.registryEntries("minecraft:trim_material")) trimMaterials_.push_back(e.id);
     registriesSet_ = true;
 }
 

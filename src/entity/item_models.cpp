@@ -1,13 +1,23 @@
 #include "entity/item_models.h"
 
+#include "entity/entities.h"
 #include "entity/entity_assets.h"
 #include "ui/resources.h"
 #include "ui/sprites.h"
 
+#include <windows.h>
+#include <urlmon.h>
+#include <stb/stb_image.h>
+
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <array>
 #include <fstream>
+#include <functional>
+#include <thread>
+
+#pragma comment(lib, "urlmon.lib")
 
 namespace ent {
 
@@ -20,6 +30,13 @@ constexpr float kDeg = kPi / 180.0f;
 std::string strip(std::string s) {
     const size_t c = s.find(':');
     return c == std::string::npos ? s : s.substr(c + 1);
+}
+// Resource id -> "namespace:path" (default namespace minecraft) and its file in a resource pack.
+std::string normId(const std::string& id) { return id.find(':') == std::string::npos ? "minecraft:" + id : id; }
+std::string resPath(const std::string& id, const char* kind, const char* ext) {
+    const std::string n = normId(id);
+    const size_t c = n.find(':');
+    return "assets/" + n.substr(0, c) + "/" + kind + "/" + n.substr(c + 1) + ext;
 }
 float num(const json& v, float d) { return v.is_number() ? v.get<float>() : d; }
 // Member of an object, or null (never throws on other types).
@@ -138,6 +155,8 @@ void rotate3(float v[3], int axis, float a) {
 
 }  // namespace
 
+Xf itemTransformation(const nlohmann::json& t) { return transformation(t); }
+
 Xf xfMul(const Xf& a, const Xf& b) {
     Xf r;
     for (int i = 0; i < 3; ++i) {
@@ -191,11 +210,9 @@ struct ItemModels::Impl {
     std::vector<Animated> animated;
     std::unordered_map<std::string, Tex> textures;
     std::unordered_map<std::string, std::shared_ptr<JModel>> models;
-    std::unordered_map<u64, ItemMesh> meshes;
     std::unordered_map<std::string, ItemMesh> namedMeshes;
-    std::unordered_map<std::string, ItemMesh> useMeshes;  // mesh(item, dye, flat, use): by the selected models
+    std::unordered_map<std::string, ItemMesh> useMeshes;  // mesh(stack, context): by the evaluated parts
     std::unordered_map<int, std::string> itemParticles;
-    const ItemModels::UseState* use = nullptr;  // evaluate(): the holder's item use (null: not in use)
     std::unordered_map<int, Equippable> equippables;
     std::unordered_map<std::string, std::vector<EquipmentLayer>> equipLayers;
     std::unordered_map<std::string, std::string> particleTextures;
@@ -212,13 +229,14 @@ struct ItemModels::Impl {
     }
 
     Tex* tex(const std::string& rawName) {
-        const std::string key = strip(rawName);
+        if (rawName.empty()) return nullptr;
+        const std::string key = normId(rawName);
         auto it = textures.find(key);
         if (it != textures.end()) return it->second.rect >= 0 ? &it->second : nullptr;
         Tex& t = textures[key];
         ui::Image img;
-        if (!res->image("assets/minecraft/textures/" + key + ".png", img) || img.w <= 0 || img.h <= 0) return nullptr;
-        const std::string meta = "assets/minecraft/textures/" + key + ".png.mcmeta";
+        if (!res->image(resPath(key, "textures", ".png"), img) || img.w <= 0 || img.h <= 0) return nullptr;
+        const std::string meta = resPath(key, "textures", ".png.mcmeta");
         ui::Sprites::Animation anim;
         const bool animatedTex = res->exists(meta) && ui::Sprites::parseAnimation(img, res->json(meta), anim);
         int w = img.w, h = (img.h > img.w && img.h % img.w == 0) ? img.w : img.h;  // strips without .mcmeta: first frame
@@ -249,7 +267,7 @@ struct ItemModels::Impl {
     }
 
     std::shared_ptr<JModel> model(const std::string& rawName) {
-        const std::string name = strip(rawName);
+        const std::string name = rawName.empty() ? rawName : normId(rawName);
         if (auto it = models.find(name); it != models.end()) return it->second;
         auto m = std::make_shared<JModel>();
         models[name] = m;
@@ -257,11 +275,11 @@ struct ItemModels::Impl {
         const json* elements = nullptr;
         std::string cur = name;
         for (int guard = 0; guard < 32 && !cur.empty(); ++guard) {
-            if (cur == "builtin/generated") {
+            if (cur == "minecraft:builtin/generated") {
                 m->generated = true;
                 break;
             }
-            const json& j = jsonAt("assets/minecraft/models/" + cur + ".json");
+            const json& j = jsonAt(resPath(cur, "models", ".json"));
             if (!j.is_object()) break;
             if (j.contains("textures") && j["textures"].is_object())
                 for (const auto& t : j["textures"].items()) {
@@ -282,7 +300,7 @@ struct ItemModels::Impl {
                         for (float& v : tr.scale) v = std::clamp(v, -4.0f, 4.0f);
                     tr.set = true;
                 }
-            cur = j.contains("parent") && j["parent"].is_string() ? strip(j["parent"].get<std::string>()) : "";
+            cur = j.contains("parent") && j["parent"].is_string() ? normId(j["parent"].get<std::string>()) : "";
         }
         auto resolve = [&](std::string ref) {
             for (int g = 0; g < 16 && !ref.empty() && ref[0] == '#'; ++g) {
@@ -478,30 +496,49 @@ struct ItemModels::Impl {
         }
     }
 
-    // Entity model layer posed at its initial pose (special item renderers draw these with no extra transform).
-    bool entityModel(Out& out, const std::string& layer, const std::string& texture, const Xf& local, u32 color) {
-        const int mi = assets->model(layer), ti = assets->texture(texture);
-        if (mi < 0 || ti < 0) return false;
+    // Entity model layer (special item renderers draw these with no extra transform), at its initial pose unless
+    // `pose` changes it (returning false leaves the part's own quads out; its children stay). Texture: an entity atlas
+    // texture, or an item atlas rect (itemRect >= 0: downloaded skins).
+    using PoseFn = std::function<bool(const ModelPart& part, size_t index, PartPose& pose)>;
+    bool entityModel(Out& out, const std::string& layer, const std::string& texture, const Xf& local, u32 color,
+                     bool translucent = false, const PoseFn& pose = {}, int itemRect = -1) {
+        const int mi = assets->model(layer);
+        if (mi < 0) return false;
+        float u0, v0, du, dv;
+        u32 texId;
+        if (itemRect >= 0) {
+            const Rect& r = self->rects_[size_t(itemRect)];
+            u0 = r.u0, v0 = r.v0, du = r.du, dv = r.dv, texId = kTexItems;
+        } else if (const int ti = assets->texture(texture); ti >= 0) {
+            const TexRect& tr = assets->rect(ti);
+            u0 = tr.u0, v0 = tr.v0, du = tr.du, dv = tr.dv, texId = kTexEntity;
+        } else if (Tex* t = tex(texture)) {  // not in the entity atlas (shield patterns): the item atlas
+            const Rect& r = self->rects_[size_t(t->rect)];
+            u0 = r.u0, v0 = r.v0, du = r.du, dv = r.dv, texId = kTexItems;
+        } else {
+            return false;
+        }
         const auto& m = assets->modelAt(mi);
-        const TexRect& tr = assets->rect(ti);
         std::vector<Xf> mats(m.parts.size());
         for (size_t i = 0; i < m.parts.size(); ++i) {
             const ModelPart& part = m.parts[i];
-            const PartPose& p = part.pose;
+            PartPose p = part.pose;
+            const bool draw = !pose || pose(part, i, p);
             Xf l = xfTranslate(p.x / 16.0f, p.y / 16.0f, p.z / 16.0f);
             if (p.zRot != 0) l = xfMul(l, xfRotZ(p.zRot));
             if (p.yRot != 0) l = xfMul(l, xfRotY(p.yRot));
             if (p.xRot != 0) l = xfMul(l, xfRotX(p.xRot));
             if (p.xScale != 1 || p.yScale != 1 || p.zScale != 1) l = xfMul(l, xfScale(p.xScale, p.yScale, p.zScale));
             mats[i] = xfMul(part.parent >= 0 ? mats[size_t(part.parent)] : local, l);
+            if (!draw) continue;
             for (u32 q = part.quadFirst; q < part.quadFirst + part.quadCount; ++q) {
                 const GpuQuad& g = assets->quads()[q];
                 float pos[4][3], uvs[4][2];
                 for (int k = 0; k < 4; ++k) {
                     for (int a = 0; a < 3; ++a) pos[k][a] = g.pos[k][a] / 16.0f;
-                    uvs[k][0] = tr.u0 + g.uv[k][0] * tr.du, uvs[k][1] = tr.v0 + g.uv[k][1] * tr.dv;
+                    uvs[k][0] = u0 + g.uv[k][0] * du, uvs[k][1] = v0 + g.uv[k][1] * dv;
                 }
-                quad(out, mats[i], pos, uvs, g.normal, kTexEntity, color, 0, false);
+                quad(out, mats[i], pos, uvs, g.normal, texId, color, 0, translucent);
             }
         }
         return true;
@@ -511,8 +548,8 @@ struct ItemModels::Impl {
     struct Part {
         std::string model;
         std::vector<u32> tints;
-        std::string special, specialTex, specialKind;
-        u32 specialColor = 0xFFFFFF;
+        const json* special = nullptr;  // the special node's "model" object
+        ui::ItemStack stack;            // special models: the stack whose components they show
         Xf local;
     };
 
@@ -523,120 +560,255 @@ struct ItemModels::Impl {
         const u8* p = img.at(int((1.0f - temp) * 255.0f), int((1.0f - down) * 255.0f));
         return 0xFF000000u | (u32(p[0]) << 16) | (u32(p[1]) << 8) | p[2];
     }
-    u32 tint(const json& t, i32 dye) {
-        const std::string type = strip(t.value("type", ""));
-        auto def = [&](const char* k, u32 d) { return t.contains(k) && t[k].is_number() ? u32(t[k].get<i64>()) : d; };
-        if (type == "constant") return def("value", 0xFFFFFFFF);
-        if (type == "dye") return dye >= 0 ? 0xFF000000u | u32(dye) : def("default", 0xFFFFFFFF);
-        if (type == "grass") return colormap(grass, num(t.value("temperature", json()), 0.5f), num(t.value("downfall", json()), 1.f));
-        if (type == "foliage") return colormap(foliage, num(t.value("temperature", json()), 0.5f), num(t.value("downfall", json()), 1.f));
-        return def("default", 0xFFFFFFFF);
+
+    // The item definition of a stack (item_model component), evaluated into parts; `key` collects what the mesh
+    // depends on (the chosen leaves, tints, transforms and special data).
+    void evaluateStack(const ui::ItemStack& s, const ui::ItemContext& c, const Xf& local, std::vector<Part>& out,
+                       std::string& key, int depth) {
+        if (s.empty() || depth > 4) return;
+        const std::string id = ui::itemModelId(*self->items_, s);
+        if (id.empty()) return;
+        const json& def = jsonAt(resPath(id, "items", ".json"));
+        if (def.is_object()) evaluate(at(def, "model"), s, c, local, out, key, depth);
     }
 
-    void evaluate(const json& n, i32 dye, bool flat, const Xf& local, std::vector<Part>& out, int depth) {
-        if (!n.is_object() || depth > 16) return;
+    void evaluate(const json& n, const ui::ItemStack& s, const ui::ItemContext& c, const Xf& local, std::vector<Part>& out,
+                  std::string& key, int depth) {
+        if (!n.is_object() || depth > 24) return;
         const Xf here = n.contains("transformation") ? xfMul(local, transformation(n["transformation"])) : local;
         const std::string type = strip(n.value("type", ""));
+        auto keyPart = [&](const void* node, const Xf& m) {
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "|%p:", node);
+            key += buf;
+            key.append(reinterpret_cast<const char*>(m.m), sizeof(m.m));
+        };
         if (type == "model") {
             Part p;
             p.model = n.value("model", "");
             p.local = here;
-            if (n.contains("tints"))
-                for (const json& t : n["tints"]) p.tints.push_back(tint(t, dye));
+            if (n.contains("tints") && n["tints"].is_array())
+                for (const json& t : n["tints"])
+                    p.tints.push_back(ui::itemTint(*self->items_, t, s, c, [&](bool isFoliage, float temp, float down) {
+                        return colormap(isFoliage ? foliage : grass, temp, down);
+                    }));
+            keyPart(&n, here);
+            for (u32 t : p.tints) key.append(reinterpret_cast<const char*>(&t), sizeof(t));
             out.push_back(std::move(p));
         } else if (type == "composite") {
-            if (n.contains("models"))
-                for (const json& m : n["models"]) evaluate(m, dye, flat, here, out, depth + 1);
-        } else if (type == "condition") {
-            const bool on = use && strip(n.value("property", "")) == "using_item" && use->usingItem;
-            evaluate(n.value(on ? "on_true" : "on_false", json()), dye, flat, here, out, depth + 1);
-        } else if (type == "select") {
-            const std::string prop = strip(n.value("property", ""));
-            const json* pick = nullptr;
-            if (prop == "charge_type" && use && use->charge && n.contains("cases")) {
-                for (const json& c : n["cases"]) {
-                    const json& when = c.value("when", json());
-                    const char* want = use->charge == 2 ? "rocket" : "arrow";
-                    bool hit = when.is_string() && when.get<std::string>() == want;
-                    if (when.is_array())
-                        for (const json& w : when) hit |= w.is_string() && w.get<std::string>() == want;
-                    if (hit) {
-                        pick = &at(c, "model");
-                        break;
-                    }
-                }
-            }
-            if (prop == "display_context" && n.contains("cases")) {
-                for (const json& c : n["cases"]) {
-                    const json& when = c.value("when", json());
-                    auto match = [&](const std::string& s) {
-                        return flat ? (s == "gui" || s == "ground" || s == "fixed") : (s.find("person") != std::string::npos);
-                    };
-                    bool hit = false;
-                    if (when.is_string()) hit = match(when.get<std::string>());
-                    else if (when.is_array())
-                        for (const json& w : when) hit |= w.is_string() && match(w.get<std::string>());
-                    if (hit) {
-                        pick = &at(c, "model");
-                        break;
-                    }
-                }
-            }
-            if (pick) evaluate(*pick, dye, flat, here, out, depth + 1);
-            else if (n.contains("fallback")) evaluate(n["fallback"], dye, flat, here, out, depth + 1);
-            else if (n.contains("cases") && !n["cases"].empty()) evaluate(n["cases"][0].value("model", json()), dye, flat, here, out, depth + 1);
-        } else if (type == "range_dispatch") {
-            const json* best = nullptr;
-            float bestT = -1e30f;
-            // The property's value (0 without a use): RangeSelectItemModel picks the last threshold <= value.
-            float value = 0;
-            if (use) {
-                const std::string prop = strip(n.value("property", ""));
-                if (prop == "use_duration") value = use->usingItem ? use->useTicks : 0.0f;
-                else if (prop == "crossbow/pull") value = use->usingItem ? use->pull : 0.0f;
-                else if (prop == "use_cycle") {
-                    const float period = num(n.value("period", json()), 1.0f);
-                    value = use->usingItem && period > 0 ? std::fmod(use->remaining, period) : 0.0f;
-                }
-                value *= num(n.value("scale", json()), 1.0f);
-            }
-            if (n.contains("entries"))
-                for (const json& e : n["entries"]) {
-                    const float t = num(e.value("threshold", json()), 0);
-                    if (t <= value && t >= bestT) bestT = t, best = &e;
-                }
-            if (best) evaluate((*best).value("model", json()), dye, flat, here, out, depth + 1);
-            else if (n.contains("fallback")) evaluate(n["fallback"], dye, flat, here, out, depth + 1);
+            if (n.contains("models") && n["models"].is_array())
+                for (const json& m : n["models"]) evaluate(m, s, c, here, out, key, depth + 1);
+        } else if (type == "condition" || type == "select" || type == "range_dispatch") {
+            if (const json* next = ui::chooseItemModel(*self->items_, n, s, c)) evaluate(*next, s, c, here, out, key, depth + 1);
         } else if (type == "special") {
+            const json& sm = at(n, "model");
+            if (!sm.is_object()) return;
             Part p;
             p.model = n.value("base", "");
             p.local = here;
-            const json& sm = at(n, "model");
-            if (!sm.is_object()) return;
-            p.special = strip(sm.value("type", ""));
-            p.specialTex = strip(sm.value("texture", ""));
-            p.specialKind = sm.value("kind", "");
-            if (p.special == "banner") {
-                static const std::pair<const char*, u32> kDye[] = {
-                    {"white", 0xF9FFFE}, {"orange", 0xF9801D}, {"magenta", 0xC74EBD}, {"light_blue", 0x3AB3DA},
-                    {"yellow", 0xFED83D}, {"lime", 0x80C71F}, {"pink", 0xF38BAA}, {"gray", 0x474F52},
-                    {"light_gray", 0x9D9D97}, {"cyan", 0x169C9C}, {"purple", 0x8932B8}, {"blue", 0x3C44AA},
-                    {"brown", 0x835432}, {"green", 0x5E7C16}, {"red", 0xB02E26}, {"black", 0x1D1D21}};
-                for (auto [name, c] : kDye)
-                    if (sm.value("color", "white") == name) p.specialColor = c;
-            }
+            p.special = &sm;
+            p.stack = s;
+            keyPart(&n, here);
+            key += self->specialKey(sm, s);
             out.push_back(std::move(p));
+        } else if (type == "bundle/selected_item") {  // BundleSelectedItemSpecialRenderer: the selected item's layers
+            ui::ItemStack selected;
+            if (ui::bundleSelectedItem(*self->items_, s, selected)) {
+                key += "|bundle";
+                evaluateStack(selected, c, here, out, key, depth + 1);
+            }
         }
     }
 
+    // --- special model renderers (SpecialModelRenderers) ------------------------------------------------------
+    // Skins of player heads with a profile: textures from the profile's skin URL, downloaded once into
+    // %LOCALAPPDATA%\minecraftCplusplus\skins and loaded into the item atlas.
+    struct Skin {
+        std::atomic<int> state{0};  // 0 new, 1 downloading, 2 file ready, 3 failed
+        fs::path file;
+        int rect = -1;  // item atlas rect once loaded
+    };
+    std::unordered_map<std::string, std::unique_ptr<Skin>> skins;  // by URL
+
+    static std::string base64Decode(std::string_view in) {
+        std::string out;
+        int val = 0, bits = -8;
+        for (char ch : in) {
+            int d;
+            if (ch >= 'A' && ch <= 'Z') d = ch - 'A';
+            else if (ch >= 'a' && ch <= 'z') d = ch - 'a' + 26;
+            else if (ch >= '0' && ch <= '9') d = ch - '0' + 52;
+            else if (ch == '+' || ch == '-') d = 62;
+            else if (ch == '/' || ch == '_') d = 63;
+            else continue;
+            val = (val << 6) | d, bits += 6;
+            if (bits >= 0) out += char((val >> bits) & 0xFF), bits -= 8;
+        }
+        return out;
+    }
+
+    // The skin of a profile's "textures" property (base64 JSON naming the skin URL): its item atlas rect, -1 while it
+    // downloads or when there is none.
+    int profileSkin(const std::string& textures) {
+        if (textures.empty()) return -1;
+        const json j = json::parse(base64Decode(textures), nullptr, false);
+        const std::string url = at(at(at(j, "textures"), "SKIN"), "url").is_string()
+                                    ? at(at(at(j, "textures"), "SKIN"), "url").get<std::string>() : std::string();
+        // Only the game's own texture server (the property is data from the server, possibly unsigned).
+        if (!url.starts_with("http://textures.minecraft.net/texture/") && !url.starts_with("https://textures.minecraft.net/texture/"))
+            return -1;
+        auto& entry = skins[url];
+        if (!entry) {
+            entry = std::make_unique<Skin>();
+            const std::string hash = url.substr(url.rfind('/') + 1);
+            bool safe = !hash.empty() && hash.size() <= 128;
+            for (char ch : hash) safe = safe && std::isalnum(u8(ch)) != 0;
+            const wchar_t* local = _wgetenv(L"LOCALAPPDATA");
+            if (!safe || !local) {
+                entry->state = 3;
+                return -1;
+            }
+            const fs::path dir = fs::path(local) / L"minecraftCplusplus" / L"skins";
+            entry->file = dir / (hash + ".png");
+            std::error_code ec;
+            if (fs::exists(entry->file, ec)) {
+                entry->state = 2;
+            } else {
+                entry->state = 1;
+                fs::create_directories(dir, ec);
+                std::thread([e = entry.get(), url] {
+                    const fs::path tmp = fs::path(e->file).concat(".download");
+                    const bool ok = URLDownloadToFileW(nullptr, std::wstring(url.begin(), url.end()).c_str(), tmp.c_str(), 0, nullptr) == S_OK;
+                    std::error_code ec2;
+                    if (ok) fs::rename(tmp, e->file, ec2);
+                    e->state = ok && !ec2 ? 2 : 3;
+                }).detach();
+            }
+        }
+        if (entry->state == 2 && entry->rect < 0) {
+            entry->state = 3;  // unless it loads below
+            std::vector<u8> bytes;
+            int w = 0, h = 0, comp = 0;
+            u8* px = readFile(entry->file, bytes) ? stbi_load_from_memory(bytes.data(), int(bytes.size()), &w, &h, &comp, 4) : nullptr;
+            if (px && w == 64 && (h == 64 || h == 32)) {
+                // SkinTextureDownloader.processLegacySkin: 64 x 32 skins grow to 64 x 64 (the limbs, which heads do
+                // not use, are not mirrored over); opaque base layers; a fully opaque legacy hat layer is see-through.
+                std::vector<u8> rgba(64 * 64 * 4, 0);
+                std::memcpy(rgba.data(), px, size_t(w) * h * 4);
+                auto alpha = [&](int x, int y) -> u8& { return rgba[(size_t(y) * 64 + x) * 4 + 3]; };
+                auto noAlpha = [&](int x0, int y0, int x1, int y1) {
+                    for (int y = y0; y < y1; ++y)
+                        for (int x = x0; x < x1; ++x) alpha(x, y) = 255;
+                };
+                noAlpha(0, 0, 32, 16);
+                if (h == 32) {  // doNotchTransparencyHack
+                    bool translucent = false;
+                    for (int y = 0; y < 32 && !translucent; ++y)
+                        for (int x = 32; x < 64 && !translucent; ++x) translucent = alpha(x, y) < 128;
+                    if (!translucent)
+                        for (int y = 0; y < 32; ++y)
+                            for (int x = 32; x < 64; ++x) alpha(x, y) = 0;
+                }
+                noAlpha(0, 16, 64, 32);
+                noAlpha(16, 48, 48, 64);
+                int x, y;
+                if (self->atlas_.alloc(64, 64, x, y)) {
+                    self->atlas_.blit(x, y, 64, 64, rgba.data(), 64 * 4);
+                    const float W = float(self->atlas_.width()), H = float(self->atlas_.height());
+                    self->rects_.push_back({float(x) / W, float(y) / H, 64.0f / W, 64.0f / H, 64, 64, false});
+                    entry->rect = int(self->rects_.size() - 1);
+                    entry->state = 2;
+                }
+            }
+            if (px) stbi_image_free(px);
+        }
+        return entry->rect;
+    }
+    int skinState(const std::string& textures) {  // for mesh keys: a skin that finishes downloading changes the mesh
+        if (textures.empty()) return 0;
+        const json j = json::parse(base64Decode(textures), nullptr, false);
+        const json& url = at(at(at(j, "textures"), "SKIN"), "url");
+        auto it = url.is_string() ? skins.find(url.get<std::string>()) : skins.end();
+        return it == skins.end() ? 0 : it->second->state.load() * 2 + (it->second->rect >= 0 ? 1 : 0);
+    }
+
+    // DefaultPlayerSkin.get(profile): the profile's id (none: the nil UUID) picks one of the 18 default skins.
+    static std::string defaultSkin(const ui::ProfileInfo& prof) {
+        static const char* kSkins[9] = {"alex", "ari", "efe", "kai", "makena", "noor", "steve", "sunny", "zuri"};
+        const u8 nil[16] = {};
+        const int i = defaultSkinIndex(prof.hasId ? prof.uuid : nil);
+        return std::string(i < 9 ? "entity/player/slim/" : "entity/player/wide/") + kSkins[i % 9];
+    }
+
     bool special(Out& out, const Part& p) {
+        const json& sm = *p.special;
+        const std::string type = strip(sm.value("type", ""));
+        const ui::ItemStack& s = p.stack;
+        const ui::Items& items = *self->items_;
         const Xf& l = p.local;
-        if (p.special == "shield") return entityModel(out, "shield#main", "entity/shield/shield_base_nopattern", l, 0xFFFFFFFF);
-        if (p.special == "trident") return entityModel(out, "trident#main", "entity/trident/trident", l, 0xFFFFFFFF);
-        if (p.special == "chest") return entityModel(out, "chest#main", "entity/chest/" + (p.specialTex.empty() ? "normal" : p.specialTex), l, 0xFFFFFFFF);
-        if (p.special == "shulker_box")
-            return entityModel(out, "shulker_box#main", "entity/shulker/" + (p.specialTex.empty() ? "shulker" : p.specialTex), l, 0xFFFFFFFF);
-        if (p.special == "head" || p.special == "player_head") {
+        const u32 white = 0xFFFFFFFF;
+        auto tinted = [](u32 rgb) { return 0xFF000000u | abgrOf(rgb); };
+        // "minecraft:textures/entity/x.png" -> "entity/x"; plain ids go below `dir`.
+        auto texPath = [](std::string t, const char* dir) {
+            t = strip(t);
+            if (t.starts_with("textures/")) {
+                t = t.substr(9);
+                if (t.ends_with(".png")) t.resize(t.size() - 4);
+                return t;
+            }
+            return std::string(dir) + t;
+        };
+        // BannerRenderer.submitPatterns: the base layer in the base colour, then up to 16 pattern layers.
+        auto patterns = [&](const std::string& layer, const char* dir, int base, const std::vector<ui::BannerLayer>& layers,
+                            const PoseFn& pose) {
+            entityModel(out, layer, std::string(dir) + "base", l, tinted(ui::dyeDiffuse(base)), true, pose);
+            for (size_t i = 0; i < layers.size() && i < 16; ++i)
+                entityModel(out, layer, std::string(dir) + strip(layers[i].pattern), l, tinted(ui::dyeDiffuse(layers[i].dye)), true, pose);
+        };
+        if (type == "shield") {  // ShieldSpecialRenderer
+            const std::vector<ui::BannerLayer> layers = ui::bannerPatterns(items, s);
+            const int base = ui::baseColor(items, s);
+            const bool patterned = !layers.empty() || base >= 0;
+            const bool ok = entityModel(out, "shield#main", patterned ? "entity/shield/shield_base" : "entity/shield/shield_base_nopattern", l, white);
+            if (ok && patterned) patterns("shield#main", "entity/shield/", base < 0 ? 0 : base, layers, {});
+            return ok;
+        }
+        if (type == "banner") {  // BannerSpecialRenderer -> BannerRenderer.submitSpecial (phase 0)
+            int base = 0;
+            for (int d = 0; d < 16; ++d)
+                if (sm.value("color", "white") == ui::dyeName(d)) base = d;
+            const bool wall = sm.value("attachment", "ground") == "wall";
+            const std::string pole = wall ? "wall_banner#main" : "standing_banner#main", flag = wall ? "wall_banner#flag" : "standing_banner#flag";
+            const PoseFn phase0 = [](const ModelPart& part, size_t, PartPose& pp) {  // BannerFlagModel.setupAnim(0)
+                if (part.name == "flag") pp.xRot = (-0.0125f + 0.01f) * kPi;
+                return true;
+            };
+            const bool a = entityModel(out, pole, "entity/banner/banner_base", l, white);
+            const bool b = entityModel(out, flag, "entity/banner/banner_base", l, white, false, phase0);
+            if (b) patterns(flag, "entity/banner/", base, ui::bannerPatterns(items, s), phase0);
+            return a || b;
+        }
+        if (type == "trident") return entityModel(out, "trident#main", "entity/trident/trident", l, white);
+        if (type == "chest") {  // ChestSpecialRenderer: the lid opened by `openness`
+            const std::string kind = sm.value("chest_type", "single");
+            const char* layer = kind == "left" ? "double_chest_left#main" : kind == "right" ? "double_chest_right#main" : "chest#main";
+            std::string tex = strip(sm.value("texture", "normal"));
+            if (kind == "left" || kind == "right") tex += "_" + kind;
+            const float open = num(sm.value("openness", json()), 0.0f);
+            return entityModel(out, layer, "entity/chest/" + tex, l, white, false, [open](const ModelPart& part, size_t, PartPose& pp) {
+                if (part.name == "lid" || part.name == "lock") pp.xRot = -(open * kPi / 2);
+                return true;
+            });
+        }
+        if (type == "shulker_box") {  // ShulkerBoxRenderer.ShulkerBoxModel.setupAnim(openness)
+            const float open = num(sm.value("openness", json()), 0.0f);
+            return entityModel(out, "shulker_box#main", "entity/shulker/" + strip(sm.value("texture", "shulker")), l, white, false,
+                               [open](const ModelPart& part, size_t, PartPose& pp) {
+                                   if (part.name == "lid") pp.x = 0, pp.y = 24.0f - open * 8.0f, pp.z = 0, pp.yRot = 270.0f * open * kDeg;
+                                   return true;
+                               });
+        }
+        if (type == "head" || type == "player_head") {  // SkullSpecialRenderer / PlayerHeadSpecialRenderer
             static const char* kHeads[][3] = {{"skeleton", "skeleton_skull#main", "entity/skeleton/skeleton"},
                                               {"wither_skeleton", "wither_skeleton_skull#main", "entity/skeleton/wither_skeleton"},
                                               {"zombie", "zombie_head#main", "entity/zombie/zombie"},
@@ -644,16 +816,85 @@ struct ItemModels::Impl {
                                               {"dragon", "dragon_skull#main", "entity/enderdragon/dragon"},
                                               {"piglin", "piglin_head#main", "entity/piglin/piglin"},
                                               {"player", "player_head#main", "entity/player/wide/steve"}};
-            const std::string kind = p.special == "player_head" ? "player" : p.specialKind;
-            for (auto& h : kHeads)
-                if (kind == h[0]) return entityModel(out, h[1], h[2], l, 0xFFFFFFFF);
+            const std::string kind = type == "player_head" ? "player" : strip(sm.value("kind", ""));
+            const float anim = num(sm.value("animation", json()), 0.0f);
+            const PoseFn pose = [anim](const ModelPart& part, size_t, PartPose& pp) {
+                if (part.name == "jaw") pp.xRot = float(std::sin(anim * kPi * 0.2f) + 1.0) * 0.2f;  // DragonHeadModel
+                if (part.name == "left_ear") pp.zRot = float(-(std::cos(anim * kPi * 0.2f * 1.2f) + 2.5)) * 0.2f;  // PiglinHeadModel
+                if (part.name == "right_ear") pp.zRot = float(std::cos(anim * kPi * 0.2f) + 2.5) * 0.2f;
+                return true;
+            };
+            for (auto& h : kHeads) {
+                if (kind != h[0]) continue;
+                std::string tex = sm.contains("texture") ? "entity/" + strip(sm.value("texture", "")) : std::string(h[2]);
+                int rect = -1;
+                ui::ProfileInfo prof;
+                if (type == "player_head" && ui::profile(items, s, prof)) {
+                    rect = profileSkin(prof.textures);
+                    if (!prof.skinTexture.empty()) tex = prof.skinTexture, rect = -1;  // the profile's skin patch
+                    else if (rect < 0) tex = defaultSkin(prof);
+                }
+                return entityModel(out, h[1], tex, l, white, false, pose, rect);
+            }
             return false;
         }
-        if (p.special == "banner") {
-            const bool a = entityModel(out, "standing_banner#main", "entity/banner/banner_base", l, 0xFFFFFFFF);
-            const u32 c = 0xFF000000u | abgrOf(p.specialColor);
-            const bool b = entityModel(out, "standing_banner#flag", "entity/banner/base", l, c);
-            return a || b;
+        if (type == "conduit") return entityModel(out, "conduit#shell", "entity/conduit/base", l, white);  // ConduitSpecialRenderer
+        if (type == "bell") return entityModel(out, "bell#main", "entity/bell/bell_body", l, white);
+        if (type == "book") {  // BookSpecialRenderer: BookModel.setupAnim(open angle, page flips)
+            const float open = num(sm.value("open_angle", json()), 0.0f) * kDeg;
+            const float f1 = num(sm.value("page1", json()), 0.0f), f2 = num(sm.value("page2", json()), 0.0f);
+            return entityModel(out, "book#main", "entity/enchanting_table_book", l, white, false,
+                               [=](const ModelPart& part, size_t, PartPose& pp) {
+                                   const std::string& n = part.name;
+                                   if (n == "left_lid") pp.yRot = kPi + open;
+                                   else if (n == "right_lid") pp.yRot = -open;
+                                   else if (n == "left_pages") pp.yRot = open, pp.x = std::sin(open);
+                                   else if (n == "right_pages") pp.yRot = -open, pp.x = std::sin(open);
+                                   else if (n == "flip_page1") pp.yRot = open - open * 2.0f * f1, pp.x = std::sin(open);
+                                   else if (n == "flip_page2") pp.yRot = open - open * 2.0f * f2, pp.x = std::sin(open);
+                                   return true;
+                               });
+        }
+        if (type == "decorated_pot") {  // DecoratedPotRenderer.submit: neck, top, bottom, then the four sides
+            int sherds[4];
+            ui::potDecorations(items, s, sherds);
+            const bool a = entityModel(out, "decorated_pot_base#main", "entity/decorated_pot/decorated_pot_base", l, white);
+            static const char* kSides[4] = {"back", "left", "right", "front"};
+            for (int i = 0; i < 4; ++i) {
+                std::string tex = "entity/decorated_pot/decorated_pot_side";
+                const std::string item = sherds[i] >= 0 ? strip(items.name(sherds[i])) : "";
+                if (item.ends_with("_pottery_sherd")) {
+                    const std::string pattern = "entity/decorated_pot/" + item.substr(0, item.size() - 14) + "_pottery_pattern";
+                    if (assets->texture(pattern) >= 0) tex = pattern;
+                }
+                const std::string side = kSides[i];
+                entityModel(out, "decorated_pot_sides#main", tex, l, white, false,
+                            [&side](const ModelPart& part, size_t, PartPose&) { return part.name == side; });
+            }
+            return a;
+        }
+        if (type == "copper_golem_statue") {  // CopperGolemStatueModel.setupAnim: the root at y 0, turned upside down
+            const std::string pose = sm.value("pose", "standing");
+            const char* layer = pose == "sitting" ? "copper_golem_sitting#main" : pose == "running" ? "copper_golem_running#main"
+                                : pose == "star" ? "copper_golem_star#main" : "copper_golem#main";
+            return entityModel(out, layer, texPath(sm.value("texture", ""), "entity/"), l, white, false,
+                               [](const ModelPart&, size_t i, PartPose& pp) {
+                                   if (i == 0) pp.y = 0, pp.zRot = kPi;
+                                   return true;
+                               });
+        }
+        if (type == "end_cube") {  // EndCubeSpecialRenderer: the end portal / gateway effect's dark sky on a unit cube
+            const float uv[4][2] = {};
+            for (int d = 0; d < 6; ++d) {
+                float pts[4][3];
+                const float* n = kNormals[d];
+                const int ax = d < 2 ? 1 : d < 4 ? 2 : 0, s0 = (ax + 1) % 3, s1 = (ax + 2) % 3;
+                const float c = n[ax] > 0 ? 1.0f : 0.0f;
+                const float corners[4][2] = {{0, 1}, {0, 0}, {1, 0}, {1, 1}};
+                for (int k = 0; k < 4; ++k) pts[k][ax] = c, pts[k][s0] = corners[k][0], pts[k][s1] = corners[k][1];
+                quad(out, l, pts, uv, n, kTexSolid, 0xFF000000u | abgrOf(0x111727), kQuadNoShade, false);
+            }
+            return true;
         }
         return false;
     }
@@ -666,7 +907,7 @@ struct ItemModels::Impl {
             std::shared_ptr<JModel> m = model(p.model);
             Out out;
             bool any = false;
-            if (!p.special.empty()) any = special(out, p);
+            if (p.special) any = special(out, p);
             if (!any) {
                 if (m->generated) generated(out, *m, p.local, p.tints);
                 else if (!m->elements.empty()) cuboids(out, *m, p.local, p.tints);
@@ -757,59 +998,89 @@ void ItemModels::tick(u64 tick) {
     }
 }
 
-const ItemMesh& ItemModels::mesh(int item, i32 dye, bool flat) {
-    if (item < 0 || size_t(item) >= impl_->itemNames.size()) return impl_->emptyMesh;
-    const u64 key = (u64(u32(item)) << 32) | (u64(u32(dye + 1) & 0x7FFFFFFF) << 1) | u64(flat);
-    auto it = impl_->meshes.find(key);
-    if (it != impl_->meshes.end()) return it->second;
-    const std::string name = strip(impl_->itemNames[size_t(item)]);
-    std::vector<Impl::Part> parts;
-    ItemMesh mesh;
-    try {
-        const json& def = impl_->jsonAt("assets/minecraft/items/" + name + ".json");
-        if (def.is_object()) impl_->evaluate(def.value("model", json()), dye, flat, Xf{}, parts, 0);
-        mesh = impl_->build(parts);
-    } catch (const std::exception& ex) {
-        LOG("visuals: item model of %s: %s", name.c_str(), ex.what());
-    }
-    return impl_->meshes.emplace(key, mesh).first->second;
+ui::ItemStack ItemModels::plainStack(int item, i32 dye) {
+    ui::ItemStack s;
+    s.item = item, s.count = 1, s.dyedColor = dye;
+    return s;
 }
 
-const ItemMesh& ItemModels::mesh(int item, i32 dye, bool flat, const UseState& use) {
-    if (item < 0 || size_t(item) >= impl_->itemNames.size()) return impl_->emptyMesh;
-    const std::string name = strip(impl_->itemNames[size_t(item)]);
+const ItemMesh& ItemModels::mesh(const ui::ItemStack& s, const ui::ItemContext& c) {
+    if (s.empty() || !items_ || size_t(s.item) >= impl_->itemNames.size()) return impl_->emptyMesh;
     std::vector<Impl::Part> parts;
+    std::string key;
+    key.reserve(128);
     try {
-        const json& def = impl_->jsonAt("assets/minecraft/items/" + name + ".json");
-        impl_->use = &use;
-        if (def.is_object()) impl_->evaluate(def.value("model", json()), dye, flat, Xf{}, parts, 0);
-        impl_->use = nullptr;
-    } catch (const std::exception&) {
-        impl_->use = nullptr;
-        return mesh(item, dye, flat);
+        impl_->evaluateStack(s, c, Xf{}, parts, key, 0);
+    } catch (const std::exception& ex) {
+        LOG("visuals: item model of %s: %s", impl_->itemNames[size_t(s.item)].c_str(), ex.what());
+        return impl_->emptyMesh;
     }
-    std::string key = std::to_string(item) + "|" + std::to_string(dye) + (flat ? "|f" : "|h");
-    for (const Impl::Part& p : parts) key += "|" + p.model + "#" + p.special;
     auto it = impl_->useMeshes.find(key);
     if (it != impl_->useMeshes.end()) return it->second;
     ItemMesh m;
     try {
         m = impl_->build(parts);
     } catch (const std::exception& ex) {
-        LOG("visuals: item model of %s: %s", name.c_str(), ex.what());
+        LOG("visuals: item model of %s: %s", impl_->itemNames[size_t(s.item)].c_str(), ex.what());
     }
-    return impl_->useMeshes.emplace(key, m).first->second;
+    return impl_->useMeshes.emplace(std::move(key), m).first->second;
+}
+
+std::string ItemModels::specialKey(const nlohmann::json& sm, const ui::ItemStack& s) {
+    if (!items_) return "";
+    const std::string type = strip(sm.value("type", ""));
+    std::string key = "|" + type;
+    if (type == "shield" || type == "banner") {
+        key += std::to_string(ui::baseColor(*items_, s));
+        for (const ui::BannerLayer& l : ui::bannerPatterns(*items_, s)) key += "," + l.pattern + ":" + std::to_string(l.dye);
+    } else if (type == "player_head") {
+        ui::ProfileInfo prof;
+        if (ui::profile(*items_, s, prof)) {
+            key += prof.skinTexture + "#" + prof.textures + "#" + std::to_string(impl_->skinState(prof.textures));
+            key.append(reinterpret_cast<const char*>(prof.uuid), prof.hasId ? 16 : 0);
+        }
+    } else if (type == "decorated_pot") {
+        int sherds[4];
+        ui::potDecorations(*items_, s, sherds);
+        for (int i : sherds) key += "," + std::to_string(i);
+    }
+    return key;
+}
+
+bool ItemModels::specialQuads(const nlohmann::json& sm, const ui::ItemStack& s, const Xf& local, std::vector<MeshQuad>& out) {
+    if (!items_) return false;
+    Impl::Part p;
+    p.special = &sm;
+    p.stack = s;
+    p.local = local;
+    Impl::Out o;
+    try {
+        if (!impl_->special(o, p)) return false;
+    } catch (const std::exception&) {
+        return false;
+    }
+    out.insert(out.end(), o.cutout.begin(), o.cutout.end());
+    out.insert(out.end(), o.translucent.begin(), o.translucent.end());
+    return true;
+}
+
+ItemModels::AtlasView ItemModels::atlasView(u32 tex) const {
+    if (tex == kTexItems) return {atlas_.data(), atlas_.width(), atlas_.height()};
+    if (tex == kTexEntity) return {impl_->assets->atlas().data(), int(impl_->assets->atlasWidth()), int(impl_->assets->atlasHeight())};
+    return {};
 }
 
 std::string ItemModels::itemParticleTexture(int item) {
-    if (item < 0 || size_t(item) >= impl_->itemNames.size()) return {};
+    if (item < 0 || size_t(item) >= impl_->itemNames.size() || !items_) return {};
     auto it = impl_->itemParticles.find(item);
     if (it != impl_->itemParticles.end()) return it->second;
     std::string result;
     try {
-        const json& def = impl_->jsonAt("assets/minecraft/items/" + strip(impl_->itemNames[size_t(item)]) + ".json");
         std::vector<Impl::Part> parts;
-        if (def.is_object()) impl_->evaluate(def.value("model", json()), -1, true, Xf{}, parts, 0);
+        std::string key;
+        ui::ItemContext c;
+        c.display = ui::ItemDisplay::Ground;
+        impl_->evaluateStack(plainStack(item), c, Xf{}, parts, key, 0);
         if (!parts.empty() && !parts[0].model.empty()) {
             const auto m = impl_->model(parts[0].model);
             result = strip(!m->particle.empty() ? m->particle : m->layers.empty() ? std::string() : m->layers[0]);

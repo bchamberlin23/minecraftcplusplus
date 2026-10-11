@@ -10,7 +10,13 @@
 #include <memory>
 #include <unordered_map>
 
+namespace ent {
+class ItemModels;
+}
+
 namespace ui {
+
+struct ItemContext;
 
 class ItemIcons {
 public:
@@ -18,8 +24,12 @@ public:
     ~ItemIcons();
     void init(const Resources& res, const Items& items, Atlas& atlas);
     void setScale(int guiScale);  // re-renders lazily at the new size
-    // Atlas UVs of the icon (u0 v0 u1 v1); false when the item draws nothing.
-    bool icon(const ItemStack& s, float uv[4]);
+    // The 3D item models (special model renderers: banners, shields, heads ... drawn from the same entity model
+    // geometry); until set, special models are simple boxes.
+    void setItemModels(ent::ItemModels* models);
+    // Atlas UVs of the icon (u0 v0 u1 v1); false when the item draws nothing. The item model properties read the
+    // context (default: the GUI display context with the local player as the owner, itemWorld().player).
+    bool icon(const ItemStack& s, float uv[4], const ItemContext* context = nullptr);
     // Icons with animated textures (prismarine, magma, sea lantern...) are redrawn when a frame changes.
     void tick(u64 tick);
     int iconSize() const { return size_; }

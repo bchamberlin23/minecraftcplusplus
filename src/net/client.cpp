@@ -316,7 +316,7 @@ bool Client::handleConfiguration(const std::string& name, Reader& r) {
         const i32 n = r.varInt();
         if (registry == "minecraft:worldgen/biome") biomeBits_ = std::max(1, ceilLog2(u32(n)));
         static const char* const kKept[] = {"minecraft:enchantment", "minecraft:painting_variant", "minecraft:instrument",
-                                            "minecraft:banner_pattern"};
+                                            "minecraft:banner_pattern", "minecraft:trim_material"};
         std::vector<RegistryEntry>* kept = nullptr;
         for (const char* k : kKept)
             if (registry == k) kept = &registries_[registry], kept->clear();

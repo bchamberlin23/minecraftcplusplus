@@ -72,13 +72,15 @@ const ui::Items* gItems = nullptr;  // EntityWorld::setItemDecoder
 // ItemStack.OPTIONAL_STREAM_CODEC. Component patches are not length-prefixed: without the item registry a stack
 // with added components cannot be skipped and returns false (after reading the item id); the caller stops there.
 bool readItemStack(net::Reader& r, i64& item, int& count, i32* dye = nullptr, bool* foil = nullptr, i32* mapId = nullptr,
-                   std::string* fireworks = nullptr) {
+                   std::string* fireworks = nullptr, std::shared_ptr<const ui::ItemStack>* full = nullptr) {
     if (dye) *dye = -1;
     if (foil) *foil = false;
     if (mapId) *mapId = -1;
     if (gItems) {
-        ui::ItemStack st;
+        auto stack = std::make_shared<ui::ItemStack>();
+        ui::ItemStack& st = *stack;
         const bool ok = gItems->read(r, st);
+        if (full && !st.empty()) *full = std::move(stack);
         item = st.empty() ? -1 : st.item;
         count = st.count;
         if (dye) *dye = st.dyedColor >= 0 ? i32(st.dyedColor & 0xFFFFFF) : -1;
@@ -333,8 +335,10 @@ void readEntityData(net::Reader& r, EventQueue& q, int entityEffect) {
                 i32 dye = -1, mapId = -1;
                 bool foil = false;
                 std::string fireworks;
-                const bool complete = readItemStack(r, v.i, count, &dye, &foil, &mapId, &fireworks);
+                std::shared_ptr<const ui::ItemStack> full;
+                const bool complete = readItemStack(r, v.i, count, &dye, &foil, &mapId, &fireworks, &full);
                 v.f[0] = float(count), v.f[1] = float(dye), v.f[2] = foil ? 1.0f : 0.0f, v.f[3] = float(mapId);
+                if (full) q.stacks.push_back(std::move(full)), v.stack = i32(q.stacks.size() - 1);
                 if (!fireworks.empty()) q.strings.push_back(std::move(fireworks)), v.str = i32(q.strings.size() - 1);
                 stop = !complete;
                 break;
@@ -523,12 +527,15 @@ void EntityWorld::attach(net::Client& client) {
             int count;
             i32 dye;
             bool foil;
-            const bool complete = readItemStack(r, item, count, &dye, &foil);
+            std::shared_ptr<const ui::ItemStack> full;
+            const bool complete = readItemStack(r, item, count, &dye, &foil, nullptr, nullptr, &full);
             if (!r.ok) break;
             q.ints.push_back(slot & 127), q.ints.push_back(i32(item)), q.ints.push_back(dye), q.ints.push_back(foil);
+            q.ints.push_back(full ? i32(q.stacks.size()) : -1);
+            if (full) q.stacks.push_back(std::move(full));
             if (!complete || !(slot & 0x80)) break;
         }
-        e.count = (u32(q.ints.size()) - e.first) / 4;
+        e.count = (u32(q.ints.size()) - e.first) / 5;
         if (e.count) q.events.push_back(e);
     });
     on("player_info_update", [](net::Reader& r, EventQueue& q) {
@@ -855,11 +862,13 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
         case EventType::Data: applyData(e, &q.meta[ev.first], ev.count, q); break;
         case EventType::Equipment:
             for (u32 i = 0; i < ev.count; ++i) {
-                const int slot = q.ints[ev.first + i * 4];
+                const int slot = q.ints[ev.first + i * 5];
                 if (slot < 0 || slot >= 8) continue;
-                e.equipment[slot] = q.ints[ev.first + i * 4 + 1];
-                e.equipDye[slot] = q.ints[ev.first + i * 4 + 2];
-                e.equipFoil = u8((e.equipFoil & ~(1 << slot)) | (q.ints[ev.first + i * 4 + 3] ? 1 << slot : 0));
+                e.equipment[slot] = q.ints[ev.first + i * 5 + 1];
+                e.equipDye[slot] = q.ints[ev.first + i * 5 + 2];
+                e.equipFoil = u8((e.equipFoil & ~(1 << slot)) | (q.ints[ev.first + i * 5 + 3] ? 1 << slot : 0));
+                const i32 stack = q.ints[ev.first + i * 5 + 4];
+                e.equipStack[slot] = stack >= 0 ? q.stacks[size_t(stack)] : nullptr;
             }
             break;
         case EventType::Swing: e.swingTime = 0; break;
@@ -920,7 +929,7 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
         else if (idx == d.horseVariant) e.variant = int(v.i & 0xFF), e.variant2 = int((v.i >> 8) & 0xFF);
         else if (idx == d.item && v.serializer == 7)
             e.itemId = int(v.i), e.itemCount = std::max(1, int(v.f[0])), e.itemDye = i32(v.f[1]), e.itemFoil = v.f[2] > 0.5f,
-            e.mapId = int(v.f[3]);
+            e.mapId = int(v.f[3]), e.itemStack = v.stack >= 0 ? q.stacks[size_t(v.stack)] : nullptr;
         else if (idx == d.rotation && v.serializer == 1) e.rotation = int(v.i);
         else if (idx == d.painting && v.serializer == 34) e.painting = int(v.i);
         else if (idx == d.nameVisible && v.serializer == 8) e.nameVisible = v.i != 0;
@@ -983,6 +992,7 @@ bool EntityWorld::applyDisplayData(Entity& e, const DataIds& d, const MetaValue&
     else if (idx == d.dBlock && v.serializer == 14) e.blockState = int(v.i), s.updateRender = true;
     else if (idx == d.dItem && v.serializer == 7) {
         e.itemId = int(v.i), e.itemCount = std::max(1, int(v.f[0])), e.itemDye = i32(v.f[1]), e.itemFoil = v.f[2] > 0.5f;
+        e.itemStack = v.stack >= 0 ? q.stacks[size_t(v.stack)] : nullptr;
         s.updateRender = true;
     } else if (idx == d.dItemContext) s.itemContext = int(v.i), s.updateRender = true;
     else if (idx == d.dText && v.str >= 0) s.text = q.strings[size_t(v.str)], ++s.textVersion, s.updateRender = true;

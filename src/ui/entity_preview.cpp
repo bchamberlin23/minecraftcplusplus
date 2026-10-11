@@ -296,7 +296,9 @@ void drawEntityFollowsMouse(UiState& s, Canvas& c, const PreviewEntity& pe, int 
         const ItemStack& held = pe.held[k];
         float iuv[4];
         if (!haveHand[k] || held.empty() || !s.icons.icon(held, iuv)) continue;
-        const ent::ItemMesh& mesh = s.itemModels->mesh(held.item, i32(held.dyedColor), false);
+        ItemContext ic;
+        ic.display = k == 0 ? ItemDisplay::ThirdRight : ItemDisplay::ThirdLeft;
+        const ent::ItemMesh& mesh = s.itemModels->mesh(held, ic);
         if (mesh.empty()) continue;
         M34 m = mul(hand[k], rotX(-kPi / 2));
         m = mul(m, rotY(kPi));

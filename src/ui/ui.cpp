@@ -1,5 +1,7 @@
 #include "ui/ui.h"
 
+#include "ui/item_props.h"
+
 #include "assets/assets.h"
 #include "assets/game_reports.h"
 #include "ui/frontend.h"
@@ -458,6 +460,14 @@ bool Ui::loadImpl(const fs::path& jar, const fs::path& minecraftDir, const GameR
                             "gui/container/blast_furnace"})
         s.sprites.texture(tex);
     s.icons.init(s.res, s.items, s.iconAtlas);
+    itemWorld().keyDown = [st = &s](std::string_view name) {  // IsKeybindDown: KeyMapping.isDown by name
+        for (size_t k = 0; k < kKeyCount; ++k)
+            if (name == keyDef(Key(k)).name) {
+                const int vk = st->settings.key(Key(k));
+                return vk != 0 && st->window && st->window->keyDown(vk);
+            }
+        return false;
+    };
     s.loaded = true;
     LOG("ui      %8.1f ms  fonts, GUI sprites and %d items from the game", t.ms(), s.items.count());
     return true;
@@ -545,6 +555,7 @@ void Ui::registerHandlers(net::Client& client) {
     client.setInformation(clientInformation(s->settings));  // the login sends it
     const Lang* lang = &s->res.lang();
     const Items* items = &s->items;
+    attachItemWorld(client);  // item model properties: dimension, spawn, last death (item_props.h)
 
     client.onPlay("set_health", [s](net::Reader& r) {
         const float health = r.f32();
@@ -978,7 +989,10 @@ void Ui::attachSession(net::Client* client, net::Session* session) {
 }
 
 void Ui::setEntities(ent::EntityWorld* entities) { s_->entities = entities; }
-void Ui::setItemModels(ent::ItemModels* models) { s_->itemModels = models; }
+void Ui::setItemModels(ent::ItemModels* models) {
+    s_->itemModels = models;
+    s_->icons.setItemModels(models);
+}
 
 int Ui::ticksFrozen() const { return s_->ticksFrozen; }
 
@@ -1121,6 +1135,7 @@ void Ui::State::runScript(double) {
 void Ui::beginFrame(double dt) {
     State& s = *s_;
     s.clock += dt;
+    itemWorld().shiftDown = s.window && s.window->keyDown(VK_SHIFT);
     {
         std::vector<std::function<void()>> pending;
         {
