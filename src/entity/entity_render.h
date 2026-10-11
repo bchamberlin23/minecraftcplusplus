@@ -5,6 +5,7 @@
 #include "entity/entities.h"
 #include "entity/entity_anim.h"
 #include "entity/item_models.h"
+#include "game/item_rules.h"
 #include "render/pack_sink.h"
 #include "render/renderer.h"
 
@@ -33,6 +34,8 @@ public:
 
     // Equipment (armor, elytra) from the item models' equipment data; dropped items are left to the visuals pass.
     void setItemModels(ItemModels* items) { items_ = items; }
+    // Item default components (spear timing for the arm poses).
+    void setRules(ItemRules* rules) { rules_ = rules; }
     void setItemEntitiesExternal(bool external) { externalItems_ = external; }  // the visuals pass draws item entities
     // The local player, drawn like any other player while the camera is detached (F5); nullptr: not drawn.
     void setLocalPlayer(const Entity* e) { localPlayer_ = e; }
@@ -126,6 +129,7 @@ private:
     std::unordered_map<u64, CachedLayers> layerCache_;  // resolved layers by type + variant state
     int equipmentLayers(const Entity& e, const TypeDef& d, Layer* out, int max);
     ItemModels* items_ = nullptr;
+    ItemRules* rules_ = nullptr;
     bool externalItems_ = false;
     const Entity* localPlayer_ = nullptr;
     const Entity* localShadow_ = nullptr;

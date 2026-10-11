@@ -320,9 +320,14 @@ void Game::startUseItem(bool afterEntity) {
     useConsumed_ = false;
     for (int hand = 0; hand < 2; ++hand) {
         if (!afterEntity && target_.hit) {
+            useOnTakesItem = placedLast_ = false;
             const int r = useItemOn(hand);
             if (r != kUsePass) {  // consumed (placed, used the block) or failed: done
                 useConsumed_ = true;
+                // A use that took one of the stack (a placed block, an egg...) or any use in creative
+                // (hasInfiniteMaterials) moves the hand.
+                const bool hasItem = handHasItem ? handHasItem(hand) : hand == 0;
+                if (r == kUseConsume && hasItem && (placedLast_ || useOnTakesItem || instabuild) && onItemUsed) onItemUsed(hand);
                 return;
             }
         }
@@ -330,7 +335,10 @@ void Game::startUseItem(bool afterEntity) {
         if (!hasItem) continue;
         if (onUseItem) onUseItem(hand);  // ServerboundUseItemPacket (sent even while the item cools down)
         usingItem_ = true;
-        if (predictItemUse && predictItemUse(hand, afterEntity || !target_.hit ? nullptr : &target_) == kUseConsume) return;
+        if (predictItemUse && predictItemUse(hand, afterEntity || !target_.hit ? nullptr : &target_) == kUseConsume) {
+            if (onItemUsed) onItemUsed(hand);
+            return;
+        }
     }
 }
 
@@ -343,7 +351,7 @@ bool Game::useTarget(bool place) {
         const u16 old = world_.block(target_.x, target_.y, target_.z);
         edit(target_.x, target_.y, target_.z, 0);
         if (onBlockChanged && old) onBlockChanged(false, target_.x, target_.y, target_.z, old);
-        if (onSwing) onSwing();
+        if (onSwing) onSwing(0, swingType);
         return true;
     }
     useItemOn(0);
@@ -421,10 +429,10 @@ int Game::useItemOn(int hand) {
     edit(t[0], t[1], t[2], id);
     placedLast_ = true;
     if (onBlockChanged) onBlockChanged(true, t[0], t[1], t[2], id);
-    if (onSwing) {  // a use swing: the item's interact_animation
+    if (onSwing) {  // a use swing: the used hand's interact_animation
         const int attackSwing = swingTicks;
-        swingTicks = useSwingTicks;
-        onSwing();
+        swingTicks = useSwingTicksOf[hand & 1];
+        onSwing(hand & 1, useSwingTypeOf[hand & 1]);
         swingTicks = attackSwing;
     }
     return kUseConsume;
@@ -464,6 +472,7 @@ void Game::tickCameraFeedback() {
     if (dead && deathTime < 20) ++deathTime;
     if (!dead) deathTime = 0;
     ++attackStrengthTicker;  // Player.tick
+    if (kineticHitTicks >= 0) ++kineticHitTicks;
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -586,13 +595,13 @@ bool Game::startAttack() {
         if (onStab) onStab();
         if (onStabEffects) onStabEffects();
         attackStrengthTicker = 0;  // Player.onAttack
-        if (onSwing) onSwing();
+        if (onSwing) onSwing(0, swingType);
         return true;
     }
     // An entity in front of the targeted block takes the press (the attack packet carries its own punch).
     if (onEntityClick && onEntityClick(true, false, blockDistance_)) {
         attackStrengthTicker = 0;  // MultiPlayerGameMode.attack -> resetAttackStrengthTicker
-        if (onSwing) onSwing();
+        if (onSwing) onSwing(0, swingType);
         return false;
     }
     bool endAttack = false;
@@ -603,7 +612,7 @@ bool Game::startAttack() {
         if (!instabuild) missTime_ = 10;  // MultiPlayerGameMode.hasMissTime: survival-like modes
         attackStrengthTicker = 0;         // resetAttackStrengthTicker
     }
-    if (onSwing) onSwing();
+    if (onSwing) onSwing(0, swingType);
     if (onPunch) onPunch();
     return endAttack;
 }
@@ -613,7 +622,7 @@ void Game::continueAttack(bool down) {
     if (missTime_ > 0 || use.active || heldPiercing) return;  // piercing weapons do not break blocks
     if (down && target_.hit && world_.block(target_.x, target_.y, target_.z) != 0) {
         if (continueDestroyBlock(target_.x, target_.y, target_.z, target_.face)) {
-            if (onSwing) onSwing();
+            if (onSwing) onSwing(0, swingType);
             if (onPunch) onPunch();
         }
     } else {

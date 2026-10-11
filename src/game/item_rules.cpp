@@ -340,10 +340,33 @@ const ItemRules::ItemInfo& ItemRules::item(std::string_view itemName) {
         k.hasAttackRange = true;
         for (int i = 0; i < 6; ++i) k.attackRange[i] = r.value(kKeys[i], k.attackRange[i]);
     }
-    if (c.contains("minecraft:attack_animation") && c["minecraft:attack_animation"].is_object())
+    auto swingType = [](const nlohmann::json& a) {
+        const std::string t = a.value("type", "whack");
+        return t == "none" ? 0 : t == "stab" ? 2 : 1;
+    };
+    if (c.contains("minecraft:attack_animation") && c["minecraft:attack_animation"].is_object()) {
         k.attackSwingTicks = c["minecraft:attack_animation"].value("duration", 6);
-    if (c.contains("minecraft:interact_animation") && c["minecraft:interact_animation"].is_object())
+        k.attackSwingType = swingType(c["minecraft:attack_animation"]);
+    }
+    if (c.contains("minecraft:interact_animation") && c["minecraft:interact_animation"].is_object()) {
         k.interactSwingTicks = c["minecraft:interact_animation"].value("duration", 6);
+        k.interactSwingType = swingType(c["minecraft:interact_animation"]);
+    }
+    if (c.contains("minecraft:kinetic_weapon") && c["minecraft:kinetic_weapon"].is_object()) {
+        const nlohmann::json& w = c["minecraft:kinetic_weapon"];
+        auto duration = [&](const char* key) {
+            return w.contains(key) && w[key].is_object() ? w[key].value("max_duration_ticks", 0) : 0;
+        };
+        k.kineticValid = true;
+        k.kineticDelay = w.value("delay_ticks", 0);
+        k.kineticDismount = duration("dismount_conditions"), k.kineticKnockback = duration("knockback_conditions");
+        k.kineticDamage = duration("damage_conditions");
+        k.kineticForward = w.value("forward_movement", 0.0f);
+        if (w.contains("hit_sound")) {
+            const nlohmann::json& s = w["hit_sound"];
+            k.kineticHitSound = s.is_string() ? s.get<std::string>() : s.is_object() ? s.value("sound_id", "") : "";
+        }
+    }
     k.classUse = shortName == "bow" || shortName == "crossbow" || shortName == "trident" || shortName == "spyglass" ||
                  shortName == "goat_horn" || shortName == "brush" || shortName == "bundle" || shortName.ends_with("_bundle");
     if (shortName == "bow") info.use = {Anim::Bow, 72000};

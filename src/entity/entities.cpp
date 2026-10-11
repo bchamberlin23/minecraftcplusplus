@@ -574,7 +574,9 @@ void EntityWorld::attach(net::Client& client) {
         Event e;
         e.type = EventType::Swing;
         e.id = r.varInt();
-        e.a = r.varInt();  // hand
+        e.a = r.varInt();      // hand
+        e.b = r.varInt();      // SwingAnimation: type (0 none, 1 whack, 2 stab), duration
+        e.count = u32(r.varInt());
         if (r.ok) q.events.push_back(e);
     });
     on("animate", [](net::Reader& r, EventQueue& q) {  // wake up / critical hit particles
@@ -792,7 +794,10 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
         }
         return;
     }
-    if (it == entities_.end()) return;
+    if (it == entities_.end()) {
+        if (ev.type == EventType::EntityEvent && onUntrackedEntityEvent) onUntrackedEntityEvent(ev.id, ev.a);
+        return;
+    }
     Entity& e = it->second;
     switch (ev.type) {
         case EventType::Move: {
@@ -862,7 +867,10 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
                 e.equipFoil = u8((e.equipFoil & ~(1 << slot)) | (q.ints[ev.first + i * 4 + 3] ? 1 << slot : 0));
             }
             break;
-        case EventType::Swing: e.swingTime = 0; break;
+        case EventType::Swing:
+            e.swingTime = 0, e.swingHand = ev.a == 1 ? 1 : 0, e.swingType = int(ev.b);
+            e.swingDuration = std::max<int>(int(ev.count), 1);
+            break;
         case EventType::Hurt:
             e.hurtTime = 10;
             if (verbose_) LOG("entities: %d hurt animation", e.id);
@@ -873,7 +881,7 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
             break;
         case EventType::EntityEvent:
             if (ev.a == 3 && e.category == Category::Living) e.dying = true;  // death
-            if (ev.a == 2) e.hurtTime = 10;                                     // legacy hurt
+            if (ev.a == 2 && (e.kineticHitTicks < 0 || e.kineticHitTicks > 10)) e.kineticHitTicks = 0;  // KINETIC_HIT
             if (onEntityEvent) onEntityEvent(e, ev.a);
             break;
         case EventType::Animate:
@@ -1138,6 +1146,7 @@ void EntityWorld::tickEntity(Entity& e) {
     if (e.vehicleDamage > 0) e.vehicleDamage = std::max(0.0f, e.vehicleDamage - 1.0f);
     if (e.dying && e.deathTime < 20) ++e.deathTime;
     if (e.swingTime >= 0 && ++e.swingTime >= e.swingDuration) e.swingTime = -1;
+    if (e.kineticHitTicks >= 0) ++e.kineticHitTicks;
     if (e.livingFlags & 1) ++e.useTicks;
 
     // Interpolation (a vehicle the local player drives moves itself).

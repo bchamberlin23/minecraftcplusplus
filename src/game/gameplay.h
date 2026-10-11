@@ -67,6 +67,9 @@ public:
     BlockRegistry& registry() { return registry_; }
     std::string itemName(int item) const;  // "minecraft:bow", "" if unknown
     ItemRules& rules() { return rules_; }
+    // LivingEntity.onKineticHit for the local player (the server's KINETIC_HIT entity event): hit feedback for the
+    // spear animations and the kinetic_weapon's hit sound, at most every 10 ticks.
+    void kineticHit();
     // Entity.isEyeInFluid(WATER) for the local player (updateFluidOnEyes: eye y - 1/9 below the fluid surface).
     bool eyeInWater() const;
 
@@ -88,6 +91,7 @@ private:
     bool inWaterOrRain() const;
     int componentType(const char* name);  // data component type id by short name ("consumable")
     void heldWeapon();                    // Game's held weapon fields from the main hand stack
+    ItemRules::Components handComponents(const ui::ItemStack* s);  // swing / kinetic components with the stack's patch
     std::string weaponSound(const ui::ItemStack& s, const char* type);  // kinetic_weapon / piercing_weapon sound
     bool onCooldown(const ui::ItemStack* s) const;
     bool startUsing(int hand);  // LivingEntity.startUsingItem

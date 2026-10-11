@@ -159,6 +159,7 @@ struct Visuals::Impl {
 
     Game* game = nullptr;
     ui::Ui* ui = nullptr;
+    ItemRules* rules = nullptr;
     std::string playerName;
     std::function<int()> gameMode;
 
@@ -241,6 +242,7 @@ struct Visuals::Impl {
     int itemSwapTicker = 0, lastMainItem = -2;
     bool swinging = false;
     int swingTime = 0, swingTicks = 6;  // swingTicks: this swing's duration (the weapon's attack_animation)
+    int swingHand = 0, swingType = 1;   // the swinging hand (0 main, 1 off) and its SwingAnimationType
     float attackAnim = 0, oAttackAnim = 0;
     float xBob = 0, yBob = 0, xBobO = 0, yBobO = 0, walkDist = 0, walkDistO = 0, bob = 0, bobO = 0;
     double tickClock = 0;
@@ -403,6 +405,11 @@ bool Visuals::addPasses(Renderer& renderer) {
     return true;
 }
 
+void Visuals::setItemRules(ItemRules* rules) {
+    impl_->rules = rules;
+    impl_->er.setRules(rules);
+}
+
 void Visuals::setPlayer(Game& game, ui::Ui& ui, const std::string& name, std::function<int()> gameMode) {
     Impl& m = *impl_;
     m.game = &game;
@@ -410,9 +417,11 @@ void Visuals::setPlayer(Game& game, ui::Ui& ui, const std::string& name, std::fu
     ui.setItemModels(&m.models);
     m.playerName = name;
     m.gameMode = std::move(gameMode);
-    game.onSwing = [&m] {  // LivingEntity.swing: SwingState.startIfAble (not in the first half of a swing)
+    game.onItemUsed = [&m](int hand) { (hand == 0 ? m.mainHand : m.offHand).height = 0; };  // itemUsed
+    game.onSwing = [&m](int hand, int type) {  // LivingEntity.swing: SwingState.startIfAble (not in a swing's first half)
         if (!m.swinging || m.swingTime > m.swingTicks / 2 || m.swingTime <= 0)
-            m.swingTime = -1, m.swinging = true, m.swingTicks = std::max(m.game->swingTicks, 1);
+            m.swingTime = -1, m.swinging = true, m.swingTicks = std::max(m.game->swingTicks, 1), m.swingHand = hand,
+            m.swingType = type;
     };
     game.onBlockChanged = [&m, prev = std::move(game.onBlockChanged)](bool place, int x, int y, int z, u16 state) {
         if (prev) prev(place, x, y, z, state);
@@ -1369,6 +1378,9 @@ void Visuals::Impl::update() {
         e.chargedCrossbow = u8((chargeOf(36 + game->selectedSlot()) ? 1 : 0) | (chargeOf(45) ? 2 : 0));
         e.swingTime = swinging ? std::max(swingTime, 0) : -1;
         e.swingDuration = swingTicks;
+        e.swingHand = swingHand, e.swingType = swingType;
+        e.kineticHitTicks = game->kineticHitTicks;
+        e.mainArm = ui ? ui->settings().mainHand : 1;
         if (const PlayerInfo* info = world.playerNamed(playerName)) e.skin = info->skin, e.slim = info->slim;
         else if (e.skin < 0) e.skin = assets.texture("entity/player/wide/steve"), e.slim = false;
         auto equip = [&](int slot, int menuSlot) {
@@ -1430,6 +1442,44 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
             m = xfMul(m, xfRotY(180.0f * kDeg));
             const float ox = a.babyOffset ? 0.0f : 1.0f, oy = a.babyOffset ? 1.0f : 2.0f, oz = a.babyOffset ? -4.5f : -10.0f;
             m = xfMul(m, xfTranslate((k == 1 ? -1.0f : 1.0f) * ox / 16.0f, oy / 16.0f, oz / 16.0f));
+            {
+                const bool armRight = k == 0;
+                const float swingAnim = e->swingTime >= 0 ? (float(e->swingTime) + pt) / float(std::max(e->swingDuration, 1)) : 0.0f;
+                auto kineticOf = [&](int s) {
+                    KineticParams p;
+                    if (rules && e->equipment[s] >= 0) {
+                        const ItemRules::Components& c = rules->components(models.itemName(e->equipment[s]));
+                        p = {c.kineticValid, c.kineticDelay, c.kineticDismount, c.kineticKnockback, c.kineticDamage, c.kineticForward};
+                    }
+                    return p;
+                };
+                const bool swingArmRight = (e->swingHand == 0) == rightHanded;
+                const int type = e->swingType >= 0 ? e->swingType : models.itemName(e->equipment[e->swingHand & 1]).ends_with("_spear") ? 2 : 1;
+                if (swingAnim > 0 && type == 2 && swingArmRight == armRight) {  // thirdPersonAttackItem
+                    const float attack = ease::inQuad(ease::progress(swingAnim, 0.05f, 0.2f));
+                    const float retract = ease::inOutExpo(ease::progress(swingAnim, 0.4f, 1.0f));
+                    m = xfMul(m, xfMul(xfTranslate(0, -0.125f, 0.125f), xfMul(xfRotX(-70.0f * (attack - retract) * kDeg),
+                                                                              xfTranslate(0, 0.125f, -0.125f))));
+                    m = xfMul(m, xfTranslate(0, kineticOf(0).forward * (attack - retract), 0));
+                }
+                const bool using_ = (e->livingFlags & 1) != 0;
+                const bool useArmRight = ((e->livingFlags & 2) != 0) != rightHanded;
+                const KineticParams kp = kineticOf(slot);
+                if (using_ && useArmRight == armRight && kp.valid) {  // ArmPose.SPEAR.animateUseItem: thirdPersonUseItem
+                    const float timeHeld = float(e->useTicks) + pt;
+                    const float attack = ease::inQuad(ease::progress(swingAnim, 0.05f, 0.2f));
+                    const float retract = ease::inOutExpo(ease::progress(swingAnim, 0.4f, 1.0f));
+                    const SpearUse u = spearUse(kp, timeHeld);
+                    const float inv = armRight ? 1.0f : -1.0f;
+                    const float raiseModified = 1.0f - ease::outBack(1.0f - u.raise);
+                    const float hit = spearHitFeedback(e->kineticHitTicks >= 0 ? float(e->kineticHitTicks) + pt : -1.0f);
+                    m = xfMul(m, xfTranslate(0, -hit * 0.4f, -kp.forward * (raiseModified - u.raiseBack) + hit));
+                    const float xr = 70.0f * (u.raise - u.raiseBack) - 40.0f * (attack - retract);
+                    m = xfMul(m, xfMul(xfTranslate(0, -0.03125f, 0.125f), xfMul(xfRotX(-xr * kDeg), xfTranslate(0, 0.03125f, -0.125f))));
+                    const float yr = inv * 90.0f * (u.raise - u.sway + 3.0f * retract + attack);
+                    m = xfMul(m, xfMul(xfTranslate(0, 0, 0.125f), xfMul(xfRotY(yr * kDeg), xfTranslate(0, 0, -0.125f))));
+                }
+            }
             L.begin((u64(u32(a.entity)) << 4 | u64(k)) + 1);
             pushItem(L, models.mesh(item, e->equipDye[slot], false), k == 0 ? Display::ThirdRight : Display::ThirdLeft,
                      m, a.light, (e->equipFoil >> slot) & 1);
@@ -2089,6 +2139,29 @@ void Visuals::Impl::buildHand(const PassContext& ctx, float viewProj[16], bool j
         ps = xfMul(ps, xfScale(1.0f, 1.0f, 1.0f + power * 0.2f));
         ps = xfMul(ps, xfRotY(-float(inv) * 45.0f * kDeg));
     };
+    // SpearAnimations.firstPersonUse / firstPersonAttack.
+    auto spearFirstPersonUse = [&](Xf& ps, int inv, float timeHeld, const KineticParams& k) {
+        if (!k.valid) return;
+        const SpearUse u = spearUse(k, timeHeld);
+        const float fi = float(inv);
+        ps = xfMul(ps, xfTranslate(fi * (u.raise * 0.15f + u.raiseEnd * -0.05f + u.sway * -0.1f + u.swaySlow * 0.005f),
+                                   u.raise * -0.075f + u.raiseMiddle * 0.075f + u.swayFast * 0.01f,
+                                   u.raiseStart * 0.05f + u.raiseEnd * -0.05f + u.swaySlow * 0.005f));
+        const float xr = -65.0f * ease::inOutBack(u.raise) - 35.0f * u.lower + 100.0f * u.raiseBack - 0.5f * u.swayFast;
+        ps = xfMul(ps, xfMul(xfTranslate(0, 0.1f, 0), xfMul(xfRotX(xr * kDeg), xfTranslate(0, -0.1f, 0))));
+        const float yr = fi * (-90.0f * ease::progress(u.raise, 0.5f, 0.55f) + 90.0f * u.sway + 2.0f * u.swaySlow);
+        ps = xfMul(ps, xfMul(xfTranslate(fi * 0.15f, 0, 0), xfMul(xfRotY(-yr * kDeg), xfTranslate(-fi * 0.15f, 0, 0))));
+        const float hitTicks = game->kineticHitTicks >= 0 ? float(game->kineticHitTicks) + pt : -1.0f;
+        ps = xfMul(ps, xfTranslate(0, -spearHitFeedback(hitTicks), 0));
+    };
+    auto spearFirstPersonAttack = [&](Xf& ps, int inv, float att) {
+        const float start = ease::inOutSine(ease::progress(att, 0.0f, 0.05f));
+        const float middle = ease::outBack(ease::progress(att, 0.05f, 0.2f));
+        const float end = ease::inOutExpo(ease::progress(att, 0.4f, 1.0f));
+        ps = xfMul(ps, xfTranslate(float(inv) * 0.1f * (start - middle), -0.075f * (start - end), 0.65f * (start - middle)));
+        ps = xfMul(ps, xfRotX(-70.0f * (start - end) * kDeg));
+        ps = xfMul(ps, xfTranslate(0, 0, -0.25f * (end - middle)));
+    };
     auto renderItem = [&](Xf ps, const HandState& h, float inverseArmHeight, float att, bool rightArm, int hand) {
         const int inv = rightArm ? 1 : -1;
         const std::string name = models.itemName(h.item);
@@ -2183,12 +2256,22 @@ void Visuals::Impl::buildHand(const PassContext& ctx, float viewProj[16], bool j
                     break;
                 }
                 case ItemRules::Anim::Bundle: swingArm(ps, inv, att); break;
-                case ItemRules::Anim::Spear: ps = xfMul(ps, xfTranslate(float(inv) * 0.56f, -0.52f, -0.72f)); break;
+                case ItemRules::Anim::Spear: {
+                    ps = xfMul(ps, xfTranslate(float(inv) * 0.56f, -0.52f, -0.72f));
+                    spearFirstPersonUse(ps, inv, duration - (remaining - pt + 1.0f), game->kinetic[hand & 1]);
+                    break;
+                }
                 default: break;
             }
+        } else if (game->player().spinFlag) {  // isAutoSpinAttack (riptide)
+            applyItemArm(ps, inv, inverseArmHeight);
+            ps = xfMul(ps, xfTranslate(float(inv) * -0.4f, 0.8f, 0.3f));
+            ps = xfMul(ps, xfRotY(float(inv) * 65.0f * kDeg));
+            ps = xfMul(ps, xfRotZ(float(inv) * -85.0f * kDeg));
         } else {
             applyItemArm(ps, inv, inverseArmHeight);
-            if (att > 0) swingArm(ps, inv, att);
+            if (att > 0 && swingType == 1) swingArm(ps, inv, att);
+            else if (att > 0 && swingType == 2) spearFirstPersonAttack(ps, inv, att);
         }
         pushItem(hudLists, models.mesh(h.item, h.dye, false, us), rightArm ? Display::FirstRight : Display::FirstLeft, ps, light,
                  h.foil);
@@ -2218,11 +2301,14 @@ void Visuals::Impl::buildHand(const PassContext& ctx, float viewProj[16], bool j
     const float offSwap = offHand.item >= 0 ? models.handInfo(offHand.item).swapScale : 1.0f;
     const float mainInv = mainSwap * (1.0f - (mainHand.oHeight + (mainHand.height - mainHand.oHeight) * pt));
     const float offInv = offSwap * (1.0f - (offHand.oHeight + (offHand.height - offHand.oHeight) * pt));
+    // The attack swing belongs to the swinging hand; the main hand is on the main arm (Main Hand option).
+    const bool mainRight = !ui || ui->settings().mainHand != 0;
+    const float mainAttack = swingHand == 0 ? attack : 0.0f, offAttack = swingHand == 1 ? attack : 0.0f;
     if (drawMain) {
-        if (mainHand.item < 0) renderArm(pose, mainInv, attack, true);
-        else renderItem(pose, mainHand, mainInv, attack, true, 0);
+        if (mainHand.item < 0) renderArm(pose, mainInv, mainAttack, mainRight);
+        else renderItem(pose, mainHand, mainInv, mainAttack, mainRight, 0);
     }
-    if (drawOff && offHand.item >= 0) renderItem(pose, offHand, offInv, 0.0f, false, 1);
+    if (drawOff && offHand.item >= 0) renderItem(pose, offHand, offInv, offAttack, !mainRight, 1);
 }
 
 // CrossbowItem.isCharged / the charge_type property of a player inventory menu slot: 0 none, 1 arrow, 2 rocket.

@@ -171,6 +171,9 @@ struct Entity {
 
     // Animation timers (ticks).
     int age = 0, hurtTime = 0, deathTime = 0, swingTime = -1, swingDuration = 6;
+    int swingHand = 0;     // the swinging hand: 0 main, 1 off (ClientboundSwingPacket)
+    int swingType = -1;    // SwingAnimationType (0 none, 1 whack, 2 stab); -1: from the item in the swinging hand
+    int kineticHitTicks = -1;  // ticks since a KINETIC_HIT entity event (SpearAnimations hit feedback), -1 none
     float flap = 0, oFlap = 0, flapSpeed = 0, oFlapSpeed = 0, flapping = 1;
     float bobOffset = 0;
     int vehicle = -1;
@@ -280,6 +283,8 @@ public:
     // they are applied; 17 makes a firework rocket explode) and
     // animate actions (ClientboundAnimatePacket: 0 wake up, 1 critical hit, 2 magic critical hit).
     std::function<void(const Entity&, int event)> onEntityEvent;
+    // Entity events for ids not tracked here (the local player's own, e.g. KINETIC_HIT).
+    std::function<void(int id, int event)> onUntrackedEntityEvent;
     std::function<void(const Entity&, int action)> onAnimate;
 
     struct Stats {

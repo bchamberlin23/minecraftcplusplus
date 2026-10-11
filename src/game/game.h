@@ -1,5 +1,6 @@
 #pragma once
 #include "core/common.h"
+#include "entity/spear_anim.h"
 #include "game/player.h"
 #include "game/tick_rate.h"
 #include "render/renderer.h"
@@ -37,8 +38,13 @@ public:
     // gives that entity's eye position and view rotation at the partial tick (false: unknown, the player's view).
     int cameraEntity = -1;
     std::function<bool(int id, CameraState& out)> entityView;
-    // The player's arm swings (attack press, block broken / placed): drives the hand animation.
-    std::function<void()> onSwing;
+    // The player's arm swings (attack press, block broken / placed): drives the hand animation. hand: 0 main, 1 off;
+    // type: the item's SwingAnimationType (0 none, 1 whack, 2 stab).
+    std::function<void(int hand, int type)> onSwing;
+    // LocalPlayer.itemUsed: a use of the hand's item went through (Minecraft.startUseItem); its hand drops for the
+    // re-equip motion.
+    std::function<void(int hand)> onItemUsed;
+    bool useOnTakesItem = false;  // the last predicted Item.useOn used up one of the stack (set by the gameplay layer)
     std::string status() const;
     Player& player() { return player_; }
     Physics& physics() { return physics_; }
@@ -214,6 +220,11 @@ public:
     float heldMinimumCharge = 0;
     double attackMinReach = 0, attackMaxReach = -1;
     int swingTicks = 6, useSwingTicks = 6;  // attack / interact swings (onSwing reads swingTicks)
+    int swingType = 1;                      // the main hand's attack_animation type
+    int useSwingTicksOf[2] = {6, 6}, useSwingTypeOf[2] = {1, 1};  // each hand's interact_animation
+    ent::KineticParams kinetic[2];          // each hand's kinetic_weapon timing (spear use animations)
+    // LivingEntity.getTicksSinceLastKineticHitFeedback: ticks since the server's KINETIC_HIT event, -1 none.
+    int kineticHitTicks = -1;
     std::function<void()> onStab;
     std::function<void()> onStabEffects;  // PiercingWeapon.makeSound for the local player (gameplay layer)
     bool crosshairOnLiving = false;    // a living entity is under the crosshair (Minecraft.crosshairPickEntity)

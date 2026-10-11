@@ -1009,6 +1009,10 @@ int Gameplay::predictUseOn(int hand, const RayHit& hit) {
     const std::string& state = registry_.name(world_.block(hit.x, hit.y, hit.z));
     const std::string block(shortName(state.substr(0, state.find('['))));
     const bool airAbove = world_.block(hit.x, hit.y + 1, hit.z) == 0;
+    // Uses that take one of the stack (the others damage the tool).
+    game_->useOnTakesItem = name == "fire_charge" || name.ends_with("_spawn_egg") || name == "armor_stand" || name == "item_frame" ||
+                            name == "glow_item_frame" || name == "painting" || name == "end_crystal" ||
+                            name.ends_with("minecart") || name == "honeycomb" || name == "ender_eye";
     if (name == "flint_and_steel" || name == "fire_charge" || name.ends_with("_spawn_egg") || name == "armor_stand" ||
         name == "item_frame" || name == "glow_item_frame" || name == "painting")
         return Game::kUseConsume;
@@ -1069,8 +1073,7 @@ std::string Gameplay::weaponSound(const ui::ItemStack& s, const char* type) {
 // The main hand's weapon components for Minecraft.startAttack (defaults with the stack's patch): piercing_weapon,
 // minimum_attack_charge, attack_range (the player's: creative or survival reaches, plus the hitbox margin) and the
 // attack_animation duration with Haste / Conduit Power / Mining Fatigue (LivingEntity.getModifiedSwingDuration).
-void Gameplay::heldWeapon() {
-    const ui::ItemStack* s = mainHand();
+ItemRules::Components Gameplay::handComponents(const ui::ItemStack* s) {
     ItemRules::Components d = s ? rules_.components(itemName(s->item)) : ItemRules::Components{};
     if (s) {
         auto read = [&](const char* type, auto fn) {
@@ -1089,15 +1092,33 @@ void Gameplay::heldWeapon() {
             d.hasAttackRange = on;
             for (int i = 0; i < 6 && on; ++i) d.attackRange[i] = r.f32();
         });
-        read("attack_animation", [&](net::Reader& r, bool on) {
-            if (on) r.varInt();
+        read("attack_animation", [&](net::Reader& r, bool on) {  // SwingAnimation: type, duration (default whack, 6)
+            d.attackSwingType = on ? r.varInt() : 1;
             d.attackSwingTicks = on ? r.varInt() : 6;
         });
         read("interact_animation", [&](net::Reader& r, bool on) {
-            if (on) r.varInt();
+            d.interactSwingType = on ? r.varInt() : 1;
             d.interactSwingTicks = on ? r.varInt() : 6;
         });
+        read("kinetic_weapon", [&](net::Reader& r, bool on) {  // contact cooldown, delay, three conditions, movement...
+            d.kineticValid = on;
+            if (!on) return;
+            r.varInt();
+            d.kineticDelay = r.varInt();
+            int* durations[3] = {&d.kineticDismount, &d.kineticKnockback, &d.kineticDamage};
+            for (int* t : durations) {
+                *t = 0;
+                if (r.boolean()) *t = r.varInt(), r.f32(), r.f32();
+            }
+            d.kineticForward = r.f32();
+        });
     }
+    return d;
+}
+
+void Gameplay::heldWeapon() {
+    const ItemRules::Components d = handComponents(mainHand());
+    const ItemRules::Components off = handComponents(offHand());
     game_->heldPiercing = d.piercing;
     game_->heldMinimumCharge = d.minimumAttackCharge;
     const bool creative = game_->gameMode == 1;
@@ -1110,6 +1131,25 @@ void Gameplay::heldWeapon() {
     };
     game_->swingTicks = modified(d.attackSwingTicks);
     game_->useSwingTicks = modified(d.interactSwingTicks);
+    game_->swingType = d.attackSwingType;
+    game_->useSwingTicksOf[0] = game_->useSwingTicks, game_->useSwingTicksOf[1] = modified(off.interactSwingTicks);
+    game_->useSwingTypeOf[0] = d.interactSwingType, game_->useSwingTypeOf[1] = off.interactSwingType;
+    const ItemRules::Components* hands[2] = {&d, &off};
+    for (int h = 0; h < 2; ++h) {
+        const ItemRules::Components& k = *hands[h];
+        game_->kinetic[h] = {k.kineticValid, k.kineticDelay, k.kineticDismount, k.kineticKnockback, k.kineticDamage, k.kineticForward};
+    }
+}
+
+void Gameplay::kineticHit() {
+    if (!game_ || (game_->kineticHitTicks >= 0 && game_->kineticHitTicks <= 10)) return;
+    game_->kineticHitTicks = 0;
+    // KineticWeapon.makeLocalHitSound: the used item's hit sound.
+    const ui::ItemStack* s = game_->use.active ? (game_->use.hand == 0 ? mainHand() : offHand()) : nullptr;
+    if (!s) return;
+    const std::string& sound = rules_.components(itemName(s->item)).kineticHitSound;
+    if (audio::AudioSystem* a = audio::instance(); a && !sound.empty())
+        a->play(sound, audio::Category::Player, game_->player().pos[0], game_->player().pos[1], game_->player().pos[2], 1.0f, 1.0f);
 }
 
 // Item.releaseUsing on the client: a riptide trident held for 10 ticks in water or rain launches the player.

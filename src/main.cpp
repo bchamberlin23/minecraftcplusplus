@@ -778,6 +778,10 @@ int wmain(int argc, wchar_t** argv) {
     if (haveEntities) {
         gameplay.setEntities(&entities);
         blockEntityRenderer.setRules(&gameplay.rules());
+        visuals.setItemRules(&gameplay.rules());
+        entities.onUntrackedEntityEvent = [&](int id, int event) {  // our own entity events
+            if (event == 2 && session && id == session->entityId()) gameplay.kineticHit();  // EntityEvent.KINETIC_HIT
+        };
         blockEntityRenderer.setBlockSink([&](const std::vector<net::BlockChange>& c) {
             if (session) session->applyClientBlocks(c);
         });

@@ -938,7 +938,38 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         const bool rightHanded = e.mainArm != 0;
         s.rightItem = rightHanded ? e.equipment[0] >= 0 : e.equipment[1] >= 0;
         s.leftItem = rightHanded ? e.equipment[1] >= 0 : e.equipment[0] >= 0;
-        s.swingLeft = !rightHanded;
+        s.leftHanded = !rightHanded;
+        s.swingLeft = (e.swingHand == 0) != rightHanded;  // the main hand swings the main arm
+        auto nameOf = [&](int slot) { return e.equipment[slot] >= 0 && items_ ? items_->itemName(e.equipment[slot]) : std::string(); };
+        auto isSpear = [&](int slot) { return nameOf(slot).ends_with("_spear"); };  // ItemTags.SPEARS
+        s.swingType = e.swingType >= 0 ? e.swingType : isSpear(e.swingHand) ? 2 : 1;
+        {
+            KineticParams k[2];
+            for (int slot = 0; slot < 2 && rules_; ++slot)
+                if (const std::string n = nameOf(slot); !n.empty()) {
+                    const ItemRules::Components& c = rules_->components(n);
+                    k[slot] = {c.kineticValid, c.kineticDelay, c.kineticDismount, c.kineticKnockback, c.kineticDamage, c.kineticForward};
+                }
+            s.rightKinetic = rightHanded ? k[0] : k[1], s.leftKinetic = rightHanded ? k[1] : k[0];
+        }
+        // HumanoidMobRenderer.usesSpearPose: the hand's STAB swing, or a spear in it.
+        auto spearPose = [&](int slot) { return (e.swingTime >= 0 && s.swingType == 2 && e.swingHand == slot) || isSpear(slot); };
+        if (e.category != Category::Player && items_ && (d.anim == Anim::Zombie || d.anim == Anim::Skeleton)) {
+            // HumanoidMobRenderer.getArmPose: SPEAR or EMPTY (skeletons draw an aggressive main-hand bow, the drowned
+            // an aggressive main-hand trident).
+            const bool drowned = e.info && e.info->name == "minecraft:drowned";
+            auto mobPose = [&](int slot) {
+                const std::string n = nameOf(slot);
+                if (slot == 0 && s.aggressive && d.anim == Anim::Skeleton && n == "bow") return ArmPose::BowAndArrow;
+                if (slot == 0 && s.aggressive && drowned && n == "trident") return ArmPose::ThrowTrident;
+                return spearPose(slot) ? ArmPose::Spear : ArmPose::Empty;
+            };
+            const ArmPose mainPose = mobPose(0), offPose = mobPose(1);
+            s.havePoses = true;
+            s.rightPose = rightHanded ? mainPose : offPose;
+            s.leftPose = rightHanded ? offPose : mainPose;
+            s.holdingBow = nameOf(0) == "bow";
+        }
         if (e.category == Category::Player && items_) {
             // AvatarRenderer.getArmPose: the use animation of the hand in use, a charged crossbow, else ITEM / EMPTY.
             auto poseFor = [&](int slot) {
@@ -956,7 +987,7 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
                     if (n == "brush") return ArmPose::Brush;
                     if (n.ends_with("_spear")) return ArmPose::Spear;
                 }
-                return ArmPose::Item;
+                return spearPose(slot) ? ArmPose::Spear : ArmPose::Item;
             };
             ArmPose mainPose = poseFor(0), offPose = poseFor(1);
             if (mainPose == ArmPose::BowAndArrow || mainPose == ArmPose::CrossbowCharge || mainPose == ArmPose::CrossbowHold)
@@ -966,7 +997,7 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
             s.leftPose = rightHanded ? offPose : mainPose;
             s.usingItem = (e.livingFlags & 1) != 0;
             s.useRight = ((e.livingFlags & 2) != 0) != rightHanded;
-            s.useTicks = float(e.useTicks) + (s.usingItem ? pt : 0.0f);
+            s.useTicks = s.usingItem ? float(e.useTicks) + pt : 0.0f;
         }
         s.standFlags = e.standFlags;
         s.standPose = e.standPose;

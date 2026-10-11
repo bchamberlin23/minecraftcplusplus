@@ -80,6 +80,13 @@ public:
         float minimumAttackCharge = 0;
         float attackRange[6] = {0, 3, 0, 5, 0.3f, 1};
         int attackSwingTicks = 6, interactSwingTicks = 6;  // attack_animation / interact_animation durations
+        int attackSwingType = 1, interactSwingType = 1;    // their SwingAnimationType: 0 none, 1 whack, 2 stab
+        // kinetic_weapon (SpearAnimations.UseParams): delay ticks, the dismount / knockback / damage conditions'
+        // max durations, forward movement; hit_sound (LivingEntity.onKineticHit).
+        bool kineticValid = false;
+        int kineticDelay = 0, kineticDismount = 0, kineticKnockback = 0, kineticDamage = 0;
+        float kineticForward = 0;
+        std::string kineticHitSound;
         std::string kineticSound, piercingSound;  // kinetic_weapon / piercing_weapon "sound" (use start, stab)
     };
     const Components& components(std::string_view itemName);
