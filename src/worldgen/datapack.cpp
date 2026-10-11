@@ -44,7 +44,10 @@ bool DataPack::open(const fs::path& jar) {
                     src.readAll(file, [&](size_t, const std::vector<u8>& b) {
                         const nlohmann::json j = nlohmann::json::parse(b.begin(), b.end(), nullptr, false);
                         if (!j.is_object()) return;
-                        if (j.value("replace", false)) merged["values"] = nlohmann::json::array();
+                        // Data packs can be sloppy ("replace": "true", 1...): never let one tag file throw.
+                        const auto replace = j.find("replace");
+                        if (replace != j.end() && replace->is_boolean() && replace->get<bool>())
+                            merged["values"] = nlohmann::json::array();
                         if (j.contains("values") && j["values"].is_array())
                             for (const auto& v : j["values"]) merged["values"].push_back(v);
                     });
@@ -101,7 +104,9 @@ std::vector<std::string> DataPack::tag(std::string_view kind, std::string_view i
         if (it == files_.end()) continue;
         const nlohmann::json& values = it->second.contains("values") ? it->second["values"] : it->second;
         for (const auto& v : values) {
-            std::string s = v.is_string() ? v.get<std::string>() : v.value("id", std::string());
+            std::string s = v.is_string() ? v.get<std::string>()
+                            : v.is_object() && v.contains("id") && v["id"].is_string() ? v["id"].get<std::string>()
+                                                                                      : std::string();
             if (s.starts_with("#"))
                 pending.push_back(normalize(s));
             else if (!s.empty())
@@ -118,7 +123,10 @@ const nlohmann::json* DataPack::tagValues(std::string_view kind, std::string_vie
 }
 
 std::string blockStateKey(const nlohmann::json& state) {
-    std::string name = state.is_string() ? state.get<std::string>() : state.value("Name", std::string("minecraft:air"));
+    std::string name = state.is_string() ? state.get<std::string>()
+                       : state.is_object() && state.contains("Name") && state["Name"].is_string()
+                           ? state["Name"].get<std::string>()
+                           : std::string("minecraft:air");
     if (name.find(':') == std::string::npos) name = "minecraft:" + name;
     std::vector<std::pair<std::string, std::string>> props;
     if (state.is_object())

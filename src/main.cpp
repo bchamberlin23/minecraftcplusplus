@@ -323,8 +323,13 @@ int wmain(int argc, wchar_t** argv) {
 
     // Mods and packs (mods/mod_manager.h): resource and data packs layered over the game's files for every loader
     // below, Fabric mods for the local server, native mods.
-    mods::Manager::get().init({mc, version, jar, opt.connect.empty() ? worldDir : fs::path(), opt.modsDir,
-                               opt.play && opt.connect.empty()});
+    // A broken pack from the internet must not take the game down (one data pack's tag file did).
+    try {
+        mods::Manager::get().init({mc, version, jar, opt.connect.empty() ? worldDir : fs::path(), opt.modsDir,
+                                   opt.play && opt.connect.empty()});
+    } catch (const std::exception& e) {
+        LOG("error: mods and packs: %s (continuing without some of them)", e.what());
+    }
 
     // --- singleplayer (--play): the official server runs the game's rules on this world in the background
     // while the save is shown right away; the game switches to it once it is up ---
@@ -512,7 +517,12 @@ int wmain(int argc, wchar_t** argv) {
     if (opt.generate && (menu && !titleCached ? (seed = i64(titleRandom()), true) : World::readSeed(worldDir, seed))) {
         t = Timer();
         gamedata = std::make_unique<wg::DataPack>();
-        if (gamedata->open(jar)) generator = std::make_unique<wg::ChunkGenerator>(*gamedata, registry, seed);
+        try {  // data packs can change worldgen in ways the generator cannot read: then no local generation
+            if (gamedata->open(jar)) generator = std::make_unique<wg::ChunkGenerator>(*gamedata, registry, seed);
+        } catch (const std::exception& e) {
+            LOG("error: world generation from the data packs failed: %s (the server still generates the world)", e.what());
+            generator.reset();
+        }
         if (generator && generator->ok()) {
             // Saved chunks next to generated ones are read-only neighbours for decoration.
             auto exists = [&world](int cx, int cz) {
@@ -646,7 +656,10 @@ int wmain(int argc, wchar_t** argv) {
             // The server listens on loopback only (unless --lan): the LAN port is forwarded to it.
             if (!lanHost.start(motd, port, localServer->port(), !opt.lan, error)) return false;
             localServer->command("defaultgamemode " + mode);
-            if (cheats) localServer->command("op @a");  // commands for everyone here (and the host)
+            if (cheats) {  // commands for everyone here (and the host), and for everyone who joins later
+                localServer->command("op @a");
+                localServer->setOpJoiners(true);
+            }
             LOG("lan: open to LAN on port %u as \"%s\"", port, motd.c_str());
             return true;
         };

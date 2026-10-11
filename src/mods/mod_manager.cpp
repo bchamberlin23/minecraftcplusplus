@@ -52,6 +52,24 @@ json parseLenient(const std::vector<u8>& bytes) {
     return json::parse(s, nullptr, false, true);
 }
 
+// Typed reads that never throw on unexpected types (packs and mods from the internet are sloppy; nlohmann's value()
+// throws a type_error when the stored type differs, which crashed the game on one data pack).
+std::string strOr(const json& j, const char* key, const std::string& def) {
+    if (!j.is_object()) return def;
+    const auto it = j.find(key);
+    return it != j.end() && it->is_string() ? it->get<std::string>() : def;
+}
+int intOr(const json& j, const char* key, int def) {
+    if (!j.is_object()) return def;
+    const auto it = j.find(key);
+    return it != j.end() && it->is_number_integer() ? it->get<int>() : def;
+}
+bool boolOr(const json& j, const char* key, bool def) {
+    if (!j.is_object()) return def;
+    const auto it = j.find(key);
+    return it != j.end() && it->is_boolean() ? it->get<bool>() : def;
+}
+
 // Text component (string, {"text": ...}, [ ... ]) -> plain text.
 std::string plainText(const json& j) {
     if (j.is_string()) return j.get<std::string>();
@@ -60,7 +78,7 @@ std::string plainText(const json& j) {
         for (const json& part : j) out += plainText(part);
     else if (j.is_object()) {
         if (j.contains("text")) out += plainText(j["text"]);
-        else if (j.contains("translate")) out += j.value("fallback", j["translate"].is_string() ? j["translate"].get<std::string>() : "");
+        else if (j.contains("translate")) out += strOr(j, "fallback", strOr(j, "translate", ""));
         if (j.contains("extra")) out += plainText(j["extra"]);
     }
     return out;
@@ -98,7 +116,7 @@ std::string compatNote(const json& meta, int current) {
     if (lo < 0 && p.contains("supported_formats")) {
         const json& s = p["supported_formats"];
         if (s.is_array() && s.size() == 2) lo = formatMajor(s[0]), hi = formatMajor(s[1]);
-        else if (s.is_object()) lo = s.value("min_inclusive", -1), hi = s.value("max_inclusive", -1);
+        else if (s.is_object()) lo = intOr(s, "min_inclusive", -1), hi = intOr(s, "max_inclusive", -1);
         else if (s.is_number_integer()) lo = hi = s.get<int>();
     }
     if (lo < 0 && p.contains("pack_format")) lo = hi = formatMajor(p["pack_format"]);
@@ -135,7 +153,7 @@ PackVersion packVersion(const AssetSource& src) {
     const json j = json::parse(bytes.begin(), bytes.end(), nullptr, false);
     if (!j.is_object() || !j.contains("pack_version")) return v;
     const json& pv = j["pack_version"];
-    if (pv.is_object()) v.resource = pv.value("resource_major", 0), v.data = pv.value("data_major", 0);
+    if (pv.is_object()) v.resource = intOr(pv, "resource_major", 0), v.data = intOr(pv, "data_major", 0);
     else if (pv.is_number_integer()) v.resource = v.data = pv.get<int>();
     return v;
 }
@@ -200,7 +218,7 @@ void detect(Entry& e, const PackVersion& pv) {
             e.kind = Kind::Unsupported;
             return;
         }
-        e.modId = j.value("id", "");
+        e.modId = strOr(j, "id", "");
         e.version = j.contains("version") && j["version"].is_string() ? j["version"].get<std::string>() : "";
         if (j.contains("name") && j["name"].is_string()) e.name = j["name"].get<std::string>() + (e.version.empty() ? "" : " " + e.version);
         if (j.contains("description") && j["description"].is_string()) e.description = oneLine(j["description"].get<std::string>());
@@ -463,7 +481,7 @@ void Manager::loadConfig() {
         int pos = 0;
         for (const json& item : cfg["entries"])
             if (item.is_object() && item.contains("id") && item["id"].is_string())
-                known[item["id"].get<std::string>()] = {pos++, item.value("enabled", true)};
+                known[item["id"].get<std::string>()] = {pos++, boolOr(item, "enabled", true)};
     }
     // Vanilla selection (options.txt "resourcePacks", bottom first) for packs this config has not seen yet.
     std::vector<std::string> vanillaSelected;

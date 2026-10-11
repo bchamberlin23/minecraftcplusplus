@@ -53,6 +53,9 @@ public:
         return fs::exists(p, ec) ? p : fs::path();
     }
     void command(const std::string& line);     // server console
+    // Open to LAN with cheats: every player who joins from now on is made an operator (vanilla's LAN worlds allow
+    // commands for later joiners too; "op @a" only reached those online at the time).
+    void setOpJoiners(bool on) { opJoiners_ = on; }
     void stop(double timeoutSeconds = 60.0);   // saves, exits and syncs the player data back
 
 private:
@@ -68,7 +71,7 @@ private:
     std::string offlineUuid_, hostUuid_;
     HANDLE process_ = nullptr, job_ = nullptr, stdinWrite_ = nullptr, stdoutRead_ = nullptr;
     std::thread reader_;
-    std::atomic<bool> ready_{false}, failed_{false};
+    std::atomic<bool> ready_{false}, failed_{false}, opJoiners_{false};
     std::mutex stdinMutex_;
     u16 port_ = 0;
     bool stopped_ = false, upgrading_ = false, creating_ = false;

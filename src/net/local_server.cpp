@@ -370,10 +370,27 @@ bool LocalServer::start(const Config& config) {
     std::error_code existsEc;
     creating_ = config.create && !fs::exists(config.world / "level.dat", existsEc);
     if (!ensureServerJar(jar) || (!creating_ && !backupIfUpgrading())) return false;
+    // Each world's server runs in its own folder (server.properties, ops.json, logs): two servers starting at once
+    // (another world, a test) used to rewrite each other's settings in the shared one. The server jar unpacks its
+    // libraries into the shared folder (bundlerRepoDir). Fabric servers keep their own folder (mods, cache).
+    fs::path work = runDir_;
+    std::wstring jvmExtra = L" -DbundlerRepoDir=\"" + runDir_.wstring() + L"\"";
+    {
+        std::error_code abs;
+        const std::wstring key = fs::absolute(config.world, abs).wstring();
+        char hash[17];
+        std::snprintf(hash, sizeof(hash), "%08x", u32(std::hash<std::wstring>{}(key)));
+        std::string name = config.world.filename().string();
+        for (char& c : name)
+            if (!std::isalnum(u8(c)) && c != '-' && c != '_') c = '_';
+        work = runDir_ / "worlds" / (name.substr(0, 32) + "-" + hash);
+        fs::create_directories(work, abs);
+    }
     // Fabric mods in the mods folder: Fabric's server runs them on top of this server.jar (mods/fabric_server.h).
     if (const auto fabric = mods::Manager::get().fabricMods(); !fabric.empty()) {
         if (!mods::prepareFabricServer(runDir_.parent_path(), config.minecraftDir, config.version, jar, fabric, runDir_, jar))
             return false;
+        work = runDir_, jvmExtra.clear();
         if (mods::Manager::get().fabricContent())
             LOG("warning: some Fabric mods add blocks / items; they are drawn from the mods' own models where possible "
                 "(see the Mods & Packs screen)");
@@ -408,9 +425,9 @@ bool LocalServer::start(const Config& config) {
     }
     port_ = config.port ? config.port : freePort();
     {
-        std::ofstream eula(runDir_ / "eula.txt", std::ios::trunc);
+        std::ofstream eula(work / "eula.txt", std::ios::trunc);
         eula << "# Accepted by the game's owner: https://aka.ms/MinecraftEULA\neula=true\n";
-        std::ofstream p(runDir_ / "server.properties", std::ios::trunc);
+        std::ofstream p(work / "server.properties", std::ios::trunc);
         p << "# Written by minecraftCplusplus for singleplayer; rewritten on every launch.\n"
           << "online-mode=false\n"
           << "white-list=false\n"  // on by default since 26.1
@@ -434,7 +451,7 @@ bool LocalServer::start(const Config& config) {
               << "generate-structures=" << (config.create->structures ? "true" : "false") << "\n";
         p << "motd=" << config.world.filename().string() << " (minecraftCplusplus)\n";
         // Cheats on in the save: the player may run commands, as in singleplayer.
-        std::ofstream ops(runDir_ / "ops.json", std::ios::trunc);
+        std::ofstream ops(work / "ops.json", std::ios::trunc);
         if (num("allowCommands", 0) || (creating_ && config.create->cheats))
             ops << "[{\"uuid\":\"" << offlineUuid_ << "\",\"name\":\"" << config.player
                 << "\",\"level\":4,\"bypassesPlayerLimit\":false}]\n";
@@ -454,11 +471,11 @@ bool LocalServer::start(const Config& config) {
     si.hStdInput = stdinRead;
     si.hStdOutput = si.hStdError = stdoutWrite;
     PROCESS_INFORMATION pi{};
-    std::wstring cmd = L"\"" + java.wstring() + L"\" -Xms1G -Xmx4G -jar \"" + jar.wstring() +
+    std::wstring cmd = L"\"" + java.wstring() + L"\" -Xms1G -Xmx4G" + jvmExtra + L" -jar \"" + jar.wstring() +
                        L"\" --nogui --universe \"" + config.world.parent_path().wstring() + L"\" --world \"" +
                        config.world.filename().wstring() + L"\" --port " + std::to_wstring(port_);
     const BOOL ok = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | CREATE_SUSPENDED,
-                                   nullptr, runDir_.c_str(), &si, &pi);
+                                   nullptr, work.c_str(), &si, &pi);
     CloseHandle(stdinRead);
     CloseHandle(stdoutWrite);
     if (!ok) {
@@ -493,6 +510,13 @@ void LocalServer::readOutput() {
             if (line.find("Done (") != std::string::npos) {
                 ready_ = true;
                 LOG("server: %s", line.c_str());
+            } else if (const size_t j = line.find(" joined the game"); j != std::string::npos) {
+                const size_t s = line.rfind("]: ", j);
+                const std::string name = s == std::string::npos ? std::string() : line.substr(s + 3, j - s - 3);
+                if (opJoiners_ && !name.empty() && name.find(' ') == std::string::npos) command("op " + name);
+                LOG("server: %s", line.c_str());
+            } else if (line.find("moved too quickly") != std::string::npos || line.find("moved wrongly") != std::string::npos) {
+                LOG("server: %s", line.c_str());  // movement corrections (prediction mismatches)
             } else if ((line.find("ERROR") != std::string::npos || line.find("Exception") != std::string::npos ||
                         line.find("FAILED") != std::string::npos) &&
                        line.find("OFFLINE") == std::string::npos) {

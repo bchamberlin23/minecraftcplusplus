@@ -63,8 +63,13 @@ std::unique_ptr<AssetPack> AssetPack::openIndex(const fs::path& minecraftDir, co
     versionJson.replace_extension(".json");
     if (!readFile(versionJson, bytes)) return nullptr;
     const nlohmann::json v = nlohmann::json::parse(bytes.begin(), bytes.end(), nullptr, false);
-    std::string indexId = v.is_object() && v.contains("assetIndex") ? v["assetIndex"].value("id", "") : "";
-    if (indexId.empty() && v.is_object()) indexId = v.value("assets", "");
+    auto str = [](const nlohmann::json& o, const char* key) {  // never throws on unexpected types
+        if (!o.is_object()) return std::string();
+        const auto it = o.find(key);
+        return it != o.end() && it->is_string() ? it->get<std::string>() : std::string();
+    };
+    std::string indexId = v.is_object() && v.contains("assetIndex") ? str(v["assetIndex"], "id") : "";
+    if (indexId.empty()) indexId = str(v, "assets");
     if (indexId.empty() || !readFile(minecraftDir / "assets" / "indexes" / (indexId + ".json"), bytes)) return nullptr;
     auto pack = std::make_unique<AssetPack>();
     pack->id_ = std::move(id);
