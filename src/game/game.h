@@ -130,6 +130,14 @@ public:
     std::function<void()> onUseTick;
     // After a use press went to the server (onUseItem): the client's own prediction (Item.use -> startUsingItem).
     std::function<void(const RayHit* target, bool afterEntity)> predictUse;
+    // --- Item cooldowns: Player.getCooldowns (ItemCooldowns) by cooldown group ("minecraft:ender_pearl"), set by the
+    // server's cooldown packets and counted in player ticks. While the main hand's group cools down, a right click
+    // does not predict its use (MultiPlayerGameMode.useItemOn / useItem pass). ---
+    void addCooldown(const std::string& group, int ticks) { cooldowns_[group] = {cooldownTick_, cooldownTick_ + ticks}; }
+    void removeCooldown(const std::string& group) { cooldowns_.erase(group); }
+    void clearCooldowns() { cooldowns_.clear(); }
+    float cooldownPercent(const std::string& group, float partial) const;  // ItemCooldowns.getCooldownPercent
+    std::function<bool()> mainHandOnCooldown;
     // Item shards (eating): ParticleTypes.ITEM at a position with a velocity.
     std::function<void(int item, const double pos[3], const double vel[3])> onItemParticle;
     bool usePressed() const { return usingItem_; }  // the use key is held after a use press
@@ -226,4 +234,9 @@ private:
     int destroyDelay_ = 0, missTime_ = 0, pendingAttacks_ = 0;
     u64 ticks_ = 0;
     std::unordered_map<int, Destruction> destructions_;
+    struct Cooldown {
+        int start, end;  // player ticks
+    };
+    std::unordered_map<std::string, Cooldown> cooldowns_;
+    int cooldownTick_ = 0;
 };

@@ -221,6 +221,8 @@ void Game::frame(Window& w, double dt) {
             player_.tick(physics_, input);
         }
         tickCameraFeedback();
+        ++cooldownTick_;  // Player.tick -> ItemCooldowns.tick
+        std::erase_if(cooldowns_, [&](const auto& c) { return c.second.end <= cooldownTick_; });
         if (onPlayerTick) onPlayerTick();
         tickAccumulator_ -= kTick;
     }
@@ -318,7 +320,8 @@ bool Game::useTarget(bool place) {
     }
     // Using a block that opens a screen (or acting with an item that is not a block) goes to the server as is.
     const bool interacts = onInteract && !player_.sneaking && onInteract(target_.x, target_.y, target_.z);
-    if (interacts || !hotbar_[selected_]) {
+    // A held block cooling down is not placed (ItemStack.useOn is skipped); the use still goes to the server.
+    if (interacts || !hotbar_[selected_] || (mainHandOnCooldown && mainHandOnCooldown())) {
         useConsumed_ = interacts;  // else the held item may still be used (food, buckets...)
         if (onEdit) onEdit(action);
         return false;
@@ -355,6 +358,14 @@ float Game::useFovModifier() const {
 }
 
 bool Game::scoping() const { return use.active && use.anim == 7; }  // ItemRules::Anim::Spyglass
+
+float Game::cooldownPercent(const std::string& group, float partial) const {
+    auto it = cooldowns_.find(group);
+    if (it == cooldowns_.end()) return 0.0f;
+    const float duration = float(it->second.end - it->second.start);
+    const float remaining = float(it->second.end) - (float(cooldownTick_) + partial);
+    return std::clamp(remaining / duration, 0.0f, 1.0f);
+}
 
 void Game::tickCameraFeedback() {
     // LocalPlayer.move -> addWalkedDistance; AbstractClientPlayer.updateBob (resetBob while riding).

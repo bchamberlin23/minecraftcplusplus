@@ -202,6 +202,21 @@ int Items::componentType(std::string_view name) const {
     return it == componentIds_.end() ? -1 : it->second;
 }
 
+std::string Items::cooldownGroup(const ItemStack& s) const {
+    const int type = componentType("use_cooldown");
+    for (const ItemStack::Component& c : s.added) {
+        if (c.type != type) continue;
+        net::Reader r(reinterpret_cast<const u8*>(c.data.data()), c.data.size());  // UseCooldown.STREAM_CODEC
+        r.f32();                                                                    // seconds
+        if (r.boolean()) {
+            std::string group(r.str());
+            if (r.ok) return group;
+        }
+        break;
+    }
+    return name(s.item);
+}
+
 int Items::maxStack(const ItemStack& s) const {
     if (s.maxStack > 0) return s.maxStack;
     if (s.maxDamage > 0 || s.damage > 0) return 1;

@@ -183,7 +183,18 @@ void Gameplay::attach(net::Client& client) {
             entityId_ = id;
             effects_.clear(), attributes_.clear(), entityAttributes_.clear();
             if (riding_) riding_->dismounted();
-            if (game_) game_->border = WorldBorder{};  // a new ClientLevel
+            if (game_) game_->border = WorldBorder{}, game_->clearCooldowns();  // a new ClientLevel and player
+        });
+    });
+    // ClientboundCooldownPacket: cooldown group, duration in ticks (0 removes it).
+    client.onPlayPeek("cooldown", [this](net::Reader& r) {
+        std::string group(r.str());
+        const int duration = r.varInt();
+        if (r.ok) post([this, group = std::move(group), duration] {
+            if (verbose_) LOG("gameplay: cooldown %s %d ticks", group.c_str(), duration);
+            if (!game_) return;
+            if (duration == 0) game_->removeCooldown(group);
+            else game_->addCooldown(group, duration);
         });
     });
     // World border (ClientPacketListener.handleInitializeBorder / handleSetBorder*).
@@ -228,6 +239,7 @@ void Gameplay::attach(net::Client& client) {
     client.onPlayPeek("respawn", [this](net::Reader&) {  // a new player entity: no effects, default attributes
         post([this] {
             effects_.clear(), attributes_.clear();
+            if (game_) game_->clearCooldowns();
             if (riding_) riding_->dismounted();
         });
     });
@@ -416,6 +428,11 @@ void Gameplay::setPlayer(Game& game, ui::Ui& ui) {
         return !t || t->canDestroyInCreative;
     };
     game.adventureMayBreak = [this](int x, int y, int z) { return adventureMayBreak(x, y, z); };
+    game.mainHandOnCooldown = [this] { return onCooldown(mainHand()); };
+}
+
+bool Gameplay::onCooldown(const ui::ItemStack* s) const {  // ItemCooldowns.isOnCooldown
+    return s && game_ && ui_ && game_->cooldownPercent(ui_->items().cooldownGroup(*s), 0.0f) > 0.0f;
 }
 
 void Gameplay::frame() {
@@ -542,7 +559,7 @@ void Gameplay::predictUse(const RayHit* target, bool) {
     if (!game_ || game_->use.active || game_->gameMode == 3) return;
     for (int hand = 0; hand < 2; ++hand) {
         const ui::ItemStack* s = hand == 0 ? mainHand() : offHand();
-        if (!s) continue;
+        if (!s || onCooldown(s)) continue;  // MultiPlayerGameMode.useItem: a cooling item passes to the other hand
         const ItemRules::Use u = rules_.use(itemName(s->item));
         if (u.anim == ItemRules::Anim::None && u.duration <= 0) {
             if (hand == 0) continue;  // nothing to use: the off hand's turn

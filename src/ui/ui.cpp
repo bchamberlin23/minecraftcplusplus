@@ -831,6 +831,8 @@ void Ui::setItemModels(ent::ItemModels* models) { s_->itemModels = models; }
 
 int Ui::ticksFrozen() const { return s_->ticksFrozen; }
 
+const Items& Ui::items() const { return s_->items; }
+
 const ItemStack* Ui::playerSlot(int slot) const {
     const auto& slots = s_->inventory.slots;
     if (slot < 0 || size_t(slot) >= slots.size() || slots[size_t(slot)].empty()) return nullptr;

@@ -131,6 +131,13 @@ void Ui::State::drawItem(Canvas& c, const ItemStack& s, float x, float y, bool d
         const std::string n = countOverride ? countOverride : std::to_string(s.count);
         font.draw(c, n, x + 19 - 2 - float(font.width(n)), y + 6 + 3, kWhite, true);
     }
+    if (game) {  // GuiGraphics.itemCooldown: the remaining part of the cooldown as a white sweep from the top
+        const float cooldown = game->cooldownPercent(items.cooldownGroup(s), game->partialTick());
+        if (cooldown > 0.0f) {
+            const float top = y + std::floor(16.0f * (1.0f - cooldown)), bottom = top + std::ceil(16.0f * cooldown);
+            c.fill(x, top, x + 16, bottom, 0x7FFFFFFF);
+        }
+    }
 }
 
 void Ui::State::drawTooltip(Canvas& c, const std::vector<Text>& lines, float mx, float my) {
