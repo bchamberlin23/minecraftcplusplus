@@ -144,6 +144,10 @@ void Lighting::initChunk(int cx, int cz, std::unordered_set<u64>& dirty) {
         int x, y, z;
     };
 
+    static const bool profile = std::getenv("MCPP_LIGHT_PROFILE") != nullptr;
+    const Timer tAll;
+    double tSeed[2] = {}, tBorder[2] = {}, tFlood[2] = {};
+    size_t floodN[2] = {}, seedN[2] = {};
     // Decode the column once and find, per column, the lowest y still open to the sky.
     thread_local std::vector<u8> opacity;
     opacity.assign(size_t(H) * 256, 0);
@@ -204,6 +208,7 @@ void Lighting::initChunk(int cx, int cz, std::unordered_set<u64>& dirty) {
         };
         thread_local std::vector<Node> flood;
         flood.clear();
+        Timer tPhase;
         if (sky) {
             for (int z = 0; z < 16; ++z)
                 for (int x = 0; x < 16; ++x) {
@@ -232,6 +237,7 @@ void Lighting::initChunk(int cx, int cz, std::unordered_set<u64>& dirty) {
                 flood.push_back(e);
             }
         }
+        tSeed[sky] = tPhase.ms(), tPhase = Timer(), seedN[sky] = flood.size();
         // Light already in the neighbouring chunks flows in across the borders.
         for (int y = minY; y < maxY; ++y)
             for (int k = 0; k < 16; ++k) {
@@ -240,6 +246,7 @@ void Lighting::initChunk(int cx, int cz, std::unordered_set<u64>& dirty) {
                     if (ch.get(x0 + b[0], y, z0 + b[1]) > 1) flood.push_back({x0 + b[0], y, z0 + b[1]});
             }
 
+        tBorder[sky] = tPhase.ms(), tPhase = Timer();
         for (size_t head = 0; head < flood.size(); ++head) {  // breadth first; the vector is the queue
             const Node n = flood[head];
             const int l = getL(n.x, n.y, n.z);
@@ -257,7 +264,12 @@ void Lighting::initChunk(int cx, int cz, std::unordered_set<u64>& dirty) {
                 flood.push_back({nx, ny, nz});
             }
         }
+        tFlood[sky] = tPhase.ms(), floodN[sky] = flood.size();
     }
+    if (profile && tAll.ms() > 10.0)
+        LOG("light chunk %d %d: %.1f ms | sky seed %.1f (%zu), border %.1f, flood %.1f (%zu) | block seed %.1f (%zu), "
+            "border %.1f, flood %.1f (%zu)", cx, cz, tAll.ms(), tSeed[1], seedN[1], tBorder[1], tFlood[1], floodN[1],
+            tSeed[0], seedN[0], tBorder[0], tFlood[0], floodN[0]);
     for (int sy = minSy; sy <= maxSy; ++sy)
         for (int dz = -1; dz <= 1; ++dz)
             for (int dx = -1; dx <= 1; ++dx)

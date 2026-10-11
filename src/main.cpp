@@ -265,6 +265,9 @@ int wmain(int argc, wchar_t** argv) {
     }
 
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    // The frame thread above the generation / meshing workers and the local server's JVM, which together keep every
+    // core busy while travelling: at normal priority it lost whole scheduler quanta (20-50 ms frames).
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
     Jobs::init();
     struct JobsGuard {
         ~JobsGuard() { Jobs::shutdown(); }
