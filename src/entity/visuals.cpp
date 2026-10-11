@@ -1629,6 +1629,10 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
         } else {
             const float bobY = std::sin(age / 10.0f + e.bobOffset) * 0.1f + 0.1f;
             const float spin = age / 20.0f + e.bobOffset;
+            // The game draws item entities back-face culled, so from inside one nothing of it shows: a dropped item
+            // starts at the dropper's eyes (eye height - 0.3) and would otherwise fill the screen for a moment.
+            const float cy = ry + bobY + 0.2f;
+            if (rx * rx + cy * cy + rz * rz < 0.3f * 0.3f) continue;
             m = xfTranslate(rx, ry + bobY + (-mesh.groundMinY + 0.0625f), rz);
             m = xfMul(m, xfRotY(spin));
         }
