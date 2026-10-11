@@ -246,7 +246,8 @@ Text Items::hoverName(const ItemStack& s) const {
     return displayName(s).withStyle(colorStyle(kRarity[std::clamp(rarity, 0, 3)]));
 }
 
-std::vector<Text> Items::tooltip(const ItemStack& s) const {
+std::vector<Text> Items::tooltip(const ItemStack& s, bool creative) const {
+    if (s.hideTooltip && !creative) return {};  // ItemStack.getTooltipLines
     std::vector<Text> lines{hoverName(s)};
     auto shown = [&](const char* component) {
         const int t = componentType(component);
@@ -300,11 +301,12 @@ std::vector<Text> Items::tooltip(const ItemStack& s) const {
         if (p.hasAuthor) lines.push_back(p.author);
         lines.push_back(Text(formatJava(tr("painting.dimensions", "%sx%s"), {std::to_string(p.width), std::to_string(p.height)})));
     }
-    for (const Text& l : s.lore) {
-        Style st = colorStyle(0xAA00AA);
-        st.italic = 1;
-        lines.push_back(l.withStyle(st));
-    }
+    if (shown("lore"))
+        for (const Text& l : s.lore) {
+            Style st = colorStyle(0xAA00AA);
+            st.italic = 1;
+            lines.push_back(l.withStyle(st));
+        }
     const int md = maxDamage(s);
     if (s.damage > 0 && md > 0) {
         lines.push_back(Text(formatJava(lang_->count("item.durability") ? lang_->at("item.durability") : "Durability: %s / %s",
@@ -536,7 +538,7 @@ bool Items::readPatch(net::Reader& r, ItemStack& out, int depth) const {
         } else if (n == "instrument") out.instrument = v.varInt() - 1;
         else if (n == "painting/variant") out.painting = v.varInt() - 1;
         else if (n == "tooltip_display") {
-            v.boolean();
+            out.hideTooltip = v.boolean();
             const i32 cnt = v.varInt();
             for (i32 k = 0; k < cnt && v.ok; ++k) out.hiddenTooltip.push_back(v.varInt());
         }

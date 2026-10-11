@@ -40,6 +40,7 @@ struct ItemStack {
     std::vector<std::pair<int, int>> stewEffects;                  // (mob_effect id, duration ticks)
     int instrument = -1, painting = -1;                            // registry network ids
     std::vector<int> hiddenTooltip;                                // tooltip_display hidden component types
+    bool hideTooltip = false;                                      // tooltip_display hide_tooltip
     // Gameplay components the patch sets (otherwise the item's defaults apply).
     int foodNutrition = -1;  // food: -1 not patched
     float foodSaturation = 0;
@@ -83,7 +84,8 @@ public:
     bool isBlockItem(int id) const { return id >= 0 && id < int(blockItem_.size()) && blockItem_[size_t(id)]; }
     Text displayName(const ItemStack& s) const;   // custom name (italic) > item_name > translated name
     Text hoverName(const ItemStack& s) const;     // displayName in the rarity colour
-    std::vector<Text> tooltip(const ItemStack& s) const;
+    // creative: TooltipFlag.isCreative (creative inventory item slots), which ignores tooltip_display's hide_tooltip.
+    std::vector<Text> tooltip(const ItemStack& s, bool creative = false) const;
     bool foil(const ItemStack& s) const { return s.glint >= 0 ? s.glint == 1 : s.enchantments > 0; }
 
     // Data-driven registries the server synced (net::Client::registryEntries): names and tooltip data of

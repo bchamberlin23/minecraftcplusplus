@@ -359,7 +359,7 @@ void dropStack(UiState& s, const ItemStack& st) {  // handleCreativeModeItemDrop
 }
 
 std::vector<Text> tooltipFor(UiState& s, const ItemStack& st, bool creativeSlot) {
-    std::vector<Text> lines = s.items.tooltip(st);
+    std::vector<Text> lines = s.items.tooltip(st, creativeSlot);
     if (tab().kind == TabKind::Category && creativeSlot) return lines;
     auto it = g.tabsOfItem.find(st.item);
     if (it != g.tabsOfItem.end() && !lines.empty()) {
