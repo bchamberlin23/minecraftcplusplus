@@ -269,9 +269,9 @@ int wmain(int argc, wchar_t** argv) {
     const bool menu = opt.world.empty() && opt.connect.empty() && !opt.play && opt.gentestDir.empty() && !opt.bench &&
                       !opt.selftest && !opt.audioTest;
     if (menu) {
-        opt.detail = std::min(opt.detail, 10);        // a vista: little full detail, far terrain beyond
+        opt.detail = std::min(opt.detail, 10);  // like the game's panorama: full detail only, fogged at its edge
         if (opt.genRadius < 0) opt.genRadius = 10;
-        if (opt.farBlocks < 0) opt.farBlocks = opt.fog = std::min(opt.fog, 8192.0f);
+        if (opt.farBlocks < 0) opt.farBlocks = 0, opt.fog = std::min(opt.fog, float(opt.detail * 16));
         if (opt.sky.time < 0) opt.sky.time = 1500;  // morning light
     }
 
