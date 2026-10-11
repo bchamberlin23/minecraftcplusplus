@@ -376,6 +376,8 @@ void Ui::State::drawChat(Canvas& c, bool focused) {
         c.fill(-4, float(entryTop), float(maxWidth + 4 + 4), float(entryBottom), withAlpha(0, alpha * bgOpacity));
         const int textTop = entryBottom - 8;
         font.draw(c, line.text, 0, float(textTop), withAlpha(0xFFFFFF, alpha * textOpacity), true);
+        if (line.tag.color)  // GuiMessageTag indicator
+            c.fill(-4, float(entryTop), -2, float(entryBottom), withAlpha(line.tag.color, alpha * textOpacity));
     }
     if (focused && total > 0) {  // scroll bar
         const int chatHeight = count * entryHeight, virtualHeight = total * entryHeight;

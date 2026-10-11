@@ -71,10 +71,27 @@ Layout layoutFor(const Menu& m);
 // What the client tells the server about its options (main hand, skin parts, server listing).
 net::Client::Information clientInformation(const Settings& s);
 
+// GuiMessageTag: the indicator left of a chat message (0: none) and its tooltip's translation key.
+struct ChatTag {
+    u32 color = 0;
+    std::string key;
+};
+inline const ChatTag kTagSystemSinglePlayer{0xD0D0D0, "chat.tag.system_single_player"};
+inline const ChatTag kTagSystem{0xD0D0D0, "chat.tag.system"};
+inline const ChatTag kTagNotSecure{0xD0D0D0, "chat.tag.not_secure"};
+inline const ChatTag kTagError{0xFF5555, "chat.tag.error"};
+
 struct ChatLine {
     Text text;
     int addedTick = 0;
     bool endOfEntry = true;
+    ChatTag tag;
+};
+struct ChatMessage {  // GuiMessage
+    Text text;
+    int addedTick = 0;
+    std::string signature;  // MessageSignature (256 bytes), "" none
+    ChatTag tag;
 };
 
 struct Button {
@@ -201,19 +218,11 @@ struct Ui::State {
 
     // Chat
     std::vector<ChatLine> chatLines;  // newest first, wrapped
-    std::vector<std::pair<Text, int>> chatMessages;  // newest first: message, added tick
+    std::vector<ChatMessage> chatMessages;  // newest first (ChatComponent.allMessages)
     std::vector<std::string> sentHistory;
     int historyPos = -1;
     std::string historyDraft;
     int chatScroll = 0;
-    // Message acknowledgements (LastSeenMessagesTracker): signatures of signed messages.
-    struct Seen {
-        std::string signature;
-        bool acknowledged = false;
-    };
-    std::vector<std::optional<Seen>> lastSeen = std::vector<std::optional<Seen>>(20);
-    int lastSeenTail = 0, lastSeenOffset = 0;
-    std::string lastSeenSignature;
 
     // Text field (chat input, creative search).
     struct TextField {
@@ -284,7 +293,9 @@ struct Ui::State {
     void updatePause();
     void closeScreen(bool sendClose = true);
     void syncHotbarToGame();
-    void addChat(const Text& message);
+    void addChat(const Text& message);  // a client / server system message (ChatComponent.addClientSystemMessage)
+    void addChatMessage(ChatMessage m);  // ChatComponent.addMessage
+    void refreshChatLines();             // ChatComponent.refreshTrimmedMessages
     void sendChat(const std::string& text);
     const Lang* lang() const { return &res.lang(); }
     void runScript(double dt);

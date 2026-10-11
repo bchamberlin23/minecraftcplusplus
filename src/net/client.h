@@ -140,6 +140,12 @@ public:
     // Observers: see a copy of the packet before it is handled as usual (several per packet allowed).
     void onPlayPeek(const std::string& packet, PacketHandler handler) { playPeeks_[packet].push_back(std::move(handler)); }
     bool sendPlay(const char* packet, const Writer& body) { return send(Play, packet, body); }  // any thread
+    // Configuration-phase observers (show_dialog, server_links, update_tags...): like onPlayPeek. Register before start().
+    void onConfig(const std::string& packet, PacketHandler handler) { configPeeks_[packet].push_back(std::move(handler)); }
+    bool sendConfig(const char* packet, const Writer& body) { return send(Configuration, packet, body); }  // any thread
+    bool inConfiguration() const { return phase_ == Configuration; }
+    // Closes the connection from this side (Connection.disconnect): `reason` is the disconnect event's message.
+    void disconnect(const std::string& reason);
     const Dimension& dimension() const { return dimension_; }  // network thread / after JoinEvent
     // Data-driven registries the UI reads (enchantment, painting_variant, instrument, banner_pattern): entries in
     // network id order with their network NBT ("" when the server sent none). Complete once inPlay().
@@ -149,6 +155,7 @@ public:
     };
     const std::vector<RegistryEntry>& registryEntries(const std::string& registry) const;
     bool inPlay() const { return phase_ == Play; }
+    const std::string& playerUuid() const { return uuid_; }  // our profile id (16 bytes), set at login
     // The server's chunk cache view (set_chunk_cache_center / _radius, the login's distances) and simulation
     // distance (set_simulation_distance), in chunks; any thread.
     int viewDistance() const { return viewDistance_; }
@@ -192,6 +199,8 @@ private:
     std::vector<Event> events_;
     std::unordered_map<std::string, std::vector<PacketHandler>> playHandlers_;
     std::unordered_map<std::string, std::vector<PacketHandler>> playPeeks_;
+    std::unordered_map<std::string, std::vector<PacketHandler>> configPeeks_;
+    std::atomic<bool> disconnected_{false};  // disconnect(): its event replaces the connection-closed one
     ClientStats stats_;
     double startTime_ = 0;
 
@@ -201,6 +210,7 @@ private:
     std::vector<u8> biomeIds_;  // the server's biome registry order -> World biome ids
     std::unordered_map<std::string, std::vector<RegistryEntry>> registries_;  // written in configuration only
     Dimension dimension_;
+    std::string uuid_;  // written before the configuration phase
 };
 
 }  // namespace net

@@ -5,6 +5,7 @@
 #include "ui/frontend.h"
 #include "ui/signs_books.h"
 #include "ui/gameplay_hud.h"
+#include "ui/mp_hud.h"
 #include "ui/ui_state.h"
 #include "world/terrain.h"
 
@@ -38,20 +39,6 @@ void readLpVec3(net::Reader& r, double out[3]) {
 }
 
 std::string shortName(const std::string& n) { return n.substr(n.find(':') + 1); }
-
-// Vanilla chat types in registry order (the server sends minecraft:chat_type sorted by id).
-struct ChatType {
-    const char* key;
-    int params;  // 2: sender, content; 3: target, sender, content; -2: target, content
-    bool grayItalic;
-};
-const ChatType kChatTypes[] = {{"chat.type.text", 2, false},
-                               {"chat.type.emote", 2, false},
-                               {"commands.message.display.incoming", 2, true},
-                               {"commands.message.display.outgoing", -2, true},
-                               {"chat.type.announcement", 2, false},
-                               {"chat.type.team.text", 3, false},
-                               {"chat.type.team.sent", 3, false}};
 
 int vkFromName(std::string n) {
     for (char& c : n) c = char(std::toupper(u8(c)));
@@ -292,14 +279,25 @@ void Ui::State::closeScreen(bool sendClose) {
     window->setMouseCaptured(true);
 }
 
-void Ui::State::addChat(const Text& message) {
-    nativeMods.chatReceived(message.plain());
-    chatMessages.insert(chatMessages.begin(), {message, guiTicks});
-    if (chatMessages.size() > 100) chatMessages.pop_back();
-    const std::vector<Text> lines = font.split(message, 320);  // ChatComponent.getWidth() at default options
+void Ui::State::addChat(const Text& message) { addChatMessage({message, guiTicks, {}, kTagSystemSinglePlayer}); }
+
+void Ui::State::addChatMessage(ChatMessage m) {
+    nativeMods.chatReceived(m.text.plain());
+    const std::vector<Text> lines = font.split(m.text, 320);  // ChatComponent.getWidth() at default options
     for (size_t i = 0; i < lines.size(); ++i) {
         if (screen == Screen::Chat && chatScroll > 0) ++chatScroll;
-        chatLines.insert(chatLines.begin(), ChatLine{lines[i], guiTicks, i == lines.size() - 1});
+        chatLines.insert(chatLines.begin(), ChatLine{lines[i], m.addedTick, i == lines.size() - 1, m.tag});
+    }
+    if (chatLines.size() > 100) chatLines.resize(100);
+    chatMessages.insert(chatMessages.begin(), std::move(m));
+    if (chatMessages.size() > 100) chatMessages.pop_back();
+}
+
+void Ui::State::refreshChatLines() {
+    chatLines.clear();
+    for (auto it = chatMessages.rbegin(); it != chatMessages.rend(); ++it) {
+        const std::vector<Text> lines = font.split(it->text, 320);
+        for (size_t i = 0; i < lines.size(); ++i) chatLines.insert(chatLines.begin(), ChatLine{lines[i], it->addedTick, i == lines.size() - 1, it->tag});
     }
     if (chatLines.size() > 100) chatLines.resize(100);
 }
@@ -317,33 +315,8 @@ void Ui::State::sendChat(const std::string& raw) {
         else addChat(translatable("chat.type.text", {Text("Player"), Text(text)}, lang()));
         return;
     }
-    if (text[0] == '/') {
-        net::Writer w;
-        w.str(text.substr(1));
-        client->sendPlay("chat_command", w);
-        LOG("[chat] sent command %s", text.c_str());
-        return;
-    }
-    // ServerboundChatPacket: unsigned (offline mode), with the message acknowledgements the server tracks.
-    static std::mt19937_64 rng(std::random_device{}());
-    net::Writer w;
-    w.str(text);
-    w.u64v(u64(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count()));
-    w.u64v(rng());
-    w.boolean(false);  // no signature
-    w.varInt(lastSeenOffset);
-    lastSeenOffset = 0;
-    u8 bits[3] = {};
-    for (int i = 0; i < 20; ++i) {
-        const int index = (lastSeenTail + i) % 20;
-        if (!lastSeen[size_t(index)]) continue;
-        bits[i / 8] |= u8(1 << (i % 8));
-        lastSeen[size_t(index)]->acknowledged = true;
-    }
-    w.bytes(bits, 3);
-    w.u8v(0);  // checksum: ignored
-    client->sendPlay("chat", w);
-    LOG("[chat] sent message %s", text.c_str());
+    if (text[0] == '/') sendChatCommand(*this, text.substr(1));  // chat_net.cpp
+    else sendChatMessage(*this, text);
 }
 
 void Ui::State::syncHotbarToGame() {
@@ -833,79 +806,7 @@ void Ui::registerHandlers(net::Client& client) {
             if (slot >= 0 && slot < 9) s->game->setSelectedSlot(slot);
         });
     });
-    auto chatMessage = [s](Text t) {
-        LOG("[chat] %s", t.plain().c_str());
-        s->post([s, t = std::move(t)] { s->addChat(t); });
-    };
-    client.onPlay("system_chat", [s, lang, chatMessage](net::Reader& r) {
-        Text t = parseComponent(r.nbt(), lang);
-        if (r.boolean()) {
-            s->post([s, t] {
-                s->actionbar = t;
-                s->actionbarTime = 60;
-            });
-            return;
-        }
-        chatMessage(std::move(t));
-    });
-    auto decorate = [lang](int chatType, const Text& sender, const Text* target, const Text& content) {
-        if (chatType < 0 || chatType >= int(std::size(kChatTypes))) return translatable("chat.type.text", {sender, content}, lang);
-        const ChatType& ct = kChatTypes[chatType];
-        Style st;
-        if (ct.grayItalic) st.color = 0xAAAAAA, st.italic = 1;
-        const Text tgt = target ? *target : Text();
-        if (ct.params == 3) return translatable(ct.key, {tgt, sender, content}, lang, st);
-        if (ct.params == -2) return translatable(ct.key, {tgt, content}, lang, st);
-        return translatable(ct.key, {sender, content}, lang, st);
-    };
-    client.onPlay("player_chat", [s, lang, chatMessage, decorate](net::Reader& r) {
-        r.varInt();    // global index
-        r.skip(16);    // sender
-        r.varInt();    // index
-        std::string signature;
-        if (r.boolean()) signature = std::string(r.bytes(256));
-        Text content(std::string(r.str()));
-        r.i64v(), r.i64v();  // timestamp, salt
-        const i32 seen = r.varInt();
-        for (i32 i = 0; i < seen && r.ok; ++i)
-            if (r.varInt() == 0) r.skip(256);
-        if (r.boolean()) content = parseComponent(r.nbt(), lang);
-        const int filter = r.varInt();
-        if (filter == 2) {
-            const i32 longs = r.varInt();
-            r.skip(size_t(std::max(0, longs)) * 8);
-        }
-        const int type = r.varInt() - 1;
-        if (type < 0) return;  // inline chat type: not supported
-        const Text sender = parseComponent(r.nbt(), lang);
-        Text target;
-        const bool hasTarget = r.boolean();
-        if (hasTarget) target = parseComponent(r.nbt(), lang);
-        if (!signature.empty())
-            s->post([s, signature] {  // LastSeenMessagesTracker.addPending
-                if (signature == s->lastSeenSignature) return;
-                s->lastSeenSignature = signature;
-                s->lastSeen[size_t(s->lastSeenTail)] = State::Seen{signature, false};
-                s->lastSeenTail = (s->lastSeenTail + 1) % 20;
-                if (++s->lastSeenOffset > 64 && s->online()) {
-                    net::Writer w;
-                    w.varInt(s->lastSeenOffset);
-                    s->client->sendPlay("chat_ack", w);
-                    s->lastSeenOffset = 0;
-                }
-            });
-        if (filter == 1) return;
-        chatMessage(decorate(type, sender, hasTarget ? &target : nullptr, content));
-    });
-    client.onPlay("disguised_chat", [lang, chatMessage, decorate](net::Reader& r) {
-        const Text content = parseComponent(r.nbt(), lang);
-        const int type = r.varInt() - 1;
-        const Text sender = type >= 0 ? parseComponent(r.nbt(), lang) : Text("?");
-        Text target;
-        const bool hasTarget = type >= 0 && r.boolean();
-        if (hasTarget) target = parseComponent(r.nbt(), lang);
-        chatMessage(decorate(type, sender, hasTarget ? &target : nullptr, content));
-    });
+    // Chat packets: chat_net.cpp.
     client.onPlay("set_title_text", [s, lang](net::Reader& r) {
         Text t = parseComponent(r.nbt(), lang);
         s->post([s, t] {

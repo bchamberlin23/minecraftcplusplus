@@ -43,3 +43,6 @@ struct NbtValue {
 
 bool nbtRead(const u8* data, size_t size, NbtValue& root, std::string* rootName = nullptr);
 void nbtWrite(const NbtValue& root, std::vector<u8>& out, std::string_view rootName = "");
+// Network NBT (NbtIo.writeAnyTag without a name): the type byte, then the payload; any tag type.
+bool nbtReadNetwork(const u8* data, size_t size, NbtValue& root);
+void nbtWriteNetwork(const NbtValue& root, std::vector<u8>& out);

@@ -17,6 +17,7 @@ bool decode(net::Reader& r, const std::vector<std::string>& argTypes, Tree& out)
         const u8 flags = r.u8v();
         n.type = flags & 3;
         n.executable = (flags & 4) != 0;
+        n.restricted = (flags & 32) != 0;
         const i32 children = r.varInt();
         for (i32 i = 0; i < children && r.ok; ++i) n.children.push_back(r.varInt());
         if (flags & 8) n.redirect = r.varInt();
@@ -304,7 +305,7 @@ void withNode(Context& c, int node, Range range) {
 }
 
 // CommandDispatcher.parseNodes
-Parse parseNodes(const Tree& t, int node, const Reader& original, const Context& soFar, int depth) {
+Parse parseNodes(const Tree& t, int node, const Reader& original, const Context& soFar, int depth, bool allowRestricted) {
     std::vector<std::pair<int, Error>> errors;
     std::vector<Parse> potentials;
     const int cursor = original.cursor;
@@ -328,6 +329,7 @@ Parse parseNodes(const Tree& t, int node, const Reader& original, const Context&
     }
     for (int child : relevant) {
         const Node& cn = t.nodes[size_t(child)];
+        if (cn.restricted && !allowRestricted) continue;  // CommandNode.canUse
         Context ctx = soFar;
         Reader reader = original;
         const int start = reader.cursor;
@@ -355,11 +357,11 @@ Parse parseNodes(const Tree& t, int node, const Reader& original, const Context&
                 Context childCtx;
                 childCtx.rootNode = cn.redirect;
                 childCtx.range = {reader.cursor, reader.cursor};
-                Parse parse = parseNodes(t, cn.redirect, reader, childCtx, depth + 1);
+                Parse parse = parseNodes(t, cn.redirect, reader, childCtx, depth + 1, allowRestricted);
                 ctx.child = parse.ctx;
                 return {std::make_shared<Context>(ctx), parse.input, parse.cursor, parse.exceptions};
             }
-            potentials.push_back(parseNodes(t, child, reader, ctx, depth + 1));
+            potentials.push_back(parseNodes(t, child, reader, ctx, depth + 1, allowRestricted));
         } else {
             potentials.push_back({std::make_shared<Context>(ctx), reader.s, reader.cursor, {}});
         }
@@ -443,13 +445,26 @@ std::string smartUsage(const Tree& t, int node, bool optional, bool deep, int de
 
 }  // namespace
 
-Parse parse(const Tree& t, const std::string& input, int start) {
+Parse parse(const Tree& t, const std::string& input, int start, bool allowRestricted) {
     Reader r{input, start};
     Context c;
     c.rootNode = t.root;
     c.range = {start, start};
     if (!t.valid()) return {std::make_shared<Context>(c), input, start, {}};
-    return parseNodes(t, t.root, r, c, 0);
+    return parseNodes(t, t.root, r, c, 0, allowRestricted);
+}
+
+bool validCommand(const Tree& t, const Parse& p) {
+    if (p.canRead() || !p.exceptions.empty() || !p.ctx) return false;
+    const Context& last = p.ctx->lastChild();
+    return !last.nodes.empty() && t.nodes[size_t(last.nodes.back().first)].executable;
+}
+
+bool hasSignedArguments(const Tree& t, const Parse& p) {
+    for (const Context* c = p.ctx.get(); c; c = c->child.get())
+        for (const auto& [node, range] : c->nodes)
+            if (t.nodes[size_t(node)].type == 2 && t.nodes[size_t(node)].parser == "minecraft:message") return true;
+    return false;
 }
 
 Completion complete(const Tree& t, const Parse& p, int cursor) {

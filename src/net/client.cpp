@@ -194,7 +194,13 @@ void Client::run() {
     }
     connection_.close();
     alive_ = false;
-    if (!quit_ && !reason.empty()) push(DisconnectEvent{reason});
+    if (!quit_ && !reason.empty() && !disconnected_) push(DisconnectEvent{reason});
+}
+
+void Client::disconnect(const std::string& reason) {
+    if (disconnected_.exchange(true)) return;
+    push(DisconnectEvent{reason});
+    connection_.close();
 }
 
 namespace {
@@ -239,7 +245,7 @@ bool Client::handleLogin(const std::string& name, Reader& r) {
         push(DisconnectEvent{jsonComponentText(r.str(), &lang_)});
         return false;
     } else if (name == "login_finished") {
-        r.skip(16);
+        uuid_ = std::string(r.bytes(16));
         const std::string_view player = r.str();
         LOG("net: logged in as %.*s (protocol %d)", int(player.size()), player.data(), protocol_);
         switchPhase(Login, "login_acknowledged", Configuration);
@@ -306,6 +312,11 @@ const std::vector<Client::RegistryEntry>& Client::registryEntries(const std::str
 }
 
 bool Client::handleConfiguration(const std::string& name, Reader& r) {
+    if (auto p = configPeeks_.find(name); p != configPeeks_.end())
+        for (const PacketHandler& peek : p->second) {
+            Reader copy = r;
+            peek(copy);
+        }
     if (name == "select_known_packs") {
         // Claim no packs, so the server sends every registry entry in full (dimension types included).
         Writer w;
@@ -316,7 +327,7 @@ bool Client::handleConfiguration(const std::string& name, Reader& r) {
         const i32 n = r.varInt();
         if (registry == "minecraft:worldgen/biome") biomeBits_ = std::max(1, ceilLog2(u32(n)));
         static const char* const kKept[] = {"minecraft:enchantment", "minecraft:painting_variant", "minecraft:instrument",
-                                            "minecraft:banner_pattern"};
+                                            "minecraft:banner_pattern", "minecraft:chat_type", "minecraft:dialog"};
         std::vector<RegistryEntry>* kept = nullptr;
         for (const char* k : kKept)
             if (registry == k) kept = &registries_[registry], kept->clear();
