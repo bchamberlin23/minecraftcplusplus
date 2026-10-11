@@ -848,22 +848,28 @@ bool World::readSeed(const fs::path& saveDir, i64& seed) {
 
 PlayerStart World::readPlayer(const fs::path& saveDir) {
     PlayerStart ps;
-    std::vector<u8> gz;
-    if (!readFile(saveDir / "level.dat", gz) || gz.size() < 18) return ps;
-    u32 isize = u32(gz[gz.size() - 4]) | (u32(gz[gz.size() - 3]) << 8) | (u32(gz[gz.size() - 2]) << 16) |
-                (u32(gz[gz.size() - 1]) << 24);
-    std::vector<u8> raw(std::max<u32>(isize, 1));
-    libdeflate_decompressor* d = libdeflate_alloc_decompressor();
-    size_t actual = 0;
-    libdeflate_result res = libdeflate_gzip_decompress(d, gz.data(), gz.size(), raw.data(), raw.size(), &actual);
-    libdeflate_free_decompressor(d);
-    if (res != LIBDEFLATE_SUCCESS) return ps;
+    auto gunzip = [](const fs::path& path, std::vector<u8>& raw) {
+        std::vector<u8> gz;
+        if (!readFile(path, gz) || gz.size() < 18) return false;
+        u32 isize = u32(gz[gz.size() - 4]) | (u32(gz[gz.size() - 3]) << 8) | (u32(gz[gz.size() - 2]) << 16) |
+                    (u32(gz[gz.size() - 1]) << 24);
+        raw.resize(std::max<u32>(isize, 1));
+        libdeflate_decompressor* d = libdeflate_alloc_decompressor();
+        size_t actual = 0;
+        libdeflate_result res = libdeflate_gzip_decompress(d, gz.data(), gz.size(), raw.data(), raw.size(), &actual);
+        libdeflate_free_decompressor(d);
+        raw.resize(actual);
+        return res == LIBDEFLATE_SUCCESS;
+    };
+    std::vector<u8> raw;
+    if (!gunzip(saveDir / "level.dat", raw)) return ps;
 
-    NbtReader r(raw.data(), actual);
+    NbtReader r(raw.data(), raw.size());
     if (r.u8v() != TagCompound) return ps;
     r.str();
     bool haveSpawn = false;
     int spawn[3] = {0, 100, 0};
+    std::vector<i32> owner;  // singleplayer_uuid: 26.x keeps the owner in players/data/<uuid>.dat
     u8 t;
     std::string_view n;
     while (r.field(t, n)) {
@@ -895,6 +901,9 @@ PlayerStart World::readPlayer(const fs::path& saveDir) {
                         r.skip(t);
                     }
                 }
+            } else if (t == TagIntArray && n == "singleplayer_uuid") {
+                const i32 count = r.i32v();
+                for (i32 i = 0; i < count && r.ok; ++i) owner.push_back(r.i32v());
             } else if (t == TagInt && (n == "SpawnX" || n == "SpawnY" || n == "SpawnZ")) {
                 spawn[n.back() - 'X'] = r.i32v();
                 haveSpawn = true;
@@ -913,6 +922,25 @@ PlayerStart World::readPlayer(const fs::path& saveDir) {
                 }
             } else {
                 r.skip(t);
+            }
+        }
+    }
+    // Where the owner left off, so the world shows there before the server places the player (only in the
+    // overworld: the view starts there).
+    if (!ps.found && owner.size() == 4) {
+        char id[40];
+        std::snprintf(id, sizeof(id), "%08x-%04x-%04x-%04x-%04x%08x", u32(owner[0]), u32(owner[1]) >> 16,
+                      u32(owner[1]) & 0xFFFF, u32(owner[2]) >> 16, u32(owner[2]) & 0xFFFF, u32(owner[3]));
+        NbtValue player;
+        if (gunzip(saveDir / "players" / "data" / (std::string(id) + ".dat"), raw) &&
+            nbtRead(raw.data(), raw.size(), player)) {
+            const NbtValue* pos = player.find("Pos");
+            const NbtValue* rot = player.find("Rotation");
+            const NbtValue* dim = player.find("Dimension");
+            if (pos && pos->items.size() == 3 && (!dim || dim->s == "minecraft:overworld")) {
+                ps.x = pos->items[0].d, ps.y = pos->items[1].d, ps.z = pos->items[2].d;
+                if (rot && rot->items.size() == 2) ps.yaw = float(rot->items[0].d), ps.pitch = float(rot->items[1].d);
+                ps.found = true;
             }
         }
     }
