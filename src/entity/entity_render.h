@@ -55,7 +55,7 @@ public:
     enum class Kind : u8 { None, Mob, Item, Block, Sprite, Box };
     struct LayerDef {
         int model = -1, babyModel = -1, tex = -1, babyTex = -1;
-        u8 flags = 0;
+        u16 flags = 0;
     };
     struct TypeDef {
         Kind kind = Kind::None;
@@ -76,7 +76,8 @@ public:
     struct Layer {
         int model, tex;
         u32 color;
-        u8 flags;
+        u16 flags;
+        float scroll[2] = {};  // Scroll layers: texture offset (fractions of the texture)
     };
     // A mob type drawn without an entity (spawner display entities): its layers with the default variants, its
     // animation and the renderer's scale. Returns the layer count (0: not drawn as a model).
@@ -90,6 +91,8 @@ private:
     int resolve(const Entity& e, const TypeDef& d, Layer* out);
     int resolveUncached(const Entity& e, const TypeDef& d, Layer* out) const;
     bool modelEntity(const Entity& e, const TypeDef& d, float pt, const double cam[3], u32 light);
+    void speciesRotations(const Entity& e, const TypeDef& d, float pt, float pitch, Mat34& root) const;
+    void mobPoses(const Entity& e, const TypeDef& d, const double cam[3], AnimState& s) const;
     void freeEntity(const Entity& e, const TypeDef& d, float pt, const double cam[3], u32 light, const float* camRight);
     void emitBlock(u16 block, const Mat34& m, u32 light, u32 overlay);
     void emitFree(const float pos[4][3], const float uv[4][2], const float n[3], u32 tex, u32 color, u32 light,

@@ -5,8 +5,10 @@
 // hurt/death/swing timers). Rendering lives in entity_render.*; picking for attack/use is here.
 #include "core/common.h"
 #include "entity/entity_assets.h"
+#include "entity/species.h"
 #include "game/tick_rate.h"
 
+#include <atomic>
 #include <climits>
 #include <functional>
 #include <mutex>
@@ -34,7 +36,7 @@ struct MetaValue {
 
 enum class EventType : u8 {
     Add, Remove, Move, PositionSync, Teleport, Motion, HeadRot, Data, Equipment, PlayerInfo, PlayerRemove, Swing,
-    Hurt, Damage, EntityEvent, TakeItem, Passengers, Animate
+    Hurt, Damage, EntityEvent, TakeItem, Passengers, Animate, Jukebox
 };
 
 struct Step {
@@ -204,6 +206,7 @@ struct Entity {
     bool slim = false;
     int skin = -1;
     DisplayState display;
+    SpeciesState sp;  // species client state and raw synched data (species.h)
 };
 
 struct PlayerInfo {
@@ -336,6 +339,9 @@ private:
     int localControl_ = -1;
     std::function<void(Entity&)> localTick_;
     double tickAccumulator_ = 0, tickSeconds_ = 0.05;
+    i64 gameTime_ = 0;  // the level's game time (set_time, advanced each entity tick)
+    std::atomic<i64> netGameTime_{INT64_MIN};
+    std::atomic<float> rainLevel_{0}, thunderLevel_{0};  // game events 1 / 2 / 7 / 8
     u64 ticks_ = 0;
     Stats stats_;
     bool verbose_ = false;  // MCPP_ENTITY_VERBOSE=1: log spawns, variants, attacks
@@ -352,6 +358,8 @@ void tickPoseAnimation(Entity& e, const double move[3], bool fallFlying, bool cr
 int bedFacingAt(const World& world, const BlockRegistry& registry, int x, int y, int z);
 // LivingEntity.isFullyFrozen.
 inline bool fullyFrozen(const Entity& e) { return e.ticksFrozen >= 140; }
+// getMainArm: players synch it (DATA_PLAYER_MAIN_HAND), mobs keep a left-handed flag (DATA_MOB_FLAGS_ID bit 2).
+inline bool rightHanded(const Entity& e) { return e.category == Category::Player ? e.mainArm != 0 : !(e.mobFlags & 2); }
 
 // Display.calculateInterpolationProgress at a partial tick (1 without an interpolation).
 float displayProgress(const Entity& e, float partialTick);

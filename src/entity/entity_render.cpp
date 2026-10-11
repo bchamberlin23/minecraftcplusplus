@@ -1,5 +1,7 @@
 #include "entity/entity_render.h"
 
+#include "entity/species.h"
+
 #include "assets/assets.h"
 #include "assets/game_reports.h"
 #include "world/world.h"
@@ -35,11 +37,15 @@ constexpr u64 kRefOffset = kInstOffset + u64(kMaxInstances) * 32;
 constexpr u64 kFreeOffset = kRefOffset + u64(kMaxRefs) * 8;
 constexpr u64 kFrameBytes = (kFreeOffset + u64(kMaxFree) * 128 + 65535) & ~u64(65535);
 
-enum LayerFlags : u8 { Emissive = 1, Translucent = 2, TintWool = 8, TintCollar = 16, Armor = 32, Elytra = 64, Glint = 128 };
+enum LayerFlags : u16 {
+    Emissive = 1, Translucent = 2, Additive = 4, TintWool = 8, TintCollar = 16, Armor = 32, Elytra = 64, Glint = 128,
+    Scroll = 256,  // texture coordinates wrap within the texture, scrolled by Layer::scroll (breeze wind, energy swirl)
+};
 enum Special : u8 {
     SpNone, SpCow, SpPig, SpChicken, SpSheep, SpWolf, SpCat, SpHorse, SpLlama, SpRabbit, SpParrot, SpFox, SpAxolotl,
     SpPanda, SpMooshroom, SpVillager, SpZombieVillager, SpSlime, SpPlayer, SpFrog, SpArmorStand, SpCreeper, SpBoat,
-    SpMinecart, SpArrow, SpXpOrb, SpTrident, SpDisplay, SpShulker, SpCushion, SpSulfurCube, SpZombieNautilus
+    SpMinecart, SpArrow, SpXpOrb, SpTrident, SpDisplay, SpShulker, SpCushion, SpSulfurCube, SpZombieNautilus,
+    SpSalmon, SpPufferfish, SpTropicalFish, SpWither, SpDragon, SpObject
 };
 // DyeColor names by id.
 const char* const kDyeNames[16] = {"white", "orange", "magenta", "light_blue", "yellow", "lime", "pink", "gray",
@@ -171,7 +177,7 @@ void EntityRenderer::buildDefs() {
             d.anim = anim;
             d.base = {M(model), babyModel.empty() ? -1 : M(babyModel), T(tex), babyTex.empty() ? -1 : T(babyTex)};
         };
-        auto extra = [&](const std::string& model, const std::string& tex, u8 flags, const std::string& babyModel = "",
+        auto extra = [&](const std::string& model, const std::string& tex, u16 flags, const std::string& babyModel = "",
                          const std::string& babyTex = "") {
             if (d.extraCount < 3)
                 d.extra[d.extraCount++] = {M(model), babyModel.empty() ? -1 : M(babyModel), T(tex),
@@ -188,17 +194,17 @@ void EntityRenderer::buildDefs() {
         } else if (n == "zombie") mob(Anim::Zombie, "zombie#main", "zombie/zombie", "zombie_baby#main", "zombie/zombie_baby");
         else if (n == "husk") mob(Anim::Zombie, "husk#main", "zombie/husk", "husk_baby#main", "zombie/husk_baby");
         else if (n == "drowned") {
-            mob(Anim::Zombie, "drowned#main", "zombie/drowned", "drowned_baby#main", "zombie/drowned_baby");
+            mob(Anim::Drowned, "drowned#main", "zombie/drowned", "drowned_baby#main", "zombie/drowned_baby");
             extra("drowned#outer", "zombie/drowned_outer_layer", 0, "drowned_baby#outer", "zombie/drowned_outer_layer_baby");
         } else if (n == "zombie_villager") {
             mob(Anim::Zombie, "zombie_villager#main", "zombie_villager/zombie_villager", "zombie_villager_baby#main",
                 "zombie_villager/zombie_villager_baby");
             d.special = SpZombieVillager;
         } else if (n == "zombified_piglin")
-            mob(Anim::Zombie, "zombified_piglin#main", "piglin/zombified_piglin", "zombified_piglin_baby#main",
+            mob(Anim::ZombifiedPiglin, "zombified_piglin#main", "piglin/zombified_piglin", "zombified_piglin_baby#main",
                 "piglin/zombified_piglin_baby");
-        else if (n == "piglin") mob(Anim::Humanoid, "piglin#main", "piglin/piglin", "piglin_baby#main", "piglin/piglin_baby");
-        else if (n == "piglin_brute") mob(Anim::Humanoid, "piglin_brute#main", "piglin/piglin_brute");
+        else if (n == "piglin") mob(Anim::Piglin, "piglin#main", "piglin/piglin", "piglin_baby#main", "piglin/piglin_baby");
+        else if (n == "piglin_brute") mob(Anim::Piglin, "piglin_brute#main", "piglin/piglin_brute");
         else if (n == "giant") mob(Anim::Zombie, "giant#main", "zombie/zombie"), d.scale = 6.0f;
         else if (n == "skeleton") mob(Anim::Skeleton, "skeleton#main", "skeleton/skeleton");
         else if (n == "stray") mob(Anim::Skeleton, "stray#main", "skeleton/stray"), extra("stray#outer", "skeleton/stray_overlay", 0);
@@ -211,69 +217,79 @@ void EntityRenderer::buildDefs() {
             extra(n + "#main", "spider/spider_eyes", Emissive | Translucent);
             d.flip = 180.0f;
         } else if (n == "enderman") {
-            mob(Anim::Humanoid, "enderman#main", "enderman/enderman");
+            mob(Anim::Enderman, "enderman#main", "enderman/enderman");
             extra("enderman#main", "enderman/enderman_eyes", Emissive | Translucent);
-        } else if (n == "witch") mob(Anim::Villager, "witch#main", "witch/witch");
+        } else if (n == "witch") mob(Anim::Witch, "witch#main", "witch/witch");
         else if (n == "villager") mob(Anim::Villager, "villager#main", "villager/villager", "villager_baby#main", "villager/villager_baby"), d.special = SpVillager;
-        else if (n == "wandering_trader") mob(Anim::Villager, "wandering_trader#main", "wandering_trader/wandering_trader");
-        else if (n == "pillager" || n == "vindicator" || n == "evoker" || n == "illusioner") mob(Anim::Villager, n + "#main", "illager/" + n);
-        else if (n == "vex" || n == "ravager") mob(Anim::Head, n + "#main", "illager/" + n);
-        else if (n == "evoker_fangs") mob(Anim::None, "evoker_fangs#main", "illager/evoker_fangs");
+        else if (n == "wandering_trader") mob(Anim::WanderingTrader, "wandering_trader#main", "wandering_trader/wandering_trader");
+        else if (n == "pillager" || n == "vindicator" || n == "evoker" || n == "illusioner") mob(Anim::Illager, n + "#main", "illager/" + n);
+        else if (n == "vex") mob(Anim::Vex, "vex#main", "illager/vex"), d.base.flags = Translucent;
+        else if (n == "ravager") mob(Anim::Ravager, "ravager#main", "illager/ravager");
+        else if (n == "evoker_fangs") mob(Anim::EvokerFangs, "evoker_fangs#main", "illager/evoker_fangs"), d.special = SpObject;
         else if (n == "iron_golem") mob(Anim::IronGolem, "iron_golem#main", "iron_golem/iron_golem");
         else if (n == "cow") mob(Anim::Quadruped, "cow#main", "cow/cow_temperate", "cow_baby#main", "cow/cow_temperate_baby"), d.special = SpCow;
         else if (n == "mooshroom") mob(Anim::Quadruped, "mooshroom#main", "cow/mooshroom_red", "mooshroom_baby#main", "cow/mooshroom_red_baby"), d.special = SpMooshroom;
         else if (n == "pig") mob(Anim::Quadruped, "pig#main", "pig/pig_temperate", "pig_baby#main", "pig/pig_temperate_baby"), d.special = SpPig;
         else if (n == "sheep") {
-            mob(Anim::Quadruped, "sheep#main", "sheep/sheep", "sheep_baby#main", "sheep/sheep_baby");
+            mob(Anim::Sheep, "sheep#main", "sheep/sheep", "sheep_baby#main", "sheep/sheep_baby");
             d.special = SpSheep;
         } else if (n == "chicken") mob(Anim::Chicken, "chicken#main", "chicken/chicken_temperate", "chicken_baby#main", "chicken/chicken_temperate_baby"), d.special = SpChicken;
-        else if (n == "wolf") mob(Anim::Quadruped, "wolf#main", "wolf/wolf", "wolf_baby#main", "wolf/wolf_baby"), d.special = SpWolf;
-        else if (n == "cat") mob(Anim::Quadruped, "cat#main", "cat/cat_tabby", "cat_baby#main", "cat/cat_tabby_baby"), d.special = SpCat;
-        else if (n == "ocelot") mob(Anim::Quadruped, "ocelot#main", "cat/ocelot", "ocelot_baby#main", "cat/ocelot_baby");
-        else if (n == "horse") mob(Anim::Quadruped, "horse#main", "horse/horse_white", "horse_baby#main", "horse/horse_white_baby"), d.special = SpHorse;
-        else if (n == "donkey" || n == "mule") mob(Anim::Quadruped, n + "#main", "horse/" + n, n + "_baby#main", "horse/" + n + "_baby");
-        else if (n == "skeleton_horse") mob(Anim::Quadruped, "skeleton_horse#main", "horse/horse_skeleton", "skeleton_horse_baby#main", "horse/horse_skeleton_baby");
-        else if (n == "zombie_horse") mob(Anim::Quadruped, "zombie_horse#main", "horse/horse_zombie", "zombie_horse_baby#main", "horse/horse_zombie_baby");
-        else if (n == "llama" || n == "trader_llama") mob(Anim::Head, n + "#main", "llama/llama_creamy", n + "_baby#main", "llama/llama_creamy_baby"), d.special = SpLlama;
-        else if (n == "rabbit") mob(Anim::Head, "rabbit#main", "rabbit/rabbit_brown", "rabbit_baby#main", "rabbit/rabbit_brown_baby"), d.special = SpRabbit;
-        else if (n == "parrot") mob(Anim::Head, "parrot#main", "parrot/parrot_red_blue"), d.special = SpParrot;
-        else if (n == "fox") mob(Anim::Quadruped, "fox#main", "fox/fox", "fox_baby#main", "fox/fox_baby"), d.special = SpFox;
-        else if (n == "axolotl") mob(Anim::Head, "axolotl#main", "axolotl/axolotl_lucy", "axolotl_baby#main", "axolotl/axolotl_lucy_baby"), d.special = SpAxolotl;
-        else if (n == "panda") mob(Anim::Quadruped, "panda#main", "panda/panda", "panda_baby#main", "panda/panda_baby"), d.special = SpPanda;
-        else if (n == "frog") mob(Anim::Head, "frog#main", "frog/frog_temperate"), d.special = SpFrog;
-        else if (n == "polar_bear") mob(Anim::Quadruped, "polar_bear#main", "bear/polarbear", "polar_bear_baby#main", "bear/polarbear_baby");
-        else if (n == "goat") mob(Anim::Quadruped, "goat#main", "goat/goat", "goat_baby#main", "goat/goat_baby");
-        else if (n == "hoglin") mob(Anim::Quadruped, "hoglin#main", "hoglin/hoglin", "hoglin_baby#main", "hoglin/hoglin_baby");
-        else if (n == "zoglin") mob(Anim::Quadruped, "zoglin#main", "hoglin/zoglin", "zoglin_baby#main", "hoglin/zoglin_baby");
-        else if (n == "sniffer") mob(Anim::Head, "sniffer#main", "sniffer/sniffer", "sniffer_baby#main", "sniffer/snifflet");
-        else if (n == "glow_squid") mob(Anim::None, "glow_squid#main", "squid/glow_squid", "glow_squid_baby#main", "squid/glow_squid_baby");
-        else if (n == "squid") mob(Anim::None, "squid#main", "squid/squid", "squid_baby#main", "squid/squid_baby");
-        else if (n == "cod") mob(Anim::None, "cod#main", "fish/cod");
-        else if (n == "salmon") mob(Anim::None, "salmon#main", "fish/salmon");
-        else if (n == "pufferfish") mob(Anim::None, "pufferfish_big#main", "fish/pufferfish");
-        else if (n == "tropical_fish") mob(Anim::None, "tropical_fish_small#main", "fish/tropical_a");
-        else if (n == "strider") mob(Anim::Head, "strider#main", "strider/strider", "strider_baby#main", "strider/strider_baby");
+        else if (n == "wolf") mob(Anim::Wolf, "wolf#main", "wolf/wolf", "wolf_baby#main", "wolf/wolf_baby"), d.special = SpWolf;
+        else if (n == "cat") mob(Anim::Feline, "cat#main", "cat/cat_tabby", "cat_baby#main", "cat/cat_tabby_baby"), d.special = SpCat;
+        else if (n == "ocelot") mob(Anim::Feline, "ocelot#main", "cat/ocelot", "ocelot_baby#main", "cat/ocelot_baby");
+        else if (n == "horse") mob(Anim::Horse, "horse#main", "horse/horse_white", "horse_baby#main", "horse/horse_white_baby"), d.special = SpHorse;
+        else if (n == "donkey" || n == "mule") mob(Anim::Horse, n + "#main", "horse/" + n, n + "_baby#main", "horse/" + n + "_baby");
+        else if (n == "skeleton_horse") mob(Anim::Horse, "skeleton_horse#main", "horse/horse_skeleton", "skeleton_horse_baby#main", "horse/horse_skeleton_baby");
+        else if (n == "zombie_horse") mob(Anim::Horse, "zombie_horse#main", "horse/horse_zombie", "zombie_horse_baby#main", "horse/horse_zombie_baby");
+        else if (n == "llama" || n == "trader_llama") mob(Anim::Llama, n + "#main", "llama/llama_creamy", n + "_baby#main", "llama/llama_creamy_baby"), d.special = SpLlama;
+        else if (n == "rabbit") mob(Anim::Rabbit, "rabbit#main", "rabbit/rabbit_brown", "rabbit_baby#main", "rabbit/rabbit_brown_baby"), d.special = SpRabbit;
+        else if (n == "parrot") mob(Anim::Parrot, "parrot#main", "parrot/parrot_red_blue"), d.special = SpParrot;
+        else if (n == "fox") mob(Anim::Fox, "fox#main", "fox/fox", "fox_baby#main", "fox/fox_baby"), d.special = SpFox;
+        else if (n == "axolotl") mob(Anim::Axolotl, "axolotl#main", "axolotl/axolotl_lucy", "axolotl_baby#main", "axolotl/axolotl_lucy_baby"), d.special = SpAxolotl;
+        else if (n == "panda") mob(Anim::Panda, "panda#main", "panda/panda", "panda_baby#main", "panda/panda_baby"), d.special = SpPanda;
+        else if (n == "frog") mob(Anim::Frog, "frog#main", "frog/frog_temperate"), d.special = SpFrog;
+        else if (n == "polar_bear") mob(Anim::PolarBear, "polar_bear#main", "bear/polarbear", "polar_bear_baby#main", "bear/polarbear_baby");
+        else if (n == "goat") mob(Anim::Goat, "goat#main", "goat/goat", "goat_baby#main", "goat/goat_baby");
+        else if (n == "hoglin") mob(Anim::Hoglin, "hoglin#main", "hoglin/hoglin", "hoglin_baby#main", "hoglin/hoglin_baby");
+        else if (n == "zoglin") mob(Anim::Hoglin, "zoglin#main", "hoglin/zoglin", "zoglin_baby#main", "hoglin/zoglin_baby");
+        else if (n == "sniffer") mob(Anim::Sniffer, "sniffer#main", "sniffer/sniffer", "sniffer_baby#main", "sniffer/snifflet");
+        else if (n == "glow_squid") mob(Anim::Squid, "glow_squid#main", "squid/glow_squid", "glow_squid_baby#main", "squid/glow_squid_baby");
+        else if (n == "squid") mob(Anim::Squid, "squid#main", "squid/squid", "squid_baby#main", "squid/squid_baby");
+        else if (n == "cod") mob(Anim::Cod, "cod#main", "fish/cod");
+        else if (n == "salmon") mob(Anim::Salmon, "salmon#main", "fish/salmon"), d.special = SpSalmon;
+        else if (n == "pufferfish") mob(Anim::Pufferfish, "pufferfish_big#main", "fish/pufferfish"), d.special = SpPufferfish;
+        else if (n == "tropical_fish") mob(Anim::TropicalFish, "tropical_fish_small#main", "fish/tropical_a"), d.special = SpTropicalFish;
+        else if (n == "strider") mob(Anim::Strider, "strider#main", "strider/strider", "strider_baby#main", "strider/strider_baby");
         else if (n == "slime") {
             mob(Anim::None, "slime#main", "slime/slime");
             extra("slime#outer", "slime/slime", Translucent);
             d.special = SpSlime;
-        } else if (n == "magma_cube") mob(Anim::None, "magma_cube#main", "slime/magmacube"), d.special = SpSlime;
-        else if (n == "phantom") mob(Anim::None, "phantom#main", "phantom/phantom"), extra("phantom#main", "phantom/phantom_eyes", Emissive | Translucent);
-        else if (n == "guardian") mob(Anim::None, "guardian#main", "guardian/guardian");
-        else if (n == "elder_guardian") mob(Anim::None, "elder_guardian#main", "guardian/guardian_elder");
-        else if (n == "ghast") mob(Anim::None, "ghast#main", "ghast/ghast");
-        else if (n == "happy_ghast") mob(Anim::None, "happy_ghast#main", "ghast/happy_ghast", "happy_ghast_baby#main", "ghast/happy_ghast_baby");
-        else if (n == "snow_golem") mob(Anim::Head, "snow_golem#main", "snow_golem/snow_golem");
-        else if (n == "copper_golem") mob(Anim::Head, "copper_golem#main", "copper_golem/copper_golem");
-        else if (n == "turtle") mob(Anim::Head, "turtle#main", "turtle/turtle", "turtle_baby#main", "turtle/turtle_baby");
-        else if (n == "dolphin") mob(Anim::Head, "dolphin#main", "dolphin/dolphin", "dolphin_baby#main", "dolphin/dolphin_baby");
-        else if (n == "camel") mob(Anim::Head, "camel#main", "camel/camel", "camel_baby#main", "camel/camel_baby");
-        else if (n == "camel_husk") mob(Anim::Head, "camel#main", "camel/camel_husk");
-        else if (n == "armadillo") mob(Anim::Head, "armadillo#main", "armadillo/armadillo", "armadillo_baby#main", "armadillo/armadillo_baby");
-        else if (n == "bee") mob(Anim::Head, "bee#main", "bee/bee", "bee_baby#main", "bee/bee_baby");
-        else if (n == "warden") mob(Anim::Head, "warden#main", "warden/warden");
-        else if (n == "wither") mob(Anim::None, "wither#main", "wither/wither");
-        else if (n == "ender_dragon") mob(Anim::None, "ender_dragon#main", "enderdragon/dragon");
+        } else if (n == "magma_cube") mob(Anim::MagmaCube, "magma_cube#main", "slime/magmacube"), d.special = SpSlime;
+        else if (n == "phantom") mob(Anim::Phantom, "phantom#main", "phantom/phantom"), extra("phantom#main", "phantom/phantom_eyes", Emissive | Translucent);
+        else if (n == "guardian") mob(Anim::Guardian, "guardian#main", "guardian/guardian");
+        else if (n == "elder_guardian") mob(Anim::Guardian, "elder_guardian#main", "guardian/guardian_elder");
+        else if (n == "ghast") mob(Anim::Ghast, "ghast#main", "ghast/ghast");
+        else if (n == "happy_ghast") mob(Anim::HappyGhast, "happy_ghast#main", "ghast/happy_ghast", "happy_ghast_baby#main", "ghast/happy_ghast_baby");
+        else if (n == "snow_golem") mob(Anim::SnowGolem, "snow_golem#main", "snow_golem/snow_golem");
+        else if (n == "copper_golem") mob(Anim::CopperGolem, "copper_golem#main", "copper_golem/copper_golem");
+        else if (n == "turtle") mob(Anim::Turtle, "turtle#main", "turtle/turtle", "turtle_baby#main", "turtle/turtle_baby");
+        else if (n == "dolphin") mob(Anim::Dolphin, "dolphin#main", "dolphin/dolphin", "dolphin_baby#main", "dolphin/dolphin_baby");
+        else if (n == "camel") mob(Anim::Camel, "camel#main", "camel/camel", "camel_baby#main", "camel/camel_baby");
+        else if (n == "camel_husk") mob(Anim::Camel, "camel#main", "camel/camel_husk");
+        else if (n == "armadillo") mob(Anim::Armadillo, "armadillo#main", "armadillo/armadillo", "armadillo_baby#main", "armadillo/armadillo_baby");
+        else if (n == "bee") mob(Anim::Bee, "bee#main", "bee/bee", "bee_baby#main", "bee/bee_baby");
+        else if (n == "warden") mob(Anim::Warden, "warden#main", "warden/warden");
+        else if (n == "wither") mob(Anim::Wither, "wither#main", "wither/wither"), d.special = SpWither;
+        else if (n == "ender_dragon") mob(Anim::Dragon, "ender_dragon#main", "enderdragon/dragon"), d.special = SpDragon;
+        else if (n == "allay") mob(Anim::Allay, "allay#main", "allay/allay"), d.base.flags = Translucent;
+        else if (n == "bat") mob(Anim::Bat, "bat#main", "bat/bat");
+        else if (n == "blaze") mob(Anim::Blaze, "blaze#main", "blaze/blaze");
+        else if (n == "breeze") mob(Anim::Breeze, "breeze#main", "breeze/breeze"), d.base.flags = Translucent;
+        else if (n == "creaking") mob(Anim::Creaking, "creaking#main", "creaking/creaking");
+        else if (n == "endermite") mob(Anim::Endermite, "endermite#main", "endermite/endermite"), d.flip = 180.0f;
+        else if (n == "silverfish") mob(Anim::Silverfish, "silverfish#main", "silverfish/silverfish"), d.flip = 180.0f;
+        else if (n == "tadpole") mob(Anim::Tadpole, "tadpole#main", "tadpole/tadpole");
+        else if (n == "nautilus") mob(Anim::Nautilus, "nautilus#main", "nautilus/nautilus", "nautilus_baby#main", "nautilus/nautilus_baby");
         else if (n == "armor_stand") {
             mob(Anim::ArmorStand, "armor_stand#main", "armorstand/armorstand", "armor_stand_small#main");
             d.special = SpArmorStand;
@@ -286,15 +302,16 @@ void EntityRenderer::buildDefs() {
         } else if (n.ends_with("minecart")) {
             mob(Anim::None, n + "#main", "minecart/minecart");
             d.special = SpMinecart;
-        } else if (n == "arrow") mob(Anim::None, "arrow#main", "projectiles/arrow"), d.special = SpArrow;
-        else if (n == "spectral_arrow") mob(Anim::None, "arrow#main", "projectiles/arrow_spectral"), d.special = SpArrow;
+        } else if (n == "arrow") mob(Anim::Arrow, "arrow#main", "projectiles/arrow"), d.special = SpArrow;
+        else if (n == "spectral_arrow") mob(Anim::Arrow, "arrow#main", "projectiles/arrow_spectral"), d.special = SpArrow;
         else if (n == "trident") mob(Anim::None, "trident#main", "trident/trident"), d.special = SpTrident;
-        else if (n == "shulker_bullet") mob(Anim::None, "shulker_bullet#main", "shulker/spark");
-        else if (n == "wind_charge" || n == "breeze_wind_charge") mob(Anim::None, "wind_charge#main", "projectiles/wind_charge");
-        else if (n == "llama_spit") mob(Anim::None, "llama_spit#main", "llama/llama_spit");
-        else if (n == "wither_skull") mob(Anim::None, "wither_skull#main", "wither/wither");
-        else if (n == "leash_knot") mob(Anim::None, "leash_knot#main", "lead_knot/lead_knot");
-        else if (n == "end_crystal") mob(Anim::None, "end_crystal#main", "end_crystal/end_crystal");
+        else if (n == "shulker_bullet") mob(Anim::ShulkerBullet, "shulker_bullet#main", "shulker/spark"), d.special = SpObject;
+        else if (n == "wind_charge" || n == "breeze_wind_charge")
+            mob(Anim::WindCharge, "wind_charge#main", "projectiles/wind_charge"), d.special = SpObject, d.base.flags = Translucent | Scroll;
+        else if (n == "llama_spit") mob(Anim::LlamaSpit, "llama_spit#main", "llama/llama_spit"), d.special = SpObject;
+        else if (n == "wither_skull") mob(Anim::WitherSkull, "wither_skull#main", "wither/wither"), d.special = SpObject;
+        else if (n == "leash_knot") mob(Anim::None, "leash_knot#main", "lead_knot/lead_knot"), d.special = SpObject;
+        else if (n == "end_crystal") mob(Anim::EndCrystal, "end_crystal#main", "end_crystal/end_crystal"), d.special = SpObject;
         else if (n == "shulker") mob(Anim::Shulker, "shulker#main", "shulker/shulker"), d.special = SpShulker;
         else if (n == "cushion") mob(Anim::None, "cushion#main", "cushion/white_cushion"), d.special = SpCushion;
         else if (n == "sulfur_cube") {  // SulfurCubeRenderer: the inner cube (SulfurCubeInnerLayer, drawn first), the outer
@@ -305,7 +322,7 @@ void EntityRenderer::buildDefs() {
                   "sulfur_cube/sulfur_cube_outer_small");
             d.special = SpSulfurCube;
         } else if (n == "zombie_nautilus")
-            mob(Anim::Head, "zombie_nautilus#main", "nautilus/zombie_nautilus"), d.special = SpZombieNautilus;
+            mob(Anim::Nautilus, "zombie_nautilus#main", "nautilus/zombie_nautilus"), d.special = SpZombieNautilus;
         else if (n == "item") d.kind = Kind::Item;
         else if (n == "falling_block") d.kind = Kind::Block;
         else if (n == "tnt") d.kind = Kind::Block, d.block = "minecraft:tnt";
@@ -361,7 +378,9 @@ int EntityRenderer::displayLayers(int type, Layer* out, int max, Anim& anim, flo
 }
 
 int EntityRenderer::resolve(const Entity& e, const TypeDef& d, Layer* out) {
-    const u64 v1 = u64(d.special == SpPlayer ? e.skin : e.variant) & 0xFFF;
+    u64 v1 = u64(d.special == SpPlayer ? e.skin : e.variant) & 0xFFF;
+    if (d.special == SpSalmon) v1 = u64(dataInt(e, "DATA_TYPE", 1));            // Salmon.Variant (medium by default)
+    else if (d.special == SpPufferfish) v1 = u64(dataInt(e, "PUFF_STATE", 0));  // the puff state picks the model
     const u64 key = (u64(u32(e.type)) << 48) | (v1 << 36) | ((u64(e.variant2) & 0xFFF) << 24) |
                     ((u64(e.villagerType) & 0xFF) << 16) | (u64(e.baby) << 0) | (u64(e.tame) << 1) |
                     (u64(e.angry) << 2) | (u64(e.slim) << 3) | (u64((e.wool & 0x10) != 0) << 4) |
@@ -381,6 +400,10 @@ int EntityRenderer::resolve(const Entity& e, const TypeDef& d, Layer* out) {
         out[i] = c.layers[i];
         if (out[i].flags & TintWool) out[i].color = abgr(woolRgb);
         if (out[i].flags & TintCollar) out[i].color = abgr(kDye[std::clamp(e.collar, 0, 15)]);
+        if (d.special == SpTropicalFish && i < 2) {  // TropicalFishRenderer.getModelTint / TropicalFishPatternLayer
+            const i64 packed = dataInt(e, "DATA_ID_TYPE_VARIANT");
+            out[i].color = abgr(kDye[((i == 0 ? packed >> 16 : packed >> 24) & 255) % 16]);
+        }
     }
     return c.count;
 }
@@ -490,6 +513,22 @@ int EntityRenderer::resolveUncached(const Entity& e, const TypeDef& d, Layer* ou
             if (e.dyeColor >= 0 && e.dyeColor < 16)
                 if (const int t = T(std::string("shulker/shulker_") + kDyeNames[e.dyeColor]); t >= 0) tex = t;
             break;
+        case SpSalmon: {  // SalmonRenderer: the model by size
+            static const char* kModels[3] = {"salmon_small#main", "salmon#main", "salmon_large#main"};
+            if (const int m = assets_.model(kModels[std::clamp(int(dataInt(e, "DATA_TYPE", 1)), 0, 2)]); m >= 0) model = m;
+            break;
+        }
+        case SpPufferfish: {  // PufferfishRenderer: the model by puff state
+            static const char* kModels[3] = {"pufferfish_small#main", "pufferfish_medium#main", "pufferfish_big#main"};
+            if (const int m = assets_.model(kModels[std::clamp(int(dataInt(e, "PUFF_STATE", 0)), 0, 2)]); m >= 0) model = m;
+            break;
+        }
+        case SpTropicalFish: {  // TropicalFishRenderer: small / large model and texture (+ the pattern layer below)
+            const bool large = (e.variant & 0xFF) == 1;
+            if (const int m = assets_.model(large ? "tropical_fish_large#main" : "tropical_fish_small#main"); m >= 0) model = m;
+            if (const int t = T(large ? "fish/tropical_b" : "fish/tropical_a"); t >= 0) tex = t;
+            break;
+        }
         case SpZombieNautilus:  // ZombieNautilusRenderer: the variant's model type and texture
             if (const Variant* v = variantOf("zombie_nautilus_variant")) {
                 if (v->tex >= 0) tex = v->tex;
@@ -530,6 +569,12 @@ int EntityRenderer::resolveUncached(const Entity& e, const TypeDef& d, Layer* ou
         if (!type.empty() && typeTex >= 0) out[n++] = {out[0].model, typeTex, kWhite, 0};
         const int profTex = baby || prof.empty() || prof == "none" ? -1 : T(dir + "profession/" + prof);
         if (profTex >= 0) out[n++] = {out[0].model, profTex, kWhite, 0};
+    }
+    if (d.special == SpTropicalFish && n < 6) {  // TropicalFishPatternLayer
+        const bool large = (e.variant & 0xFF) == 1;
+        const int pm = assets_.model(large ? "tropical_fish_large#pattern" : "tropical_fish_small#pattern");
+        const int pt = T(std::string(large ? "fish/tropical_b_pattern_" : "fish/tropical_a_pattern_") + std::to_string(std::clamp(e.variant2, 0, 5) + 1));
+        if (pm >= 0 && pt >= 0) out[n++] = {pm, pt, kWhite, 0};
     }
     if (d.special == SpHorse && e.variant2 > 0 && e.variant2 <= 4 && n < 6) {
         static const char* kMarks[5] = {"", "white", "whitefield", "whitedots", "blackdots"};
@@ -735,7 +780,7 @@ int EntityRenderer::equipmentLayers(const Entity& e, const TypeDef& d, Layer* ou
                 if (dye < 0) continue;  // getColorForLayer: 0 = not drawn
                 color = abgr(u32(dye));
             }
-            out[n++] = {model, l.tex, color, u8(Armor | (glint ? Glint : 0))};
+            out[n++] = {model, l.tex, color, u16(Armor | (glint ? Glint : 0))};
             glint = false;
         }
     }
@@ -744,7 +789,7 @@ int EntityRenderer::equipmentLayers(const Entity& e, const TypeDef& d, Layer* ou
     if (chest >= 0 && elytra >= 0 &&
         (d.anim == Anim::Humanoid || d.anim == Anim::Zombie || d.anim == Anim::Skeleton || d.anim == Anim::ArmorStand)) {
         for (const EquipmentLayer& l : items_->itemLayers(chest, 3))
-                if (l.tex >= 0 && n < max) out[n++] = {elytra, l.tex, kWhite, u8(Elytra | ((e.equipFoil & 16) ? Glint : 0))};
+                if (l.tex >= 0 && n < max) out[n++] = {elytra, l.tex, kWhite, u16(Elytra | ((e.equipFoil & 16) ? Glint : 0))};
     }
     // SimpleEquipmentLayer / LlamaDecorLayer: body armour, carpets and saddles (posed like the base model).
     if (e.info && d.anim != Anim::Humanoid && d.anim != Anim::Zombie && d.anim != Anim::Skeleton) {
@@ -769,12 +814,199 @@ int EntityRenderer::equipmentLayers(const Entity& e, const TypeDef& d, Layer* ou
                     if (dye < 0) continue;
                     color = abgr(u32(dye));
                 }
-                out[n++] = {model, l.tex, color, u8(Armor | (glint ? Glint : 0))};
+                out[n++] = {model, l.tex, color, u16(Armor | (glint ? Glint : 0))};
                 glint = false;
             }
         }
     }
     return n;
+}
+
+namespace {
+// LivingEntityRenderer.isShaking and the overrides: fully frozen, converting zombies / skeletons / zombie villagers,
+// suffocating striders.
+bool isShaking(const Entity& e) {
+    if (fullyFrozen(e)) return true;
+    if (!e.info) return false;
+    const std::string& n = e.info->name;
+    if (n == "minecraft:zombie" || n == "minecraft:husk" || n == "minecraft:drowned") return dataInt(e, "DATA_DROWNED_CONVERSION_ID") != 0;
+    if (n == "minecraft:skeleton") return dataInt(e, "DATA_STRAY_CONVERSION_ID") != 0;
+    if (n == "minecraft:zombie_villager") return dataInt(e, "DATA_CONVERTING_ID") != 0;
+    if (n == "minecraft:strider") return dataInt(e, "DATA_SUFFOCATING") != 0;
+    return false;
+}
+}  // namespace
+
+// The species renderers' setupRotations after LivingEntityRenderer's (before the model flip).
+void EntityRenderer::speciesRotations(const Entity& e, const TypeDef& d, float pt, float pitch, Mat34& rootOut) const {
+    M34& root = *reinterpret_cast<M34*>(&rootOut);
+    const float age = float(e.age) + pt;
+    auto lerpA = [&](int i) { return e.sp.ao[i] + (e.sp.a[i] - e.sp.ao[i]) * pt; };
+    switch (d.anim) {
+        case Anim::Feline: {  // CatRenderer: lying down
+            const float lie = d.special == SpCat ? lerpA(kLie) : 0.0f;
+            if (lie > 0) {
+                root = mul(root, translate(0.4f * lie, 0.15f * lie, 0.1f * lie));
+                root = mul(root, rotZ(lerpAngle(lie, 0.0f, 90.0f) * kDeg));
+                // isLyingOnTopOfSleepingPlayer: a sleeping player within 2 blocks
+                for (const auto& [id, other] : world_.entities())
+                    if (other.category == Category::Player && other.pose == 2 && std::abs(other.pos[0] - e.pos[0]) < 3 &&
+                        std::abs(other.pos[1] - e.pos[1]) < 3 && std::abs(other.pos[2] - e.pos[2]) < 3) {
+                        root = mul(root, translate(0.15f * lie, 0, 0));
+                        break;
+                    }
+            }
+            break;
+        }
+        case Anim::Fox: {  // FoxRenderer: pouncing / faceplanted foxes tilt with their pitch
+            const i64 flags = dataInt(e, "DATA_FLAGS_ID");
+            if (flags & (16 | 64)) root = mul(root, rotX(-pitch * kDeg));
+            break;
+        }
+        case Anim::Panda: {  // PandaRenderer: rolling, sitting, lying on the back
+            const float rollTime = e.sp.t[0] > 0 ? float(e.sp.t[0]) + pt : 0.0f;
+            if (rollTime > 0) {
+                const float frac = rollTime - std::floor(rollTime);
+                const int pos = int(std::floor(rollTime)), next = pos + 1;
+                const float y = e.baby ? 0.3f : 0.8f;
+                auto angle = [&](float a, float b, float threshold) { return float(next) < threshold ? a + (b - a) * frac : a; };
+                if (pos < 8) {
+                    const float ang = angle(90.0f * float(pos) / 7.0f, 90.0f * float(next) / 7.0f, 8.0f);
+                    root = mul(mul(root, translate(0, (y + 0.2f) * (ang / 90.0f), 0)), rotX(-ang * kDeg));
+                } else if (pos < 16) {
+                    const float ang = angle(90.0f + 90.0f * (float(pos) - 8.0f) / 7.0f, 90.0f + 90.0f * (float(next) - 8.0f) / 7.0f, 16.0f);
+                    root = mul(mul(root, translate(0, y + 0.2f + (y - 0.2f) * (ang - 90.0f) / 90.0f, 0)), rotX(-ang * kDeg));
+                } else if (pos < 24) {
+                    const float ang = angle(180.0f + 90.0f * (float(pos) - 16.0f) / 7.0f, 180.0f + 90.0f * (float(next) - 16.0f) / 7.0f, 24.0f);
+                    root = mul(mul(root, translate(0, y + y * (270.0f - ang) / 90.0f, 0)), rotX(-ang * kDeg));
+                } else if (pos < 32) {
+                    const float ang = angle(270.0f + 90.0f * (float(pos) - 24.0f) / 7.0f, 270.0f + 90.0f * (float(next) - 24.0f) / 7.0f, 32.0f);
+                    root = mul(mul(root, translate(0, y * ((360.0f - ang) / 90.0f), 0)), rotX(-ang * kDeg));
+                }
+            }
+            const float sit = lerpA(kSit);
+            if (sit > 0) {
+                root = mul(root, translate(0, 0.8f * sit, 0));
+                root = mul(root, rotX((pitch + sit * 90.0f) * kDeg));
+                root = mul(root, translate(0, -1.0f * sit, 0));
+                if (e.variant == 2 && speciesThundering()) {  // scared
+                    root = mul(root, rotY(float(std::cos(age * 1.25f) * kPi * 0.05f) * kDeg));
+                    if (e.baby) root = mul(root, translate(0, 0.8f, 0.55f));
+                }
+            }
+            const float back = lerpA(kOnBack);
+            if (back > 0) {
+                root = mul(root, translate(0, (e.baby ? 0.5f : 1.3f) * back, 0));
+                root = mul(root, rotX((pitch + back * 180.0f) * kDeg));
+            }
+            break;
+        }
+        case Anim::Cod:
+        case Anim::Salmon:
+        case Anim::TropicalFish: {  // Cod / Salmon / TropicalFishRenderer: swimming wiggle, flopping on land
+            const bool salmon = d.anim == Anim::Salmon;
+            const float amp = salmon && !e.inWater ? 1.3f : 1.0f, ang = salmon && !e.inWater ? 1.7f : 1.0f;
+            root = mul(root, rotY(amp * 4.3f * std::sin(ang * 0.6f * age) * kDeg));
+            if (!e.inWater) {
+                root = mul(root, d.anim == Anim::Cod ? translate(0.1f, 0.1f, -0.1f) : translate(0.2f, 0.1f, 0));
+                root = mul(root, rotZ(kPi / 2));
+            }
+            break;
+        }
+        case Anim::Drowned: {  // DrownedRenderer: swimming tilt about the middle of the body
+            const float swim = e.swimAmountO + (e.swimAmount - e.swimAmountO) * pt;
+            if (swim > 0) {
+                const float h = (e.info ? e.info->height : 1.95f) * (e.baby ? 0.5f : 1.0f) / 2.0f;
+                root = mul(mul(mul(root, translate(0, h, 0)), rotX(swim * (-10.0f - pitch) * kDeg)), translate(0, -h, 0));
+            }
+            break;
+        }
+        case Anim::IronGolem: {  // IronGolemRenderer: the body sways while walking
+            const float speed = std::min(e.walkSpeedOld + (e.walkSpeed - e.walkSpeedOld) * pt, 1.0f);
+            if (speed >= 0.01f) {
+                const float wp = (e.walkPos - e.walkSpeed * (1.0f - pt)) * e.walkScale + 6.0f;
+                root = mul(root, rotZ(6.5f * ((std::abs(std::fmod(wp, 13.0f) - 6.5f) - 3.25f) / 3.25f) * kDeg));
+            }
+            break;
+        }
+        case Anim::Phantom: root = mul(root, rotX(pitch * kDeg)); break;  // PhantomRenderer
+        case Anim::ArmorStand:
+            break;
+        default: break;
+    }
+}
+
+// Mob arm poses: HumanoidMobRenderer.getArmPose (spears; the skeletons' bow, the drowned's trident), PiglinArmPose,
+// IllagerArmPose; the guardian's eye target (GuardianRenderer.getEntityToLookAt).
+void EntityRenderer::mobPoses(const Entity& e, const TypeDef& d, const double cam[3], AnimState& s) const {
+    const auto& names = assets_.itemNames();
+    auto item = [&](int slot) -> std::string_view {
+        const int id = e.equipment[slot];
+        return id >= 0 && size_t(id) < names.size() ? std::string_view(names[size_t(id)]) : std::string_view();
+    };
+    const std::string_view main = item(0), off = item(1);
+    const bool right = rightHanded(e), aggressive = (e.mobFlags & 4) != 0;
+    auto melee = [](std::string_view n) {
+        return n.ends_with("_sword") || n.ends_with("_axe") || n.ends_with("_spear") || n == "mace" || n == "trident";
+    };
+    switch (d.anim) {
+        case Anim::Zombie:
+        case Anim::Skeleton:
+        case Anim::Drowned:
+        case Anim::Piglin:
+        case Anim::ZombifiedPiglin:
+        case Anim::Enderman: {
+            ArmPose mainPose = main.ends_with("_spear") ? ArmPose::Spear : ArmPose::Empty;
+            const ArmPose offPose = off.ends_with("_spear") ? ArmPose::Spear : ArmPose::Empty;
+            if (d.anim == Anim::Skeleton && aggressive && main == "bow") mainPose = ArmPose::BowAndArrow;
+            if (d.anim == Anim::Drowned && aggressive && main == "trident") mainPose = ArmPose::ThrowTrident;
+            s.havePoses = true;
+            s.rightPose = right ? mainPose : offPose;
+            s.leftPose = right ? offPose : mainPose;
+            s.usingItem = (e.livingFlags & 1) != 0;
+            s.useRight = ((e.livingFlags & 2) != 0) != right;
+            s.useTicks = float(e.useTicks) + (s.usingItem ? s.pt : 0.0f);
+            break;
+        }
+        default: break;
+    }
+    const std::string& n = e.info ? e.info->name : std::string();
+    if (d.anim == Anim::Piglin) {  // Piglin.getArmPose / PiglinBrute.getArmPose
+        const bool meleeAttack = aggressive && melee(main);
+        if (n == "minecraft:piglin_brute") s.mobPose = meleeAttack ? 1 : 0;
+        else if (dataInt(e, "DATA_IS_DANCING")) s.mobPose = 5;
+        else if (off.find("gold") != std::string_view::npos || off == "bell" || off == "clock" ||
+                 off == "glistering_melon_slice" || off == "light_weighted_pressure_plate")
+            s.mobPose = 4;  // PiglinAi.isLovedItem
+        else if (meleeAttack) s.mobPose = 1;
+        else if (dataInt(e, "DATA_IS_CHARGING_CROSSBOW")) s.mobPose = 3;
+        else s.mobPose = (main == "crossbow" || off == "crossbow") && aggressive ? 2 : 0;  // a charged crossbow
+        s.useTicks = float(e.useTicks) + s.pt;
+    } else if (d.anim == Anim::Illager) {  // Pillager / Vindicator / SpellcasterIllager / Illusioner.getArmPose
+        const bool casting = dataInt(e, "DATA_SPELL_CASTING_ID") > 0, celebrating = dataInt(e, "IS_CELEBRATING") != 0;
+        if (n == "minecraft:pillager")
+            s.mobPose = dataInt(e, "IS_CHARGING_CROSSBOW") ? 5 : (main == "crossbow" || off == "crossbow") ? 4 : aggressive ? 1 : 7;
+        else if (n == "minecraft:vindicator") s.mobPose = aggressive ? 1 : celebrating ? 6 : 0;
+        else if (n == "minecraft:illusioner") s.mobPose = casting ? 2 : aggressive ? 3 : 0;
+        else s.mobPose = casting ? 2 : celebrating ? 6 : 0;
+        s.useTicks = float(e.useTicks) + s.pt;
+    } else if (d.anim == Anim::Guardian) {
+        const float pt = s.pt;
+        for (int a = 0; a < 3; ++a) s.eyePos[a] = float(e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt);
+        s.eyePos[1] += e.info ? e.info->eye : 0.4f;
+        const float yaw = lerpAngle(pt, e.prevYaw, e.yaw) * kDeg, pitch = (e.prevPitch + (e.pitch - e.prevPitch) * pt) * kDeg;
+        s.lookDir[0] = -std::sin(yaw) * std::cos(pitch), s.lookDir[1] = -std::sin(pitch), s.lookDir[2] = std::cos(yaw) * std::cos(pitch);
+        s.lookValid = true;
+        const int target = int(dataInt(e, "DATA_ID_ATTACK_TARGET"));
+        auto it = target ? world_.entities().find(target) : world_.entities().end();
+        if (it != world_.entities().end()) {
+            const Entity& t = it->second;
+            for (int a = 0; a < 3; ++a) s.lookAt[a] = float(t.prevPos[a] + (t.pos[a] - t.prevPos[a]) * pt);
+            s.lookAt[1] += t.info ? t.info->eye : 1.62f;
+        } else {
+            for (int a = 0; a < 3; ++a) s.lookAt[a] = float(cam[a]);  // the camera entity's eyes
+        }
+    }
 }
 
 bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, const double cam[3], u32 light) {
@@ -793,7 +1025,11 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
     // Root transform (LivingEntityRenderer.submit / setupRotations, or the vehicle / projectile renderers).
     M34 root = translate(float(p[0]), float(p[1]), float(p[2]));
     AnimState s;
+    s.pt = pt, s.entity = &e, s.assets = &assets_;
+    s.age = float(e.age) + pt;
     u32 overlay = 0;
+    const bool ridden = std::find(ridden_.begin(), ridden_.end(), e.id) != ridden_.end();
+    s.riding = ridden;  // non-humanoid models: "is ridden" (camel reins, strider body); humanoids: below
     if (d.special == SpBoat) {
         root = mul(root, translate(0, 0.375f, 0));
         root = mul(root, rotY((180.0f - yaw) * kDeg));
@@ -816,6 +1052,43 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
     } else if (d.special == SpArrow || d.special == SpTrident) {
         root = mul(root, rotY((yaw - 90.0f) * kDeg));
         root = mul(root, rotZ((pitch + (d.special == SpTrident ? 90.0f : 0.0f)) * kDeg));
+    } else if (d.special == SpObject) {  // the projectile / decoration renderers' own transforms
+        if (d.anim == Anim::EvokerFangs) {  // EvokerFangsRenderer: drawn once the bite started
+            if (!e.sp.t[1]) return true;
+            root = mul(root, rotY((90.0f - e.yaw) * kDeg));
+            root = mul(mul(root, scale(-1, -1, 1)), translate(0, -1.501f, 0));
+        } else if (d.anim == Anim::EndCrystal) {  // EndCrystalRenderer
+            root = mul(mul(root, scale(2, 2, 2)), translate(0, -0.5f, 0));
+        } else if (d.anim == Anim::ShulkerBullet) {  // ShulkerBulletRenderer
+            const float tc = s.age;
+            root = mul(root, translate(0, 0.15f, 0));
+            root = mul(root, rotY(std::sin(tc * 0.1f) * 180.0f * kDeg));
+            root = mul(root, rotX(std::cos(tc * 0.1f) * 180.0f * kDeg));
+            root = mul(root, rotZ(std::sin(tc * 0.15f) * 360.0f * kDeg));
+            root = mul(root, scale(-0.5f, -0.5f, 0.5f));
+        } else if (d.anim == Anim::LlamaSpit) {  // LlamaSpitRenderer
+            root = mul(root, translate(0, 0.15f, 0));
+            root = mul(mul(root, rotY((yaw - 90.0f) * kDeg)), rotZ(pitch * kDeg));
+        } else if (d.anim != Anim::WindCharge) {  // leash knot, wither skull: flipped
+            root = mul(root, scale(-1, -1, 1));
+        }
+    } else if (d.special == SpDragon) {  // EnderDragonRenderer: the flight history turns the body
+        float h7[2], h5[2], h10[2];
+        auto sample = [&](int delay, float out[2]) {  // DragonFlightHistory.get(delay, partialTicks)
+            const float a = e.health <= 0 ? 0.0f : pt;
+            const int head = std::max(e.sp.historyPos, 0);
+            const float* x = e.sp.history[(head - delay) & 63];
+            const float* y = e.sp.history[(head - delay - 1) & 63];
+            out[0] = y[0] + (x[0] - y[0]) * a;
+            out[1] = lerpAngle(a, y[1], x[1]);
+        };
+        sample(7, h7), sample(5, h5), sample(10, h10);
+        root = mul(root, rotY(-h7[1] * kDeg));
+        root = mul(root, rotX((h5[0] - h10[0]) * 10.0f * kDeg));
+        root = mul(root, translate(0, 0, 1.0f));
+        root = mul(mul(root, scale(-1, -1, 1)), translate(0, -1.501f, 0));
+        if (e.hurtTime > 0) overlay |= 77;
+        s.walkPos = s.walkSpeed = 0;
     } else if (living) {
         const float bodyYaw = lerpAngle(pt, e.prevBodyYaw, e.bodyYaw);
         const float headYaw = lerpAngle(pt, e.prevHeadYaw, e.headYaw);
@@ -829,14 +1102,27 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
             const float headOffset = (e.info ? e.info->eye : 1.62f) - 0.1f;
             root = mul(root, translate(-kBedStep[e.bedFacing][0] * headOffset, 0, -kBedStep[e.bedFacing][1] * headOffset));
         }
-        if (d.special == SpArmorStand) {
+        if (d.special == SpArmorStand) {  // ArmorStandRenderer.setupRotations: a hit makes it wiggle
             root = mul(root, rotY((180.0f - yaw) * kDeg));
+            const float wiggle = e.sp.t[1] ? float(e.age - e.sp.t[0]) + pt : 99.0f;
+            if (wiggle < 5.0f) root = mul(root, rotY(std::sin(wiggle / 1.5f * kPi) * 3.0f * kDeg));
         } else {
-            // LivingEntityRenderer.setupRotations (frozen shaking, death roll, riptide spin, sleeping).
+            // LivingEntityRenderer.setupRotations (frozen / converting shaking, death roll, riptide spin, sleeping,
+            // upside-down names) and the species' own (SquidRenderer replaces it).
             float bodyRot = d.special == SpShulker ? bodyYaw + 180.0f : bodyYaw;  // ShulkerRenderer.setupRotations
-            if (fullyFrozen(e)) bodyRot += float(std::cos(std::floor(float(e.age) + pt) * 3.25f) * kPi * 0.4f);
-            if (!sleeping) root = mul(root, rotY((180.0f - bodyRot) * kDeg));
-            if (e.deathTime > 0) {
+            if (isShaking(e)) bodyRot += float(std::cos(std::floor(float(e.age) + pt) * 3.25f) * kPi * 0.4f);
+            if (d.anim == Anim::Pufferfish) root = mul(root, translate(0, std::cos(s.age * 0.05f) * 0.08f, 0));
+            const bool upsideDown = (e.name == "Dinnerbone" || e.name == "Grumm") && (!player || (e.skinParts & 1));
+            if (d.anim == Anim::Squid) {  // SquidRenderer.setupRotations
+                const float xb = e.sp.ao[kXBody] + (e.sp.a[kXBody] - e.sp.ao[kXBody]) * pt;
+                const float zb = e.sp.ao[kZBody] + (e.sp.a[kZBody] - e.sp.ao[kZBody]) * pt;
+                root = mul(root, translate(0, e.baby ? 0.25f : 0.5f, 0));
+                root = mul(root, rotY((180.0f - bodyRot) * kDeg));
+                root = mul(mul(root, rotX(xb * kDeg)), rotY(zb * kDeg));
+                root = mul(root, translate(0, e.baby ? -0.6f : -1.2f, 0));
+            } else if (!sleeping) root = mul(root, rotY((180.0f - bodyRot) * kDeg));
+            if (d.anim == Anim::Squid) {
+            } else if (e.deathTime > 0 && !(d.anim == Anim::Creaking && dataInt(e, "IS_TEARING_DOWN"))) {
                 float fall = std::sqrt(std::max(0.0f, (float(e.deathTime) + pt - 1.0f) / 20.0f * 1.6f));
                 root = mul(root, rotZ(std::min(fall, 1.0f) * d.flip * kDeg));
             } else if (spinAttack) {
@@ -847,7 +1133,11 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
                 root = mul(root, rotY((e.bedFacing >= 0 ? kSleepRot[e.bedFacing] : bodyRot) * kDeg));
                 root = mul(root, rotZ(d.flip * kDeg));
                 root = mul(root, rotY(270.0f * kDeg));
+            } else if (upsideDown) {
+                root = mul(root, translate(0, (e.info ? e.info->height : 1.8f) + 0.1f, 0));
+                root = mul(root, rotZ(kPi));
             }
+            speciesRotations(e, d, pt, pitch, *reinterpret_cast<Mat34*>(&root));
             // AvatarRenderer.setupRotations: gliding and swimming / crawling bodies.
             if (player && fallFlying) {
                 const float ft = float(e.fallFlyTicks) + pt;
@@ -883,7 +1173,19 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         root = mul(root, scale(-1, -1, 1));
         float sc = d.scale;
         float sx = sc, sy = sc, sz = sc;
-        if (d.special == SpSlime) sx *= float(e.size), sy *= float(e.size), sz *= float(e.size);
+        if (d.special == SpSlime) {  // AbstractCubeMobRenderer: downscaleSlightly, size and squish
+            root = mul(mul(root, scale(0.999f, 0.999f, 0.999f)), translate(0, 0.001f, 0));
+            const float size = float(e.size), squish = e.sp.ao[kSquish] + (e.sp.a[kSquish] - e.sp.ao[kSquish]) * pt;
+            const float w = 1.0f / (squish / (size * 0.5f + 1.0f) + 1.0f);
+            sx *= w * size, sy *= 1.0f / w * size, sz *= w * size;
+        } else if (d.anim == Anim::Phantom) {  // PhantomRenderer.scale
+            const float k = 1.0f + 0.15f * float(dataInt(e, "ID_SIZE"));
+            root = mul(mul(root, scale(k, k, k)), translate(0, 1.3125f, 0.1875f));
+        } else if (d.special == SpWither) {  // WitherBossRenderer.scale: shrunk while invulnerable
+            const int inv = int(dataInt(e, "DATA_ID_INV"));
+            const float k = 2.0f - (inv > 0 ? (float(inv) - pt) / 220.0f * 0.5f : 0.0f);
+            sx *= k, sy *= k, sz *= k;
+        }
         if (d.special == SpCreeper) {
             const float swelling = (float(e.oldSwell) + (float(e.swell) - float(e.oldSwell)) * pt) / 28.0f;
             const float wobble = 1.0f + std::sin(swelling * 100.0f) * swelling * 0.01f;
@@ -920,6 +1222,7 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         s.baby = e.baby;
         s.crouching = e.pose == 5;
         s.riding = e.vehicle >= 0;
+        if (d.anim == Anim::Camel || d.anim == Anim::Strider) s.riding = ridden;  // their models want "is ridden"
         s.swimAmount = swimAmount;
         s.fallFlying = fallFlying;
         if (fallFlying) {  // HumanoidMobRenderer.extractHumanoidRenderState: speedValue from the delta movement
@@ -932,7 +1235,7 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
             s.speedValue = std::max(1.0f, v * v * v);
         }
         s.aggressive = (e.mobFlags & 4) != 0;
-        const bool rightHanded = e.mainArm != 0;
+        const bool rightHanded = ent::rightHanded(e);
         s.rightItem = rightHanded ? e.equipment[0] >= 0 : e.equipment[1] >= 0;
         s.leftItem = rightHanded ? e.equipment[1] >= 0 : e.equipment[0] >= 0;
         s.swingLeft = !rightHanded;
@@ -965,6 +1268,9 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
             s.useRight = ((e.livingFlags & 2) != 0) != rightHanded;
             s.useTicks = float(e.useTicks) + (s.usingItem ? pt : 0.0f);
         }
+        if ((e.name == "Dinnerbone" || e.name == "Grumm") && (e.category != Category::Player || (e.skinParts & 1)))
+            s.pitch = -s.pitch, s.headYaw = -s.headYaw;  // upside down
+        if (e.category == Category::Living) mobPoses(e, d, cam, s);
         s.standFlags = e.standFlags;
         s.standPose = e.standPose;
         s.peek = e.peekO + (e.peek - e.peekO) * pt;
@@ -993,7 +1299,7 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
             return false;
         poses_.resize(parts);
         mats_.resize(parts);
-        hidden_.resize(parts);
+        hidden_.assign(parts, 0);
         for (size_t i = 0; i < parts; ++i) poses_[i] = m.parts[i].pose;
         u64 hiddenRoles = 0;
         M34 layerRoot = root;
@@ -1023,9 +1329,10 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
                 if (r != RoleNone && ((roleSet >> r) & 1)) poses_[i] = rolePose[r];
             }
             hiddenRoles = baseHidden & ((1ull << LeftArm) | (1ull << RightArm));
-        } else if (living) {
+        } else if (living || d.anim != Anim::None) {
             AnimState sl = s;
             if (L.flags & Armor) sl.skinParts = 0x7F;
+            sl.hide = hidden_.data();
             hiddenRoles = animate(d.anim, sl, m, poses_.data());
             if (li == 0) {
                 baseHidden = hiddenRoles;
@@ -1043,10 +1350,10 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
                 const M34 parent = part.parent >= 0 ? *reinterpret_cast<const M34*>(&mats_[size_t(part.parent)]) : layerRoot;
                 *reinterpret_cast<M34*>(&mats_[i]) = mul(parent, local);
             }
-            hidden_[i] = ((hiddenRoles >> part.role) & 1) && part.role != RoleNone ? 1 : 0;
+            if (((hiddenRoles >> part.role) & 1) && part.role != RoleNone) hidden_[i] = 1;
             if (hideChests && (part.name == "left_chest" || part.name == "right_chest")) hidden_[i] = 1;
             if (hideReins && (part.name == "left_saddle_line" || part.name == "right_saddle_line")) hidden_[i] = 1;
-            if (part.parent >= 0 && hidden_[size_t(part.parent)]) hidden_[i] = 1;
+            if (part.parent >= 0 && hidden_[size_t(part.parent)] == 1) hidden_[i] = 1;  // 2: skipDraw (children drawn)
         }
         if (li == 0 && living)
             for (size_t i = 0; i < parts; ++i)

@@ -43,7 +43,36 @@ struct Model {
     std::vector<ModelPart> parts;
     i16 roles[RoleCount];  // part index or -1
     u32 quadCount = 0;
+    bool baby = false;  // a baby layer ("cow_baby#main")
     i16 role(Role r) const { return roles[r]; }
+    struct NameHash {
+        using is_transparent = void;
+        size_t operator()(std::string_view s) const { return std::hash<std::string_view>()(s); }
+    };
+    // By part name (ModelPart.createPartLookup: shallowest first); "root" is the top part.
+    std::unordered_map<std::string, i16, NameHash, std::equal_to<>> partIndex;
+    i16 part(std::string_view name) const {
+        auto it = partIndex.find(name);
+        return it == partIndex.end() ? i16(-1) : it->second;
+    }
+};
+
+// A keyframe animation (AnimationDefinition) as the game bakes it: positions in model pixels (y down), rotations in
+// radians, scales as offsets from 1.
+struct Keyframe {
+    float t;
+    u8 catmullRom;
+    float pre[3], post[3];
+};
+struct KeyChannel {
+    std::string bone;
+    u8 target;  // 0 position, 1 rotation, 2 scale
+    std::vector<Keyframe> keys;
+};
+struct KeyAnimation {
+    float length = 0;
+    bool looping = false;
+    std::vector<KeyChannel> channels;
 };
 
 // One face of a model cube: model-pixel positions (part space) and normalized texture coordinates.
@@ -97,6 +126,9 @@ public:
     const std::vector<TypeInfo>& types() const { return types_; }  // by protocol id
     const std::vector<std::string>& itemNames() const { return items_; }  // by protocol id
 
+    // Keyframe animations by "<definitions class>.<field>", e.g. "WardenAnimation.WARDEN_ROAR"; nullptr if missing.
+    const KeyAnimation* animation(std::string_view name) const;
+
     // Data-driven variant registries; network ids follow the registry order (entries sorted by name).
     const std::vector<Variant>& variants(std::string_view registry) const;  // "cow_variant"
 
@@ -104,6 +136,7 @@ private:
     bool loadImpl(const fs::path& minecraftDir, const std::string& version, const fs::path& jar,
                   const fs::path& cacheDir, const GameReports& reports);
     bool parseModels(const std::vector<u8>& json);
+    bool parseAnimations(const std::vector<u8>& json);
     bool loadTextures(const fs::path& jar);
 
     std::vector<Model> models_;
@@ -117,6 +150,7 @@ private:
     std::unordered_map<std::string, int> typeIndex_;
     std::vector<std::string> items_;
     std::unordered_map<std::string, std::vector<Variant>> variants_;
+    std::unordered_map<std::string, KeyAnimation> animations_;
 };
 
 }  // namespace ent

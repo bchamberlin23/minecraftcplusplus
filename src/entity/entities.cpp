@@ -623,6 +623,31 @@ void EntityWorld::attach(net::Client& client) {
         if (r.ok) q.events.push_back(e);
     });
     on("update_attributes", [](net::Reader&, EventQueue&) {});  // not needed for drawing
+    client.onPlayPeek("set_time", [this](net::Reader& r) {  // the game time (species animations)
+        const i64 t = r.i64v();
+        if (r.ok) netGameTime_ = t;
+    });
+    client.onPlayPeek("game_event", [this](net::Reader& r) {  // rain / thunder levels (scared pandas)
+        const int type = r.u8v();
+        const float param = r.f32();
+        if (!r.ok) return;
+        if (type == 1) rainLevel_ = 0;  // START_RAINING (the level rises from 0)
+        else if (type == 2) rainLevel_ = 1;  // STOP_RAINING
+        else if (type == 7) rainLevel_ = param;
+        else if (type == 8) thunderLevel_ = param;
+        setSpeciesThundering(thunderLevel_.load() * rainLevel_.load() > 0.9f);
+    });
+    on("level_event", [](net::Reader& r, EventQueue& q) {  // jukebox songs: parrots dance, allays follow
+        const i32 type = r.i32v();
+        int x, y, z;
+        r.blockPos(x, y, z);
+        if (!r.ok || (type != 1010 && type != 1011)) return;
+        Event e;
+        e.type = EventType::Jukebox;
+        e.d[0] = x, e.d[1] = y, e.d[2] = z;
+        e.flag = type == 1010;
+        q.events.push_back(e);
+    });
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -736,6 +761,14 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
         static const char* kSkins[9] = {"alex", "ari", "efe", "kai", "makena", "noor", "steve", "sunny", "zuri"};
         p.slim = skin < 9;
         p.skin = assets_.texture(std::string("entity/player/") + (p.slim ? "slim/" : "wide/") + kSkins[skin % 9]);
+        return;
+    }
+    if (ev.type == EventType::Jukebox) {  // LevelRenderer.notifyNearbyEntities: living entities within 3 blocks
+        const int pos[3] = {int(ev.d[0]), int(ev.d[1]), int(ev.d[2])};
+        for (auto& [id, other] : entities_)
+            if (other.category == Category::Living && other.pos[0] > pos[0] - 3 && other.pos[0] < pos[0] + 4 &&
+                other.pos[1] > pos[1] - 3 && other.pos[1] < pos[1] + 4 && other.pos[2] > pos[2] - 3 && other.pos[2] < pos[2] + 4)
+                speciesJukebox(other, pos, ev.flag);
         return;
     }
     if (ev.type == EventType::PlayerRemove) {
@@ -874,6 +907,7 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
         case EventType::EntityEvent:
             if (ev.a == 3 && e.category == Category::Living) e.dying = true;  // death
             if (ev.a == 2) e.hurtTime = 10;                                     // legacy hurt
+            speciesEvent(e, ev.a);
             if (onEntityEvent) onEntityEvent(e, ev.a);
             break;
         case EventType::Animate:
@@ -898,6 +932,7 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
         const MetaValue& v = values[i];
         const int idx = v.index;
         if (e.display.is && applyDisplayData(e, d, v, q)) continue;
+        if (idx < SpeciesState::kData) e.sp.data[idx] = v.i, e.sp.dataF[idx] = v.f[0], e.sp.seen |= 1u << idx;
         if (idx == d.flags) e.sharedFlags = u8(v.i);
         else if (idx == d.silent && v.serializer == 8) e.silent = v.i != 0;
         else if (idx == d.staysStill && v.serializer == 8) e.staysStill = v.i != 0;
@@ -960,6 +995,7 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
         else if (idx == d.peek) e.peekRaw = int(v.i);
         else if (idx == d.mainGene) e.variant = int(v.i);
         else if (idx == d.hiddenGene) e.variant2 = int(v.i);
+        speciesDataChanged(e, idx);
     }
 }
 
@@ -1090,6 +1126,8 @@ u32 displayLight(const Entity& e, u32 worldLight) {
 }
 
 void EntityWorld::tick() {
+    if (const i64 t = netGameTime_.exchange(INT64_MIN); t != INT64_MIN) gameTime_ = t;
+    else ++gameTime_;
     for (auto& [id, e] : entities_)  // TickRateManager.isEntityFrozen: all but players and what they drive
         if (tickRate.runs || e.category == Category::Player || e.id == localControl_) tickEntity(e);
     for (auto it = entities_.begin(); it != entities_.end();)  // ItemPickupParticle.LIFE_TIME
@@ -1225,7 +1263,7 @@ void EntityWorld::tickEntity(Entity& e) {
 
     // AbstractBoat.tick: the paddles turn pi/8 per tick while rowing (getRowingTime lerps from the previous step).
     for (int i = 0; i < 2; ++i) e.paddlePos[i] = e.paddle[i] ? e.paddlePos[i] + kPi / 8 : 0.0f;
-    if (e.category != Category::Living && e.category != Category::Player) return;
+    if (e.category != Category::Living && e.category != Category::Player) return tickSpecies(e, gameTime_, entities_);
     {  // pose animation state (swimming / gliding / elytra wings), the bed of a sleeping entity
         const double move[3] = {e.pos[0] - e.prevPos[0], e.pos[1] - e.prevPos[1], e.pos[2] - e.prevPos[2]};
         std::shared_lock lock(world_.mutex());
@@ -1242,17 +1280,21 @@ void EntityWorld::tickEntity(Entity& e) {
     }
     const double dx = e.pos[0] - e.prevPos[0], dz = e.pos[2] - e.prevPos[2];
     const std::string& n = e.info ? e.info->name : std::string();
-    const bool flier = n == "minecraft:bat" || n == "minecraft:bee" || n == "minecraft:allay" || n == "minecraft:vex" ||
-                       n == "minecraft:parrot" || n == "minecraft:ghast" || n == "minecraft:blaze" ||
-                       n == "minecraft:phantom" || n == "minecraft:happy_ghast";
+    // calculateEntityAnimation(omnidirectionalAirMover): only bees and parrots count vertical movement.
+    const bool flier = n == "minecraft:bee" || n == "minecraft:parrot";
     const double dy = flier ? e.pos[1] - e.prevPos[1] : 0.0;
     if (e.vehicle < 0 && !e.dying) {
         const float distance = float(std::sqrt(dx * dx + dy * dy + dz * dz));
-        const float target = std::min(distance * 4.0f, 1.0f);
+        // updateWalkAnimation and its overrides (Camel, Frog, Creaking).
+        float target = std::min(distance * 4.0f, 1.0f), rate = 0.4f;
+        if (n == "minecraft:camel" || n == "minecraft:camel_husk")
+            target = e.pose == 0 && e.sp.anim[kCamelDash] == INT_MIN ? std::min(distance * 6.0f, 1.0f) : 0.0f, rate = 0.2f;
+        else if (n == "minecraft:frog") target = e.sp.anim[kFrogJump] != INT_MIN ? 0.0f : std::min(distance * 25.0f, 1.0f);
+        else if (n == "minecraft:creaking") target = std::min(distance * 25.0f, 3.0f);
         e.walkSpeedOld = e.walkSpeed;
-        e.walkSpeed += (target - e.walkSpeed) * 0.4f;
+        e.walkSpeed += (target - e.walkSpeed) * rate;
         e.walkPos += e.walkSpeed;
-        e.walkScale = e.baby ? 3.0f : 1.0f;
+        e.walkScale = e.baby && n != "minecraft:creaking" ? 3.0f : 1.0f;
     } else {
         e.walkSpeedOld = e.walkSpeed = e.walkPos = 0;
     }
@@ -1306,6 +1348,7 @@ void EntityWorld::tickEntity(Entity& e) {
         e.oldSwell = e.swell;
         e.swell = std::clamp(e.swell + (e.swellDir > 0 ? 1 : e.swellDir < 0 ? -1 : 0), 0, 30);
     }
+    tickSpecies(e, gameTime_, entities_);
 }
 
 // ---------------------------------------------------------------------------------------------------------

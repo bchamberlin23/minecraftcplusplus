@@ -73,8 +73,35 @@ void bob(PartPose* arm, float age, float scale) {
     arm->xRot += scale * (std::sin(age * 0.067f) * 0.05f);
 }
 
-// HumanoidModel.setupAnim (walking, riding, held items, attack swing, crouching, arm bob).
-void humanoid(const Parts& P, const AnimState& s) {
+void zombieArms(const Parts& P, const AnimState& s);
+
+// AnimationUtils.swingWeaponDown (piglins, illagers).
+void swingWeaponDown(PartPose* ra, PartPose* la, bool rightHanded, float attackTime, float age) {
+    const float attack2 = std::sin(attackTime * kPi);
+    const float attack = std::sin((1.0f - (1.0f - attackTime) * (1.0f - attackTime)) * kPi);
+    ra->zRot = 0, la->zRot = 0;
+    ra->yRot = kPi / 20, la->yRot = -kPi / 20;
+    PartPose* main = rightHanded ? ra : la;
+    PartPose* off = rightHanded ? la : ra;
+    main->xRot = -1.8849558f + std::cos(age * 0.09f) * 0.15f + attack2 * 2.2f - attack * 0.4f;
+    off->xRot = std::cos(age * 0.19f) * 0.5f + attack2 * 1.2f - attack * 0.4f;
+    bob(ra, age, 1.0f);
+    bob(la, age, -1.0f);
+}
+
+// DrownedModel.setupSwimAnimation.
+void drownedSwim(PartPose* h, PartPose* ra, PartPose* la, PartPose* rl, PartPose* ll, const AnimState& s) {
+    const float amount = s.swimAmount, wave = std::sin(0.1f * s.age);
+    if (ra) ra->xRot = rotLerpRad(amount, ra->xRot, -kPi * 4.0f / 5.0f) + amount * 0.35f * wave, ra->zRot = rotLerpRad(amount, ra->zRot, -0.15f);
+    if (la) la->xRot = rotLerpRad(amount, la->xRot, -kPi * 4.0f / 5.0f) - amount * 0.35f * wave, la->zRot = rotLerpRad(amount, la->zRot, 0.15f);
+    if (ll) ll->xRot -= amount * 0.55f * wave;
+    if (rl) rl->xRot += amount * 0.55f * wave;
+    if (h) h->xRot = 0;
+}
+
+// HumanoidModel.setupAnim (walking, riding, held items, attack swing, crouching, arm bob); kind selects the
+// subclasses' setupAttackAnimation (zombie arms, piglin weapon swing) and setupSwimAnimation (drowned).
+void humanoid(const Parts& P, const AnimState& s, Anim kind) {
     PartPose *h = P[Head], *body = P[Body], *ra = P[RightArm], *la = P[LeftArm], *rl = P[RightLeg], *ll = P[LeftLeg];
     if (h) h->xRot = s.fallFlying ? -kPi / 4 : s.pitch * kDeg, h->yRot = s.headYaw * kDeg;
     const float pos = s.walkPos, speed = s.walkSpeed / s.speedValue;
@@ -160,8 +187,10 @@ void humanoid(const Parts& P, const AnimState& s) {
             if (!affectsOther(s.leftPose)) pose(true);
         }
     }
-    // setupAttackAnimation (WHACK swing).
-    if (s.swing > 0 && body && ra && la) {
+    // setupAttackAnimation: PiglinModel swings a melee weapon down, the rest WHACK (zombies then raise their arms).
+    if (kind == Anim::Piglin && s.swing > 0 && s.mobPose == 1 && ra && la) {
+        swingWeaponDown(ra, la, !s.swingLeft, s.swing, s.age);
+    } else if (s.swing > 0 && body && ra && la) {
         float by = std::sin(std::sqrt(s.swing) * kPi * 2.0f) * 0.2f;
         if (s.swingLeft) by = -by;
         body->yRot = by;
@@ -176,6 +205,7 @@ void humanoid(const Parts& P, const AnimState& s) {
         arm->yRot += by * 2.0f;
         arm->zRot += std::sin(s.swing * kPi) * -0.4f;
     }
+    if (kind == Anim::Zombie || kind == Anim::Drowned || kind == Anim::ZombifiedPiglin) zombieArms(P, s);
     if (s.crouching) {
         if (body) body->xRot = 0.5f, body->y += 3.2f;
         if (ra) ra->xRot += 0.4f, ra->y += 3.2f;
@@ -186,21 +216,20 @@ void humanoid(const Parts& P, const AnimState& s) {
     }
     if (!s.havePoses || s.rightPose != ArmPose::Spyglass) bob(ra, s.age, 1.0f);
     if (!s.havePoses || s.leftPose != ArmPose::Spyglass) bob(la, s.age, -1.0f);
-    if (s.swimAmount > 0) swim(h, ra, la, rl, ll, s);
+    if (s.swimAmount > 0) kind == Anim::Drowned ? drownedSwim(h, ra, la, rl, ll, s) : swim(h, ra, la, rl, ll, s);
 }
 
 // AnimationUtils.animateZombieArms.
 void zombieArms(const Parts& P, const AnimState& s) {
+    if (s.havePoses && (s.rightPose == ArmPose::Spear || s.leftPose == ArmPose::Spear)) return;
     PartPose *ra = P[RightArm], *la = P[LeftArm];
-    const bool raise = !s.baby || !s.rightItem;
+    const bool raise = !s.baby || !(s.swingLeft ? s.leftItem : s.rightItem);  // the main hand's item
     const float drop = raise ? -kPi / (s.aggressive ? 1.5f : 2.25f) : 0.0f;
     const float ay = (raise ? 1.0f : -1.0f) * std::sin(s.swing * kPi);
     const float ax = std::sin((1.0f - (1.0f - s.swing) * (1.0f - s.swing)) * kPi);
     const float xRot = drop + ay * 1.2f - ax * 0.4f, yRot = 0.1f - ay * 0.6f;
-    if (ra) ra->xRot = xRot, ra->yRot = raise ? -yRot : yRot, ra->zRot = 0;
-    if (la) la->xRot = xRot, la->yRot = raise ? yRot : -yRot, la->zRot = 0;
-    bob(ra, s.age, 1.0f);
-    bob(la, s.age, -1.0f);
+    if (ra && !(s.havePoses && s.rightPose == ArmPose::ThrowTrident)) ra->xRot = xRot, ra->yRot = raise ? -yRot : yRot, ra->zRot = 0;
+    if (la && !(s.havePoses && s.leftPose == ArmPose::ThrowTrident)) la->xRot = xRot, la->yRot = raise ? yRot : -yRot, la->zRot = 0;
 }
 
 void quadrupedLegs(const Parts& P, const AnimState& s) {
@@ -226,15 +255,27 @@ u64 animate(Anim kind, const AnimState& s, const Model& model, PartPose* poses) 
         case Anim::Humanoid:
         case Anim::Skeleton:
         case Anim::Zombie:
-            humanoid(P, s);
-            if (kind == Anim::Zombie) zombieArms(P, s);
-            if (kind == Anim::Skeleton && s.aggressive && s.rightItem) {  // BOW_AND_ARROW
-                PartPose *h = P[Head], *ra = P[RightArm], *la = P[LeftArm];
-                if (h && ra && la) {
-                    ra->yRot = -0.1f + h->yRot, la->yRot = 0.1f + h->yRot + 0.4f;
-                    ra->xRot = -kPi / 2 + h->xRot, la->xRot = -kPi / 2 + h->xRot;
+        case Anim::Drowned:
+        case Anim::Piglin:
+        case Anim::ZombifiedPiglin:
+        case Anim::Enderman:
+            humanoid(P, s, kind);
+            if (kind == Anim::Skeleton && s.aggressive && !(s.havePoses && (s.rightPose == ArmPose::BowAndArrow ||
+                                                                              s.leftPose == ArmPose::BowAndArrow))) {
+                // SkeletonModel: aggressive without a bow, the arms reach forward
+                PartPose *ra = P[RightArm], *la = P[LeftArm];
+                if (ra && la) {
+                    const float swing2 = std::sin(s.swing * kPi);
+                    const float swing = std::sin((1.0f - (1.0f - s.swing) * (1.0f - s.swing)) * kPi);
+                    ra->zRot = la->zRot = 0;
+                    ra->yRot = -(0.1f - swing2 * 0.6f), la->yRot = 0.1f - swing2 * 0.6f;
+                    ra->xRot = la->xRot = -kPi / 2 - (swing2 * 1.2f - swing * 0.4f);
+                    bob(ra, s.age, 1.0f);
+                    bob(la, s.age, -1.0f);
                 }
             }
+            if (kind != Anim::Humanoid && kind != Anim::Skeleton && kind != Anim::Zombie && kind != Anim::Drowned)
+                hidden |= animateSpecies(kind, s, model, poses);  // the subclass' additions
             // Player model customisation: hat 6, jacket 1, sleeves 2/3, pants 4/5.
             if (!(s.skinParts & 64)) hidden |= 1ull << Hat;
             if (!(s.skinParts & 2)) hidden |= 1ull << Jacket;
@@ -247,15 +288,6 @@ u64 animate(Anim kind, const AnimState& s, const Model& model, PartPose* poses) 
             head(P, s);
             quadrupedLegs(P, s);
             break;
-        case Anim::Chicken: {
-            head(P, s);
-            const float flap = (std::sin(s.flap) + 1.0f) * s.flapSpeed;
-            if (PartPose* l = P[RightLeg]) l->xRot = std::cos(s.walkPos * 0.6662f) * 1.4f * s.walkSpeed;
-            if (PartPose* l = P[LeftLeg]) l->xRot = std::cos(s.walkPos * 0.6662f + kPi) * 1.4f * s.walkSpeed;
-            if (PartPose* w = P[RightWing]) w->zRot = flap;
-            if (PartPose* w = P[LeftWing]) w->zRot = -flap;
-            break;
-        }
         case Anim::Creeper: {
             // CreeperModel binds its fields crosswise: "left_hind_leg" drives as the right hind leg, etc.
             head(P, s);
@@ -283,21 +315,6 @@ u64 animate(Anim kind, const AnimState& s, const Model& model, PartPose* poses) 
             }
             break;
         }
-        case Anim::IronGolem: {
-            if (PartPose* h = P[Head]) h->yRot = s.headYaw * kDeg, h->xRot = s.pitch * kDeg;
-            const float t = triangleWave(s.walkPos, 13.0f);
-            if (PartPose* l = P[RightLeg]) l->xRot = -1.5f * t * s.walkSpeed;
-            if (PartPose* l = P[LeftLeg]) l->xRot = 1.5f * t * s.walkSpeed;
-            if (PartPose* a = P[RightArm]) a->xRot = (-0.2f + 1.5f * t) * s.walkSpeed;
-            if (PartPose* a = P[LeftArm]) a->xRot = (-0.2f - 1.5f * t) * s.walkSpeed;
-            break;
-        }
-        case Anim::Villager: {
-            if (PartPose* h = P[Head]) h->yRot = s.headYaw * kDeg, h->xRot = s.pitch * kDeg;
-            if (PartPose* l = P[RightLeg]) l->xRot = std::cos(s.walkPos * 0.6662f) * 1.4f * s.walkSpeed * 0.5f;
-            if (PartPose* l = P[LeftLeg]) l->xRot = std::cos(s.walkPos * 0.6662f + kPi) * 1.4f * s.walkSpeed * 0.5f;
-            break;
-        }
         case Anim::ArmorStand: {
             // ArmorStandArmorModel + ArmorStandModel: every limb follows the synched pose (degrees).
             if (!s.standPose) break;
@@ -318,6 +335,7 @@ u64 animate(Anim kind, const AnimState& s, const Model& model, PartPose* poses) 
             if (s.standFlags & 8) hidden |= 1ull << BasePlate;
             break;
         }
+        default: return animateSpecies(kind, s, model, poses);
         case Anim::Shulker: {  // ShulkerModel.setupAnim: the lid opens with the peek, the head looks around
             const float bs = (0.5f + s.peek) * kPi, q = -1.0f + std::sin(bs);
             const float extra = bs > kPi ? std::sin(s.age * 0.1f) * 0.7f : 0.0f;

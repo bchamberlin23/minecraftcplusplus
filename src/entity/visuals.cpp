@@ -1416,7 +1416,7 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
         else if (auto it = entities.find(a.entity); it != entities.end()) e = &it->second;
         if (!e) continue;
         Lists& L = a.shadowOnly ? shadowLists : worldLists;  // shadow-only casters (first-person player, outside the view)
-        const bool rightHanded = e->mainArm != 0;
+        const bool rightHanded = ent::rightHanded(*e);
         for (int k = 0; k < 2; ++k) {
             if (!(a.valid & (1 << k))) continue;
             const int slot = (k == 0) == rightHanded ? 0 : 1;  // right arm holds the main hand when right handed
