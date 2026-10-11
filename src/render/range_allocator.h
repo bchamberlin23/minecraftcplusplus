@@ -50,6 +50,15 @@ public:
 
     u64 used() const { return used_; }
     u64 capacity() const { return capacity_; }
+    // More room at the end (the storage behind it was enlarged): merges with a free range ending there.
+    void grow(u64 newCapacity) {
+        if (newCapacity <= capacity_) return;
+        const u64 extra = newCapacity - capacity_;
+        const u64 at = capacity_;
+        capacity_ = newCapacity;
+        used_ += extra;  // free() subtracts it again
+        free(at, extra);
+    }
 
 private:
     void insert(u64 off, u64 n) {

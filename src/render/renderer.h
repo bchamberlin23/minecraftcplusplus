@@ -180,9 +180,11 @@ public:
 
     // World storage: capacities in quads / mesh slots.
     bool createWorldStorage(u64 cubeQuads, u64 modelQuads, u32 slots);
-    u32 addMesh(const SectionMesh& mesh, int level, i32 x, i32 y, i32 z);  // kNoSlot if out of space
+    // Replaces a world storage buffer with a larger copy (GPU copy, waits for the GPU; pending uploads follow).
+    bool growBuffer(ComPtr<ID3D12Resource>& buffer, u64 oldBytes, u64 newBytes, const char* what);
+    u32 addMesh(const SectionMesh& mesh, int level, i32 x, i32 y, i32 z);  // kNoSlot if out of space (after growing)
     void removeMesh(u32 slot);
-    void setActive(const std::vector<u32>& slots) { active_ = slots; }
+    void setActive(const std::vector<u32>& slots) { active_ = slots, ++activeVersion_; }
     void flushUploads();  // submit staged copies now (used while loading)
 
     // HUD and world overlays for the next frame.
@@ -264,7 +266,11 @@ private:
     };
     struct Slot {
         u64 cubeOffset = 0, cubeCount = 0, modelOffset = 0, modelCount = 0;
+        i32 origin[4] = {};  // xyz in blocks, w = LOD level
+        u32 translucent = 0;  // translucent quads
     };
+    // Active slots with translucent quads, far to near: blending needs back-to-front order between sections.
+    void sortTranslucent(const CameraState& cam, u32 activeCount);
 
     ComPtr<ID3D12Resource> createBuffer(u64 size, D3D12_HEAP_TYPE heap,
                                         D3D12_RESOURCE_FLAGS flags = D3D12_RESOURCE_FLAG_NONE);
@@ -335,6 +341,9 @@ private:
     std::vector<u32> freeSlots_;
     u32 slotCapacity_ = 0, slotHigh_ = 0;
     std::vector<u32> active_;
+    std::vector<u32> translucent_;
+    u64 activeVersion_ = 0, sortedVersion_ = ~u64(0);
+    double sortedCam_[3] = {};
     u32 segBase_[4] = {}, segCap_[4] = {};
 
     std::vector<RenderPass*> passes_[5];

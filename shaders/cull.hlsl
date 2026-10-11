@@ -24,40 +24,53 @@ void emit(uint pass, uint quadOffset, uint quadCount, uint sectionIndex) {
     }
 }
 
-[numthreads(64, 1, 1)]
-void CullCS(uint tid : SV_DispatchThreadID) {
-    if (tid >= gMisc.x) return;
-    uint id = gActive[tid];
+// The section's box relative to the camera; false if outside the frustum or the fog.
+bool sectionVisible(uint id, out float3 mn, out float3 mx) {
     int4 origin = gSections[id].origin;
-    float3 mn = float3(origin.xyz - gCamBlock.xyz) - gCamFrac.xyz;
-    float3 mx = mn + float3(float(16u << origin.w), 16.0, float(16u << origin.w));  // LOD nodes stay 16 tall
+    mn = float3(origin.xyz - gCamBlock.xyz) - gCamFrac.xyz;
+    mx = mn + float3(float(16u << origin.w), 16.0, float(16u << origin.w));  // LOD nodes stay 16 tall
 
     [unroll] for (uint i = 0; i < 5; ++i) {
         float4 pl = gFrustum[i];
         float3 v = float3(pl.x >= 0 ? mx.x : mn.x, pl.y >= 0 ? mx.y : mn.y, pl.z >= 0 ? mx.z : mn.z);
-        if (dot(pl.xyz, v) + pl.w < 0) return;
+        if (dot(pl.xyz, v) + pl.w < 0) return false;
     }
     if (gFogParams.z > 0) {
         float3 c = clamp(0, mn, mx);
-        if (dot(c, c) > gFogParams.z * gFogParams.z) return;
+        if (dot(c, c) > gFogParams.z * gFogParams.z) return false;
     }
+    return true;
+}
 
-    // A face direction can only be visible if the camera is on its front side of some plane.
-    bool vis[6] = {mx.y > 0, mn.y < 0, mx.z > 0, mn.z < 0, mx.x > 0, mn.x < 0};
-    for (uint l = 0; l < 3; ++l) {
-        // Opaque and cutout: one draw for all six face ranges of the layer (they are contiguous); the rasterizer's
-        // back-face culling replaces the per-direction test. Fewer, larger draws measured faster at every LOD
-        // level (sptest 1440p: 74k -> 33k draws, 1.45 -> 1.05 ms). Translucent keeps the test (drawn unculled).
-        if (l < 2) {
-            uint first = gSections[id].ranges[l * 6].x, count = 0;
-            [unroll] for (uint f = 0; f < 6; ++f) count += gSections[id].ranges[l * 6 + f].y;
-            if (count != 0) emit(l, first, count, id);
-            continue;
-        }
+[numthreads(64, 1, 1)]
+void CullCS(uint tid : SV_DispatchThreadID) {
+    // Translucent: gMisc.w sections after the active list, sorted far to near by the CPU. Blending needs that
+    // order kept, so each section owns six fixed command slots (empty when culled) instead of appending.
+    if (tid < gMisc.w) {
+        if (tid == 0) gCounts.Store(2 * 4, gMisc.w * 6);
+        uint id = gActive[gMisc.x + tid];
+        float3 mn, mx;
+        bool shown = sectionVisible(id, mn, mx);
+        // A face direction can only be visible if the camera is on its front side of some plane (drawn unculled).
+        bool vis[6] = {mx.y > 0, mn.y < 0, mx.z > 0, mn.z < 0, mx.x > 0, mn.x < 0};
         for (uint f = 0; f < 6; ++f) {
-            uint2 r = gSections[id].ranges[l * 6 + f];
-            if (r.y != 0 && vis[f]) emit(l, r.x, r.y, id);
+            uint2 r = gSections[id].ranges[12 + f];
+            uint addr = (gSegBase[2] + tid * 6 + f) * kCommandBytes;
+            gArgs.Store4(addr, uint4(r.x, id, shown && vis[f] ? r.y * 6 : 0, 1));
+            gArgs.Store3(addr + 16, uint3(0, 0, 0));
         }
+    }
+    if (tid >= gMisc.x) return;
+    uint id = gActive[tid];
+    float3 mn, mx;
+    if (!sectionVisible(id, mn, mx)) return;
+    // Opaque and cutout: one draw for all six face ranges of the layer (they are contiguous); the rasterizer's
+    // back-face culling replaces the per-direction test. Fewer, larger draws measured faster at every LOD
+    // level (sptest 1440p: 74k -> 33k draws, 1.45 -> 1.05 ms).
+    for (uint l = 0; l < 2; ++l) {
+        uint first = gSections[id].ranges[l * 6].x, count = 0;
+        [unroll] for (uint f = 0; f < 6; ++f) count += gSections[id].ranges[l * 6 + f].y;
+        if (count != 0) emit(l, first, count, id);
     }
     uint2 m = gSections[id].ranges[18];
     if (m.y != 0) emit(3, m.x, m.y, id);

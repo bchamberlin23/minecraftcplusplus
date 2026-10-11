@@ -206,7 +206,7 @@ bool Renderer::init(HWND hwnd, u32 width, u32 height, bool debug, bool vsync) {
 
     constants_ = createBuffer(kConstantSlotBytes * kFrames * 2, D3D12_HEAP_TYPE_UPLOAD);  // + unjittered overlay copies
     constants_->Map(0, nullptr, reinterpret_cast<void**>(&constantsMapped_));
-    activeLists_ = createBuffer(u64(kMaxActive) * 4 * kFrames, D3D12_HEAP_TYPE_UPLOAD);
+    activeLists_ = createBuffer(u64(kMaxActive) * 2 * 4 * kFrames, D3D12_HEAP_TYPE_UPLOAD);  // active + translucent
     activeLists_->Map(0, nullptr, reinterpret_cast<void**>(&activeMapped_));
     remap_ = createBuffer(u64(kRemapCapacity) * 4 * kFrames, D3D12_HEAP_TYPE_UPLOAD);
     remap_->Map(0, nullptr, reinterpret_cast<void**>(&remapMapped_));
@@ -651,12 +651,46 @@ bool Renderer::createWorldStorage(u64 cubeQuads, u64 modelQuads, u32 slots) {
     return true;
 }
 
+bool Renderer::growBuffer(ComPtr<ID3D12Resource>& buffer, u64 oldBytes, u64 newBytes, const char* what) {
+    ComPtr<ID3D12Resource> bigger = createBuffer(newBytes, D3D12_HEAP_TYPE_DEFAULT);
+    if (!bigger) {
+        LOG("warning: world geometry: could not grow the %s buffer to %.0f MB", what, double(newBytes) / 1048576.0);
+        return false;
+    }
+    waitIdle();  // nothing in flight reads the old buffer any more
+    allocators_[0]->Reset();
+    list_->Reset(allocators_[0].Get(), nullptr);
+    list_->CopyBufferRegion(bigger.Get(), 0, buffer.Get(), 0, oldBytes);  // COMMON buffers promote implicitly
+    list_->Close();
+    ID3D12CommandList* lists[] = {list_.Get()};
+    queue_->ExecuteCommandLists(1, lists);
+    waitIdle();
+    for (Copy& c : copies_)  // uploads staged for the old buffer land in the new one
+        if (c.dst == buffer.Get()) c.dst = bigger.Get();
+    LOG("world geometry: %s buffer %.0f -> %.0f MB", what, double(oldBytes) / 1048576.0, double(newBytes) / 1048576.0);
+    buffer = std::move(bigger);
+    return true;
+}
+
 u32 Renderer::addMesh(const SectionMesh& m, int level, i32 x, i32 y, i32 z) {
     const u64 nc = m.cubeQuads.size(), nm = m.counts[kModelRange];
     if (nc + nm == 0) return kNoSlot;
     u64 co = 0, mo = 0;
-    if (nc && (co = cubeAlloc_.alloc(nc)) == RangeAllocator::kFail) return kNoSlot;
-    if (nm && (mo = modelAlloc_.alloc(nm)) == RangeAllocator::kFail) {
+    // Out of room: the storage grows by half (the startup estimate cannot know how much a played world adds;
+    // failing here left holes in the terrain).
+    auto grow = [&](ComPtr<ID3D12Resource>& buf, RangeAllocator& alloc, u64 unit, u64 need, const char* what) {
+        const u64 cap = alloc.capacity(), wanted = std::max(cap + cap / 2, cap + need * 4);
+        if (wanted * unit > (u64(4) << 30) || !growBuffer(buf, cap * unit, wanted * unit, what)) return false;
+        alloc.grow(wanted);
+        return true;
+    };
+    if (nc && (co = cubeAlloc_.alloc(nc)) == RangeAllocator::kFail &&
+        (!grow(cubeQuads_, cubeAlloc_, kCubeQuadBytes, nc, "cube quad") || (co = cubeAlloc_.alloc(nc)) == RangeAllocator::kFail))
+        return kNoSlot;
+    if (nm && (mo = modelAlloc_.alloc(nm)) == RangeAllocator::kFail &&
+        grow(modelQuads_, modelAlloc_, u64(kModelQuadWords) * 4, nm, "model quad"))
+        mo = modelAlloc_.alloc(nm);
+    if (nm && mo == RangeAllocator::kFail) {
         if (nc) cubeAlloc_.free(co, nc);
         return kNoSlot;
     }
@@ -664,14 +698,18 @@ u32 Renderer::addMesh(const SectionMesh& m, int level, i32 x, i32 y, i32 z) {
     if (!freeSlots_.empty()) {
         slot = freeSlots_.back();
         freeSlots_.pop_back();
-    } else if (slotHigh_ < slotCapacity_) {
+    } else if (slotHigh_ < slotCapacity_ ||
+               (growBuffer(sections_, u64(slotCapacity_) * sizeof(GpuSection),
+                           u64(slotCapacity_ + slotCapacity_ / 2) * sizeof(GpuSection), "section") &&
+                (slots_.resize(slotCapacity_ + slotCapacity_ / 2), slotCapacity_ += slotCapacity_ / 2, true))) {
         slot = slotHigh_++;
     } else {
         if (nc) cubeAlloc_.free(co, nc);
         if (nm) modelAlloc_.free(mo, nm);
         return kNoSlot;
     }
-    slots_[slot] = {co, nc, mo, nm};
+    slots_[slot] = {co, nc, mo, nm, {x, y, z, level}, 0};
+    for (int r = 2 * 6; r < 3 * 6; ++r) slots_[slot].translucent += m.counts[r];
 
     GpuSection g{};
     g.origin[0] = x, g.origin[1] = y, g.origin[2] = z, g.origin[3] = level;
@@ -703,6 +741,27 @@ u64 Renderer::arenaBytesUsed() const {
 }
 u64 Renderer::arenaBytesTotal() const {
     return cubeAlloc_.capacity() * kCubeQuadBytes + modelAlloc_.capacity() * kModelQuadWords * 4;
+}
+
+void Renderer::sortTranslucent(const CameraState& cam, u32 activeCount) {
+    // Re-sorted when the cut changes or the camera has moved a block; in between the order is close enough.
+    const double dx = cam.x - sortedCam_[0], dy = cam.y - sortedCam_[1], dz = cam.z - sortedCam_[2];
+    if (sortedVersion_ == activeVersion_ && dx * dx + dy * dy + dz * dz < 1.0) return;
+    sortedVersion_ = activeVersion_;
+    sortedCam_[0] = cam.x, sortedCam_[1] = cam.y, sortedCam_[2] = cam.z;
+    thread_local std::vector<std::pair<double, u32>> keyed;
+    keyed.clear();
+    for (u32 i = 0; i < activeCount; ++i) {
+        const u32 id = active_[i];
+        if (id >= slotCapacity_ || !slots_[id].translucent) continue;
+        const i32* o = slots_[id].origin;
+        const double half = double(8 << o[3]);
+        const double cx = o[0] + half - cam.x, cy = o[1] + 8.0 - cam.y, cz = o[2] + half - cam.z;
+        keyed.push_back({cx * cx + cy * cy + cz * cz, id});
+    }
+    std::sort(keyed.begin(), keyed.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+    translucent_.resize(keyed.size());
+    for (size_t i = 0; i < keyed.size(); ++i) translucent_[i] = keyed[i].second;
 }
 
 void Renderer::render(const CameraState& cam, float viewDistance, const fs::path* screenshot) {
@@ -784,6 +843,8 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     std::memcpy(fc.segCap, segCap_, sizeof(segCap_));
     const u32 activeCount = u32(std::min<size_t>(active_.size(), kMaxActive));
     fc.misc[0] = activeCount;
+    sortTranslucent(cam, activeCount);
+    fc.misc[3] = u32(translucent_.size());
     {  // texture LOD bias for the upscaler's render scale (common.hlsli sampleBlock)
         const float bias = shaded ? upscalers_->mipBias() : 0.0f;
         std::memcpy(&fc.misc[1], &bias, 4);
@@ -816,8 +877,10 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     Timer shadeTimer;
     if (shaded) shading_->prepare(shadeIn);
     double shadeCpu = shadeTimer.ms();
-    if (activeCount) std::memcpy(activeMapped_ + size_t(fi) * kMaxActive, active_.data(), size_t(activeCount) * 4);
-    const D3D12_GPU_VIRTUAL_ADDRESS activeVa = activeLists_->GetGPUVirtualAddress() + u64(fi) * kMaxActive * 4;
+    if (activeCount) std::memcpy(activeMapped_ + size_t(fi) * kMaxActive * 2, active_.data(), size_t(activeCount) * 4);
+    if (!translucent_.empty())  // right after the active list (CullCS)
+        std::memcpy(activeMapped_ + size_t(fi) * kMaxActive * 2 + activeCount, translucent_.data(), translucent_.size() * 4);
+    const D3D12_GPU_VIRTUAL_ADDRESS activeVa = activeLists_->GetGPUVirtualAddress() + u64(fi) * kMaxActive * 2 * 4;
     const bool haveWorld = sections_ && activeCount;
     if (remapSliceVersion_[fi] != remapVersion_) {  // this frame's slice of the texture remap is stale
         std::memcpy(remapMapped_ + size_t(fi) * kRemapCapacity, remapCpu_.data(), size_t(kRemapCapacity) * 4);
@@ -853,7 +916,7 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
         list_->SetComputeRootUnorderedAccessView(5, counts_->GetGPUVirtualAddress());
         list_->SetComputeRootUnorderedAccessView(6, args_->GetGPUVirtualAddress());
         list_->SetComputeRootShaderResourceView(7, activeVa);
-        list_->Dispatch((activeCount + 63) / 64, 1, 1);
+        list_->Dispatch((std::max<u32>(activeCount, u32(translucent_.size())) + 63) / 64, 1, 1);
         transition(counts_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
         transition(args_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
     }
