@@ -170,5 +170,9 @@ void drawDirectConnect(State& s, Canvas& c);
 void serversFrame(State& s);  // ping results, LAN worlds
 void frontEndInit(State& s);
 void openToLanScreen(State& s);  // pause menu: Open to LAN  // Ui::init: the title screen (menu mode) or the in-world parts
+// friends_screen.cpp: the Friends screen, its button label ("Friends (2)" with requests), --menu friend-join:<code>.
+void openFriendsScreen(State& s);
+Text friendsButtonLabel();
+bool friendsMenuCommand(State& s, const std::string& command);
 
 }  // namespace ui

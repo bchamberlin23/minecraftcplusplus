@@ -69,6 +69,8 @@ void loadingLine(State& s, std::string line) {
     } else if (line.starts_with("server: ") && has("Preparing level")) at(0.3f, s.res.translate("createWorld.preparing"));
     else if (line.starts_with("server: ") && has("Done (")) at(0.7f, s.res.translate("multiplayer.downloadingTerrain"));
     else if (line.starts_with("assets ")) at(0.12f, "Loading resources...");
+    else if (line.starts_with("friends: connecting to")) at(0.04f, "Connecting to your friend...");
+    else if (line.starts_with("friends: connected to")) at(0.1f, "Connected to your friend");
     else if (line.starts_with("ui ")) at(0.2f, "");
     else if (line.starts_with("server ") && has("joined")) at(0.6f, s.res.translate("connect.joining"));
     else if (line.starts_with("world ")) at(0.75f, s.res.translate("multiplayer.downloadingTerrain"));
@@ -452,6 +454,8 @@ void frontEndInit(State& s) {
     s.buildButtons();
     if (f.cfg.openScreen == "worlds") openWorlds(s);
     else if (f.cfg.openScreen == "servers") openServers(s);
+    else if (f.cfg.openScreen == "friends") openFriendsScreen(s);
+    else friendsMenuCommand(s, f.cfg.openScreen);  // friend-join:<code> (friends_screen.cpp)
 }
 
 // --- title screen (TitleScreen) -----------------------------------------------------------------------------------
@@ -463,7 +467,8 @@ void buildTitle(State& s) {
     const int y = H / 4 + 48;
     addButton(s, x, float(y), 200, tr(s, "menu.singleplayer"), [p] { openWorlds(*p); });
     addButton(s, x, float(y + 24), 200, tr(s, "menu.multiplayer"), [p] { openServers(*p); });
-    addButton(s, x, float(y + 48), 200, Text("Mods & Packs"), [p] { p->openScreen(Screen::Mods); });
+    addButton(s, x, float(y + 48), 98, Text("Mods & Packs"), [p] { p->openScreen(Screen::Mods); });
+    addButton(s, float(W / 2 + 2), float(y + 48), 98, Text(), [p] { openFriendsScreen(*p); }).labelFn = friendsButtonLabel;
     addButton(s, x, float(y + 84), 98, tr(s, "menu.options"), [p] { p->openScreen(Screen::Options); });
     addButton(s, float(W / 2 + 2), float(y + 84), 98, tr(s, "menu.quit"), [p] { p->quit = true; });
     s.fe->onBack = nullptr;

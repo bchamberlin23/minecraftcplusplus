@@ -1089,6 +1089,8 @@ void Ui::endFrame() {
     if (hud) s.drawModHud(c);  // native mods
     if (s.debug) s.drawDebug(c);
     if (s.screen != Screen::None) s.drawScreen(c);
+    for (const UiModule& m : uiModules())  // modules.h: toasts
+        if (m.drawTop) m.drawTop(s, c);
 }
 
 }  // namespace ui

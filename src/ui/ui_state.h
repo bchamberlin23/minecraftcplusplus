@@ -90,6 +90,7 @@ enum class Screen {
     None, Chat, Inventory, Container, Creative, Pause, Options, Death, Mods, Video, PackOptions,
     // Registered screens (modules.h ScreenDef): signs and books, advancements, statistics, game mode switcher, bed
     Sign, BookEdit, BookView, Advancements, Stats, GameModeSwitcher, InBed,
+    Friends, AddFriend,  // friends_screen.cpp
     // Front end (frontend.h)
     Title, Worlds, CreateWorld, EditWorld, Confirm, Servers, EditServer, DirectConnect, Loading, Message, OpenToLan
 };
