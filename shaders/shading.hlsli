@@ -107,8 +107,7 @@ float skyCurve(float level) {  // 0..15 -> sky light visibility
 }
 float blockCurve(float level) {  // 0..15 -> block light intensity
     float f = saturate(level / 15.0);
-    float f2 = f * f;
-    return f2 * f2 * 2.2 + f2 * 0.06;
+    return f * f * f * 1.6 + f * 0.12;
 }
 
 // Optical depth of exponential height fog between the camera and rel.

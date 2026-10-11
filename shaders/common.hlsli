@@ -27,6 +27,7 @@ StructuredBuffer<uint> gActive : register(t3);  // slots selected by the CPU LOD
 
 Texture2DArray<float4> gTextures : register(t2);
 StructuredBuffer<uint> gColors : register(t4);  // tint colour table (0xRRGGBB), see ColorTable in mesher.h
+StructuredBuffer<uint> gTextureRemap : register(t5);  // texture layer -> current animation frame's layer
 float3 tintColor(uint index) {
     uint c = gColors[index];
     return float3((c >> 16) & 255, (c >> 8) & 255, c & 255) / 255.0;

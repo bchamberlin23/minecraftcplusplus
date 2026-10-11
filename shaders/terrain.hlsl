@@ -34,6 +34,10 @@ CubeVertex pullCube(uint vid) {
     int4 origin = gSections[gDraw.sectionIndex].origin;
     float3 p = float3(q.x & 15, (q.x >> 4) & 15, (q.x >> 8) & 15);
     p += max(kNormal[face], 0) + axisA * (a * w) + axisB * (b * h);
+    // Top fluid block (geo bit 29): the surface sits 2/16 below the block top (up faces, top corners of sides).
+    if ((q.x >> 29) & 1u) {
+        if (face == 1 || (face >= 2 && (corner >> 1) == 1)) p.y -= 0.125;
+    }
     p.xz *= float(1u << origin.w);  // LOD columns span 2^level blocks (heights stay exact); UVs stay in block units
 
     // Canonical face UVs (same convention as the game's automatic UVs), then rotation.
@@ -68,7 +72,7 @@ VSOut TerrainVS(uint vid : SV_VertexID) {
     CubeVertex v = pullCube(vid);
     VSOut o;
     o.pos = mul(gViewProj, float4(v.rel, 1));
-    o.uvl = float3(v.st, float(v.q.y & 0xFFF));
+    o.uvl = float3(v.st, float(gTextureRemap[v.q.y & 0xFFF]));
     // Smooth lighting: this corner's light (4.4 fixed point) and ambient occlusion (1 - 0.2 per solid cell).
     o.color = tintColor(colorIndex(v)) * (kShade[v.face] * cornerAo(v)) * lightColorLevels(cornerSky(v), cornerBlock(v));
     o.fog = fogFactor(v.rel);
@@ -119,7 +123,7 @@ GbufVSOut TerrainGbufVS(uint vid : SV_VertexID) {
     float3 rel = v.rel + waveOffset(v.rel, matWave(m) == 3 ? 3 : 0, 1);
     GbufVSOut o;
     o.pos = mul(gViewProj, float4(rel, 1));
-    o.uvl = float3(v.st, float(layer));
+    o.uvl = float3(v.st, float(gTextureRemap[layer]));
     o.tint = tintColor(colorIndex(v));
     o.light = float3(cornerSky(v), cornerBlock(v), cornerAo(v));
     o.info = v.face | (matClass(m) << 4);
@@ -162,7 +166,7 @@ ShadowVSOut TerrainShadowVS(uint vid : SV_VertexID) {
     float3 rel = v.rel + waveOffset(v.rel, matWave(m) == 3 ? 3 : 0, 1);
     ShadowVSOut o;
     o.pos = mul(gShadowMat[gPassA.x], float4(rel, 1));
-    o.uvl = float3(v.st, float(layer));
+    o.uvl = float3(v.st, float(gTextureRemap[layer]));
     return o;
 }
 
@@ -186,7 +190,7 @@ FwdVSOut TerrainFwdVS(uint vid : SV_VertexID) {
     uint layer = v.q.y & 0xFFF;
     FwdVSOut o;
     o.pos = mul(gViewProj, float4(v.rel, 1));
-    o.uvl = float3(v.st, float(layer));
+    o.uvl = float3(v.st, float(gTextureRemap[layer]));
     o.tint = tintColor(colorIndex(v));
     o.light = float3(cornerSky(v), cornerBlock(v), cornerAo(v));
     o.rel = v.rel;

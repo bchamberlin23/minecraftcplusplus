@@ -224,8 +224,8 @@ void detect(Entry& e, const PackVersion& pv) {
         if (e.environment == "client")
             e.warnings.push_back("client-only mod: it changes the Java client, which this engine replaces; not used");
         else if (e.clientContent)
-            e.warnings.push_back("adds blocks / items: they are drawn from the mod's own models (best effort); "
-                                 "custom renderers, GUIs and entities of the mod are not shown");
+            e.warnings.push_back("adds blocks / items: its blocks are drawn from the mod's own models; its items, GUIs, "
+                                 "entities and special renderers are not shown. Worlds played without it lose its blocks");
         return;
     }
     if (mcmeta) {
@@ -534,12 +534,14 @@ void Manager::saveConfig() const {
     json list = json::array();
     for (const Entry& e : entries_) list.push_back({{"id", e.id}, {"enabled", e.enabled}});
     cfg["entries"] = list;
+    const std::string text = cfg.dump(2) + "\n";
+    if (std::string(bytes.begin(), bytes.end()) == text) return;  // unchanged
     std::error_code ec;
     fs::create_directories(configFile_.parent_path(), ec);
     const fs::path tmp = configFile_.wstring() + L".tmp";
     {
         std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
-        f << cfg.dump(2) << "\n";
+        f << text;
         if (!f) return;
     }
     fs::rename(tmp, configFile_, ec);

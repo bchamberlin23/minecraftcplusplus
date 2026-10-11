@@ -527,7 +527,7 @@ void Renderer::Shading::prepare(const FrameInput& in) {
     k.moonDir[3] = night;
 
     // Sky colours (vanilla, linear) drive the ambient light and the sky model.
-    const float skyScale = 1.4f;
+    const float skyScale = 1.15f;
     float zen[3], hor[3];
     for (int c = 0; c < 3; ++c) {
         zen[c] = srgbToLinear(std::clamp(sky.skyColor[c], 0.0f, 1.0f));
@@ -569,7 +569,7 @@ void Renderer::Shading::prepare(const FrameInput& in) {
     k.time[1] = rain, k.time[2] = thunder, k.time[3] = float(cam.y);
     k.misc[0] = set.exposure;
     k.misc[1] = set.bloom;
-    k.misc[2] = 3.0f;
+    k.misc[2] = 1.6f;  // emissive strength
     k.misc[3] = in.viewDistance;
 
     // View rays: camera-relative position = viewZ * (rayZ + ndc.x * rayX + ndc.y * rayY) for the jittered ndc.

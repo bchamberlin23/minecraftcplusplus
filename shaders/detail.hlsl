@@ -33,7 +33,7 @@ VSOut DetailVS(uint vid : SV_VertexID) {
     ModelVertex v = pullModel(vid);
     VSOut o;
     o.pos = mul(gViewProj, float4(v.rel, 1));
-    o.uvl = float3(v.uv, float(v.meta & 0xFFFF));
+    o.uvl = float3(v.uv, float(gTextureRemap[v.meta & 0xFFFF]));
     o.color = tintColor(v.lit >> 8) * (float((v.meta >> 19) & 255) / 255.0) * lightColor(v.lit & 0xFF);
     o.fog = fogFactor(v.rel);
     return o;
@@ -78,7 +78,7 @@ DetailGbufVSOut DetailGbufVS(uint vid : SV_VertexID) {
     float3 rel = v.rel + modelWave(v, m);
     DetailGbufVSOut o;
     o.pos = mul(gViewProj, float4(rel, 1));
-    o.uvl = float3(v.uv, float(layer));
+    o.uvl = float3(v.uv, float(gTextureRemap[layer]));
     o.tint = tintColor(v.lit >> 8);
     o.light = float3(float((v.lit >> 4) & 15), float(v.lit & 15), 1);
     o.rel = rel;
@@ -114,7 +114,7 @@ DetailShadowVSOut DetailShadowVS(uint vid : SV_VertexID) {
     uint layer = v.meta & 0xFFFF;
     DetailShadowVSOut o;
     o.pos = mul(gShadowMat[gPassA.x], float4(v.rel + modelWave(v, gMaterial[layer]), 1));
-    o.uvl = float3(v.uv, float(layer));
+    o.uvl = float3(v.uv, float(gTextureRemap[layer]));
     return o;
 }
 

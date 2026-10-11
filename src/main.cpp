@@ -629,6 +629,15 @@ int wmain(int argc, wchar_t** argv) {
         ui.endFrame();
         if (!opt.bench) cam.fovY = ui.fovRadians();
         const fs::path* uiShot = ui.screenshotRequest();
+        // Animated block textures advance with the game's 20 ticks per second.
+        static std::vector<u32> textureRemap;
+        if (registry.textureRemap(u64(now * 20.0), textureRemap)) renderer.setTextureRemap(textureRemap);
+        if (opt.profile && frame % 120 == 0) {
+            size_t moved = 0;
+            for (size_t i = 0; i < textureRemap.size(); ++i) moved += textureRemap[i] != i;
+            LOG("texture remap: %zu layers, %zu showing another frame (tick %llu)", textureRemap.size(), moved,
+                (unsigned long long)u64(now * 20.0));
+        }
         renderer.render(cam, opt.fog, shot ? &opt.screenshot : uiShot);
         if (uiShot && !shot) LOG("screenshot written to %s", uiShot->string().c_str());
 

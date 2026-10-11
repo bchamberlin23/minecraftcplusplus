@@ -80,7 +80,7 @@ void DeferredCS(uint2 px : SV_DispatchThreadID) {
     // HDR sun disc (the vanilla sun texture's bright core) and a soft forward-scattering glow around it.
     float lum = luminance(skyLdr.rgb);
     float disc = mu > 0.94 ? pow(saturate(lum), 6.0) * smoothstep(0.94, 0.97, mu) : 0;
-    float3 glow = gLightColor.rgb * gLightColor.w * (pow(saturate(mu), 12.0) * 0.06 + pow(saturate(mu), 200.0) * 0.5) *
+    float3 glow = gLightColor.rgb * gLightColor.w * (pow(saturate(mu), 24.0) * 0.025 + pow(saturate(mu), 300.0) * 0.4) *
                   (1.0 - gTime.y * 0.9);
     float3 sky = skyHdr * (1.0 + gSunDir.w * disc) + glow * (dir.y > -0.05 ? 1 : 0);
 
