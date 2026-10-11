@@ -70,6 +70,11 @@ struct FrontEnd {
         openToLan;
 };
 
+// Map data from ClientboundMapItemDataPacket (main thread): the 128 x 128 packed map colours of a map id, nullptr if
+// none arrived; `version` changes with every update. mapColorRgba: MapColor.getColorFromPackedId as RGBA bytes.
+const std::vector<u8>* mapColors(int id, u32& version);
+u32 mapColorRgba(u8 packed);
+
 // The title screen's panorama world (a cache, generated once): level.dat with the seed and the camera spot.
 bool writeTitleWorld(const fs::path& dir, i64 seed, int dataVersion, const double pos[3], float yawDeg, float pitchDeg);
 

@@ -225,8 +225,14 @@ struct Visuals::Impl {
     bool avatarReady = false;
     std::vector<i8> skullCache;  // item id -> 1 skull, 0 not, -1 unknown
     std::vector<const ItemMesh*> skullMeshes;  // item id -> worn skull model
-    std::vector<i8> mapItem;                   // item id -> 1 filled map, 0 not, -1 unknown
     const ItemMesh* frameMeshes[4] = {};       // item / glow frame, without / with a map
+    // Maps in item frames: the map image in the item atlas and its quad (MapRenderer), by map id.
+    struct MapTex {
+        int ax = -1, ay = -1;
+        u32 version = ~0u, quad = UINT32_MAX;
+    };
+    std::unordered_map<int, MapTex> mapTextures;
+    const MapTex* mapTexture(int id);  // nullptr: no map data (yet)
     std::vector<Xf> armMats;                   // scratch: arm part matrices
 
     // Name tags: text quads per name in the static store.
@@ -1092,6 +1098,42 @@ const Visuals::Impl::Tag& Visuals::Impl::tag(const std::string& name) {
     return tags.emplace(name, t).first->second;
 }
 
+// MapTextureManager: the map's colours as a 128 x 128 image (refreshed with each update) and MapRenderer's quad
+// (0..128 at z -0.01, map space).
+const Visuals::Impl::MapTex* Visuals::Impl::mapTexture(int id) {
+    u32 version = 0;
+    const std::vector<u8>* colors = ui::mapColors(id, version);
+    if (!colors || colors->size() < 128 * 128) return nullptr;
+    MapTex& t = mapTextures[id];
+    if (t.ax < 0) {
+        ui::Atlas& atlas = models.atlas();
+        if (!atlas.alloc(128, 128, t.ax, t.ay)) {
+            mapTextures.erase(id);
+            return nullptr;
+        }
+        const float W = float(atlas.width()), H = float(atlas.height());
+        const float u0 = float(t.ax) / W, v0 = float(t.ay) / H, u1 = float(t.ax + 128) / W, v1 = float(t.ay + 128) / H;
+        MeshQuad q{};
+        const float corners[4][4] = {{0, 128, u0, v1}, {128, 128, u1, v1}, {128, 0, u1, v0}, {0, 0, u0, v0}};
+        for (int k = 0; k < 4; ++k)
+            q.pos[k][0] = corners[k][0], q.pos[k][1] = corners[k][1], q.pos[k][2] = -0.01f, q.uv[k][0] = corners[k][2],
+            q.uv[k][1] = corners[k][3];
+        q.normal = packNormal(0, 0, -1), q.color = 0xFFFFFFFF, q.tex = kTexItems, q.flags = kQuadNoShade;
+        t.quad = models.addQuads(&q, 1);
+    }
+    if (t.quad == UINT32_MAX) return nullptr;
+    if (t.version != version) {
+        t.version = version;
+        std::vector<u8> px(128 * 128 * 4);
+        for (size_t i = 0; i < 128 * 128; ++i) {
+            const u32 c = ui::mapColorRgba((*colors)[i]);
+            std::memcpy(&px[i * 4], &c, 4);
+        }
+        models.atlas().blit(t.ax, t.ay, 128, 128, px.data(), 128 * 4);
+    }
+    return &t;
+}
+
 // TextDisplayRenderer.splitLines + submitInner's layout: lines wrapped at the line width, aligned within the widest
 // line; the background covers (-1, -1) .. (width, height).
 const Visuals::Impl::TextBlock& Visuals::Impl::textBlock(int id, const DisplayState& s) {
@@ -1442,13 +1484,8 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
             m = xfMul(m, xfRotY(yRot * kDeg));
             const bool glow = e.type == glowFrameType;
             const bool invisible = (e.sharedFlags & 0x20) != 0;
-            bool map = false;
-            if (e.itemId >= 0) {
-                if (mapItem.size() <= size_t(e.itemId)) mapItem.resize(size_t(e.itemId) + 1, -1);
-                i8& mi = mapItem[size_t(e.itemId)];
-                if (mi < 0) mi = models.itemName(e.itemId) == "filled_map" ? 1 : 0;
-                map = mi == 1;
-            }
+            const MapTex* mapTex = e.itemId >= 0 && e.mapId >= 0 ? mapTexture(e.mapId) : nullptr;  // a map with data
+            const bool map = mapTex != nullptr;
             u32 frameLight = light;
             if (glow) frameLight = (light & 0xF0) | std::max<u32>(light & 15, 5);
             if (!invisible) {
@@ -1456,7 +1493,14 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
                 if (!fm) fm = &models.blockModelMesh(std::string("block/") + (glow ? "glow_item_frame" : "item_frame") + (map ? "_map" : ""));
                 pushRaw(L, *fm, xfMul(m, xfTranslate(-0.5f, -0.5f, -0.5f)), frameLight);
             }
-            if (e.itemId >= 0) {
+            if (map) {  // MapRenderer: the 128 x 128 map image (decorations are not drawn)
+                Xf im = xfMul(m, xfTranslate(0, 0, invisible ? 0.5f : 0.4375f));
+                im = xfMul(im, xfRotZ(float(e.rotation % 4 * 2) * 45.0f * kDeg));
+                im = xfMul(im, xfRotZ(kPi));
+                im = xfMul(im, xfScale(1.0f / 128, 1.0f / 128, 1.0f / 128));
+                im = xfMul(im, xfTranslate(-64, -64, -1));
+                L.cut.add(im, mapTex->quad, 1, (glow ? 0xFDu : frameLight) | 512u, 0xFFFFFFFF, 0, L.next());
+            } else if (e.itemId >= 0) {
                 Xf im = xfMul(m, xfTranslate(0, 0, invisible ? 0.5f : 0.4375f));
                 im = xfMul(im, xfRotZ(float(e.rotation % 8) * 45.0f * kDeg));
                 im = xfMul(im, xfScale(0.5f, 0.5f, 0.5f));
@@ -1469,9 +1513,25 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
             if (!info) continue;
             if (!info->mesh) info->mesh = &models.paintingMesh(info->asset, info->w, info->h);
             static const int k2d[6] = {0, 0, 2, 0, 1, 3};  // 3D data value -> 2D data value (S W N E)
-            const int d2 = k2d[std::clamp(e.direction, 0, 5)];
+            const int dir = std::clamp(e.direction, 0, 5), d2 = k2d[dir];
             Xf m = xfMul(xfTranslate(rx, ry, rz), xfRotY(float(180 - d2 * 90) * kDeg));
-            pushRaw(L, *info->mesh, m, light);
+            if (info->mesh->empty()) continue;
+            // PaintingRenderer.extractRenderState: each segment lit by the block it covers.
+            const ItemMesh::Part& part = info->mesh->parts[0];
+            const int w = info->w, h = info->h;
+            if (part.count < u32(w * h) * ItemModels::kPaintingSegmentQuads) continue;
+            for (int sy = 0; sy < h; ++sy)
+                for (int sx = 0; sx < w; ++sx) {
+                    const double ox = sx - w / 2.0 + 0.5, oy = sy - h / 2.0 + 0.5;
+                    double bx = std::floor(e.pos[0]), bz = std::floor(e.pos[2]);
+                    if (dir == 2) bx = std::floor(e.pos[0] + ox);       // north
+                    else if (dir == 4) bz = std::floor(e.pos[2] - ox);  // west
+                    else if (dir == 3) bx = std::floor(e.pos[0] - ox);  // south
+                    else if (dir == 5) bz = std::floor(e.pos[2] + ox);  // east
+                    const u32 seg = u32(sx + sy * w) * ItemModels::kPaintingSegmentQuads;
+                    L.cut.add(m, part.first + seg, ItemModels::kPaintingSegmentQuads, lightAt(bx, std::floor(e.pos[1] + oy), bz),
+                              0xFFFFFFFF, 0, L.next());
+                }
             continue;
         }
         // ItemEntityRenderer: bob, spin and several copies for larger stacks (GROUND display).

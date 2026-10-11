@@ -158,6 +158,7 @@ struct Entity {
     u8 equipFoil = 0;                                      // enchantment glint by slot (bits)
     i32 itemDye = -1;                                      // item / item frame stack: dyed_color
     bool itemFoil = false;
+    int mapId = -1;             // item / item frame stack: map_id component (-1 none)
     int rotation = 0;           // item frame rotation (0..7)
     int direction = 0;          // add_entity data: facing of hanging entities (Direction 3D value)
     int painting = -1;          // painting_variant network id

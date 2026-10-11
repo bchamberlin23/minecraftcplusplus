@@ -110,7 +110,10 @@ public:
     const HandInfo& handInfo(int item);
     std::string itemName(int item) const;  // without namespace ("" if unknown)
     // Painting: front (variant texture), back and edges; width x height blocks centred at the origin, facing -z.
+    // One part, kPaintingSegmentQuads quads per block segment in segment order (x + y * width): segments are lit
+    // separately (PaintingRenderState.lightCoordsPerBlock).
     const ItemMesh& paintingMesh(const std::string& assetId, int width, int height);
+    static constexpr u32 kPaintingSegmentQuads = 6;
 
     // Textures in the item atlas (path below textures/, e.g. "particle/flame"): atlas rect index or -1.
     int texture(const std::string& path);

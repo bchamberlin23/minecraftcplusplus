@@ -71,9 +71,10 @@ const ui::Items* gItems = nullptr;  // EntityWorld::setItemDecoder
 
 // ItemStack.OPTIONAL_STREAM_CODEC. Component patches are not length-prefixed: without the item registry a stack
 // with added components cannot be skipped and returns false (after reading the item id); the caller stops there.
-bool readItemStack(net::Reader& r, i64& item, int& count, i32* dye = nullptr, bool* foil = nullptr) {
+bool readItemStack(net::Reader& r, i64& item, int& count, i32* dye = nullptr, bool* foil = nullptr, i32* mapId = nullptr) {
     if (dye) *dye = -1;
     if (foil) *foil = false;
+    if (mapId) *mapId = -1;
     if (gItems) {
         ui::ItemStack st;
         const bool ok = gItems->read(r, st);
@@ -81,6 +82,14 @@ bool readItemStack(net::Reader& r, i64& item, int& count, i32* dye = nullptr, bo
         count = st.count;
         if (dye) *dye = st.dyedColor >= 0 ? i32(st.dyedColor & 0xFFFFFF) : -1;
         if (foil) *foil = gItems->foil(st);
+        static const int mapIdType = gItems->componentType("map_id");
+        if (mapId)
+            for (const auto& c : st.added)
+                if (c.type == mapIdType) {
+                    net::Reader v(reinterpret_cast<const u8*>(c.data.data()), c.data.size());
+                    const i32 id = v.varInt();
+                    if (v.ok) *mapId = id;
+                }
         return ok && r.ok;
     }
     count = r.varInt();
@@ -310,10 +319,10 @@ void readEntityData(net::Reader& r, EventQueue& q, int entityEffect) {
                 break;
             case 7: {  // item stack
                 int count = 0;
-                i32 dye = -1;
+                i32 dye = -1, mapId = -1;
                 bool foil = false;
-                const bool complete = readItemStack(r, v.i, count, &dye, &foil);
-                v.f[0] = float(count), v.f[1] = float(dye), v.f[2] = foil ? 1.0f : 0.0f;
+                const bool complete = readItemStack(r, v.i, count, &dye, &foil, &mapId);
+                v.f[0] = float(count), v.f[1] = float(dye), v.f[2] = foil ? 1.0f : 0.0f, v.f[3] = float(mapId);
                 stop = !complete;
                 break;
             }
@@ -877,7 +886,8 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
         }
         else if (idx == d.horseVariant) e.variant = int(v.i & 0xFF), e.variant2 = int((v.i >> 8) & 0xFF);
         else if (idx == d.item && v.serializer == 7)
-            e.itemId = int(v.i), e.itemCount = std::max(1, int(v.f[0])), e.itemDye = i32(v.f[1]), e.itemFoil = v.f[2] > 0.5f;
+            e.itemId = int(v.i), e.itemCount = std::max(1, int(v.f[0])), e.itemDye = i32(v.f[1]), e.itemFoil = v.f[2] > 0.5f,
+            e.mapId = int(v.f[3]);
         else if (idx == d.rotation && v.serializer == 1) e.rotation = int(v.i);
         else if (idx == d.painting && v.serializer == 34) e.painting = int(v.i);
         else if (idx == d.nameVisible && v.serializer == 8) e.nameVisible = v.i != 0;
