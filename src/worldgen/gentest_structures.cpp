@@ -109,15 +109,19 @@ int statusRank(const std::string& s) {
 
 }  // namespace
 
-int runStructureTest(BlockRegistry& registry, const fs::path& jar, const fs::path& regionDir, i64 seed, const std::string& mode) {
+int runStructureTest(BlockRegistry& registry, const fs::path& jar, const fs::path& dir, i64 seedArg, const std::string& mode) {
     wg::DataPack data;
     if (!data.open(jar)) return 1;
+    const GenTestTarget target = genTestTarget(data, dir, seedArg);
+    const fs::path& regionDir = target.regionDir;
+    const i64 seed = target.seed;
     Timer t;
-    wg::ChunkGenerator gen(data, registry, seed);
+    wg::ChunkGenerator gen(data, registry, seed, target.dim);
     if (!gen.ok()) return 1;
-    wg::FeatureSystem features(gen.noise(), registry, gen.biomes(), gen.possibleBiomes());
+    wg::FeatureSystem features(gen, registry);
     wg::StructureSystem structures(gen, &features, registry, seed);
-    const bool noStructures = std::getenv("GENTEST_NOSTRUCT") != nullptr;  // baseline: decoration without structures
+    // baseline: decoration without structures (also a world generated without them)
+    const bool noStructures = std::getenv("GENTEST_NOSTRUCT") != nullptr || !target.structures;
     if (!noStructures) features.setStructures(&structures);
     LOG("structtest: generator, features and structures ready in %.1f ms", t.ms());
 

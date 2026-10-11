@@ -6,6 +6,7 @@
 
 #include "assets/assets.h"
 #include "worldgen/features_internal.h"
+#include "worldgen/structure_core.h"
 #include "worldgen/structures.h"
 
 #include <algorithm>
@@ -106,10 +107,82 @@ bool GenRegion::setBlock(const BlockPos& p, u16 id) {
     if (!c) return false;
     if (!c->inside(p.y)) return true;  // ProtoChunk ignores it (void air) but the write "succeeds"
     const int lx = p.x & 15, lz = p.z & 15;
+    // WorldGenRegion.setBlock: a configured block entity stays while the new block has one too, else it goes.
+    if (!c->blockEntities.empty()) {
+        const auto it = c->blockEntities.find(c->index(lx, p.y, lz));
+        if (it != c->blockEntities.end()) {
+            const std::string& n = facts_.blocks().name(id);
+            if (!blockHasEntity(std::string_view(n).substr(0, n.find('[')))) c->blockEntities.erase(it);
+        }
+    }
     c->set(lx, p.y, lz, id);
     const BlockFacts::Impl& f = facts_.impl();
     for (int t = 0; t < 4; ++t) updateHeightmap(*c, f, t, lx, p.y, lz, id);
     return true;
+}
+
+NbtValue* GenRegion::blockEntity(const BlockPos& p, std::string_view id) {
+    GenChunk* c = chunk(p.x >> 4, p.z >> 4);
+    if (!c || !c->inside(p.y)) return nullptr;
+    auto [it, inserted] = c->blockEntities.try_emplace(c->index(p.x & 15, p.y, p.z & 15));
+    if (inserted) {
+        it->second = NbtValue::make(TagCompound);
+        NbtValue s = NbtValue::make(TagString);
+        s.s = id;
+        it->second.set("id", std::move(s));
+        for (const auto& [k, v] : {std::pair{"x", p.x}, std::pair{"y", p.y}, std::pair{"z", p.z}}) {
+            NbtValue n = NbtValue::make(TagInt);
+            n.i = v;
+            it->second.set(k, std::move(n));
+        }
+    }
+    return &it->second;
+}
+
+void GenRegion::addEntity(NbtValue tag) {
+    const NbtValue* pos = tag.find("Pos");
+    if (!pos || pos->items.size() != 3) return;
+    const int x = int(std::floor(pos->items[0].d)), z = int(std::floor(pos->items[2].d));
+    if (GenChunk* c = chunk(x >> 4, z >> 4)) c->entities.push_back(std::move(tag));
+}
+
+void GenRegion::scheduleTick(const BlockPos& p, u16 state, int delay, bool fluid) {
+    GenChunk* c = chunk(p.x >> 4, p.z >> 4);
+    if (!c || !c->inside(p.y)) return;
+    const u32 i = c->index(p.x & 15, p.y, p.z & 15);
+    for (const GenChunk::Tick& t : c->ticks)  // LevelTicks keep one tick per position and type
+        if (t.index == i && t.fluid == fluid && facts_.impl().blockOf(t.state) == facts_.impl().blockOf(state)) return;
+    c->ticks.push_back({i, state, delay, fluid});
+}
+
+bool GenRegion::hasScheduledTick(const BlockPos& p, u16 state) const {
+    const GenChunk* c = chunk(p.x >> 4, p.z >> 4);
+    if (!c || !c->inside(p.y)) return false;
+    const u32 i = c->index(p.x & 15, p.y, p.z & 15);
+    for (const GenChunk::Tick& t : c->ticks)
+        if (t.index == i && !t.fluid && facts_.impl().blockOf(t.state) == facts_.impl().blockOf(state)) return true;
+    return false;
+}
+
+void GenRegion::markPostProcess(const BlockPos& p) {
+    if (GenChunk* c = chunk(p.x >> 4, p.z >> 4)) c->markPostProcess(p.x & 15, p.y, p.z & 15);
+}
+
+bool blockHasEntity(std::string_view n) {
+    if (n.starts_with("minecraft:")) n.remove_prefix(10);
+    auto ends = [&](std::string_view s) { return n.ends_with(s); };
+    static constexpr std::string_view kExact[] = {
+        "furnace", "jukebox", "dispenser", "dropper", "spawner", "creaking_heart", "moving_piston", "brewing_stand",
+        "enchanting_table", "end_portal", "beacon", "daylight_detector", "hopper", "comparator", "structure_block",
+        "end_gateway", "command_block", "chain_command_block", "repeating_command_block", "conduit", "barrel", "smoker",
+        "blast_furnace", "lectern", "bell", "jigsaw", "campfire", "soul_campfire", "bee_nest", "beehive", "sculk_sensor",
+        "calibrated_sculk_sensor", "sculk_catalyst", "sculk_shrieker", "chiseled_bookshelf", "suspicious_sand",
+        "suspicious_gravel", "decorated_pot", "crafter", "trial_spawner", "vault", "test_block", "test_instance_block",
+        "potent_sulfur", "skeleton_skull", "skeleton_wall_skull", "wither_skeleton_skull", "wither_skeleton_wall_skull"};
+    for (std::string_view e : kExact)
+        if (n == e) return true;
+    return ends("chest") || ends("_sign") || ends("_shulker_box") || n == "shulker_box" || ends("_banner") ||
+           (ends("_head") && n != "piston_head") || ends("_shelf") || ends("copper_golem_statue");
 }
 
 bool GenRegion::isEmpty(const BlockPos& p) const { return facts_.impl().has(block(p), fact::Air); }
@@ -266,6 +339,7 @@ struct Shared {
     BiomeTable* biomes = nullptr;
     const BlockFacts::Impl* facts = nullptr;
     int genMinY = -64, genDepth = 384, seaLevel = 63;  // WorldGenerationContext
+    const st::StructureEnv* templates = nullptr;       // structure templates for template / fossil features
     Simplex2D temperatureNoise, frozenNoise[3], biomeInfoNoise;
     std::vector<BiomeClimate> climate;  // by biome id
     std::vector<std::unordered_set<const PlacedFeature*>> biomeFeatures;  // BiomeGenerationSettings.hasFeature
@@ -1332,6 +1406,7 @@ public:
 
     const NoiseState& noise() const override { return *s_.noise; }
     const DataPack& data() const override { return s_.noise->data(); }
+    const st::StructureEnv* structureEnv() const override { return s_.templates; }
     const BlockFacts& facts() const override { return facts_; }
     BlockRegistry& blocks() const override { return *s_.blocks; }
 
@@ -2388,6 +2463,45 @@ void registerCoreFeatures(FeatureTypes& types) {
 
 // ---- FeatureSystem ----------------------------------------------------------------------------------
 
+namespace {
+// FlatLevelGeneratorSettings.adjustGenerationSettings for the flat world's biome: lava lakes ("lakes"), the
+// biome's features without structure steps ("features"; a void world only in the_void), and fill_layer features at
+// top_layer_modification for the layers that neither block motion nor hold fluid (the terrain leaves them out).
+json flatFeatures(const json& flat, const json& biomeSteps, const std::string& biome, BlockRegistry& blocks) {
+    auto flag = [&](const char* k) {
+        const auto it = flat.find(k);
+        return it != flat.end() && (it->is_boolean() ? it->get<bool>() : it->is_number() && it->get<int>() != 0);
+    };
+    const bool lakes = flag("lakes"), decoration = flag("features");
+    std::vector<std::string> layers;  // block per layer row
+    for (const json& l : flat.value("layers", json::array())) {
+        std::string block = l.value("block", std::string("minecraft:air"));
+        if (block.find(':') == std::string::npos) block = "minecraft:" + block;
+        for (int i = 0, n = l.value("height", 0); i < n; ++i) layers.push_back(block);
+    }
+    const bool voidGen = std::all_of(layers.begin(), layers.end(), [](const std::string& b) { return b == "minecraft:air"; });
+    json out = json::array();
+    for (int i = 0; i < 11; ++i) out.push_back(json::array());
+    if (lakes)
+        for (const char* id : {"minecraft:lake_lava_underground", "minecraft:lake_lava_surface"}) out[1].push_back(id);
+    if ((!voidGen || biome == "minecraft:the_void") && decoration)
+        for (size_t step = 0; step < biomeSteps.size() && step < 11; ++step) {
+            if (step == 3 || step == 4 || (lakes && step == 1)) continue;  // underground / surface structures, lakes
+            for (const json& f : biomeSteps[step]) out[step].push_back(f);
+        }
+    // MOTION_BLOCKING's test: blocks motion or holds a fluid (as ChunkGenerator::generate tests it).
+    for (size_t i = 0; i < layers.size(); ++i) {
+        const std::string& b = layers[i];
+        if (b == "minecraft:air") continue;
+        const BlockInfo& info = blocks.infos()[blocks.idFor(b)];
+        if (info.collisionCount > 0 || info.fluid) continue;
+        out[10].push_back({{"feature", {{"type", "minecraft:fill_layer"}, {"config", {{"height", int(i)}, {"state", {{"Name", b}}}}}}},
+                           {"placement", json::array()}});
+    }
+    return out;
+}
+}  // namespace
+
 struct FeatureSystem::Impl {
     Impl(const NoiseState& n, BlockRegistry& b, BiomeTable& t) : noise(n), blocks(b), biomes(t), facts(b, n.data()) {}
 
@@ -2407,8 +2521,11 @@ struct FeatureSystem::Impl {
     std::vector<std::vector<std::vector<PlacedRef>>> biomeSteps;  // by biome id
     std::vector<bool> possible;                                   // by biome id
     const StructureSystem* structures = nullptr;
+    const ChunkGenerator* debugWorld = nullptr;  // DebugLevelSource: decoration is its block grid
+    std::unique_ptr<st::StructureEnv> templateEnv;  // the structure template code, for template / fossil features
 
     void buildFeatureOrder(const std::vector<u16>& sources);
+    void init(const std::vector<u16>& possibleBiomes, const nlohmann::json* flat);
 };
 
 // FeatureSorter.buildFeaturesPerStep with Graph.depthFirstSearch: a global order per step that respects
@@ -2469,8 +2586,33 @@ void FeatureSystem::Impl::buildFeatureOrder(const std::vector<u16>& sources) {
 FeatureSystem::FeatureSystem(const NoiseState& noise, BlockRegistry& blocks, BiomeTable& biomes,
                              const std::vector<u16>& possibleBiomes)
     : impl_(std::make_unique<Impl>(noise, blocks, biomes)) {
+    Shared& s = impl_->shared;
+    if (const json* settings = noise.data().worldgen("noise_settings", "overworld")) {
+        s.seaLevel = settings->value("sea_level", 63);
+        if (settings->contains("noise")) {
+            s.genMinY = (*settings)["noise"].value("min_y", -64);
+            s.genDepth = (*settings)["noise"].value("height", 384);
+        }
+    }
+    impl_->init(possibleBiomes, nullptr);
+}
+
+FeatureSystem::FeatureSystem(ChunkGenerator& generator, BlockRegistry& blocks)
+    : impl_(std::make_unique<Impl>(generator.noise(), blocks, generator.biomes())) {
+    Shared& s = impl_->shared;
+    s.seaLevel = generator.seaLevel();
+    // WorldGenerationContext(generator, level): the generator's range within the level's.
+    s.genMinY = std::max(generator.minY(), generator.genMinY());
+    s.genDepth = std::min(generator.height(), generator.genDepth());
+    if (generator.kind() == ChunkGenerator::Kind::Debug) impl_->debugWorld = &generator;
+    impl_->templateEnv = std::make_unique<st::StructureEnv>(generator, this, blocks, generator.noise().data(), generator.noise().seed());
+    s.templates = impl_->templateEnv.get();
+    impl_->init(generator.possibleBiomes(), generator.flatSettings());
+}
+
+void FeatureSystem::Impl::init(const std::vector<u16>& possibleBiomes, const nlohmann::json* flat) {
     Timer t;
-    Impl& im = *impl_;
+    Impl& im = *this;
     const DataPack& data = noise.data();
     registerCoreFeatures(im.types);
     registerTreeFeatures(im.types);
@@ -2481,13 +2623,6 @@ FeatureSystem::FeatureSystem(const NoiseState& noise, BlockRegistry& blocks, Bio
     s.blocks = &blocks;
     s.biomes = &biomes;
     s.facts = &im.facts.impl();
-    if (const json* settings = data.worldgen("noise_settings", "overworld")) {
-        s.seaLevel = settings->value("sea_level", 63);
-        if (settings->contains("noise")) {
-            s.genMinY = (*settings)["noise"].value("min_y", -64);
-            s.genDepth = (*settings)["noise"].value("height", 384);
-        }
-    }
     LegacyRandom temperatureRandom(1234), frozenRandom(3456), biomeInfoRandom(2345);
     s.temperatureNoise.init(temperatureRandom);
     for (Simplex2D& n : s.frozenNoise) n.init(frozenRandom);
@@ -2510,11 +2645,12 @@ FeatureSystem::FeatureSystem(const NoiseState& noise, BlockRegistry& blocks, Bio
         s.climate[b].temperature = float(def->value("temperature", 0.5));
         s.climate[b].precipitation = def->value("has_precipitation", true);
         s.climate[b].frozen = def->value("temperature_modifier", std::string("none")) == "frozen";
-        if (const auto it = def->find("features"); it != def->end())
-            for (const json& step : *it) {
-                im.biomeSteps[b].push_back(im.env->placedList(step));
-                for (const PlacedRef& pf : im.biomeSteps[b].back()) s.biomeFeatures[b].insert(pf.get());
-            }
+        json steps = def->value("features", json::array());
+        if (flat) steps = flatFeatures(*flat, steps, biomes.name(b), blocks);
+        for (const json& step : steps) {
+            im.biomeSteps[b].push_back(im.env->placedList(step));
+            for (const PlacedRef& pf : im.biomeSteps[b].back()) s.biomeFeatures[b].insert(pf.get());
+        }
     }
     im.buildFeatureOrder(possibleBiomes);
     size_t total = 0;
@@ -2534,8 +2670,19 @@ float FeatureSystem::temperature(u16 biome, const BlockPos& p) const { return im
 void FeatureSystem::decorate(const std::array<GenChunk*, 9>& chunks, const BiomeZoom& zoom,
                              const NoiseBiomeFn& noiseBiome) const {
     const Impl& im = *impl_;
+    if (im.debugWorld) {  // DebugLevelSource.applyBiomeDecoration
+        GenChunk& c = *chunks[4];
+        const u16 barrier = im.blocks.idFor("minecraft:barrier");
+        for (int z = 0; z < 16; ++z)
+            for (int x = 0; x < 16; ++x) {
+                c.set(x, 60, z, barrier);
+                c.set(x, 70, z, im.debugWorld->debugState(c.minBlockX() + x, c.minBlockZ() + z));
+            }
+        return;
+    }
     const GenChunk& centre = *chunks[4];
     GenRegion level(chunks, im.facts, zoom, noiseBiome, im.noise.seed(), im.shared.seaLevel);
+    level.setGenDepth(im.shared.genDepth);
     DecorationContext& context = decorationContext();
     const DecorationContext saved = context;
     context.level = &level;

@@ -878,6 +878,56 @@ u16 wallShape(PlaceCtx& c, u16 state, u16 top, const bool conn[4]) {
 
 }  // namespace
 
+namespace {
+
+bool speleothemWithDirection(const SB& b, u16 s, Direction tip) {
+    return b.tag(s, "minecraft:speleothems") && dirFromName(b.prop(s, "vertical_direction")) == tip;
+}
+
+// SpeleothemBlock.updateShape (pointed dripstone and its kin): a tip without support breaks on a scheduled tick.
+u16 speleothemShape(PlaceCtx& c, u16 s, const BlockPos& p, Direction toNeighbour) {
+    const SB& b = c.b;
+    if (toNeighbour != Up && toNeighbour != Down) return s;
+    const Direction tip = dirFromName(b.prop(s, "vertical_direction")).value_or(Up);
+    if (tip == Down && c.level.hasScheduledTick(p, s)) return s;
+    const Direction base = opposite(tip);
+    if (toNeighbour == base) {
+        const BlockPos behind = relative(p, base);
+        const u16 bs = c.level.block(behind);
+        if (!(b.f.sturdy(bs, tip) || (speleothemWithDirection(b, bs, tip) && b.f.blockOf(bs) == b.f.blockOf(s)))) {
+            c.level.scheduleTick(p, s, tip == Down ? 2 : 1);
+            return s;
+        }
+    }
+    const bool mergeOpposingTips = b.prop(s, "thickness") == "tip_merge";
+    const u16 front = c.level.block(relative(p, tip));
+    const char* thickness;
+    if (speleothemWithDirection(b, front, base) && b.f.blockOf(front) == b.f.blockOf(s))
+        thickness = !mergeOpposingTips && b.prop(front, "thickness") != "tip_merge" ? "tip" : "tip_merge";
+    else if (!speleothemWithDirection(b, front, tip))
+        thickness = "tip";
+    else if (const std::string_view ft = b.prop(front, "thickness"); ft != "tip" && ft != "tip_merge")
+        thickness = speleothemWithDirection(b, c.level.block(relative(p, base)), tip) ? "middle" : "base";
+    else
+        thickness = "frustum";
+    return b.with(s, "thickness", thickness);
+}
+
+// PotentSulfurBlock.validBlockState
+u16 potentSulfurState(PlaceCtx& c, u16 s, const BlockPos& p) {
+    const SB& b = c.b;
+    const u16 above = c.level.block(p.offset(0, 1, 0));
+    if (!(b.waterFluid(above) && b.fluidSource(above))) return b.with(s, "potent_sulfur_state", "dry");
+    const u16 below = c.level.block(p.offset(0, -1, 0));
+    const bool sourceIfFluid = b.fluidEmpty(below) || b.fluidSource(below);
+    if (b.tag(below, "minecraft:causes_continuous_geyser_eruptions") && sourceIfFluid) return b.with(s, "potent_sulfur_state", "continuous");
+    if (b.tag(below, "minecraft:causes_periodic_geyser_eruptions") && sourceIfFluid)
+        return b.prop(s, "potent_sulfur_state") == "erupting" ? s : b.with(s, "potent_sulfur_state", "dormant");
+    return b.with(s, "potent_sulfur_state", "wet");
+}
+
+}  // namespace
+
 u16 updateShape(PlaceCtx& c, u16 state, const BlockPos& pos, Direction dir, const BlockPos& npos, u16 neighbour) {
     const SB& b = c.b;
     if (b.isAir(state)) return state;
@@ -911,6 +961,8 @@ u16 updateShape(PlaceCtx& c, u16 state, const BlockPos& pos, Direction dir, cons
     if (dir == Up && b.has(state, "snowy") && (b.is(state, "minecraft:grass_block") || b.is(state, "minecraft:podzol") ||
                                                b.is(state, "minecraft:mycelium")))
         return b.with(state, "snowy", b.tag(neighbour, "minecraft:snow"));
+    if (b.tag(state, "minecraft:speleothems")) return speleothemShape(c, state, pos, dir);
+    if (b.is(state, "minecraft:potent_sulfur")) return potentSulfurState(c, state, pos);
     if (horizontal(dir)) {
         const char* side = kDirNames[dir];
         if (b.tag(state, "minecraft:fences")) {

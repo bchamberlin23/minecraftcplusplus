@@ -723,7 +723,7 @@ void Terrain::update(double x, double y, double z, bool waitForDetail) {
         for (FarResult& f : ready) {
             RegionLod& r = regions_[size_t(f.build.region)];
             r.farQueued = false;
-            if (!farActive_) continue;
+            if (!farActive_ || f.epoch != farEpoch_) continue;
             if (r.farData && r.farData->level <= f.grid->level) continue;
             r.farData = std::move(f.grid);
             applyCoarse(f.build, true);
@@ -804,6 +804,7 @@ void Terrain::enableFar(FarGenFn fn, int genMinY, unsigned threads) {
 void Terrain::setFarActive(bool active) {
     if (active == farActive_) return;
     farActive_ = active;
+    ++farEpoch_;
     {
         std::lock_guard lock(mutex_);
         for (const FarJob& j : farQueue_) regions_[size_t(j.region)].farQueued = false;
@@ -848,6 +849,7 @@ void Terrain::farMain() {
         farGen_(job.rx, job.rz, job.level, prev && prev->level == job.level + 1 ? prev : nullptr, *grid);
         grid->level = job.level;
         FarResult res;
+        res.epoch = job.epoch;
         job.coarse.farData = grid;
         buildRegion(job.coarse, res.build, true);
         res.grid = std::move(grid);
@@ -925,7 +927,7 @@ void Terrain::scheduleFar(double x, double z) {
             const bool firstPass = !r.farData && r.world < 0 && target < kMaxLevel;
             const int level = firstPass ? kMaxLevel : r.farData ? std::max(target, have - 1) : target;
             const float priority = r.world >= 0 ? d * 0.5f : firstPass || !r.farData ? d : d * 2.0f;
-            jobs.push_back({idx, rx, rz, level, priority, coarseJob(idx)});
+            jobs.push_back({idx, rx, rz, level, priority, coarseJob(idx), farEpoch_});
         }
     ms[1] = tp.ms(), tp = Timer();
     for (size_t i = 0; i < regions_.size(); ++i) {

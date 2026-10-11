@@ -56,7 +56,8 @@ public:
     void setDetailRadius(float blocks) { detailRadius_ = blocks, cutDirty_ = true; }  // full-detail radius (options)
     void enableFar(FarGenFn fn, int genMinY, unsigned threads);
     void stopFar();  // joins the far threads (before whatever fn uses goes away)
-    // Far terrain shows the overworld: off (and dropped) while the player is in another dimension.
+    // Far terrain off (and dropped) while there is no generator for the player's dimension; every change starts a new
+    // epoch, so jobs still running for the previous dimension are discarded.
     void setFarActive(bool active);
 
     bool buildCoarse();
@@ -142,10 +143,12 @@ private:
         int region, rx, rz, level;
         float priority;  // lower first
         CoarseJob coarse;
+        u32 epoch;  // farEpoch_ when queued: results of an older one (another dimension) are dropped
     };
     struct FarResult {
         std::shared_ptr<const FarGrid> grid;
         CoarseBuild build;
+        u32 epoch = 0;
     };
     CoarseJob coarseJob(int region) const;
     // Layers [layerFrom, layerTo) (default: all); node states of other layers stay kAbsent.
@@ -214,6 +217,7 @@ private:
     const BiomeColors* biomeColors_ = nullptr;
     float farRadius_ = 0;
     int farMinY_ = 0;
+    u32 farEpoch_ = 0;
     std::vector<std::thread> farThreads_;
     std::condition_variable farCv_;
     std::vector<FarJob> farQueue_;  // sorted: next job at the back

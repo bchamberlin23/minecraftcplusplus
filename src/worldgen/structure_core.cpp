@@ -467,21 +467,60 @@ u16 Piece::reorient(PlaceCtx& c, const BlockPos& p, u16 state) {
     return c.b.with(state, "facing", lock);
 }
 
-bool Piece::createChest(PlaceCtx& c, const BBox& chunkBB, RandomSource& r, const BlockPos& p, std::optional<u16> state) {
+bool Piece::createChest(PlaceCtx& c, const BBox& chunkBB, RandomSource& r, const BlockPos& p, std::optional<u16> state,
+                        std::string_view lootTable) {
     if (!chunkBB.isInside(p) || c.b.is(c.get(p), "minecraft:chest")) return false;
     const u16 s = state ? *state : reorient(c, p, c.b.def("minecraft:chest"));
     c.set(p, s);
-    if (c.b.is(c.get(p), "minecraft:chest")) r.nextLong();  // ChestBlockEntity.setLootTable seed
+    if (c.b.is(c.get(p), "minecraft:chest")) c.setLootTable(p, lootTable, r.nextLong());  // ChestBlockEntity.setLootTable
     return true;
 }
 
-bool Piece::createDispenser(PlaceCtx& c, const BBox& chunkBB, RandomSource& r, int x, int y, int z, Direction facing) {
+bool Piece::createDispenser(PlaceCtx& c, const BBox& chunkBB, RandomSource& r, int x, int y, int z, Direction facing,
+                            std::string_view lootTable) {
     const BlockPos p = worldPos(x, y, z);
     if (!chunkBB.isInside(p) || c.b.is(c.get(p), "minecraft:dispenser")) return false;
     placeBlock(c, c.b.with(c.b.def("minecraft:dispenser"), "facing", facing), x, y, z, chunkBB);
-    if (c.b.is(c.get(p), "minecraft:dispenser")) r.nextLong();
+    if (c.b.is(c.get(p), "minecraft:dispenser")) c.setLootTable(p, lootTable, r.nextLong());
     return true;
 }
+
+void PlaceCtx::setLootTable(const BlockPos& p, std::string_view table, i64 seed) const {
+    if (table.empty()) return;
+    NbtValue* be = level.blockEntity(p, blockEntityId(b.blockName(level.block(p))));
+    if (!be) return;
+    NbtValue t = NbtValue::make(TagString);
+    t.s = table;
+    be->set("LootTable", std::move(t));
+    NbtValue s = NbtValue::make(TagLong);
+    s.i = seed;
+    be->set("LootTableSeed", std::move(s));
+}
+
+void PlaceCtx::setSpawner(const BlockPos& p, std::string_view entity) const {
+    NbtValue* be = level.blockEntity(p, "minecraft:mob_spawner");
+    if (!be) return;
+    // BaseSpawner's defaults as it saves them, with the entity as the next spawn.
+    for (const auto& [k, v] : {std::pair{"Delay", 20}, std::pair{"MinSpawnDelay", 200}, std::pair{"MaxSpawnDelay", 800},
+                               std::pair{"SpawnCount", 4}, std::pair{"MaxNearbyEntities", 6}, std::pair{"RequiredPlayerRange", 16},
+                               std::pair{"SpawnRange", 4}}) {
+        NbtValue n = NbtValue::make(TagShort);
+        n.i = v;
+        be->set(k, std::move(n));
+    }
+    NbtValue id = NbtValue::make(TagString);
+    id.s = entity;
+    NbtValue e = NbtValue::make(TagCompound);
+    e.set("id", std::move(id));
+    NbtValue data = NbtValue::make(TagCompound);
+    data.set("entity", std::move(e));
+    be->set("SpawnData", std::move(data));
+    NbtValue potentials = NbtValue::make(TagList);
+    potentials.listType = TagCompound;
+    be->set("SpawnPotentials", std::move(potentials));
+}
+
+void PlaceCtx::addEntity(NbtValue tag) const { level.addEntity(std::move(tag)); }
 
 // ---- PiecesBuilder ----------------------------------------------------------------------------------------
 
@@ -622,7 +661,27 @@ const FeatureEnv* StructureEnv::featureEnv() const { return features ? &features
 
 float StructureEnv::temperature(u16 biome, const BlockPos& p) const { return features ? features->temperature(biome, p) : 0.5f; }
 
-void PlaceCtx::markPostProcess(const BlockPos& p) const { env.markPostProcess(p); }
+void PlaceCtx::markPostProcess(const BlockPos& p) const {
+    env.markPostProcess(p);
+    level.markPostProcess(p);
+}
+
+std::string blockEntityId(std::string_view block) {
+    if (block.starts_with("minecraft:")) block.remove_prefix(10);
+    if (block.ends_with("copper_chest")) return "minecraft:chest";
+    if (block.ends_with("shulker_box")) return "minecraft:shulker_box";
+    if (block == "suspicious_sand" || block == "suspicious_gravel") return "minecraft:brushable_block";
+    if (block == "spawner") return "minecraft:mob_spawner";
+    if (block.ends_with("_wall_sign") || (block.ends_with("_sign") && !block.ends_with("hanging_sign"))) return "minecraft:sign";
+    if (block.ends_with("hanging_sign")) return "minecraft:hanging_sign";
+    if (block.ends_with("_banner")) return "minecraft:banner";
+    if (block.ends_with("_skull") || block.ends_with("_head")) return "minecraft:skull";
+    if (block.ends_with("_shelf")) return "minecraft:shelf";
+    if (block == "soul_campfire") return "minecraft:campfire";
+    if (block == "bee_nest") return "minecraft:beehive";
+    if (block == "chain_command_block" || block == "repeating_command_block") return "minecraft:command_block";
+    return "minecraft:" + std::string(block);
+}
 
 void StructureEnv::markPostProcess(const BlockPos& p) const {
     const u64 k = (u64(u32(p.x >> 4)) << 32) | u32(p.z >> 4);

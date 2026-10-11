@@ -29,6 +29,12 @@ constexpr int kDirOffset[6][3] = {{0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, 
 enum class Heightmap : u8 { WorldSurfaceWG, OceanFloorWG, WorldSurface, MotionBlocking, MotionBlockingNoLeaves, OceanFloor };
 
 class GenRegion;
+namespace st {
+class StructureEnv;  // structure_core.h
+}
+
+// BlockState.hasBlockEntity, by block name (the blocks of BlockEntityTypes).
+bool blockHasEntity(std::string_view blockName);
 
 // Block facts features need, cached per block state id. Thread-safe.
 class BlockFacts {
@@ -68,14 +74,27 @@ public:
               const NoiseBiomeFn& noiseBiome, i64 seed, int seaLevel);
     u16 block(int x, int y, int z) const;
     u16 block(const BlockPos& p) const { return block(p.x, p.y, p.z); }
-    bool setBlock(const BlockPos& p, u16 id);  // keeps all heightmaps up to date
+    bool setBlock(const BlockPos& p, u16 id);  // keeps all heightmaps up to date; drops a block entity it replaces
+    // The block entity tag at p ({"id", "x", "y", "z"} when first asked for; null outside the region), like
+    // WorldGenRegion.getBlockEntity creating it, for what a feature or piece configures on it.
+    NbtValue* blockEntity(const BlockPos& p, std::string_view id);
+    // WorldGenRegion.addFreshEntity: the entity tag (with its "Pos") goes to the chunk it is in.
+    void addEntity(NbtValue tag);
+    void markPostProcess(const BlockPos& p);  // ChunkAccess.markPosForPostProcessing
+    // WorldGenRegion.getBlockTicks / getFluidTicks: ticks saved with the chunk (state: the block or fluid's).
+    void scheduleTick(const BlockPos& p, u16 state, int delay, bool fluid = false);
+    bool hasScheduledTick(const BlockPos& p, u16 state) const;  // a block tick of that state's block
     bool isEmpty(const BlockPos& p) const;     // air
     int height(Heightmap type, int x, int z) const;  // getHeight: one above the top matching block
     u16 biome(const BlockPos& p) const;
     bool inside(const BlockPos& p) const;      // within the 3x3 chunks and the height range
+    const GenChunk& centre() const { return *chunks_[4]; }
     int minY() const;
     int maxY() const;  // exclusive
     int seaLevel() const { return seaLevel_; }
+    // ChunkGenerator.getGenDepth (the noise settings' height: 128 in the nether), set by the decoration.
+    int genDepth() const { return genDepth_ ? genDepth_ : maxY() - minY(); }
+    void setGenDepth(int depth) { genDepth_ = depth; }
     i64 seed() const { return seed_; }
     const BlockFacts& facts() const { return facts_; }
     GenChunk* chunk(int cx, int cz) const;
@@ -87,6 +106,7 @@ private:
     const NoiseBiomeFn& noiseBiome_;
     i64 seed_;
     int seaLevel_;
+    int genDepth_ = 0;
 };
 
 // The decoration random: the game's WorldgenRandom wrapping a XoroshiroRandomSource (bit-based
@@ -182,6 +202,8 @@ public:
     // A placed feature reference or inline object; place() applies its placement modifiers.
     virtual std::shared_ptr<const PlacedFeature> placed(const nlohmann::json& j) const = 0;
     virtual bool placePlaced(const PlacedFeature& f, GenRegion& level, RandomSource& r, const BlockPos& origin) const = 0;
+    // Structure templates and processors for the template and fossil features (null without a generator).
+    virtual const st::StructureEnv* structureEnv() const { return nullptr; }
 };
 
 // Feature types ("minecraft:tree", "minecraft:ore", ...) -> factory from their "config" JSON.
@@ -199,13 +221,19 @@ void registerTreeFeatures(FeatureTypes& types);  // features_trees.cpp
 void registerMiscFeatures(FeatureTypes& types);  // features_misc.cpp
 
 class StructureSystem;  // structures.h
+class ChunkGenerator;   // generator.h
 
 // Biome decoration for a whole dimension (the game's ChunkGenerator.applyBiomeDecoration).
 class FeatureSystem {
 public:
-    // possibleBiomes: the biome source's biomes in its order (FeatureSorter input order).
+    // possibleBiomes: the biome source's biomes in its order (FeatureSorter input order). Sea level and generation
+    // range of the default overworld.
     FeatureSystem(const NoiseState& noise, BlockRegistry& blocks, BiomeTable& biomes,
                   const std::vector<u16>& possibleBiomes);
+    // The decoration of a dimension's generator: its sea level and generation range (WorldGenerationContext), a
+    // flat world's adjusted feature lists (FlatLevelGeneratorSettings.adjustGenerationSettings), the debug world's
+    // block grid (DebugLevelSource.applyBiomeDecoration).
+    FeatureSystem(ChunkGenerator& generator, BlockRegistry& blocks);
     ~FeatureSystem();
     // Decorates chunks[4] (its 8 neighbours must have terrain; features may write into them).
     void decorate(const std::array<GenChunk*, 9>& chunks, const BiomeZoom& zoom, const NoiseBiomeFn& noiseBiome) const;

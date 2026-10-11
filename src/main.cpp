@@ -29,6 +29,7 @@
 #include "world/lighting.h"
 #include "world/save.h"
 #include "world/terrain.h"
+#include "worldgen/dimensions.h"
 #include "worldgen/feature_api.h"
 #include "worldgen/gen_service.h"
 #include "worldgen/gentest.h"
@@ -530,12 +531,17 @@ int wmain(int argc, wchar_t** argv) {
         double(renderer.arenaBytesUsed()) / (1 << 20), double(renderer.arenaBytesTotal()) / (1 << 20),
         renderer.adapterName().c_str());
 
-    // Chunks the save does not have are generated from the world seed with the game's own rules.
+    // Chunks the save does not have are generated from the world seed with the game's own rules: each dimension
+    // with the generator its WorldGenSettings name (noise settings and biome source, flat, debug; data-pack ones).
     std::unique_ptr<wg::DataPack> gamedata;
-    std::unique_ptr<wg::ChunkGenerator> generator;
+    wg::WorldGenSettings genSettings;
+    std::string genDimension;  // the dimension the generators below are for ("" while there are none)
+    std::shared_ptr<wg::ChunkGenerator> generator;  // shared with the far threads (they keep the one they started with)
+    std::mutex generatorMutex;
     std::unique_ptr<wg::FeatureSystem> features;
     std::unique_ptr<wg::StructureSystem> structures;  // villages, mineshafts... placed with the features
     std::unique_ptr<wg::GenService> genService;
+    std::deque<std::unique_ptr<wg::GenChunk>> genBacklog;  // generated chunks waiting for the per-frame budget
     struct FarStop {  // destroyed before the generator the far threads call into
         Terrain& terrain;
         ~FarStop() { terrain.stopFar(); }
@@ -543,65 +549,108 @@ int wmain(int argc, wchar_t** argv) {
     i64 seed = 0;
     std::mt19937_64 titleRandom(std::random_device{}());
     if (const char* s = std::getenv("MCPP_TITLE_SEED")) titleRandom.seed(std::strtoull(s, nullptr, 10));  // tests
-    if (opt.generate && (menu && !titleCached ? (seed = i64(titleRandom()), true) : World::readSeed(worldDir, seed))) {
-        t = Timer();
-        gamedata = std::make_unique<wg::DataPack>();
-        try {  // data packs can change worldgen in ways the generator cannot read: then no local generation
-            if (gamedata->open(jar)) generator = std::make_unique<wg::ChunkGenerator>(*gamedata, registry, seed);
-        } catch (const std::exception& e) {
-            LOG("error: world generation from the data packs failed: %s (the server still generates the world)", e.what());
+    // Saved chunks next to generated ones are read-only neighbours for decoration.
+    auto exists = [&world](int cx, int cz) {
+        std::shared_lock lock(world.mutex());
+        return world.hasChunk(cx, cz);
+    };
+    auto load = [&world, &generator](int cx, int cz, wg::GenChunk& out) {
+        out.init(cx, cz, generator->minY(), generator->height());
+        u16 ids[4096];
+        for (int sy = out.minY >> 4; sy < (out.minY + out.height) >> 4; ++sy) {
+            {  // the lock per section only: a preempted worker holding it for a whole chunk made the frame
+               // thread (inserting chunks) wait a scheduler quantum
+                std::shared_lock lock(world.mutex());
+                const World::Region* r = nullptr;
+                const World::Section* s = world.section(cx, sy, cz, &r);
+                if (!s) continue;
+                World::decode(*r, *s, ids);
+            }
+            for (int i = 0; i < 4096; ++i) out.set(i & 15, sy * 16 + (i >> 8), (i >> 4) & 15, ids[i]);
+        }
+    };
+    // The generator stack of one dimension; the previous one's workers are stopped first. In singleplayer too: the
+    // server sends the chunks it simulates, these fill the view beyond them (and are replaced by the server's).
+    bool farStarted = false;
+    auto startWorldgen = [&](const std::string& dim) {
+        genService.reset();           // joins its workers
+        terrain.setFarActive(false);  // drops the previous dimension's far terrain (running jobs finish unused)
+        genBacklog.clear();
+        structures.reset(), features.reset();
+        {
+            std::lock_guard lock(generatorMutex);
             generator.reset();
         }
-        if (generator && generator->ok()) {
-            // Saved chunks next to generated ones are read-only neighbours for decoration.
-            auto exists = [&world](int cx, int cz) {
-                std::shared_lock lock(world.mutex());
-                return world.hasChunk(cx, cz);
-            };
-            auto load = [&world, &generator](int cx, int cz, wg::GenChunk& out) {
-                out.init(cx, cz, generator->minY(), generator->height());
-                u16 ids[4096];
-                for (int sy = out.minY >> 4; sy < (out.minY + out.height) >> 4; ++sy) {
-                    {  // the lock per section only: a preempted worker holding it for a whole chunk made the frame
-                       // thread (inserting chunks) wait a scheduler quantum
-                        std::shared_lock lock(world.mutex());
-                        const World::Region* r = nullptr;
-                        const World::Section* s = world.section(cx, sy, cz, &r);
-                        if (!s) continue;
-                        World::decode(*r, *s, ids);
-                    }
-                    for (int i = 0; i < 4096; ++i) out.set(i & 15, sy * 16 + (i >> 8), (i >> 4) & 15, ids[i]);
-                }
-            };
-            // In singleplayer too: the server sends the chunks it simulates, these fill the view beyond them
-            // (and are replaced by the server's when it sends them).
-            Timer ft;
-            features = std::make_unique<wg::FeatureSystem>(generator->noise(), registry, generator->biomes(),
-                                                           generator->possibleBiomes());
-            LOG("features    %6.1f ms", ft.ms());
-            structures = std::make_unique<wg::StructureSystem>(*generator, features.get(), registry, seed);
-            if (structures->ok()) features->setStructures(structures.get());
-            const char* genThreads = std::getenv("MCPP_GEN_THREADS");  // profiling override
+        genDimension.clear();
+        const wg::DimensionSpec* spec = genSettings.find(dim);
+        if (!spec) return LOG("worldgen: no generator for %s", dim.c_str()), false;
+        auto fresh = std::make_shared<wg::ChunkGenerator>(*gamedata, registry, genSettings.seed, *spec);
+        if (!fresh->ok()) return false;
+        {
+            std::lock_guard lock(generatorMutex);
+            generator = std::move(fresh);
+        }
+        Timer ft;
+        try {  // data packs can change worldgen in ways the generator cannot read: then no local generation
+            features = std::make_unique<wg::FeatureSystem>(*generator, registry);
+            if (genSettings.generateStructures) {
+                structures = std::make_unique<wg::StructureSystem>(*generator, features.get(), registry, genSettings.seed);
+                if (structures->ok()) features->setStructures(structures.get());
+            }
+        } catch (const std::exception& e) {
+            LOG("error: decoration of %s from the data packs failed: %s (far terrain only)", dim.c_str(), e.what());
+            structures.reset(), features.reset();
+        }
+        LOG("features    %6.1f ms  %s (%s)", ft.ms(), dim.c_str(), spec->generator.value("type", std::string("?")).c_str());
+        const char* genThreads = std::getenv("MCPP_GEN_THREADS");  // profiling override
+        if (features)
             genService = std::make_unique<wg::GenService>(*generator, features.get(), exists, load,
                                                           genThreads ? unsigned(std::atoi(genThreads))
                                                                      : std::max(2u, Jobs::threadCount() / 2));
-            // Beyond the generated chunks: terrain approximated per region at LOD resolution.
+        // Beyond the generated chunks: terrain approximated per region at LOD resolution.
+        if (!farStarted)
             terrain.enableFar(
-                [&generator](int rx, int rz, int level, const FarColumns* coarser, FarColumns& out) {
+                [&generator, &generatorMutex](int rx, int rz, int level, const FarColumns* coarser, FarColumns& out) {
+                    std::shared_ptr<wg::ChunkGenerator> gen;
+                    {
+                        std::lock_guard lock(generatorMutex);
+                        gen = generator;
+                    }
+                    if (!gen) return;
                     thread_local wg::DensityContext ctx;
                     thread_local std::vector<u16> genBiomes;
                     thread_local std::vector<u8> toWorld;  // generator biome id -> World biome id
-                    generator->generateCoarse(rx, rz, level, out, ctx, coarser, nullptr, &genBiomes);
+                    thread_local const wg::ChunkGenerator* owner = nullptr;
+                    if (owner != gen.get()) toWorld.clear(), ctx.clear(), owner = gen.get();
+                    gen->generateCoarse(rx, rz, level, out, ctx, coarser, nullptr, &genBiomes);
                     std::vector<u8>& biomes = out.biomes;
                     biomes.resize(genBiomes.size());
                     for (size_t i = 0; i < genBiomes.size(); ++i) {
                         const u16 b = genBiomes[i];
                         if (b >= toWorld.size()) toWorld.resize(size_t(b) + 1, 0);
-                        if (!toWorld[b]) toWorld[b] = u8(World::biomeId(generator->biomes().name(b)) + 1);
+                        if (!toWorld[b]) toWorld[b] = u8(World::biomeId(gen->biomes().name(b)) + 1);
                         biomes[i] = u8(toWorld[b] - 1);
                     }
                 },
                 generator->minY(), std::max(2u, Jobs::threadCount() / 4));
+        farStarted = true;
+        terrain.setFarActive(true);
+        genDimension = dim;
+        return true;
+    };
+    if (opt.generate && (menu && !titleCached ? (seed = i64(titleRandom()), true) : World::readSeed(worldDir, seed))) {
+        t = Timer();
+        gamedata = std::make_unique<wg::DataPack>();
+        try {
+            if (gamedata->open(jar)) {
+                if (menu || !wg::readWorldGenSettings(worldDir, *gamedata, genSettings))
+                    genSettings = wg::defaultWorldGenSettings(*gamedata, seed);
+                startWorldgen("minecraft:overworld");  // the save's dimension; play mode switches with the server's
+            }
+        } catch (const std::exception& e) {
+            LOG("error: world generation from the data packs failed: %s (the server still generates the world)", e.what());
+            genService.reset(), structures.reset(), features.reset(), generator.reset();
+            genDimension.clear();
         }
         LOG("worldgen %7.1f ms  seed %lld, %s", t.ms(), (long long)seed,
             genService                       ? "generating missing chunks in the background"
@@ -618,7 +667,6 @@ int wmain(int argc, wchar_t** argv) {
             },
             gameDataVersion(jar));
     double genScan = 0, evictScan = 0;
-    std::deque<std::unique_ptr<wg::GenChunk>> genBacklog;  // generated chunks waiting for the per-frame budget
     Lighting genLighting(world, registry);
 
     if (menu && !titleCached && generator && generator->ok()) {
@@ -851,8 +899,14 @@ int wmain(int argc, wchar_t** argv) {
         if (session && session->dimension().name != lastDimension) {
             lastDimension = session->dimension().name;
             renderer.resetTemporal();
+            // Each dimension is generated (chunks beyond the server's, far terrain) by its own generator.
+            if (gamedata && lastDimension != genDimension && !(menu && ui.switching())) {
+                const Timer tw;
+                startWorldgen(lastDimension);
+                LOG("worldgen %7.1f ms  now generating %s", tw.ms(), lastDimension.c_str());
+            }
         }
-        if (session) terrain.setFarActive(session->dimension().name == "minecraft:overworld");
+        if (session) terrain.setFarActive(!genDimension.empty() && session->dimension().name == genDimension);
         if (haveEntities) entities.frame(dt);
         if (haveEntities) entities.viewEntity = game.cameraMode == 0 ? game.cameraEntity : -1;  // set_camera
         ui.beginFrame(dt);  // UI input first: an open screen takes the game's input
@@ -884,7 +938,7 @@ int wmain(int argc, wchar_t** argv) {
         const double preMs = frameTop.ms();
         Timer phase;
         double genMs = 0, terrainMs = 0;
-        if (genService && (!session || session->dimension().name == "minecraft:overworld") && !(menu && ui.switching())) {
+        if (genService && (!session || session->dimension().name == genDimension) && !(menu && ui.switching())) {
             // Play mode: chunks far behind the player leave memory (the server owns the world; chunks it no longer
             // sends and locally generated ones come back when needed). Kept, they grew ~150 MB/s while travelling.
             if (session && now - evictScan > 2.0) {
