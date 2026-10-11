@@ -460,7 +460,7 @@ int runFriendsSelfTest() {
 int runFriendsNode(int argc, wchar_t** argv) {
     std::string name = "Node", addCode, joinCode, inviteCode;
     fs::path dir;
-    bool printCode = false, autoAccept = false, hostEcho = false, checkName = false;
+    bool printCode = false, autoAccept = false, hostEcho = false, checkName = false, joinNow = false;
     double seconds = 120, transferMb = 4;
     std::vector<std::string> relays;
     auto narrow = [](const wchar_t* w) { return fs::path(w).string(); };
@@ -475,6 +475,7 @@ int runFriendsNode(int argc, wchar_t** argv) {
         else if (a == L"--host-echo") hostEcho = true;
         else if (a == L"--invite") inviteCode = next();
         else if (a == L"--join") joinCode = next();
+        else if (a == L"--join-now") joinNow = true;
         else if (a == L"--transfer-mb") transferMb = std::atof(next().c_str());
         else if (a == L"--check-name-gate") checkName = true;
         else if (a == L"--seconds") seconds = std::atof(next().c_str());
@@ -487,7 +488,7 @@ int runFriendsNode(int argc, wchar_t** argv) {
             }
         } else {
             LOG("usage: --friends-node [--dir <dir>] [--name <name>] [--print-code] [--add <code>] [--auto-accept]\n"
-                "                      [--host-echo] [--invite <code>] [--join <code> [--transfer-mb <n>] [--check-name-gate]]\n"
+                "                      [--host-echo] [--invite <code>] [--join <code> [--join-now] [--transfer-mb <n>] [--check-name-gate]]\n"
                 "                      [--relays wss://a,wss://b] [--seconds <n>]");
             return 2;
         }
@@ -541,7 +542,7 @@ int runFriendsNode(int argc, wchar_t** argv) {
                 }
         if (!joined)
             for (const FriendInfo& fr : s.friends)
-                if (fr.pub == joinKey && (fr.joinable || fr.invitedMe)) {
+                if (fr.pub == joinKey && (fr.joinable || fr.invitedMe || (joinNow && fr.presence != Presence::Offline))) {
                     joined = true;
                     LOG("node: %s is %s; joining", fr.name.c_str(), fr.joinable ? "joinable" : "inviting us");
                     std::string error;

@@ -108,7 +108,7 @@ void RelayPool::start(const std::vector<std::string>& urls, EventFn onEvent) {
 }
 
 void RelayPool::sendLoop() {
-    constexpr double kInterval = 0.2;  // per relay: at most five events a second
+    constexpr double kInterval = 0.3;  // per relay: about three events a second (nostr.mom, damus rate limit bursts)
     while (running_) {
         Sleep(25);
         const double now = nowSeconds();
