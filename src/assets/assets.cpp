@@ -236,7 +236,12 @@ F3 applyElementRotation(const Element& e, F3 p, bool isNormal) {
     return v + o;
 }
 
-void buildMips(u8* layer) {
+// cutout: alpha-tested texture (leaves, plants): each mip's alpha is scaled so the share of texels passing the 0.5
+// test stays that of the full-size texture (otherwise distant foliage thins out into see-through dark holes).
+void buildMips(u8* layer, bool cutout = false) {
+    int coverage = 0;  // texels with alpha >= 128 in the full-size texture
+    for (int p = 0; p < kTexSize * kTexSize; ++p) coverage += layer[p * 4 + 3] >= 128;
+    const float target = float(coverage) / float(kTexSize * kTexSize);
     for (int m = 1; m < kTexMips; ++m) {
         int s = kTexSize >> m;
         const u8* src = layer + kTexMipOffset[m - 1];
@@ -257,6 +262,18 @@ void buildMips(u8* layer) {
                 for (int c = 0; c < 3; ++c) o[c] = u8(alpha > 0 ? rgb[c] / alpha + 0.5f : plain[c] / 4 + 0.5f);
                 o[3] = u8(alpha / 4 * 255 + 0.5f);
             }
+        if (!cutout || coverage == 0) continue;
+        auto covered = [&](float scale) {
+            int n = 0;
+            for (int p = 0; p < s * s; ++p) n += float(dst[p * 4 + 3]) * scale >= 127.5f;
+            return float(n) / float(s * s);
+        };
+        float lo = 0.0f, hi = 8.0f;
+        for (int it = 0; it < 16; ++it) {
+            const float mid = (lo + hi) * 0.5f;
+            (covered(mid) < target ? lo : hi) = mid;
+        }
+        for (int p = 0; p < s * s; ++p) dst[p * 4 + 3] = u8(std::min(255.0f, float(dst[p * 4 + 3]) * hi + 0.5f));
     }
 }
 
@@ -798,13 +815,13 @@ bool BlockRegistry::init(const fs::path& jarPath, const GameReports* reports) {
             partial |= a >= 8 && a <= 247;
         }
         im.texClass[layer] = partial ? LayerTranslucent : cut ? LayerCutout : LayerOpaque;
-        buildMips(base);
+        buildMips(base, im.texClass[layer] == LayerCutout);
         if (!decoded[i].frames.empty()) {
             Impl::Animation a{layer, extraLayer, {}, 0};
             for (const auto& frame : decoded[i].frames) {
                 u8* fb = &im.pixels[size_t(extraLayer) * kTexLayerBytes];
                 if (!frame.empty()) std::memcpy(fb, frame.data(), frame.size());
-                buildMips(fb);
+                buildMips(fb, im.texClass[layer] == LayerCutout);
                 im.texClass[extraLayer] = im.texClass[layer];
                 ++extraLayer;
             }

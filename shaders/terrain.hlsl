@@ -65,6 +65,8 @@ float cornerSky(CubeVertex v) { return float((v.q.z >> (v.corner * 8)) & 0xFF) /
 float cornerBlock(CubeVertex v) { return float((v.q.w >> (v.corner * 8)) & 0xFF) / 16.0; }
 float cornerAo(CubeVertex v) { return 1.0 - 0.2 * float((v.q.y >> (12 + v.corner * 2)) & 3); }
 uint colorIndex(CubeVertex v) { return ((v.q.y >> 20) << 4) | ((v.q.x >> 25) & 15); }
+// Texture coordinates + layer; coarse LOD nodes mark theirs negative for the flat-colour path (sampleTerrain).
+float3 lodUvl(CubeVertex v, float layer) { return float3(v.st, v.origin.w > 0 ? -(layer + 1.0) : layer); }
 
 // ---- vanilla ---------------------------------------------------------------------------------------------
 
@@ -72,7 +74,7 @@ VSOut TerrainVS(uint vid : SV_VertexID) {
     CubeVertex v = pullCube(vid);
     VSOut o;
     o.pos = mul(gViewProj, float4(v.rel, 1));
-    o.uvl = float3(v.st, float(gTextureRemap[v.q.y & 0xFFF]));
+    o.uvl = lodUvl(v, float(gTextureRemap[v.q.y & 0xFFF]));
     // Smooth lighting: this corner's light (4.4 fixed point) and ambient occlusion (1 - 0.2 per solid cell).
     o.color = tintColor(colorIndex(v)) * (kShade[v.face] * cornerAo(v)) * lightColorLevels(cornerSky(v), cornerBlock(v));
     o.fog = fogFactor(v.rel);
@@ -123,7 +125,7 @@ GbufVSOut TerrainGbufVS(uint vid : SV_VertexID) {
     float3 rel = v.rel + waveOffset(v.rel, matWave(m) == 3 ? 3 : 0, 1);
     GbufVSOut o;
     o.pos = mul(gViewProj, float4(rel, 1));
-    o.uvl = float3(v.st, float(gTextureRemap[layer]));
+    o.uvl = lodUvl(v, float(gTextureRemap[layer]));
     o.tint = tintColor(colorIndex(v));
     o.light = float3(cornerSky(v), cornerBlock(v), cornerAo(v));
     o.info = v.face | (matClass(m) << 4);
@@ -144,12 +146,12 @@ GbufTargets gbufWrite(float3 albedo, float3 n, float3 light, uint mat) {
 }
 
 GbufTargets TerrainGbufPS(GbufVSOut i) {
-    float4 c = sampleBlock(i.uvl);
+    float4 c = sampleTerrain(i.uvl);
     return gbufWrite(c.rgb * i.tint, kNormal[i.info & 7], i.light, i.info >> 4);
 }
 
 GbufTargets TerrainGbufPSCutout(GbufVSOut i) {
-    float4 c = sampleBlock(i.uvl);
+    float4 c = sampleTerrain(i.uvl);
     clip(c.a - 0.5);
     return gbufWrite(c.rgb * i.tint, kNormal[i.info & 7], i.light, i.info >> 4);
 }

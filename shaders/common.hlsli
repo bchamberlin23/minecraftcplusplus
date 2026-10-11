@@ -38,6 +38,21 @@ SamplerState gSampler : register(s0);
 // Block textures with the texture LOD bias of the active upscaler (gMisc.y, float bits; 0 at native resolution).
 float4 sampleBlock(float3 uvl) { return gTextures.SampleBias(gSampler, uvl, asfloat(gMisc.y)); }
 
+// Coarse LOD faces (the vertex shader stores their layer as -(layer + 1)): like Distant Horizons, the texture's
+// average colour (its 1x1 mip: alpha-weighted, so leaves keep their green) with no holes, plus a little per-block
+// noise in place of texture detail, faded out where blocks get smaller than a pixel.
+float lodRand(float2 p) { return frac(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453); }
+float4 sampleTerrain(float3 uvl) {
+    if (uvl.z >= 0) return sampleBlock(uvl);
+    float3 c = gTextures.SampleLevel(gSampler, float3(uvl.xy, -uvl.z - 1.0), 4.0).rgb;
+    float lum = (c.r + c.g + c.b) / 3.0;
+    float amp = 0.06 * (1.0 - (lum * 2.0 - 1.0) * (lum * 2.0 - 1.0));
+    float fade = saturate(1.5 - 1.5 * max(fwidth(uvl.x), fwidth(uvl.y)));  // blocks per pixel
+    float r = (lodRand(floor(uvl.xy)) * 2.0 - 1.0) * amp * fade;
+    c = saturate(c + (r > 0 ? (1.0 - c) * r : c * r));
+    return float4(c, 1);
+}
+
 struct VSOut {
     float4 pos : SV_Position;
     float3 uvl : TEXCOORD0;  // uv + texture layer
@@ -61,7 +76,7 @@ float fogFactor(float3 rel) {
 }
 
 float4 shadePixel(VSOut i) {
-    float4 c = sampleBlock(i.uvl);
+    float4 c = sampleTerrain(i.uvl);
     c.rgb = lerp(c.rgb * i.color, gFogColor.rgb, i.fog);
     return c;
 }

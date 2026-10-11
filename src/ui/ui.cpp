@@ -1019,6 +1019,23 @@ void Ui::beginFrame(double dt) {
         switch (e.code) {
             case VK_ESCAPE: s.openScreen(Screen::Pause); break;
             case VK_F1: s.hudHidden = !s.hudHidden; break;
+            case VK_F2: {  // Screenshot: %APPDATA%\minecraftCplusplus\screenshots\<date>.png (the game uses .minecraft)
+                const wchar_t* appdata = _wgetenv(L"APPDATA");
+                const fs::path dir = fs::path(appdata ? appdata : L".") / L"minecraftCplusplus" / L"screenshots";
+                std::error_code ec;
+                fs::create_directories(dir, ec);
+                SYSTEMTIME t;
+                GetLocalTime(&t);
+                char name[64];
+                std::snprintf(name, sizeof(name), "%04u-%02u-%02u_%02u.%02u.%02u.png", t.wYear, t.wMonth, t.wDay, t.wHour,
+                              t.wMinute, t.wSecond);
+                s.shotPath = dir / name;
+                s.shotPending = true;
+                Style link;
+                link.underlined = 1;
+                s.addChat(translatable("screenshot.success", {Text(name, link)}, s.lang()));
+                break;
+            }
             case 'E':
                 s.openScreen(s.creative() ? Screen::Creative : Screen::Inventory);
                 break;
