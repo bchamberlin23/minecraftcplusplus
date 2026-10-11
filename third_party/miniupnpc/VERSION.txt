@@ -1,0 +1,1 @@
+miniupnp/miniupnp miniupnpc_2_3_3 (bf4215a): include/, the library sources, LICENSE (BSD-3-Clause); miniupnpcstrings.h written for Windows

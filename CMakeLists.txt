@@ -15,6 +15,31 @@ set(LIBDEFLATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(LIBDEFLATE_COMPRESSION_SUPPORT ON CACHE BOOL "" FORCE)  # needed to write region files
 add_subdirectory(third_party/libdeflate EXCLUDE_FROM_ALL)
 
+# Friends (src/social): secp256k1 keys (BIP340 Schnorr, ECDH), ICE (libjuice), UPnP (miniupnpc), KCP. Vendored sources,
+# see each folder's VERSION.txt and license.
+add_library(mcpp_secp256k1 STATIC third_party/secp256k1/src/secp256k1.c third_party/secp256k1/src/precomputed_ecmult.c
+  third_party/secp256k1/src/precomputed_ecmult_gen.c)
+target_include_directories(mcpp_secp256k1 PUBLIC third_party/secp256k1/include)
+target_compile_definitions(mcpp_secp256k1 PRIVATE ENABLE_MODULE_ECDH=1 ENABLE_MODULE_EXTRAKEYS=1 ENABLE_MODULE_SCHNORRSIG=1
+  PUBLIC SECP256K1_STATIC)
+file(GLOB JUICE_SOURCES CONFIGURE_DEPENDS third_party/libjuice/src/*.c)
+add_library(mcpp_juice STATIC ${JUICE_SOURCES})
+target_include_directories(mcpp_juice PUBLIC third_party/libjuice/include PRIVATE third_party/libjuice/include/juice)
+target_compile_definitions(mcpp_juice PUBLIC JUICE_STATIC PRIVATE JUICE_EXPORTS USE_NETTLE=0 RELEASE=1 WIN32_LEAN_AND_MEAN
+  NOMINMAX _CRT_SECURE_NO_WARNINGS)
+target_link_libraries(mcpp_juice PRIVATE ws2_32 bcrypt)
+file(GLOB MINIUPNPC_SOURCES CONFIGURE_DEPENDS third_party/miniupnpc/src/*.c)
+add_library(mcpp_miniupnpc STATIC ${MINIUPNPC_SOURCES})
+target_include_directories(mcpp_miniupnpc PUBLIC third_party/miniupnpc/include PRIVATE third_party/miniupnpc/src)
+target_compile_definitions(mcpp_miniupnpc PUBLIC MINIUPNP_STATICLIB PRIVATE _WIN32_WINNT=0x0A00 _CRT_SECURE_NO_WARNINGS
+  _WINSOCK_DEPRECATED_NO_WARNINGS)
+target_link_libraries(mcpp_miniupnpc PRIVATE ws2_32 iphlpapi)
+add_library(mcpp_kcp STATIC third_party/kcp/ikcp.c)
+target_include_directories(mcpp_kcp PUBLIC third_party/kcp)
+foreach(lib mcpp_secp256k1 mcpp_juice mcpp_miniupnpc mcpp_kcp)
+  target_compile_options(${lib} PRIVATE /W0 /utf-8)
+endforeach()
+
 # --- shaders: compiled by DXC at build time and embedded as byte arrays -------
 find_program(DXC dxc REQUIRED HINTS "C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64")
 set(SHADER_OUT ${CMAKE_BINARY_DIR}/shaders)
@@ -132,7 +157,8 @@ set_source_files_properties(${WORLDGEN_SOURCES} PROPERTIES COMPILE_OPTIONS "/fp:
 add_executable(minecraftCplusplus ${SOURCES} ${SHADER_HEADERS})
 target_include_directories(minecraftCplusplus PRIVATE src third_party ${SHADER_OUT}
   third_party/libdeflate)
-target_link_libraries(minecraftCplusplus PRIVATE libdeflate_static d3d12 dxgi dxguid ws2_32 bcrypt)
+target_link_libraries(minecraftCplusplus PRIVATE libdeflate_static d3d12 dxgi dxguid ws2_32 bcrypt
+  mcpp_secp256k1 mcpp_juice mcpp_miniupnpc mcpp_kcp winhttp iphlpapi)
 
 # --- vendor upscalers / frame generation (src/render/upscalers, SDKs from tools/fetch_sdks.ps1) ----------------
 # Headers live in third_party; the signed DLLs are loaded at runtime (each SDK optional). XeSS links its import
@@ -159,7 +185,7 @@ endforeach()
 add_custom_command(TARGET minecraftCplusplus POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:minecraftCplusplus>/licenses VERBATIM)
 foreach(lic streamline/license.txt streamline/nvngx_dlss.license.txt streamline/reflex.license.txt
-            fidelityfx/license.md xess/LICENSE.txt)
+            fidelityfx/license.md xess/LICENSE.txt secp256k1/COPYING libjuice/LICENSE miniupnpc/LICENSE kcp/LICENSE)
   if(EXISTS ${CMAKE_SOURCE_DIR}/third_party/${lic})
     string(REPLACE "/" "_" licName ${lic})
     add_custom_command(TARGET minecraftCplusplus POST_BUILD

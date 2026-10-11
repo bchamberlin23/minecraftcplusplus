@@ -1,0 +1,1 @@
+paullouisageneau/libjuice v1.7.4 (b89c792): include/, src/, LICENSE (MPL-2.0)
