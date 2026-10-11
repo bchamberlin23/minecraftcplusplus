@@ -133,141 +133,8 @@ Widget makeWidget(UiState& s, const Adv& a) {
     return w;
 }
 
-// TreeNodePosition (Buchheim / Walker tidy tree, as the game runs it on each displayed root): x = depth, y = row.
-// Children of advancements without a display are attached to the nearest displayed ancestor. Sibling order:
-// insertion order (the game iterates an identity hash set, so its own order is arbitrary).
-struct LayoutNode {
-    Adv* adv = nullptr;
-    int parent = -1, previousSibling = -1, childIndex = 0;
-    std::vector<int> children;
-    int ancestor = -1, thread = -1;
-    int x = 0;
-    float y = -1, mod = 0, change = 0, shift = 0;
-};
-struct TreeLayout {
-    std::vector<LayoutNode> n;
-    std::unordered_map<std::string, std::vector<Adv*>> kids;  // advancement id -> children (insertion order)
-
-    int make(Adv* a, int parent, int previous, int childIndex, int x) {
-        const int i = int(n.size());
-        n.push_back({});
-        n[i].adv = a, n[i].parent = parent, n[i].previousSibling = previous, n[i].childIndex = childIndex;
-        n[i].ancestor = i, n[i].x = x;
-        int prev = -1;
-        for (Adv* c : kids[a->id]) prev = addChild(i, c, prev);
-        return i;
-    }
-    int addChild(int self, Adv* a, int previous) {
-        if (a->hasDisplay) {
-            const int c = make(a, self, previous, int(n[self].children.size()) + 1, n[self].x + 1);
-            n[self].children.push_back(c);
-            return c;
-        }
-        for (Adv* c : kids[a->id]) previous = addChild(self, c, previous);
-        return previous;
-    }
-    int previousOrThread(int i) const { return n[i].thread >= 0 ? n[i].thread : n[i].children.empty() ? -1 : n[i].children.front(); }
-    int nextOrThread(int i) const { return n[i].thread >= 0 ? n[i].thread : n[i].children.empty() ? -1 : n[i].children.back(); }
-    void firstWalk(int i) {
-        LayoutNode& v = n[i];
-        if (v.children.empty()) {
-            v.y = v.previousSibling >= 0 ? n[v.previousSibling].y + 1.0f : 0.0f;
-            return;
-        }
-        int defaultAncestor = -1;
-        for (int c : std::vector<int>(v.children)) {
-            firstWalk(c);
-            defaultAncestor = apportion(c, defaultAncestor < 0 ? c : defaultAncestor);
-        }
-        executeShifts(i);
-        LayoutNode& w = n[i];
-        const float midpoint = (n[w.children.front()].y + n[w.children.back()].y) / 2.0f;
-        if (w.previousSibling >= 0) w.y = n[w.previousSibling].y + 1.0f, w.mod = w.y - midpoint;
-        else w.y = midpoint;
-    }
-    float secondWalk(int i, float offsetY, int depth, float min) {
-        n[i].y += offsetY, n[i].x = depth;
-        if (n[i].y < min) min = n[i].y;
-        for (int c : n[i].children) min = secondWalk(c, offsetY + n[i].mod, depth + 1, min);
-        return min;
-    }
-    void thirdWalk(int i, float offsetY) {
-        n[i].y += offsetY;
-        for (int c : n[i].children) thirdWalk(c, offsetY);
-    }
-    void executeShifts(int i) {
-        float shift = 0, change = 0;
-        for (int k = int(n[i].children.size()) - 1; k >= 0; --k) {
-            LayoutNode& c = n[n[i].children[size_t(k)]];
-            c.y += shift, c.mod += shift;
-            change += c.change;
-            shift += c.shift + change;
-        }
-    }
-    int apportion(int self, int defaultAncestor) {
-        if (n[self].previousSibling < 0) return defaultAncestor;
-        int insideRight = self, outsideRight = self;
-        int insideLeft = n[self].previousSibling;
-        int outsideLeft = n[n[self].parent].children.front();
-        float sir = n[self].mod, sor = n[self].mod, sil = n[insideLeft].mod, sol = n[outsideLeft].mod;
-        while (nextOrThread(insideLeft) >= 0 && previousOrThread(insideRight) >= 0) {
-            insideLeft = nextOrThread(insideLeft);
-            insideRight = previousOrThread(insideRight);
-            outsideLeft = previousOrThread(outsideLeft);
-            outsideRight = nextOrThread(outsideRight);
-            n[outsideRight].ancestor = self;
-            const float shift = n[insideLeft].y + sil - (n[insideRight].y + sir) + 1.0f;
-            if (shift > 0) {
-                moveSubtree(getAncestor(insideLeft, self, defaultAncestor), self, shift);
-                sir += shift, sor += shift;
-            }
-            sil += n[insideLeft].mod, sir += n[insideRight].mod, sol += n[outsideLeft].mod, sor += n[outsideRight].mod;
-        }
-        if (nextOrThread(insideLeft) >= 0 && nextOrThread(outsideRight) < 0) {
-            n[outsideRight].thread = nextOrThread(insideLeft);
-            n[outsideRight].mod += sil - sor;
-        } else {
-            if (previousOrThread(insideRight) >= 0 && previousOrThread(outsideLeft) < 0) {
-                n[outsideLeft].thread = previousOrThread(insideRight);
-                n[outsideLeft].mod += sir - sol;
-            }
-            defaultAncestor = self;
-        }
-        return defaultAncestor;
-    }
-    void moveSubtree(int self, int right, float shift) {
-        const float subtrees = float(n[right].childIndex - n[self].childIndex);
-        if (subtrees != 0) n[right].change -= shift / subtrees, n[self].change += shift / subtrees;
-        n[right].shift += shift, n[right].y += shift, n[right].mod += shift;
-    }
-    int getAncestor(int self, int other, int defaultAncestor) const {
-        const int a = n[self].ancestor;
-        const auto& siblings = n[n[other].parent].children;
-        return a >= 0 && std::find(siblings.begin(), siblings.end(), a) != siblings.end() ? a : defaultAncestor;
-    }
-};
-
-void layoutTrees() {
-    TreeLayout t;
-    for (const std::string& id : g.order) {
-        Adv& a = g.advs[id];
-        if (!a.parent.empty() && g.advs.count(a.parent)) t.kids[a.parent].push_back(&a);
-    }
-    for (const std::string& id : g.order) {
-        Adv& a = g.advs[id];
-        if ((!a.parent.empty() && g.advs.count(a.parent)) || !a.hasDisplay) continue;  // roots with a display
-        t.n.clear();
-        const int root = t.make(&a, -1, -1, 1, 0);
-        t.firstWalk(root);
-        const float min = t.secondWalk(root, 0.0f, 0, t.n[root].y);
-        if (min < 0) t.thirdWalk(root, -min);
-        for (const LayoutNode& v : t.n) v.adv->x = float(v.x), v.adv->y = v.y;
-    }
-}
-
 // AdvancementsScreen.onAdvancementsUpdated: tabs for roots with a background, widgets for displayed tasks.
 void rebuild(UiState& s) {
-    layoutTrees();
     std::unordered_map<std::string, Tab> old;
     for (Tab& t : g.tabs) old[t.root] = std::move(t);
     g.tabs.clear();
@@ -418,7 +285,8 @@ void handlers(UiState& s, net::Client& client) {
                 for (i32 k = 0; k < m && r.ok; ++k) group.emplace_back(r.str());
                 a.requirements.push_back(std::move(group));
             }
-            r.boolean();  // sendsTelemetryEvent (26.x sends no positions: the client lays the tree out, see layoutTrees)
+            r.boolean();  // sendsTelemetryEvent
+            a.x = r.f32(), a.y = r.f32();  // PositionedAdvancement: the server lays the tree out
             u->added.push_back(std::move(a));
         }
         const i32 removed = r.varInt();
