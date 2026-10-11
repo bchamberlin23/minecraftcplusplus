@@ -18,7 +18,7 @@ constexpr double kTick = 0.05;
 constexpr double kPi = 3.14159265358979;
 constexpr int kChunksPerFrame = 8;       // like generated chunks in main.cpp
 constexpr double kChunkBudgetMs = 4.0;   // ...but never more than this per frame
-constexpr int kStartDestroy = 0, kStopDestroy = 3;
+constexpr int kStartDestroy = 0, kStopDestroy = 3, kReleaseUseItem = 6;
 
 u64 posKey(int x, int y, int z) { return (u64(x & 0x3FFFFFF) << 38) | (u64(z & 0x3FFFFFF) << 12) | u64(y & 0xFFF); }
 void unpackPos(u64 k, int& x, int& y, int& z) {
@@ -85,13 +85,22 @@ void Session::attach(Game& game, Terrain& terrain) {
     terrain_ = &terrain;
     world_.setTrackChanges(false);  // nothing received from a server is saved
     game.onEdit = [this](const Game::EditAction& a) { onEdit(a); };
+    game.onPunch = [this] { client_.sendPlay("punch", Writer{}); };
+    game.onUseItem = [this](const RayHit*, bool afterEntity) {
+        if (!afterEntity) useItem(0);
+    };
+    game.onReleaseUseItem = [this] {  // ServerPlayerGameMode.releaseUsingItem (bows; stops eating early)
+        client_.sendPlayerAction(kReleaseUseItem, 0, 0, 0, 0, 0);
+        if (verbose_) LOG("net: release_use_item");
+    };
 }
 
 void Session::frame(double dt) {
     client_.poll(incoming_);
     for (Event& e : incoming_) pending_.push_back(std::move(e));
     incoming_.clear();
-    // Strictly in order; chunks are the only costly events and get a per-frame budget.
+    // Strictly in order; chunks and block updates (relight + remesh each; the server sends bursts of them while
+    // it generates around a travelling player) are the costly events and share a per-frame budget.
     Timer budget;
     int chunks = 0;
     while (!pending_.empty()) {
@@ -99,6 +108,8 @@ void Session::frame(double dt) {
         if (std::holds_alternative<ChunkEvent>(e)) {
             if (chunks >= kChunksPerFrame || budget.ms() > kChunkBudgetMs) break;
             ++chunks;
+        } else if (std::holds_alternative<BlocksEvent>(e) && budget.ms() > kChunkBudgetMs) {
+            break;
         }
         handle(e);
         pending_.pop_front();
@@ -147,6 +158,7 @@ void Session::handle(Event& e) {
         else
             for (u64 k : std::vector<u64>(chunks_.begin(), chunks_.end())) forget(int(i32(k >> 32)), int(i32(k)), true);
         predictions_.clear();
+        sentInput_ = 0, sentSprinting_ = false;  // a new server player (respawn): nothing pressed, not sprinting
         dimension_ = j->dimension;
         if (!j->respawn) entityId_ = j->entityId;
         gameMode_ = j->gameMode;
@@ -331,6 +343,26 @@ void Session::teleport(const TeleportEvent& e) {
 }
 
 void Session::tick() {
+    // LocalPlayer.tick: the movement keys when they change (the server's sneaking state comes from them).
+    const Player& p = game_->player();
+    const PlayerInput& in = p.lastInput;
+    const int flags = (in.forward > 0 ? 1 : 0) | (in.forward < 0 ? 2 : 0) | (in.strafe > 0 ? 4 : 0) | (in.strafe < 0 ? 8 : 0) |
+                      (in.jump ? 16 : 0) | (in.sneak ? 32 : 0) | (in.sprint ? 64 : 0);
+    if (flags != sentInput_) {
+        Writer w;
+        w.u8v(u8(flags));
+        client_.sendPlay("player_input", w);
+        sentInput_ = flags;
+    }
+    // LocalPlayer.sendIsSprintingIfNeeded: ServerboundPlayerCommandPacket START / STOP_SPRINTING.
+    if (p.sprinting != sentSprinting_) {
+        Writer w;
+        w.varInt(entityId_);
+        w.varInt(p.sprinting ? 1 : 2);
+        w.varInt(0);
+        client_.sendPlay("player_command", w);
+        sentSprinting_ = p.sprinting;
+    }
     sendPosition();
     client_.sendTickEnd();
 }
@@ -406,6 +438,24 @@ void Session::onEdit(const Game::EditAction& a) {
     }
     const float cursor[3] = {float(a.hit[0] - a.x), float(a.hit[1] - a.y), float(a.hit[2] - a.z)};
     client_.sendUseItemOn(a.x, a.y, a.z, a.face, cursor, sequence);
+}
+
+void Session::useItem(int hand) {  // ServerboundUseItemPacket
+    syncHotbar();
+    const Player& p = game_->player();
+    Writer w;
+    w.varInt(hand);
+    w.varInt(++sequence_);
+    w.f32(float(p.yaw * 180.0 / kPi));
+    w.f32(float(p.pitch * 180.0 / kPi));
+    client_.sendPlay("use_item", w);
+    if (verbose_) LOG("net: use_item hand %d (sequence %d)", hand, sequence_);
+}
+
+void Session::useItemOn(int hand, const RayHit& hit) {  // ServerboundUseItemOnPacket, not predicted
+    const float cursor[3] = {float(hit.point[0] - hit.x), float(hit.point[1] - hit.y), float(hit.point[2] - hit.z)};
+    client_.sendUseItemOn(hit.x, hit.y, hit.z, hit.face, cursor, ++sequence_, hand);
+    if (verbose_) LOG("net: use_item_on hand %d %d %d %d face %d (sequence %d)", hand, hit.x, hit.y, hit.z, hit.face, sequence_);
 }
 
 void Session::report() const {
