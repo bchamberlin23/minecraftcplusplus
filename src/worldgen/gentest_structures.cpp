@@ -307,7 +307,7 @@ int runStructureTest(BlockRegistry& registry, const fs::path& jar, const fs::pat
         service.setWanted(order);
         std::map<std::pair<int, int>, std::unique_ptr<wg::GenChunk>> got;
         while (got.size() < want.size() && t.ms() < 600000) {
-            for (auto& c : service.take(1024)) got[{c->cx, c->cz}] = std::move(c);
+            for (auto& c : service.take(1024, ox, oz)) got[{c->cx, c->cz}] = std::move(c);
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
         const double ms = t.ms();

@@ -18,8 +18,11 @@ namespace {
 std::atomic<u64> gBuildNs[5];  // profiling: level-1 grids, coarser grids + far, padding, meshing, colours
 constexpr float kLoadMargin = 64.0f;            // stream detail slightly beyond the refine distance
 constexpr float kEvictMargin = 192.0f;          // hysteresis before dropping detail
-constexpr size_t kBatch = 1024;                 // sections per worker batch
-constexpr u64 kUploadBudget = u64(32) << 20;    // bytes of new detail geometry per frame
+constexpr size_t kBatch = 256;                 // bounded lookahead, nearest sections first
+constexpr size_t kPublishBatch = 64;           // publish nearby meshes without waiting for the whole batch
+constexpr size_t kUploadsPerFrame = 64;
+constexpr u64 kUploadBudget = u64(4) << 20;     // bytes of new detail geometry per frame
+constexpr double kUploadBudgetMs = 1.5;
 
 struct Grid {
     int sx = 0, sy = 0, sz = 0;
@@ -93,18 +96,26 @@ Terrain::CoarseJob Terrain::coarseJob(int region) const {
     CoarseJob job{region, r.world >= 0 ? world_.regions()[size_t(r.world)].get() : nullptr, {}, r.farData};
     std::copy(std::begin(r.ny), std::end(r.ny), job.ny);
     job.rx = r.rx, job.rz = r.rz;
+    job.epoch = epoch_;
     return job;
 }
 
 Terrain::~Terrain() {
+    stopBackground();
+    worker_.join();
+    for (auto& t : farThreads_) t.join();
+}
+
+void Terrain::stopBackground() {
     {
         std::lock_guard lock(mutex_);
         quit_ = true;
+        queue_.clear();
+        coarseQueue_.clear();
+        farQueue_.clear();
     }
     cv_.notify_all();
     farCv_.notify_all();
-    worker_.join();
-    for (auto& t : farThreads_) t.join();
 }
 
 float Terrain::distance(int level, double x0, double y0, double z0, double px, double py, double pz) const {
@@ -133,16 +144,26 @@ void Terrain::buildRegion(const CoarseJob& job, CoarseBuild& out, bool lockWorld
     thread_local u16 ids[4096];
     thread_local u16 padded[kPadCells];
     out.region = job.region;
+    out.epoch = job.epoch;
     out.source = job.source;
     out.farLevel = job.farData ? job.farData->level : 0;
     for (int level = 1; level <= kMaxLevel; ++level)
         out.nodes[level].assign(size_t(32 >> level) * (32 >> level) * job.ny[level], kAbsent);
 
     bool present[1024] = {};
+    std::vector<u8> occupiedLayers(size_t(heightBlocks_ / 16), 0);
     if (job.source) {
         std::shared_lock<std::shared_mutex> lock;
         if (lockWorld) lock = std::shared_lock(world_.mutex());
-        for (int idx = 0; idx < 1024; ++idx) present[idx] = job.source->columns[idx].count > 0;
+        for (int idx = 0; idx < 1024; ++idx) {
+            const World::Column& c = job.source->columns[idx];
+            present[idx] = c.count > 0;
+            for (int k = 0; k < c.count; ++k) {
+                const int layer = c.minY + k - minSy_;
+                if (layer >= 0 && layer < int(occupiedLayers.size()) && job.source->sections[c.first + k].paletteSize)
+                    occupiedLayers[size_t(layer)] = 1;
+            }
+        }
     }
     const int farLevel = job.farData ? job.farData->level : kMaxLevel + 1;
     const int first = job.source ? 1 : farLevel;  // finest level with data
@@ -194,6 +215,9 @@ void Terrain::buildRegion(const CoarseJob& job, CoarseBuild& out, bool lockWorld
         t = now;
     };
     for (int ly = std::max(layerFrom, 0); ly < std::min(layerTo, layers); ++ly) {
+        // Empty interior layers cannot emit faces. Avoid allocating/downsampling all five
+        // grids for the air above terrain (especially the Nether/End's shorter build ranges).
+        if (!job.farData && !occupiedLayers[size_t(ly)]) continue;
         const int row0 = ly * 16 - 1;  // block row (from the bottom of the world) of grid row 0
         lap(3);
         for (int level = 1; level <= kMaxLevel; ++level) {
@@ -214,6 +238,15 @@ void Terrain::buildRegion(const CoarseJob& job, CoarseBuild& out, bool lockWorld
                         const World::Section& sec = region.sections[c.first + k];
                         const int yFrom = std::max(0, row0 - sy * 16), yTo = std::min(15, row0 + 17 - sy * 16);
                         if (!sec.paletteSize || yFrom > yTo) continue;
+                        if (!sec.bits) {
+                            const u16 cube = cubeOf(region.palettes[sec.paletteOffset]);
+                            for (int y = yFrom; y <= yTo; ++y)
+                                for (int z = 0; z < 8; ++z) {
+                                    u16* row = &dst.at(bx, sy * 16 + y - row0, bz + z);
+                                    std::fill(row, row + 8, cube);
+                                }
+                            continue;
+                        }
                         if (sy == ly) World::decode(region, sec, ids);
                         for (int y = yFrom; y <= yTo; ++y)
                             for (int z = 0; z < 8; ++z)
@@ -313,6 +346,7 @@ void Terrain::buildRegion(const CoarseJob& job, CoarseBuild& out, bool lockWorld
 }
 
 void Terrain::applyCoarse(CoarseBuild& b, bool replace) {
+    if (b.epoch != epoch_) return;
     RegionLod& r = regions_[b.region];
     markCut(b.region);  // its LOD meshes (slots) are replaced below
     const World::Region* source = r.world >= 0 ? world_.regions()[size_t(r.world)].get() : nullptr;
@@ -427,23 +461,30 @@ void Terrain::workerMain() {
             batch.swap(queue_);
             queue_.clear();
         }
-        std::vector<Result> results(batch.size());
-        Jobs::parallelFor(batch.size(), [&](size_t i) {
-            thread_local u16 padded[kPadCells];
-            thread_local u8 light[kPadCells];
-            thread_local ColumnColors colors;
-            const Request& r = batch[i];
+        for (size_t first = 0; first < batch.size(); first += kPublishBatch) {
+            const size_t count = std::min(kPublishBatch, batch.size() - first);
+            std::vector<Result> results(count);
+            Jobs::parallelFor(count, [&](size_t i) {
+                thread_local u16 padded[kPadCells];
+                thread_local u8 light[kPadCells];
+                thread_local ColumnColors colors;
+                const Request& r = batch[first + i];
+                {
+                    std::shared_lock lock(world_.mutex());  // the main thread may be editing
+                    gatherSection(world_, r.cx, r.sy, r.cz, padded, light);
+                    if (biomeColors_) gatherColumnColors(world_, *biomeColors_, r.cx, r.cz, colors);
+                }
+                results[i].req = r;
+                meshGrid(padded, light, registry_, true, false, results[i].mesh, biomeColors_ ? &colors : nullptr);
+            });
             {
-                std::shared_lock lock(world_.mutex());  // the main thread may be editing
-                gatherSection(world_, r.cx, r.sy, r.cz, padded, light);
-                if (biomeColors_) gatherColumnColors(world_, *biomeColors_, r.cx, r.cz, colors);
+                std::lock_guard lock(mutex_);
+                for (auto& r : results) done_.push_back(std::move(r));
             }
-            results[i].req = r;
-            meshGrid(padded, light, registry_, true, false, results[i].mesh, biomeColors_ ? &colors : nullptr);
-        });
+            cv_.notify_all();
+        }
         {
             std::lock_guard lock(mutex_);
-            for (auto& r : results) done_.push_back(std::move(r));
             busy_ = false;
         }
         cv_.notify_all();
@@ -457,13 +498,30 @@ void Terrain::collectResults(double x, double y, double z, bool unlimited) {
         done_.clear();
     }
     const float evict = detailRadius_ + kEvictMargin;
+    // Completion order is not presentation order: reprioritize at the current camera, also
+    // after a teleport. Nearby geometry takes precedence over distant light/edge corrections.
+    std::sort(pendingUpload_.begin(), pendingUpload_.end(), [&](const Result& a, const Result& b) {
+        const float da = distance(0, a.req.cx * 16.0, a.req.sy * 16.0, a.req.cz * 16.0, x, y, z);
+        const float db = distance(0, b.req.cx * 16.0, b.req.sy * 16.0, b.req.cz * 16.0, x, y, z);
+        if (da != db) return da < db;
+        if (a.req.refresh != b.req.refresh) return a.req.refresh > b.req.refresh;
+        if (a.req.cz != b.req.cz) return a.req.cz < b.req.cz;
+        if (a.req.cx != b.req.cx) return a.req.cx < b.req.cx;
+        return a.req.sy < b.req.sy;
+    });
+    const Timer uploadTimer;
     u64 uploaded = 0;
+    float nearest = 1e30f, furthest = 0;
     size_t n = 0;
-    for (; n < pendingUpload_.size() && (unlimited || uploaded < kUploadBudget); ++n) {
+    for (; n < pendingUpload_.size() && (unlimited ||
+           (n < kUploadsPerFrame && uploaded < kUploadBudget && (n == 0 || uploadTimer.ms() < kUploadBudgetMs))); ++n) {
         Result& r = pendingUpload_[n];
         --inFlight_;
+        if (r.req.epoch != epoch_) continue;
         auto stamp = stamps_.find(Lighting::sectionKey(r.req.cx, r.req.sy, r.req.cz));
         if (stamp != stamps_.end() && stamp->second != r.req.stamp) continue;  // edited since: remesh() owns it
+        const float d = distance(0, r.req.cx * 16.0, r.req.sy * 16.0, r.req.cz * 16.0, x, y, z);
+        nearest = std::min(nearest, d), furthest = std::max(furthest, d);
         u32& state = detailState(r.req);
         if (r.req.refresh) {  // swap the mesh of a section that stayed resident
             if (!isSlot(state) && state != Renderer::kNoSlot) continue;
@@ -493,12 +551,15 @@ void Terrain::collectResults(double x, double y, double z, bool unlimited) {
         markCut(r.req.region);
     }
     pendingUpload_.erase(pendingUpload_.begin(), pendingUpload_.begin() + n);
+    if (!unlimited && n && std::getenv("MCPP_STREAM_PROFILE"))
+        LOG("detail stream: %zu results, %.2f MB, %.2f ms, %zu waiting, %.0f..%.0f blocks", n, uploaded / 1048576.0,
+            uploadTimer.ms(), pendingUpload_.size(), nearest == 1e30f ? 0 : nearest, furthest);
 }
 
 void Terrain::rescan(double x, double y, double z) {
     scanned_ = true;
     scanX_ = x, scanY_ = y, scanZ_ = z;
-    const float load = detailRadius_ + kLoadMargin, evict = detailRadius_ + kEvictMargin;
+    const float load = std::min(detailRadius_ + kLoadMargin, loadRadiusLimit_), evict = detailRadius_ + kEvictMargin;
 
     size_t keep = 0;
     for (size_t i = 0; i < resident_.size(); ++i) {
@@ -534,12 +595,17 @@ void Terrain::rescan(double x, double y, double z) {
 
 void Terrain::dispatch() {
     std::lock_guard lock(mutex_);
-    if (busy_ || (wanted_.empty() && refresh_.empty())) return;
+    if (busy_ || inFlight_ >= kBatch * 2 || (wanted_.empty() && refresh_.empty())) return;
     size_t n = 0;
-    while (n < kBatch && !refresh_.empty()) {
+    // Reserve most of each batch for new nearby detail during a chunk burst. Corrections
+    // must not keep newly arrived player chunks behind a stack of neighbour refreshes.
+    const size_t refreshLimit = wanted_.empty() ? kBatch : kBatch / 4;
+    while (n < refreshLimit && !refresh_.empty()) {
         Request& w = refresh_.back();
+        refreshQueued_.erase(Lighting::sectionKey(w.cx, w.sy, w.cz));
         auto stamp = stamps_.find(Lighting::sectionKey(w.cx, w.sy, w.cz));
         w.stamp = stamp == stamps_.end() ? 0 : stamp->second;
+        w.epoch = epoch_;
         queue_.push_back(w);
         refresh_.pop_back();
         ++n;
@@ -553,6 +619,7 @@ void Terrain::dispatch() {
         ++n;
         auto stamp = stamps_.find(Lighting::sectionKey(w.cx, w.sy, w.cz));
         w.stamp = stamp == stamps_.end() ? 0 : stamp->second;
+        w.epoch = epoch_;
         detailState(w) = kInFlight;
         queue_.push_back(wanted_.back());
         wanted_.pop_back();
@@ -652,7 +719,8 @@ void Terrain::addChunk(int cx, int cz, const std::vector<u64>& dirtySections) {
         const int ny = ssy - minSy_;
         if ((scx == cx && scz == cz) || rit == regionIndex_.end() || ny < 0 || ny >= r.ny[0]) continue;
         const u32 state = regions_[size_t(rit->second)].at(0, scx & 31, ny, scz & 31);
-        if (isSlot(state) || state == Renderer::kNoSlot) refresh_.push_back({rit->second, scx, ssy, scz, 0.0f, 0, true});
+        if ((isSlot(state) || state == Renderer::kNoSlot) && refreshQueued_.insert(k).second)
+            refresh_.push_back({rit->second, scx, ssy, scz, 0.0f, 0, true});
     }
     scanned_ = false;  // the next update streams the new sections in
     markCut(it->second);
@@ -673,6 +741,50 @@ void Terrain::removeChunk(int cx, int cz) {
     markCut(it->second);
 }
 
+void Terrain::clearChunks() {
+    ++epoch_;
+    {
+        std::lock_guard lock(mutex_);
+        // Queued/completed requests are retired here; an executing batch retires itself when
+        // collectResults sees its old epoch. Do not wait for generation/meshing to finish.
+        inFlight_ -= queue_.size() + done_.size() + pendingUpload_.size();
+        if (!queue_.empty()) busy_ = false;
+        queue_.clear();
+        done_.clear();
+        coarseQueue_.clear();
+        coarseDone_.clear();
+        farQueue_.clear();
+        farDone_.clear();
+    }
+    pendingUpload_.clear();
+    wanted_.clear();
+    refresh_.clear();
+    refreshQueued_.clear();
+    resident_.clear();
+    stamps_.clear();
+    dirtyRegions_.clear();
+    for (size_t i = 0; i < regions_.size(); ++i) {
+        RegionLod& r = regions_[i];
+        for (auto& nodes : r.nodes) {
+            for (u32 slot : nodes)
+                if (isSlot(slot)) renderer_.removeMesh(slot);
+            std::vector<u32>().swap(nodes);
+        }
+        for (auto& refine : r.refine) refine.clear();
+        r.farData.reset();
+        r.farQueued = false;
+        std::fill(std::begin(r.colLevel), std::end(r.colLevel), u8(0));
+        markCut(int(i));
+    }
+    active_.clear();
+    for (auto& part : cutParts_) part.clear();
+    renderer_.setActive(active_);
+    scanned_ = false;
+    farScanTime_ = -1e9;
+    cutDirty_ = true;
+    stats_.detailResident = stats_.detailPending = stats_.active = stats_.coarseNodes = stats_.farRegions = 0;
+}
+
 void Terrain::refresh(const std::vector<u64>& sections) {
     for (u64 k : sections) {
         int cx, sy, cz;
@@ -681,8 +793,16 @@ void Terrain::refresh(const std::vector<u64>& sections) {
         const int ny = sy - minSy_;
         if (it == regionIndex_.end() || ny < 0 || ny >= regions_[size_t(it->second)].ny[0]) continue;
         const u32 state = regions_[size_t(it->second)].at(0, cx & 31, ny, cz & 31);
-        if (isSlot(state) || state == Renderer::kNoSlot) refresh_.push_back({it->second, cx, sy, cz, 0.0f, 0, true});
+        if ((isSlot(state) || state == Renderer::kNoSlot) && refreshQueued_.insert(k).second)
+            refresh_.push_back({it->second, cx, sy, cz, 0.0f, 0, true});
     }
+}
+
+void Terrain::prime(double x, double y, double z) {
+    loadRadiusLimit_ = 64.0f;
+    update(x, y, z, true);
+    loadRadiusLimit_ = 1e30f;
+    scanned_ = false;  // the first visible frame requests the outer rings
 }
 
 void Terrain::update(double x, double y, double z, bool waitForDetail) {
@@ -715,12 +835,20 @@ void Terrain::update(double x, double y, double z, bool waitForDetail) {
         std::vector<FarResult> ready;
         {
             std::lock_guard lock(mutex_);
+            std::sort(farDone_.begin(), farDone_.end(), [&](const FarResult& a, const FarResult& b) {
+                auto d = [&](const FarResult& f) {
+                    const RegionLod& r = regions_[size_t(f.build.region)];
+                    return distance(5, r.rx * 512.0, y - 8, r.rz * 512.0, x, y, z);
+                };
+                return d(a) > d(b);  // nearest finished far region is at the back
+            });
             for (int i = 0; i < 4 && !farDone_.empty(); ++i) {
                 ready.push_back(std::move(farDone_.back()));
                 farDone_.pop_back();
             }
         }
         for (FarResult& f : ready) {
+            if (f.build.epoch != epoch_) continue;
             RegionLod& r = regions_[size_t(f.build.region)];
             r.farQueued = false;
             if (!farActive_) continue;

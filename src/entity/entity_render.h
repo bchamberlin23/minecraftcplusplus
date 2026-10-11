@@ -154,6 +154,7 @@ private:
     std::vector<Attachment> attachments_;
     std::vector<int> ridden_;  // entities with a passenger this frame (EquineSaddleModel riding lines)
     int elytraModel_ = -1, elytraBabyModel_ = -1;
+    int spinModel_ = -1, spinTex_ = -1;  // SpinAttackEffectLayer (riptide)
 
     // Shader packs (PassContext::pack): vanilla-style vertices per entity for the pack's gbuffers_entities programs.
     PackSink* pack_ = nullptr;

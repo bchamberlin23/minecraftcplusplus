@@ -35,7 +35,6 @@ public:
     void report() const;  // timings
     // The held item's use (food, bows, buckets...) and, unpredicted, a use on a block with the off hand.
     void useItem(int hand);
-    void useItemOn(int hand, const RayHit& hit);
     // Block changes the game's client makes itself (piston moves, blockentity/block_entities.h); the server's updates
     // follow. Main thread, outside the world lock.
     void applyClientBlocks(const std::vector<BlockChange>& changes) { applyBlocks(changes, false); }
@@ -82,6 +81,7 @@ private:
     double sentPos_[3] = {};
     float sentRot_[2] = {};
     bool haveServerPos_ = false, loadedSent_ = false;
+    double levelStart_ = 0;
     int sentSlot_ = -1;
     int sentInput_ = 0;  // ServerboundPlayerInputPacket flags last sent
     bool sentSprinting_ = false, sentFlying_ = false;

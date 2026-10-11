@@ -24,13 +24,13 @@ void playerSlots(Layout& l, int start, int mainY, int hotbarY) {
     for (int c = 0; c < 9; ++c) l.slots.push_back({8 + c * 18, hotbarY});
 }
 
-int equipmentSlot(const std::string& n) {  // inventory menu armor slot for an item (5 head .. 8 feet), -1 none
+int equipmentSlotByName(const std::string& n) {  // EquipmentSlot id by armour name (without the gameplay rules)
     if (n.ends_with("_helmet") || n == "turtle_helmet" || n == "carved_pumpkin" || n.ends_with("_head") || n.ends_with("_skull"))
-        return 5;
-    if (n.ends_with("_chestplate") || n == "elytra") return 6;
-    if (n.ends_with("_leggings")) return 7;
-    if (n.ends_with("_boots")) return 8;
-    return -1;
+        return 4;
+    if (n.ends_with("_chestplate") || n == "elytra") return 3;
+    if (n.ends_with("_leggings")) return 2;
+    if (n.ends_with("_boots")) return 1;
+    return n == "shield" ? 5 : 0;
 }
 
 bool isFuel(const std::string& n) {
@@ -124,10 +124,19 @@ struct Sim {
 
     int maxStack(const ItemStack& st) const { return s.items.maxStack(st); }
     std::string name(const ItemStack& st) const { return shortName(s.items.name(st.item)); }
+    // LivingEntity.getEquipmentSlotForItem (EquipmentSlot id); allowed: isEquippableInSlot's allowed entities.
+    int equipSlot(const ItemStack& st, bool& allowed) const {
+        allowed = true;
+        return s.equipmentRule ? s.equipmentRule(st, allowed) : equipmentSlotByName(name(st));
+    }
     bool mayPlace(int slot, const ItemStack& st) const {
         if (slot == resultSlot) return false;
         if (station && station->mayPlace && slot < int(m.slots.size()) - 36 && !station->mayPlace(s, m, slot, st)) return false;
-        if (m.type < 0 && slot >= 5 && slot <= 8) return equipmentSlot(name(st)) == slot;
+        if (m.type < 0 && slot >= 5 && slot <= 8) {  // ArmorSlot.mayPlace: isEquippableInSlot (head 5 .. feet 8)
+            bool allowed;
+            const int eq = equipSlot(st, allowed);
+            return allowed && eq >= 1 && eq <= 4 && 9 - eq == slot;
+        }
         return true;
     }
     int slotMax(int slot, const ItemStack& st) const {
@@ -195,12 +204,13 @@ struct Sim {
         const int n = int(m.slots.size());
         const std::string& t = m.typeName;
         bool ok = true;
-        if (m.type < 0) {
-            const int eq = equipmentSlot(name(st));
+        if (m.type < 0) {  // InventoryMenu.quickMoveStack: armour to its slot, off-hand equipment to the off hand
+            bool allowed;
+            const int eqSlot = equipSlot(st, allowed), eq = eqSlot >= 1 && eqSlot <= 4 ? 9 - eqSlot : -1;
             if (index == 0) ok = moveTo(st, 9, 45, true);
             else if (index >= 1 && index < 9) ok = moveTo(st, 9, 45, false);
             else if (eq >= 0 && at(eq).empty()) ok = moveTo(st, eq, eq + 1, false);
-            else if (name(st) == "shield" && at(45).empty()) ok = moveTo(st, 45, 46, false);
+            else if (eqSlot == 5 && at(45).empty()) ok = moveTo(st, 45, 46, false);
             else if (index >= 9 && index < 36) ok = moveTo(st, 36, 45, false);
             else if (index >= 36 && index < 45) ok = moveTo(st, 9, 36, false);
             else ok = moveTo(st, 9, 45, false);

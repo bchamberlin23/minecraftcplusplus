@@ -274,7 +274,8 @@ public:
     // Left / right click with an entity under the crosshair (before blocks): true when an entity closer than
     // blockDistance (< 0: no block targeted) is targeted; it then takes the click (attack / use when pressed).
     bool click(const double eye[3], const double dir[3], bool attack, bool use, double blockDistance, double reach,
-               bool sneaking = false);  // sneaking: sent with interactions (sneak + use opens a mount's inventory)
+               bool sneaking = false, double minReach = 0);  // sneaking: sent with interactions (sneak + use opens a
+                                                             // mount's inventory); minReach: a weapon's attack range
     // Client effects for the visuals (particles), main thread: entity events (ClientboundEntityEventPacket ids, after
     // they are applied; 17 makes a firework rocket explode) and
     // animate actions (ClientboundAnimatePacket: 0 wake up, 1 critical hit, 2 magic critical hit).
@@ -348,6 +349,9 @@ int defaultSkinIndex(const u8 uuid[16]);
 // ElytraAnimationState.tick. move: this tick's delta movement; fallFlying: shared flag 7 (the local player's own
 // state for the avatar).
 void tickPoseAnimation(Entity& e, const double move[3], bool fallFlying, bool crouching);
+// The entity's bounding box size (EntityDimensions with the baby / slime size / small armor stand scales, player
+// poses): width and height.
+void entitySize(const Entity& e, double& w, double& h);
 // BedBlock.getBedOrientation at a block (Direction 2D data value, -1 if it is not a bed). Caller holds the world lock.
 int bedFacingAt(const World& world, const BlockRegistry& registry, int x, int y, int z);
 // LivingEntity.isFullyFrozen.

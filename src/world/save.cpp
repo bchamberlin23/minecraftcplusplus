@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <ctime>
 #include <map>
+#include <span>
 #include <unordered_map>
 
 namespace {
@@ -179,7 +180,10 @@ bool WorldSaver::saveRegion(int rx, int rz, const std::vector<int>& chunks) {
     }
 
     // Raw stored payloads ([length][compression][data]) for every chunk present.
-    std::vector<std::vector<u8>> payload(1024);
+    // Unchanged chunks point into the file buffer. Only edited chunks need owned payloads;
+    // copying every stored chunk first used a second region-sized buffer on every save.
+    std::vector<std::span<const u8>> payload(1024);
+    std::vector<std::vector<u8>> changed(1024);
     for (int idx = 0; idx < 1024; ++idx) {
         const u32 sector = be32(&old[size_t(idx) * 4]) >> 8;
         if (!sector) continue;
@@ -187,23 +191,29 @@ bool WorldSaver::saveRegion(int rx, int rz, const std::vector<int>& chunks) {
         if (pos + 5 > old.size()) continue;
         const u32 len = be32(&old[pos]);
         if (len < 1 || pos + 4 + len > old.size()) continue;
-        payload[idx].assign(old.begin() + pos, old.begin() + pos + 4 + len);
+        payload[idx] = std::span<const u8>(old.data() + pos, size_t(4) + len);
     }
 
     libdeflate_compressor* comp = libdeflate_alloc_compressor(6);
     bool ok = true;
     for (int idx : chunks) {
-        std::vector<u8>& p = payload[idx];
+        const std::span<const u8> p = payload[idx];
         const int cx = rx * 32 + (idx & 31), cz = rz * 32 + (idx >> 5);
         NbtValue root;
         std::string rootName;
         if (p.size() < 5) {
             // Generated this session: write a chunk at the "terrain" status, which the game
             // finishes (features, light) when it loads it, keeping our edits.
-            if (!biomeName_) continue;
+            if (!biomeName_) {
+                ok = false;
+                continue;
+            }
             root = newChunk(cx, cz);
         } else {
-            if (p[4] & 0x80) continue;  // external storage: left alone
+            if (p[4] & 0x80) {  // external storage: left alone, keep the edit dirty for retry
+                ok = false;
+                continue;
+            }
             const int type = p[4];
             std::vector<u8> raw =
                 type == 3 ? std::vector<u8>(p.begin() + 5, p.end()) : inflate(&p[5], p.size() - 5, type);
@@ -271,19 +281,24 @@ bool WorldSaver::saveRegion(int rx, int rz, const std::vector<int>& chunks) {
             ok = false;
             continue;
         }
-        p.assign(5, 0);
-        putBe32(p.data(), u32(n + 1));
-        p[4] = 2;  // zlib
-        p.insert(p.end(), packed.begin(), packed.begin() + n);
+        auto& replacement = changed[idx];
+        replacement.resize(n + 5);
+        putBe32(replacement.data(), u32(n + 1));
+        replacement[4] = 2;  // zlib
+        std::memcpy(replacement.data() + 5, packed.data(), n);
+        payload[idx] = replacement;
     }
     libdeflate_free_compressor(comp);
 
     // Re-pack every chunk into fresh sectors behind the two header sectors.
     std::vector<u8> out(8192, 0);
+    size_t outputSize = 8192;
+    for (const auto p : payload) outputSize += ((p.size() + 4095) / 4096) * 4096;
+    out.reserve(outputSize);
     std::memcpy(&out[4096], &old[4096], 4096);  // timestamps
     const u32 now = u32(std::time(nullptr));
     for (int idx = 0; idx < 1024; ++idx) {
-        const std::vector<u8>& p = payload[idx];
+        const std::span<const u8> p = payload[idx];
         if (p.empty()) continue;
         const size_t sectors = (p.size() + 4095) / 4096;
         if (sectors > 255) {  // would need the game's external .mcc storage
@@ -413,12 +428,12 @@ SaveStats WorldSaver::save(const SavedPlayer* player) {
         if (saveRegion(rc.first, rc.second, chunks)) {
             ++st.regions;
             st.chunks += chunks.size();
+            for (int idx : chunks) world_.clearDirtyChunk(rc.first * 32 + (idx & 31), rc.second * 32 + (idx >> 5));
         } else {
             st.ok = false;
         }
     }
     if (player && !savePlayer(*player)) st.ok = false;
-    world_.clearDirtyChunks();
     st.ms = t.ms();
     return st;
 }

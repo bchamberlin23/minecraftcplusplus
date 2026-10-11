@@ -305,6 +305,47 @@ const ItemRules::ItemInfo& ItemRules::item(std::string_view itemName) {
     } else if (c.contains("minecraft:kinetic_weapon")) {
         info.use = {Anim::Spear, 72000};
     }
+    Components& k = info.components;
+    k.consumable = c.contains("minecraft:consumable");
+    k.blocksAttacks = c.contains("minecraft:blocks_attacks"), k.kinetic = c.contains("minecraft:kinetic_weapon");
+    if (c.contains("minecraft:equippable") && c["minecraft:equippable"].is_object()) {
+        const nlohmann::json& e = c["minecraft:equippable"];
+        static const std::pair<const char*, int> kSlots[] = {{"mainhand", 0}, {"feet", 1},   {"legs", 2}, {"chest", 3},
+                                                             {"head", 4},     {"offhand", 5}, {"body", 6}, {"saddle", 7}};
+        for (const auto& [n, id] : kSlots)
+            if (e.value("slot", "") == n) k.equipSlot = id;
+        k.swappable = e.value("swappable", true);
+        if (e.contains("allowed_entities")) {  // a tag or entity types: players only when listed
+            const nlohmann::json& a = e["allowed_entities"];
+            k.equipForPlayer = (a.is_string() && a.get<std::string>() == "minecraft:player") ||
+                               (a.is_array() && std::find(a.begin(), a.end(), nlohmann::json("minecraft:player")) != a.end());
+        }
+    }
+    if (c.contains("minecraft:use_cooldown") && c["minecraft:use_cooldown"].is_object()) {
+        k.cooldownSeconds = c["minecraft:use_cooldown"].value("seconds", 0.0f);
+        k.cooldownGroup = c["minecraft:use_cooldown"].value("cooldown_group", "");
+    }
+    k.piercing = c.contains("minecraft:piercing_weapon");
+    auto soundOf = [&](const char* type) -> std::string {
+        if (!c.contains(type) || !c[type].is_object() || !c[type].contains("sound")) return {};
+        const nlohmann::json& s = c[type]["sound"];
+        return s.is_string() ? s.get<std::string>() : s.is_object() ? s.value("sound_id", "") : "";
+    };
+    k.piercingSound = soundOf("minecraft:piercing_weapon"), k.kineticSound = soundOf("minecraft:kinetic_weapon");
+    if (c.contains("minecraft:minimum_attack_charge") && c["minecraft:minimum_attack_charge"].is_number())
+        k.minimumAttackCharge = c["minecraft:minimum_attack_charge"].get<float>();
+    if (c.contains("minecraft:attack_range") && c["minecraft:attack_range"].is_object()) {
+        const nlohmann::json& r = c["minecraft:attack_range"];
+        static const char* kKeys[6] = {"min_reach", "max_reach", "min_creative_reach", "max_creative_reach", "hitbox_margin", "mob_factor"};
+        k.hasAttackRange = true;
+        for (int i = 0; i < 6; ++i) k.attackRange[i] = r.value(kKeys[i], k.attackRange[i]);
+    }
+    if (c.contains("minecraft:attack_animation") && c["minecraft:attack_animation"].is_object())
+        k.attackSwingTicks = c["minecraft:attack_animation"].value("duration", 6);
+    if (c.contains("minecraft:interact_animation") && c["minecraft:interact_animation"].is_object())
+        k.interactSwingTicks = c["minecraft:interact_animation"].value("duration", 6);
+    k.classUse = shortName == "bow" || shortName == "crossbow" || shortName == "trident" || shortName == "spyglass" ||
+                 shortName == "goat_horn" || shortName == "brush" || shortName == "bundle" || shortName.ends_with("_bundle");
     if (shortName == "bow") info.use = {Anim::Bow, 72000};
     else if (shortName == "crossbow") info.use = {Anim::Crossbow, 28};  // CrossbowItem: charge (1.25 s) + 3
     else if (shortName == "trident") info.use = {Anim::Trident, 72000};
@@ -349,3 +390,5 @@ bool ItemRules::correctForDrops(const Tool& t, std::string_view blockName) const
 ItemRules::Use ItemRules::use(std::string_view itemName) { return item(itemName).use; }
 
 bool ItemRules::glider(std::string_view itemName) { return item(itemName).glider; }
+
+const ItemRules::Components& ItemRules::components(std::string_view itemName) { return item(itemName).components; }

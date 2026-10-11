@@ -35,7 +35,7 @@ constexpr u64 kRefOffset = kInstOffset + u64(kMaxInstances) * 32;
 constexpr u64 kFreeOffset = kRefOffset + u64(kMaxRefs) * 8;
 constexpr u64 kFrameBytes = (kFreeOffset + u64(kMaxFree) * 128 + 65535) & ~u64(65535);
 
-enum LayerFlags : u8 { Emissive = 1, Translucent = 2, TintWool = 8, TintCollar = 16, Armor = 32, Elytra = 64, Glint = 128 };
+enum LayerFlags : u8 { Emissive = 1, Translucent = 2, SpinFx = 4, TintWool = 8, TintCollar = 16, Armor = 32, Elytra = 64, Glint = 128 };
 enum Special : u8 {
     SpNone, SpCow, SpPig, SpChicken, SpSheep, SpWolf, SpCat, SpHorse, SpLlama, SpRabbit, SpParrot, SpFox, SpAxolotl,
     SpPanda, SpMooshroom, SpVillager, SpZombieVillager, SpSlime, SpPlayer, SpFrog, SpArmorStand, SpCreeper, SpBoat,
@@ -338,6 +338,7 @@ void EntityRenderer::buildDefs() {
         if (d.kind == Kind::Sprite && d.sprite < 0) d.kind = Kind::Box;
     }
     elytraModel_ = M("elytra#main"), elytraBabyModel_ = M("elytra_baby#main");
+    spinModel_ = M("spin_attack#main"), spinTex_ = T("trident/trident_riptide");
     u32 boxes = 0;
     std::string names;
     for (size_t i = 0; i < defs_.size(); ++i)
@@ -784,7 +785,9 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
     if (!layerCount) return false;
     if (e.category == Category::Living || e.category == Category::Player)
         layerCount += equipmentLayers(e, d, layers + layerCount, 16 - layerCount);
-
+    // SpinAttackEffectLayer: the riptide swirl around a spinning player.
+    if (d.special == SpPlayer && (e.livingFlags & 4) && spinModel_ >= 0 && spinTex_ >= 0 && layerCount < 16)
+        layers[layerCount++] = {spinModel_, spinTex_, kWhite, SpinFx};
     double p[3];
     for (int a = 0; a < 3; ++a) p[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt - cam[a];
     const float yaw = lerpAngle(pt, e.prevYaw, e.yaw), pitch = e.prevPitch + (e.pitch - e.prevPitch) * pt;
@@ -1009,7 +1012,14 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
                 if (side == 1) poses_[i].yRot = kPi - poses_[i].yRot;
             }
         }
-        if (L.flags & Elytra) {  // WingsLayer: translate(0, 0, 0.125); ElytraModel.setupAnim (ElytraAnimationState)
+        if (L.flags & SpinFx) {  // SpinAttackEffectModel.setupAnim: box i turns at -(45 + 5 (i + 1)) degrees per tick
+            for (size_t i = 0; i < parts; ++i)
+                if (m.parts[i].name == "box0" || m.parts[i].name == "box1") {
+                    const float rate = 45.0f + float(m.parts[i].name == "box0" ? 1 : 2) * 5.0f;
+                    const float deg = (float(e.age) + pt) * -rate;
+                    poses_[i].yRot = (deg - 360.0f * std::floor((deg + 180.0f) / 360.0f)) * kDeg;  // Mth.wrapDegrees
+                }
+        } else if (L.flags & Elytra) {  // WingsLayer: translate(0, 0, 0.125); ElytraModel.setupAnim (ElytraAnimationState)
             layerRoot = mul(root, translate(0, 0, 0.125f));
             const i16 lw = m.role(LeftWing), rw = m.role(RightWing);
             float r[3];

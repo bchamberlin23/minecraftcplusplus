@@ -132,6 +132,9 @@ public:
     // the build range).
     void replaceChunk(int cx, int cz, int firstSy, const std::vector<PackedSection>& sections);
     void removeChunk(int cx, int cz);
+    // Whole dimension unload, holding mutex() exclusively. Region objects/indices stay stable
+    // for background terrain jobs; all chunk data and block entities are discarded at once.
+    void clearChunks();
     // Sets one light layer of a section of a loaded column (data: 2048 bytes, or null for `ref`).
     // Returns true if the stored values changed.
     bool setLight(int cx, int sy, int cz, bool sky, u32 ref, const u8* data);
@@ -139,6 +142,7 @@ public:
     // Chunks changed since the last save, as (cx << 32 | cz) keys.
     const std::unordered_set<u64>& dirtyChunks() const { return dirtyChunks_; }
     void clearDirtyChunks() { dirtyChunks_.clear(); }
+    void clearDirtyChunk(int cx, int cz) { dirtyChunks_.erase(chunkKey(cx, cz)); }
     void markChunkDirty(int cx, int cz) { dirtyChunks_.insert(chunkKey(cx, cz)); }  // saved like an edited chunk
     // Generated chunks regenerate identically from the seed, so lighting them is not a change.
     void setTrackChanges(bool track) { trackChanges_ = track; }

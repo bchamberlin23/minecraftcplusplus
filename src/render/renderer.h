@@ -8,6 +8,7 @@
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 
+#include <algorithm>
 #include <memory>
 
 struct SectionMesh;
@@ -213,7 +214,11 @@ public:
     bool growBuffer(ComPtr<ID3D12Resource>& buffer, u64 oldBytes, u64 newBytes, const char* what);
     u32 addMesh(const SectionMesh& mesh, int level, i32 x, i32 y, i32 z);  // kNoSlot if out of space (after growing)
     void removeMesh(u32 slot);
-    void setActive(const std::vector<u32>& slots) { active_ = slots, ++activeVersion_; }
+    // The LOD cut's slots. Sections entering or leaving it cross-fade (dithered) over fadeSeconds; a section replaced
+    // by one at the same place and level (an edit, new light) swaps at once.
+    void setActive(const std::vector<u32>& slots);
+    void setFadeSeconds(float seconds) { fadeSeconds_ = std::max(seconds, 0.0f); }
+    void beginWorldReveal(double x, double z);  // stagger entrance fades outward on join/large teleport
     void flushUploads();  // submit staged copies now (used while loading)
 
     // HUD and world overlays for the next frame.
@@ -303,7 +308,13 @@ private:
         i32 origin[4] = {};  // xyz in blocks, w = LOD level
         u32 translucent = 0;  // translucent quads
         u32 opaque = 0, cutout = 0;  // opaque / cutout cube quads (the path tracer's geometries)
+        float fade = 0;       // GpuSection::fade
+        bool inCut = false, retiring = false, freeLater = false;
     };
+    void freeSlot(u32 slot);
+    void setFade(u32 slot, float fade);
+    float fadeNow() const;
+    float fadeProgress(float fade, float now) const;
     // Active slots with translucent quads, far to near: blending needs back-to-front order between sections.
     void sortTranslucent(const CameraState& cam, u32 activeCount);
 
@@ -376,6 +387,19 @@ private:
     std::vector<u32> freeSlots_;
     u32 slotCapacity_ = 0, slotHigh_ = 0;
     std::vector<u32> active_;
+    std::vector<u32> drawList_;  // active_ + sections still fading out
+    struct Retiring {
+        u32 slot;
+        float end;
+    };
+    std::vector<Retiring> retiring_;
+    std::vector<u32> cutMark_;
+    u32 cutStamp_ = 0;
+    float fadeSeconds_ = 0.75f;  // the game's chunkSectionFadeInTime default
+    u32 fadeFrame_ = 0;
+    float revealStart_ = 0;
+    double revealX_ = 0, revealZ_ = 0;
+    float entranceTime(const Slot& slot, float now) const;
     std::vector<u32> translucent_;
     u64 activeVersion_ = 0, sortedVersion_ = ~u64(0);
     double sortedCam_[3] = {};

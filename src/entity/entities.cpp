@@ -1311,6 +1311,19 @@ void EntityWorld::tickEntity(Entity& e) {
 // ---------------------------------------------------------------------------------------------------------
 // Picking and interaction.
 
+void entitySize(const Entity& e, double& w, double& h) {
+    w = e.info ? e.info->width : 0.6, h = e.info ? e.info->height : 1.8;
+    if (!e.info) return;
+    if (e.baby && e.category == Category::Living) w *= 0.5, h *= 0.5;
+    if (e.info->dataId("ID_SIZE") >= 0) w *= e.size, h *= e.size;
+    if (e.info->name == "minecraft:armor_stand" && (e.standFlags & 1)) w *= 0.5, h *= 0.5;
+    if (e.category == Category::Player) {
+        if (e.pose == 5) h = 1.5;
+        else if (e.pose == 1 || e.pose == 3 || e.pose == 4) h = 0.6;
+        else if (e.pose == 2) w = h = 0.2;
+    }
+}
+
 PickResult EntityWorld::pick(const double o[3], const double dir[3], double maxDistance) const {
     PickResult best;
     best.distance = maxDistance;
@@ -1327,15 +1340,8 @@ PickResult EntityWorld::pick(const double o[3], const double dir[3], double maxD
             pickable = true;
         if (n == "minecraft:ender_dragon" || (n == "minecraft:armor_stand" && (e.standFlags & 16))) pickable = false;
         if (!pickable || e.deathTime > 0) continue;
-        double w = e.info->width, h = e.info->height;
-        if (e.baby && e.category == Category::Living) w *= 0.5, h *= 0.5;
-        if (e.info->dataId("ID_SIZE") >= 0) w *= e.size, h *= e.size;
-        if (n == "minecraft:armor_stand" && (e.standFlags & 1)) w *= 0.5, h *= 0.5;
-        if (e.category == Category::Player) {
-            if (e.pose == 5) h = 1.5;
-            else if (e.pose == 1 || e.pose == 3 || e.pose == 4) h = 0.6;
-            else if (e.pose == 2) w = h = 0.2;
-        }
+        double w, h;
+        entitySize(e, w, h);
         double c[3];
         for (int a = 0; a < 3; ++a) c[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt;
         const double lo[3] = {c[0] - w / 2, c[1], c[2] - w / 2}, hi[3] = {c[0] + w / 2, c[1] + h, c[2] + w / 2};
@@ -1361,12 +1367,16 @@ PickResult EntityWorld::pick(const double o[3], const double dir[3], double maxD
 }
 
 bool EntityWorld::click(const double eye[3], const double dir[3], bool attack, bool use, double blockDistance,
-                        double reach, bool sneaking) {
+                        double reach, bool sneaking, double minReach) {
     const double limit = blockDistance >= 0 ? std::min(blockDistance, reach) : reach;
     const PickResult p = pick(eye, dir, limit);
     if (verbose_)
         LOG("entities: click attack=%d use=%d block=%.2f -> entity %d at %.2f", attack, use, blockDistance, p.id, p.distance);
     if (p.id < 0) return false;
+    if (attack && p.distance < minReach) {  // AttackRange.isInRange: too close for the weapon, only the swing goes out
+        if (client_ && client_->alive()) client_->sendPlay("punch", net::Writer{});
+        return true;
+    }
     if (attack) this->attack(p.id);
     else if (use) this->use(p.id, p.hit, sneaking);
     return true;
