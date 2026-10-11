@@ -23,6 +23,7 @@ class Session;
 }  // namespace net
 namespace ent {
 class EntityWorld;
+class ItemModels;
 }
 
 namespace ui {
@@ -37,6 +38,8 @@ struct Settings {
     VideoSettings video;       // Video Settings screen (shaders, upscaler, frame generation, latency, VSync, FPS limit)
     bool videoSaved = false;   // options.txt had video settings
     std::string shaderPack;    // shader pack in use (render/packs; "" = the built-in pipeline)
+    bool bobView = true;       // "View Bobbing" (options.txt bobView)
+    int attackIndicator = 1;   // AttackIndicatorStatus id: 0 off, 1 crosshair, 2 hotbar (options.txt attackIndicator)
     bool loaded = false;
 
     static fs::path path();
@@ -116,8 +119,11 @@ public:
     Settings& settings();
     // Entity models, skins and entities (inventory previews, mounts); after init().
     void setEntities(ent::EntityWorld* entities);
+    // Item models (equipment layers worn in the entity previews); set by the entity visuals.
+    void setItemModels(ent::ItemModels* models);
     // Player inventory menu slot (5-8 armour, 36-44 hotbar, 45 offhand); nullptr when empty.
     const ItemStack* playerSlot(int slot) const;
+    int ticksFrozen() const;  // our DATA_TICKS_FROZEN (the third-person avatar shakes when fully frozen)
 
     struct State;  // ui_state.h
 

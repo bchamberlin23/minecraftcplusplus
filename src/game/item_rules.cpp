@@ -305,6 +305,14 @@ const ItemRules::ItemInfo& ItemRules::item(std::string_view itemName) {
     return items_.emplace(std::string(itemName), std::move(info)).first->second;
 }
 
+std::vector<u32> ItemRules::blocks(const std::vector<std::string>& namesOrTags) const {
+    return blockSet(nlohmann::json(namesOrTags));
+}
+
+bool ItemRules::blockIn(const std::vector<u32>& set, std::string_view blockName) const {
+    return std::binary_search(set.begin(), set.end(), blockIndex(blockName));
+}
+
 const ItemRules::Tool* ItemRules::tool(std::string_view itemName) {
     const ItemInfo& i = item(itemName);
     return i.hasTool ? &i.tool : nullptr;

@@ -22,6 +22,7 @@
 #include "render/renderer.h"
 #include "render/upscalers/upscalers.h"
 #include "sky/sky.h"
+#include "ui/mp_hud.h"
 #include "ui/ui.h"
 #include "world/biome_colors.h"
 #include "world/lighting.h"
@@ -943,6 +944,7 @@ int wmain(int argc, wchar_t** argv) {
         bool shot = !opt.screenshot.empty() && frame == (opt.bench ? kBenchFrames - 1 : opt.selftest ? std::max(10, opt.shotFrame - 10) : opt.shotFrame);
         const bool timeUp = opt.seconds > 0 && now - loopStart >= opt.seconds;  // --seconds: shoot the last frame
         if (opt.seconds > 0) shot = timeUp && !opt.screenshot.empty();
+        sky.setBossOverlay(ui::bossDarkenScreen(), ui::bossWorldFog());  // boss bar flags (mp_hud.h)
         sky.update(cam, dt);
         ui.endFrame();
         if (haveReports) packs::updatePlayer(renderer, ui, game.selectedSlot(), reports, registry);  // held light

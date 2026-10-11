@@ -27,6 +27,46 @@ void head(const Parts& P, const AnimState& s) {
 
 float outQuart(float x) { return 1.0f - std::pow(1.0f - x, 4.0f); }
 
+float wrapRad(float a) {
+    a = std::fmod(a + kPi, 2.0f * kPi);
+    return (a < 0 ? a + 2.0f * kPi : a) - kPi;
+}
+float rotLerpRad(float t, float from, float to) { return from + t * wrapRad(to - from); }
+float lerp(float t, float a, float b) { return a + t * (b - a); }
+float quadraticArmUpdate(float x) { return -65.0f * x + x * x; }
+
+// HumanoidModel.setupSwimAnimation (the left arm turns the short way, the right arm linearly, as in the game).
+void swim(PartPose* h, PartPose* ra, PartPose* la, PartPose* rl, PartPose* ll, const AnimState& s) {
+    const float amount = s.swimAmount, pos = s.walkPos;
+    if (h && !s.fallFlying) h->xRot = rotLerpRad(amount, h->xRot, -kPi / 4);
+    const float swimPos = std::fmod(pos, 26.0f);
+    const bool swinging = s.swing > 0;
+    const bool rightSwings = swinging && !s.swingLeft, leftSwings = swinging && s.swingLeft;
+    const float ra_ = (s.havePoses && s.rightPose == ArmPose::Spear) || rightSwings ? 0.0f : amount;
+    const float la_ = (s.havePoses && s.leftPose == ArmPose::Spear) || leftSwings ? 0.0f : amount;
+    if (!s.usingItem && ra && la) {
+        if (swimPos < 14.0f) {
+            const float q = 1.8707964f * quadraticArmUpdate(swimPos) / quadraticArmUpdate(14.0f);
+            la->xRot = rotLerpRad(la_, la->xRot, 0.0f), ra->xRot = lerp(ra_, ra->xRot, 0.0f);
+            la->yRot = rotLerpRad(la_, la->yRot, kPi), ra->yRot = lerp(ra_, ra->yRot, kPi);
+            la->zRot = rotLerpRad(la_, la->zRot, kPi + q), ra->zRot = lerp(ra_, ra->zRot, kPi - q);
+        } else if (swimPos < 22.0f) {
+            const float t = (swimPos - 14.0f) / 8.0f;
+            la->xRot = rotLerpRad(la_, la->xRot, kPi / 2 * t), ra->xRot = lerp(ra_, ra->xRot, kPi / 2 * t);
+            la->yRot = rotLerpRad(la_, la->yRot, kPi), ra->yRot = lerp(ra_, ra->yRot, kPi);
+            la->zRot = rotLerpRad(la_, la->zRot, 5.012389f - 1.8707964f * t);
+            ra->zRot = lerp(ra_, ra->zRot, 1.2707963f + 1.8707964f * t);
+        } else {
+            const float t = (swimPos - 22.0f) / 4.0f;
+            la->xRot = rotLerpRad(la_, la->xRot, kPi / 2 - kPi / 2 * t), ra->xRot = lerp(ra_, ra->xRot, kPi / 2 - kPi / 2 * t);
+            la->yRot = rotLerpRad(la_, la->yRot, kPi), ra->yRot = lerp(ra_, ra->yRot, kPi);
+            la->zRot = rotLerpRad(la_, la->zRot, kPi), ra->zRot = lerp(ra_, ra->zRot, kPi);
+        }
+    }
+    if (ll) ll->xRot = lerp(amount, ll->xRot, 0.3f * std::cos(pos * 0.33333334f + kPi));
+    if (rl) rl->xRot = lerp(amount, rl->xRot, 0.3f * std::cos(pos * 0.33333334f));
+}
+
 void bob(PartPose* arm, float age, float scale) {
     if (!arm) return;
     arm->zRot += scale * (std::cos(age * 0.09f) * 0.05f + 0.05f);
@@ -36,8 +76,8 @@ void bob(PartPose* arm, float age, float scale) {
 // HumanoidModel.setupAnim (walking, riding, held items, attack swing, crouching, arm bob).
 void humanoid(const Parts& P, const AnimState& s) {
     PartPose *h = P[Head], *body = P[Body], *ra = P[RightArm], *la = P[LeftArm], *rl = P[RightLeg], *ll = P[LeftLeg];
-    if (h) h->xRot = s.pitch * kDeg, h->yRot = s.headYaw * kDeg;
-    const float pos = s.walkPos, speed = s.walkSpeed;
+    if (h) h->xRot = s.fallFlying ? -kPi / 4 : s.pitch * kDeg, h->yRot = s.headYaw * kDeg;
+    const float pos = s.walkPos, speed = s.walkSpeed / s.speedValue;
     if (ra) ra->xRot = std::cos(pos * 0.6662f + kPi) * 2.0f * speed * 0.5f, ra->zRot = 0;
     if (la) la->xRot = std::cos(pos * 0.6662f) * 2.0f * speed * 0.5f, la->zRot = 0;
     if (rl) rl->xRot = std::cos(pos * 0.6662f) * 1.4f * speed, rl->yRot = 0.005f, rl->zRot = 0.005f;
@@ -146,6 +186,7 @@ void humanoid(const Parts& P, const AnimState& s) {
     }
     if (!s.havePoses || s.rightPose != ArmPose::Spyglass) bob(ra, s.age, 1.0f);
     if (!s.havePoses || s.leftPose != ArmPose::Spyglass) bob(la, s.age, -1.0f);
+    if (s.swimAmount > 0) swim(h, ra, la, rl, ll, s);
 }
 
 // AnimationUtils.animateZombieArms.

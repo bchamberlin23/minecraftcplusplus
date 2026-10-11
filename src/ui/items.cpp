@@ -1,6 +1,7 @@
 #include "ui/items.h"
 
 #include "assets/game_reports.h"
+#include "net/client.h"
 #include "ui/resources.h"
 
 #include <unordered_set>
@@ -61,6 +62,98 @@ int defaultMaxStack(std::string_view n) {
 }
 }  // namespace
 
+namespace {
+// Network NBT: skips one payload of `type`; false on malformed data.
+bool skipNbt(net::Reader& r, u8 type, int depth = 0) {
+    if (depth > 64) return false;
+    switch (type) {
+        case 1: r.skip(1); break;
+        case 2: r.skip(2); break;
+        case 3: case 5: r.skip(4); break;
+        case 4: case 6: r.skip(8); break;
+        case 7: r.skip(size_t(std::max(0, r.i32v()))); break;
+        case 8: r.skip(r.u16v()); break;
+        case 9: {
+            const u8 t = r.u8v();
+            const i32 n = r.i32v();
+            for (i32 i = 0; i < n && r.ok; ++i)
+                if (!skipNbt(r, t, depth + 1)) return false;
+            break;
+        }
+        case 10:
+            for (u8 t = r.u8v(); t != 0 && r.ok; t = r.u8v()) {
+                r.skip(r.u16v());
+                if (!skipNbt(r, t, depth + 1)) return false;
+            }
+            break;
+        case 11: r.skip(size_t(std::max(0, r.i32v())) * 4); break;
+        case 12: r.skip(size_t(std::max(0, r.i32v())) * 8); break;
+        default: return false;
+    }
+    return r.ok;
+}
+
+// The fields of a network NBT compound: name -> standalone network NBT of the value (type byte + payload).
+std::unordered_map<std::string, std::string> nbtFields(std::string_view nbt) {
+    std::unordered_map<std::string, std::string> out;
+    net::Reader r(reinterpret_cast<const u8*>(nbt.data()), nbt.size());
+    if (r.u8v() != 10) return out;
+    for (u8 t = r.u8v(); t != 0 && r.ok; t = r.u8v()) {
+        const std::string name(r.bytes(r.u16v()));
+        const u8* start = r.p;
+        if (!skipNbt(r, t)) break;
+        out[name] = std::string(1, char(t)) + std::string(reinterpret_cast<const char*>(start), size_t(r.p - start));
+    }
+    return out;
+}
+
+int nbtInt(const std::string& v, int fallback) {
+    if (v.size() < 2) return fallback;
+    net::Reader r(reinterpret_cast<const u8*>(v.data()) + 1, v.size() - 1);
+    switch (u8(v[0])) {
+        case 1: return i8(r.u8v());
+        case 2: return r.i16v();
+        case 3: return r.i32v();
+        default: return fallback;
+    }
+}
+}  // namespace
+
+void Items::setRegistries(const net::Client& client) {
+    auto load = [&](const char* registry, std::vector<RegistryInfo>& out) {
+        out.clear();
+        for (const net::Client::RegistryEntry& e : client.registryEntries(registry)) {
+            RegistryInfo info;
+            info.id = e.id;
+            const auto f = nbtFields(e.nbt);
+            auto text = [&](const char* key, Text& t) {
+                auto it = f.find(key);
+                if (it == f.end()) return false;
+                t = parseComponent(it->second, lang_);
+                return true;
+            };
+            text("description", info.description);
+            if (auto it = f.find("max_level"); it != f.end()) info.maxLevel = nbtInt(it->second, 1);
+            if (auto it = f.find("width"); it != f.end()) info.width = nbtInt(it->second, 0);
+            if (auto it = f.find("height"); it != f.end()) info.height = nbtInt(it->second, 0);
+            info.hasTitle = text("title", info.title);
+            info.hasAuthor = text("author", info.author);
+            out.push_back(std::move(info));
+        }
+    };
+    load("minecraft:enchantment", enchantments_);
+    load("minecraft:painting_variant", paintings_);
+    load("minecraft:instrument", instruments_);
+    bannerPatterns_.clear();
+    for (const net::Client::RegistryEntry& e : client.registryEntries("minecraft:banner_pattern")) bannerPatterns_.push_back(e.id);
+    registriesSet_ = true;
+}
+
+int Items::mobEffectId(std::string_view name) const {
+    auto it = mobEffectIds_.find(std::string(name.find(':') == std::string_view::npos ? "minecraft:" + std::string(name) : name));
+    return it == mobEffectIds_.end() ? -1 : it->second;
+}
+
 bool ItemStack::sameItemSameComponents(const ItemStack& o) const {
     if (item != o.item || added.size() != o.added.size() || removed != o.removed) return false;
     for (size_t i = 0; i < added.size(); ++i)
@@ -88,6 +181,7 @@ bool Items::init(const GameReports& reports, const Resources& res) {
     }
     std::unordered_map<std::string, int> potionIds;
     load("minecraft:potion", potions_, potionIds);
+    load("minecraft:mob_effect", mobEffects_, mobEffectIds_);
     blockItem_.assign(names_.size(), false);
     for (size_t i = 0; i < names_.size(); ++i) blockItem_[i] = reports.hasBlock(names_[i]);
     return true;
@@ -152,6 +246,58 @@ Text Items::hoverName(const ItemStack& s) const {
 
 std::vector<Text> Items::tooltip(const ItemStack& s) const {
     std::vector<Text> lines{hoverName(s)};
+    auto shown = [&](const char* component) {
+        const int t = componentType(component);
+        return std::find(s.hiddenTooltip.begin(), s.hiddenTooltip.end(), t) == s.hiddenTooltip.end();
+    };
+    auto tr = [&](const std::string& key, const std::string& fallback) {
+        auto it = lang_->find(key);
+        return it == lang_->end() ? fallback : it->second;
+    };
+    const Style gray = colorStyle(0xAAAAAA);
+    // InstrumentComponent.addToTooltip: the description in gray.
+    if (s.instrument >= 0 && size_t(s.instrument) < instruments_.size() && shown("instrument"))
+        lines.push_back(instruments_[size_t(s.instrument)].description.withStyle(gray));
+    // SuspiciousStewEffects (creative tooltips): PotionContents.addPotionTooltip without the attribute lines.
+    if (!s.stewEffects.empty() && shown("suspicious_stew_effects")) {
+        static const char* const kHarmful[] = {"slowness", "mining_fatigue", "instant_damage", "nausea", "blindness", "hunger",
+                                               "weakness", "poison", "wither", "levitation", "unluck", "darkness", "infested",
+                                               "oozing", "weaving", "wind_charged"};
+        for (auto [effect, ticks] : s.stewEffects) {
+            if (effect < 0 || size_t(effect) >= mobEffects_.size()) continue;
+            const std::string n = mobEffects_[size_t(effect)].substr(mobEffects_[size_t(effect)].find(':') + 1);
+            bool harmful = false;
+            for (const char* h : kHarmful) harmful |= n == h;
+            std::string line = tr("effect.minecraft." + n, n);
+            if (ticks > 20) {
+                const int secs = ticks / 20;
+                char dur[16];
+                std::snprintf(dur, sizeof(dur), "%d:%02d", secs / 60, secs % 60);
+                line = formatJava(tr("potion.withDuration", "%s (%s)"), {line, dur});
+            }
+            lines.push_back(Text(line, colorStyle(harmful ? 0xFF5555 : 0x5555FF)));
+        }
+    }
+    // ItemEnchantments.addToTooltip (stored first, as on books): Enchantment.getFullname.
+    for (const auto* list : {&s.storedEnchants, &s.enchantList}) {
+        if (!shown(list == &s.storedEnchants ? "stored_enchantments" : "enchantments")) continue;
+        for (auto [id, level] : *list) {
+            if (id < 0 || size_t(id) >= enchantments_.size()) continue;
+            const RegistryInfo& e = enchantments_[size_t(id)];
+            const bool curse = e.id.find("curse") != std::string::npos;  // EnchantmentTags.CURSE (vanilla members)
+            const Style st = colorStyle(curse ? 0xFF5555 : 0xAAAAAA);
+            Text t = e.description.withStyle(st);
+            if (level != 1 || e.maxLevel != 1) t.append(" " + tr("enchantment.level." + std::to_string(level), std::to_string(level)), st);
+            lines.push_back(t);
+        }
+    }
+    // HangingEntityItem.appendHoverText: a painting variant's title, author and size.
+    if (s.painting >= 0 && size_t(s.painting) < paintings_.size() && shown("painting/variant")) {
+        const RegistryInfo& p = paintings_[size_t(s.painting)];
+        if (p.hasTitle) lines.push_back(p.title);
+        if (p.hasAuthor) lines.push_back(p.author);
+        lines.push_back(Text(formatJava(tr("painting.dimensions", "%sx%s"), {std::to_string(p.width), std::to_string(p.height)})));
+    }
     for (const Text& l : s.lore) {
         Style st = colorStyle(0xAA00AA);
         st.italic = 1;
@@ -234,6 +380,34 @@ bool Items::skipValue(net::Reader& r, int type, int depth) const {
     if (n == "block_state") return list([&] { return r.str(), r.str(), r.ok; });
     if (n == "trim") return holder() && holder();
     if (n == "instrument") return holder();
+    // HolderSet<Block> (ByteBufCodecs.holderSet): 0 + tag id, else count + 1 then registry ids.
+    auto holderSet = [&] {
+        const i32 c = r.varInt();
+        if (c == 0) return r.str(), r.ok;
+        for (i32 i = 0; i < c - 1 && r.ok; ++i) r.varInt();
+        return r.ok;
+    };
+    if (n == "tool")  // rules (blocks, optional speed, optional correct_for_drops), speed, damage per block, creative
+        return list([&] {
+                   return holderSet() && optional([&] { return r.f32(), r.ok; }) && optional([&] { return r.boolean(), r.ok; });
+               }) &&
+               (r.f32(), r.varInt(), r.boolean(), r.ok);
+    if (n == "can_break" || n == "can_place_on")  // AdventureModePredicate: BlockPredicate list
+        return list([&] {
+            if (!optional(holderSet)) return false;
+            const bool props = optional([&] {
+                return list([&] {
+                    r.str();
+                    if (r.boolean()) r.str();                                 // ExactMatcher
+                    else optional([&] { return r.str(), true; }), optional([&] { return r.str(), true; });  // RangedMatcher
+                    return r.ok;
+                });
+            });
+            if (!props) return false;
+            if (r.boolean()) r.nbt();                      // NbtPredicate
+            return r.varInt() == 0 && r.varInt() == 0 && r.ok;  // DataComponentMatchers: exact / partial (not decoded)
+        });
+    if (n == "painting/variant") return holder();
     if (n == "banner_patterns") return list([&] { return holder() && (r.varInt(), r.ok); });
     if (n == "pot_decorations") return list([&] { return r.varInt(), r.ok; });
     if (n == "provides_banner_patterns") return r.str(), r.ok;
@@ -264,7 +438,27 @@ bool Items::readPatch(net::Reader& r, ItemStack& out, int depth) const {
         else if (n == "max_stack_size") out.maxStack = v.varInt();
         else if (n == "rarity") out.rarity = v.varInt();
         else if (n == "enchantment_glint_override") out.glint = v.boolean();
-        else if (n == "enchantments") out.enchantments = v.varInt();
+        else if (n == "enchantments" || n == "stored_enchantments") {
+            auto& list = n == "enchantments" ? out.enchantList : out.storedEnchants;
+            const i32 cnt = v.varInt();
+            for (i32 k = 0; k < cnt && v.ok; ++k) {
+                const int id = v.varInt(), level = v.varInt();
+                list.emplace_back(id, level);
+            }
+            if (n == "enchantments") out.enchantments = cnt;
+        } else if (n == "suspicious_stew_effects") {
+            const i32 cnt = v.varInt();
+            for (i32 k = 0; k < cnt && v.ok; ++k) {
+                const int id = v.varInt(), ticks = v.varInt();
+                out.stewEffects.emplace_back(id, ticks);
+            }
+        } else if (n == "instrument") out.instrument = v.varInt() - 1;
+        else if (n == "painting/variant") out.painting = v.varInt() - 1;
+        else if (n == "tooltip_display") {
+            v.boolean();
+            const i32 cnt = v.varInt();
+            for (i32 k = 0; k < cnt && v.ok; ++k) out.hiddenTooltip.push_back(v.varInt());
+        }
         else if (n == "dyed_color") out.dyedColor = v.u32v() & 0xFFFFFF;
         else if (n == "lore") {
             const i32 cnt = v.varInt();

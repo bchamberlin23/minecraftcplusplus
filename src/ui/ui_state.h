@@ -30,6 +30,7 @@ class GameReports;
 
 namespace ent {
 class EntityWorld;
+class ItemModels;
 }
 
 namespace packs {
@@ -104,6 +105,7 @@ struct Ui::State {
     Terrain* terrain = nullptr;
     const GameReports* reports = nullptr;
     ent::EntityWorld* entities = nullptr;  // entity models / skins / the mount (Ui::setEntities); may be null
+    ent::ItemModels* itemModels = nullptr; // equipment layers for the previews (Ui::setItemModels); may be null
     net::Client* client = nullptr;
     net::Session* session = nullptr;
     bool online() const { return client != nullptr && session != nullptr; }
@@ -129,6 +131,7 @@ struct Ui::State {
     int xpLevel = 0, xpTotal = 0;
     float armor = 0;
     int air = 300, maxAir = 300;
+    int ticksFrozen = 0;  // our DATA_TICKS_FROZEN (powder snow: the frost overlay, fully frozen at 140)
     bool serverAir = false;  // air supply comes from the server (entity data)
     int entityId = -1;
     struct Effect {
@@ -194,6 +197,9 @@ struct Ui::State {
         int scroll = 0;  // first visible byte
     };
     TextField chatInput, search;
+    // EditBox.setFormatter for the chat input (chat_ext.cpp: command colouring): the visible text from `offset`;
+    // false keeps the plain text.
+    std::function<bool(const std::string& visible, int offset, Text& out)> chatFormatter;
 
     // Screens
     Screen screen = Screen::None;

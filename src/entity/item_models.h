@@ -70,6 +70,7 @@ struct EquipmentLayer {
     i32 undyed = -1;       // dyeable: colour when undyed (RGB), -1 not dyeable
     bool dyeable = false;
     bool playerTexture = false;
+    std::string path;      // texture below textures/ ("entity/equipment/humanoid/iron")
 };
 
 class ItemModels {
@@ -139,6 +140,10 @@ public:
     // Same for an item's own equipment asset, cached by item (per frame use): type 0 humanoid, 1 humanoid_leggings,
     // 2 humanoid_baby, 3 wings.
     const std::vector<EquipmentLayer>& itemLayers(int item, int type);
+    // Mount / animal equipment (SimpleEquipmentLayer, LlamaDecorLayer): for an entity type ("horse") and
+    // EquipmentSlot 6 (body) or 7 (saddle), the model layer ("horse_armor#main") and equipment layer type
+    // ("horse_body"); false when the entity draws nothing for that slot.
+    static bool mountLayer(std::string_view entity, int slot, bool baby, const char*& model, const char*& layerType);
 
     // Particle texture of a block model (blockstates -> model -> "particle"), e.g. "block/dirt"; "" if unknown.
     std::string blockParticleTexture(const std::string& blockName);

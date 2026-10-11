@@ -9,6 +9,9 @@
 #include "ui/ui_state.h"
 #include "world/world.h"
 
+#include <shellapi.h>
+
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <unordered_map>
@@ -254,6 +257,24 @@ void signInput(UiState& s, const InputEvent& e) {
     s.buttonsInput(e);
 }
 
+// AbstractSignEditScreen.tick: done when the sign is gone (SignBlockEntity removed) or the player left its edit range
+// (SignBlockEntity.playerIsTooFarAwayToEdit: Player.isWithinBlockInteractionRange(pos, 4)).
+void signTick(UiState& s) {
+    if (s.screen != Screen::Sign || !sign.open || !s.world || !s.registry || !s.game) return;
+    const std::string& state = s.registry->name(s.world->block(sign.x, sign.y, sign.z));
+    bool removed = state.find("_sign") == std::string::npos;
+    const CameraState eye = s.game->camera();
+    // AABB(pos).distanceToSqr(eyes) < (block_interaction_range + 4)^2 (range 4.5, creative 5)
+    auto axis = [](double v, int lo) { return v < lo ? lo - v : v > lo + 1 ? v - (lo + 1) : 0.0; };
+    const double dx = axis(eye.x, sign.x), dy = axis(eye.y, sign.y), dz = axis(eye.z, sign.z);
+    const double range = (s.gameMode() == 1 ? 5.0 : 4.5) + 4.0;
+    const bool tooFar = dx * dx + dy * dy + dz * dz >= range * range;
+    if (removed || tooFar) {
+        LOG("ui: sign editor closed (%s)", removed ? "sign removed" : "too far away");
+        s.closeScreen();
+    }
+}
+
 void signClosed(UiState& s) {
     if (!sign.open) return;
     sign.open = false;
@@ -447,12 +468,30 @@ void mlKey(UiState& s, MultiLine& m, const InputEvent& e) {
     }
 }
 
-void mlClick(UiState& s, MultiLine& m, float left, float top, float mx, float my) {
+// MultiLineEditBox.seekCursorScreen; selecting keeps the selection anchor (shift click, drag).
+void mlSeek(UiState& s, MultiLine& m, float left, float top, float mx, float my, bool selecting) {
     const std::vector<LineView> lines = wrapLines(s, m.value, m.width);
     const int li = std::clamp(int(std::floor((my - top) / 9.0f)), 0, int(lines.size()) - 1);
     m.cursor = indexAtX(s, m.value, lines[size_t(li)], mx - left);
-    if (!s.window->keyDown(VK_SHIFT)) m.selection = m.cursor;
+    if (!selecting) m.selection = m.cursor;
     m.blinkStart = s.clock;
+}
+
+void mlClick(UiState& s, MultiLine& m, float left, float top, float mx, float my) {
+    mlSeek(s, m, left, top, mx, my, s.window->keyDown(VK_SHIFT));
+}
+
+// MultilineTextField.selectWordAtCursor (getPreviousWord: back over spaces, then to the word's start; to its end).
+void mlSelectWord(MultiLine& m) {
+    if (m.value.empty()) return;
+    auto space = [&](size_t i) { return std::isspace(u8(m.value[i])) != 0; };
+    size_t i = std::min(m.cursor, m.value.size() - 1);
+    while (i > 0 && space(i - 1)) --i;
+    while (i > 0 && !space(i - 1)) --i;
+    size_t end = i;
+    while (end < m.value.size() && !space(end)) ++end;
+    m.selection = i;
+    m.cursor = end;
 }
 
 void mlDraw(UiState& s, Canvas& c, const MultiLine& m, float left, float top, bool focused) {
@@ -493,6 +532,8 @@ struct BookEdit {
     MultiLine field;
     bool signing = false;
     UiState::TextField title;
+    bool dragging = false;   // the left button went down in the page and is held (drag selection)
+    double lastClick = -1;   // double click: select the word
 } edit;
 
 void editShowPage() {
@@ -598,6 +639,10 @@ void editDraw(UiState& s, Canvas& c) {
     }
     edit.pages[size_t(edit.page)] = edit.field.value;
     drawPageIndicator(s, c, edit.page, int(edit.pages.size()));
+    if (edit.dragging) {  // MultiLineEditBox.onDrag: the cursor follows the mouse, the selection anchor stays
+        if (!s.leftDown) edit.dragging = false;
+        else mlSeek(s, edit.field, editFieldLeft(W), kEditFieldTop, s.mouseX, s.mouseY, true);
+    }
     mlDraw(s, c, edit.field, editFieldLeft(W), kEditFieldTop, true);
     drawPageButton(s, c, true);
     if (edit.page > 0) drawPageButton(s, c, false);
@@ -626,7 +671,14 @@ void editInput(UiState& s, const InputEvent& e) {
         if (s.canvas && edit.page > 0 && overPageButton(s, *s.canvas, false)) return editTurn(s, false);
         const float left = editFieldLeft(s.guiW());
         if (s.mouseX >= left - 4 && s.mouseX < left + 118 && s.mouseY >= kEditFieldTop - 4 && s.mouseY < kEditFieldTop + 130) {
-            mlClick(s, edit.field, left, kEditFieldTop, s.mouseX, s.mouseY);
+            const bool doubleClick = s.clock - edit.lastClick < 0.25;  // MouseHandler: 250 ms
+            edit.lastClick = s.clock;
+            if (doubleClick) {
+                mlSelectWord(edit.field);
+            } else {
+                mlClick(s, edit.field, left, kEditFieldTop, s.mouseX, s.mouseY);
+                edit.dragging = true;
+            }
             return;
         }
     }
@@ -640,6 +692,63 @@ struct BookView {
     int page = 0;
 } view;
 
+// The page text's style under the mouse (BookViewScreen.visitText with a ClickableStyleFinder); null: none.
+const Style* bookStyleAt(UiState& s, const Canvas& c, Style& out) {
+    if (view.page < 0 || view.page >= int(view.pages.size())) return nullptr;
+    const std::vector<Text> lines = s.font.split(view.pages[size_t(view.page)], 114);
+    const float top = float(kBookTop + 30), left = float(bookLeft(c) + 36);
+    const int i = int(std::floor((s.mouseY - top) / 9.0f));
+    if (s.mouseY < top || i < 0 || i >= std::min(128 / 9, int(lines.size()))) return nullptr;
+    const float x = s.mouseX - left;
+    float pen = 0;
+    bool found = false;
+    s.font.iterate(lines[size_t(i)], [&](int, const Style& st, u32 cp) {
+        const float adv = s.font.glyph(cp).advanceFor(st.isBold());
+        if (x >= pen && x < pen + adv) {
+            out = st;
+            found = true;
+            return false;
+        }
+        pen += adv;
+        return true;
+    });
+    return found ? &out : nullptr;
+}
+
+// BookViewScreen.handleClickEvent / Screen.defaultHandleGameClickEvent.
+bool bookClick(UiState& s, const TextEvents& ev) {
+    if (ev.click.empty()) return false;
+    LOG("ui: book click %s \"%s\"", ev.click.c_str(), ev.clickValue.c_str());
+    if (ev.click == "change_page") {  // forcePage(page - 1)
+        const int page = std::atoi(ev.clickValue.c_str()) - 1;
+        const int clamped = std::clamp(page, 0, std::max(int(view.pages.size()) - 1, 0));
+        if (clamped != view.page) view.page = clamped;
+    } else if (ev.click == "run_command") {  // closeContainerOnServer; sendUnattendedCommand with no screen after
+        std::string cmd = ev.clickValue;
+        if (!cmd.empty() && cmd[0] == '/') cmd.erase(0, 1);  // Commands.trimOptionalPrefix
+        s.closeScreen();
+        if (s.online()) {
+            net::Writer w;
+            w.str(cmd);
+            s.client->sendPlay("chat_command", w);
+        }
+    } else if (ev.click == "copy_to_clipboard") {
+        s.window->setClipboard(ev.clickValue);
+    } else if (ev.click == "open_url") {  // ConfirmLinkScreen, back to the book
+        const std::string url = ev.clickValue;
+        if (!url.starts_with("http://") && !url.starts_with("https://")) return true;
+        UiState* sp = &s;
+        const std::vector<Text> pages = view.pages;
+        const int page = view.page;
+        showConfirm(s, tr(s, "chat.link.confirm"), Text(url), s.res.translate("chat.link.open"), [sp, url, pages, page] {
+            ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            view.pages = pages, view.page = page;
+            sp->openScreen(Screen::BookView);
+        }, Screen::BookView);
+    }  // suggest_command: insertText into the screen (a written book has no text field)
+    return true;
+}
+
 void viewBuild(UiState& s) {
     s.buttons.clear();
     sbButton(s, float((s.guiW() - 200) / 2), float(kBookTop + 192 + 2), 200, tr(s, "gui.done"), [&s] { s.closeScreen(); });
@@ -652,6 +761,10 @@ void viewDraw(UiState& s, Canvas& c) {
     if (view.page < int(view.pages.size()) - 1) drawPageButton(s, c, true);
     if (view.page > 0) drawPageButton(s, c, false);
     s.drawButtons(c);
+    // HoveredTextEffects.TOOLTIP_AND_CURSOR: a hovered show_text event as a tooltip.
+    Style st;
+    if (bookStyleAt(s, c, st) && st.events && st.events->hover == "show_text")
+        s.drawTooltip(c, s.font.split(st.events->hoverText, std::max(s.guiW() / 2, 200)), s.mouseX, s.mouseY);
 }
 
 void viewInput(UiState& s, const InputEvent& e) {
@@ -665,6 +778,8 @@ void viewInput(UiState& s, const InputEvent& e) {
     if (e.type == E::Button && e.down && e.code == 0 && s.canvas) {
         if (view.page < int(view.pages.size()) - 1 && overPageButton(s, *s.canvas, true)) return void(++view.page), pageSound();
         if (view.page > 0 && overPageButton(s, *s.canvas, false)) return void(--view.page), pageSound();
+        Style st;
+        if (bookStyleAt(s, *s.canvas, st) && st.events && bookClick(s, *st.events)) return;
     }
     s.buttonsInput(e);
 }
@@ -757,7 +872,7 @@ void registerHandlers(UiState& s, net::Client& client) {
     });
 }
 
-const UiModuleRegistrar kModule({.name = "signs_books", .registerHandlers = registerHandlers});
+const UiModuleRegistrar kModule({.name = "signs_books", .registerHandlers = registerHandlers, .tick = signTick});
 const ScreenRegistrar kSign({.screen = Screen::Sign, .build = signBuild, .draw = signDraw, .input = signInput, .closed = signClosed});
 const ScreenRegistrar kEdit({.screen = Screen::BookEdit, .build = editBuild, .draw = editDraw, .input = editInput});
 const ScreenRegistrar kView({.screen = Screen::BookView, .build = viewBuild, .draw = viewDraw, .input = viewInput});

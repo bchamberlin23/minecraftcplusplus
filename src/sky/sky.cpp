@@ -512,6 +512,9 @@ void Sky::update(const CameraState& cam, double dt) {
     tickAccumulator_ = std::min(tickAccumulator_ + dt * 20.0, 10.0);
     for (; tickAccumulator_ >= 1.0; tickAccumulator_ -= 1.0) {
         static wg::LegacyRandom random(12345);
+        darkenO_ = darken_;  // GameRenderer.tick
+        if (bossDarken_) darken_ = std::min(darken_ + 0.05f, 1.0f);
+        else if (darken_ > 0.0f) darken_ -= 0.0125f;
         if (flashTime_ > 0) --flashTime_;
         for (size_t i = 0; i < bolts_.size();) {
             Bolt& b = bolts_[i];
@@ -594,6 +597,11 @@ void Sky::update(const CameraState& cam, double dt) {
     const float voidDark = std::clamp((32.0f + float(dimension_->minY) - float(cam.y)) / 32.0f, 0.0f, 1.0f);
     if (voidDark > 0.0f)
         for (float& c : fog) c *= (1.0f - voidDark) * (1.0f - voidDark);
+    // FogRenderer.computeFogColor: the boss overlay's world darkening.
+    const float darken = std::clamp(darkenO_ + (darken_ - darkenO_) * float(tickAccumulator_), 0.0f, 1.0f);
+    static constexpr float kDarkenRgb[3] = {0.7f, 0.6f, 0.6f};
+    if (darken > 0.0f)
+        for (int k = 0; k < 3; ++k) fog[k] += (fog[k] * kDarkenRgb[k] - fog[k]) * darken;
 
     Frame& f = *frame_;
     f.skybox = dimension_->skybox;
@@ -601,6 +609,14 @@ void Sky::update(const CameraState& cam, double dt) {
     f.fogColor[3] = 1.0f;
     std::copy(a[int(Attr::SkyColor)].begin(), a[int(Attr::SkyColor)].begin() + 3, f.skyColor);
     f.skyEnd = std::min(float(kRenderDistance * 16), a[int(Attr::SkyFogEnd)][0]);
+    // AtmosphericFogEnvironment.setupFog under a boss bar's world fog: start <= 10, end <= 96, sky end = end; no sky.
+    f.renderSky = !bossFog_;
+    if (bossFog_) {
+        f.skyEnd = std::min(f.skyEnd, 96.0f);
+        renderer_->setFogLimit(10.0f, 96.0f);
+    } else {
+        renderer_->setFogLimit(1e30f, 1e30f);
+    }
     // getHorizonHeight: 63 unless the world is flat (not tracked here); not drawn underwater.
     f.darkDisc = cam.y - 63.0 < 0.0;
     renderer_->setAtmosphere(f.fogColor, a[int(Attr::SkyLightFactor)][0]);
@@ -612,6 +628,14 @@ void Sky::update(const CameraState& cam, double dt) {
             lm.blockTint[c] = a[int(Attr::BlockLightTint)][c];
         }
         lm.skyFactor = a[int(Attr::SkyLightFactor)][0];
+        if (darken > 0.0f) {
+            // lightmap.fsh: color = mix(color, color * (0.7, 0.6, 0.6), BossOverlayWorldDarkeningFactor) before the
+            // clamp: ambient and sky light scale exactly; the block term's white part scales by the mean factor.
+            float m[3], mean = 0;
+            for (int c = 0; c < 3; ++c) m[c] = 1.0f - darken + darken * kDarkenRgb[c], mean += m[c] / 3.0f;
+            for (int c = 0; c < 3; ++c) lm.ambient[c] *= m[c], lm.skyColor[c] *= m[c], lm.blockTint[c] *= m[c] / mean;
+            lm.blockFactor *= mean;
+        }
         renderer_->setLightmap(lm);
     }
     {  // the renderer's shader pipeline lights the world from the same sun / moon and weather
@@ -782,6 +806,7 @@ void Sky::buildClouds(const CameraState& cam, const Value* a) {
     std::copy(color.begin(), color.end(), f.cloudColor);
     f.cloudOffset[0] = -xIn, f.cloudOffset[1] = relBottom, f.cloudOffset[2] = -zIn;
     f.cloudFogEnd = std::min(float(kCloudRange * 16), a[int(Attr::CloudFogEnd)][0]);
+    if (bossFog_) f.cloudFogEnd = std::min(f.cloudFogEnd, 96.0f);  // a boss bar's world fog: cloud end = fog end
     f.cloudFaces = &cloudFaces_;
     f.cloudVersion = cloudVersion_;
 }

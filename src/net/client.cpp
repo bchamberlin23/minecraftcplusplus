@@ -276,6 +276,12 @@ bool Client::handleCommon(Phase phase, const std::string& name, Reader& r, bool&
     return true;
 }
 
+const std::vector<Client::RegistryEntry>& Client::registryEntries(const std::string& registry) const {
+    static const std::vector<RegistryEntry> kNone;
+    auto it = registries_.find(registry);
+    return it == registries_.end() ? kNone : it->second;
+}
+
 bool Client::handleConfiguration(const std::string& name, Reader& r) {
     if (name == "select_known_packs") {
         // Claim no packs, so the server sends every registry entry in full (dimension types included).
@@ -286,9 +292,15 @@ bool Client::handleConfiguration(const std::string& name, Reader& r) {
         const std::string registry(r.str());
         const i32 n = r.varInt();
         if (registry == "minecraft:worldgen/biome") biomeBits_ = std::max(1, ceilLog2(u32(n)));
+        static const char* const kKept[] = {"minecraft:enchantment", "minecraft:painting_variant", "minecraft:instrument",
+                                            "minecraft:banner_pattern"};
+        std::vector<RegistryEntry>* kept = nullptr;
+        for (const char* k : kKept)
+            if (registry == k) kept = &registries_[registry], kept->clear();
         for (i32 i = 0; i < n && r.ok; ++i) {
             const std::string id(r.str());
             const std::string_view data = r.boolean() ? r.nbt() : std::string_view{};
+            if (kept) kept->push_back({id, std::string(data)});
             if (registry == "minecraft:dimension_type") dimensionTypes_.push_back(parseDimensionType(id, data));
             if (registry == "minecraft:worldgen/biome") {
                 if (i == 0) biomeIds_.clear();

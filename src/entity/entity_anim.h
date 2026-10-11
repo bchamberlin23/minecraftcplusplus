@@ -27,6 +27,9 @@ struct AnimState {
     int standFlags = 0;                // armor stand: 4 arms, 8 no base plate
     const float (*standPose)[3] = nullptr;  // armor stand head, body, left arm, right arm, left leg, right leg (degrees)
     int skinParts = 0x7F;              // player model customisation bits
+    float swimAmount = 0;              // LivingEntity.getSwimAmount (swimming / crawling)
+    bool fallFlying = false;           // elytra gliding: head down, limbs swing by speedValue
+    float speedValue = 1;              // HumanoidRenderState.speedValue
 };
 
 // poses: one per model part, initialised by the caller from the model's initial poses.

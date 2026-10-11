@@ -288,7 +288,8 @@ void SkyGpu::drawSky(const PassContext& ctx) {
         list->DrawInstanced(u32(v.size()), 1, 0, 0);
     };
     const Sky::Frame& f = frame_;
-    if (f.skybox == Skybox::Overworld) {
+    if (!f.renderSky) {  // boss world fog: the fog colour only
+    } else if (f.skybox == Skybox::Overworld) {
         list->SetPipelineState(psoSky_.Get());
         list->DrawInstanced(3, 1, 0, 0);
         draw(psoBlend_.Get(), f.fan, 0);
@@ -378,7 +379,7 @@ void SkyGpu::drawPack(const PassContext& ctx, bool late) {
         v.clear();
     };
     if (!late) {
-        if (f.skybox != Skybox::Overworld) return;
+        if (f.skybox != Skybox::Overworld || !f.renderSky) return;
         for (const auto& s : f.fan) v.push_back(convert(s, s.color));
         submit(PackRole::SkyBasic, PackBlend::Translucent, 2 /* SUNSET */, nullptr, false);
         if (f.starBrightness > 0.0f) {  // the static star field, rotated with the sky

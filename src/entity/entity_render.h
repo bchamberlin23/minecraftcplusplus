@@ -148,6 +148,7 @@ private:
     u64 buildFrame_ = 0;
     float freeMotion_[3] = {};    // emitFree: current - previous position (blocks) of the entity being built
     std::vector<Attachment> attachments_;
+    std::vector<int> ridden_;  // entities with a passenger this frame (EquineSaddleModel riding lines)
     int elytraModel_ = -1, elytraBabyModel_ = -1;
 
     // Shader packs (PassContext::pack): vanilla-style vertices per entity for the pack's gbuffers_entities programs.

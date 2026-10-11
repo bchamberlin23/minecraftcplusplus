@@ -147,15 +147,27 @@ private:
     std::vector<NetSpawn> netSpawns_, spawnsLocal_;  // network thread / main thread (swapped, capacity kept)
     std::vector<NetBreak> netBreaks_, breaksLocal_;
     std::vector<std::pair<int, float>> netWeather_;
+    struct BlockParticleInfo {  // ExplosionParticleInfo with its WeightedList weight
+        int type;
+        Options opt;
+        float scaling, speed;
+        int weight;
+    };
     struct NetExplosion {  // ClientboundExplodePacket
         double pos[3];
+        float radius;
+        int blockCount;
         int particle;
         int soundId;  // registry id, -1: inline name
         std::string soundName;
         bool playSound;
+        std::vector<BlockParticleInfo> blockParticles;
     };
     std::vector<NetExplosion> netExplosions_;
+    std::vector<NetExplosion> trackedExplosions_;  // ClientExplosionTracker: this tick's explosions (main thread)
+    void tickExplosions();
     bool skipOptions(void* reader, int type) const;  // net::Reader*: the particle's options (false: unreadable)
+    bool readOptions(void* reader, int type, Options& out) const;
     std::vector<std::pair<int, float>> weatherQueue_;  // main thread
     const ui::Resources* res_ = nullptr;
     Stats stats_;

@@ -199,6 +199,9 @@ public:
     }
     void setLightmap(const Lightmap& l) { lightmap_ = l; }
     const Lightmap& lightmap() const { return lightmap_; }
+    // Caps on the fog distances (blocks) this frame, e.g. a boss bar's world fog (AtmosphericFogEnvironment:
+    // start 10, end 96); infinity: the view distance's own fog.
+    void setFogLimit(float start, float end) { fogLimit_[0] = start, fogLimit_[1] = end; }
 
     // Shader pipeline. setShaderPreset can be called any time (the UI's options screen); Off restores vanilla.
     void setShaderPreset(ShaderPreset preset);
@@ -338,6 +341,7 @@ private:
     float fogColor_[4] = {0.62f, 0.76f, 1.0f, 1.0f};
     float daylight_ = 1.0f;
     Lightmap lightmap_;
+    float fogLimit_[2] = {1e30f, 1e30f};
     u32 descriptorSize_ = 0, descriptorsUsed_ = 1, descriptorCapacity_ = 0;  // 0: block textures
     void runPasses(PassStage stage, const PassContext& ctx);
     void preparePasses(const PassContext& ctx);    // RenderPass::prepare, each pass once

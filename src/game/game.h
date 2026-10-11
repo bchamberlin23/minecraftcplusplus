@@ -27,7 +27,8 @@ public:
     // camera (Camera.setup: pulled back up to 4 blocks, stopped by blocks); camera() stays at the eyes.
     int cameraMode = 0;
     CameraState viewCamera() const;
-    // First-person view override (UI: the lying-down camera while sleeping, Camera.setup); may adjust the camera.
+    // View override (UI: the lying-down camera while sleeping, Camera.setup); may adjust the camera. Runs for every
+    // perspective, before the third-person pull-back.
     std::function<void(CameraState&)> viewCameraOverride;
     // The player's arm swings (attack press, block broken / placed): drives the hand animation.
     std::function<void()> onSwing;
@@ -57,6 +58,8 @@ public:
     };
     static constexpr int kStartDestroy = 0, kChangeDestroyDirection = 1, kAbortDestroy = 2, kStopDestroy = 3;
     std::function<void(const EditAction&)> onEdit;
+    // Adventure mode (Player.blockActionRestricted): the held item's can_break allows breaking this block.
+    std::function<bool(int x, int y, int z)> adventureMayBreak;
     // Entity hook (multiplayer), called on clicks before blocks: returns true when an entity closer than
     // blockDistance (< 0: no block targeted) is under the crosshair; it then takes the click.
     std::function<bool(bool attack, bool use, double blockDistance)> onEntityClick;
@@ -135,6 +138,9 @@ public:
     std::function<void(const PlayerInput& input)> rideTick;
     std::function<bool(double eye[3])> rideEye;
     bool riding() const { return vehicleId >= 0 && rideTick != nullptr; }
+    // Sleeping (UI bed module: our SLEEPING_POS_ID): the bed block; drawn lying in it in third person.
+    bool sleeping = false;
+    int bedPos[3] = {};
     // --- Camera feedback: view bobbing (ClientAvatarState walk distance / bob, GameRenderer.bobView), the hurt tilt
     // and death roll (bobHurt), and the attack strength (Player.attackStrengthTicker) for the attack indicator. ---
     bool bobView = true;  // the "View Bobbing" option (default on)

@@ -52,6 +52,10 @@ public:
     void setBiomeLookup(BiomeLookup lookup);
     // Once per frame before Renderer::render: advances time, evaluates the attributes, sets the atmosphere.
     void update(const CameraState& cam, double dt);
+    // The boss bars' flags (BossHealthOverlay.shouldDarkenScreen / shouldCreateWorldFog), before update():
+    // the world darkening ramps in (GameRenderer.bossOverlayWorldDarkening) and darkens the lightmap and fog colour;
+    // the world fog closes the fog in to 10..96 blocks and hides the sky.
+    void setBossOverlay(bool darkenScreen, bool worldFog) { bossDarken_ = darkenScreen, bossFog_ = worldFog; }
 
     // Shared with the render passes.
     struct Frame;
@@ -92,6 +96,8 @@ private:
     };
     std::vector<Bolt> bolts_;
     int flashTime_ = 0;  // ClientLevel.skyFlashTime
+    bool bossDarken_ = false, bossFog_ = false;
+    float darken_ = 0, darkenO_ = 0;  // GameRenderer.bossOverlayWorldDarkening (per tick)
     double tickAccumulator_ = 0;
 
     std::unordered_map<u64, int> biomeCache_;  // quart key -> biome index (-1 unknown)
@@ -117,6 +123,7 @@ private:
 // What the passes draw this frame (filled by Sky::update).
 struct Sky::Frame {
     Skybox skybox = Skybox::Overworld;
+    bool renderSky = true;  // false under a boss bar's world fog (LevelRenderer.render shouldRenderSky)
     float fogColor[4] = {};
     float skyColor[3] = {};
     float skyEnd = 512;

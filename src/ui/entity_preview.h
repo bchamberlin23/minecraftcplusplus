@@ -3,6 +3,7 @@
 // layers, entity/entity_assets.h) posed by its animation, projected orthographically like the game's
 // picture-in-picture entity renderer, back faces culled and faces painter-sorted, lit like ENTITY_IN_UI.
 #include "entity/entity_anim.h"
+#include "ui/items.h"
 #include "ui/modules.h"
 
 #include <string>
@@ -14,6 +15,7 @@ struct PreviewLayer {
     int model = -1;       // EntityAssets model index
     std::string texture;  // texture below textures/ ("entity/player/wide/steve")
     u32 color = 0xFFFFFFFF;
+    bool wings = false;   // WingsLayer (elytra): its own resting pose, 2 px behind the body
 };
 
 struct PreviewEntity {
@@ -22,6 +24,8 @@ struct PreviewEntity {
     ent::AnimState state;              // headYaw / pitch are set from the mouse
     float height = 1.8f;               // bounding box height (blocks)
     float modelScale = 1.0f;           // the renderer's own scale (players 0.9375)
+    ItemStack held[2];                 // ItemInHandLayer: right arm, left arm (drawn as flat cards)
+    std::vector<std::string> hiddenParts;  // parts not drawn (chests of unchested animals, reins when not ridden)
 };
 
 // The local player (skin from the player list, default skin otherwise). false: no entity models.

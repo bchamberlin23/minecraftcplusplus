@@ -102,6 +102,41 @@ double decodeDelta(double base, i16 delta) {
 
 void EntityWorld::setItemDecoder(const ui::Items* items) { gItems = items; }
 
+void tickPoseAnimation(Entity& e, const double move[3], bool fallFlying, bool crouching) {
+    // LivingEntity.updateSwimAmount: isVisuallySwimming = pose SWIMMING, or FALL_FLYING without the flag.
+    e.swimAmountO = e.swimAmount;
+    const bool visuallySwimming = e.pose == 3 || (e.pose == 1 && !fallFlying);
+    e.swimAmount = visuallySwimming ? std::min(1.0f, e.swimAmount + 0.09f) : std::max(0.0f, e.swimAmount - 0.09f);
+    e.fallFlyTicks = fallFlying ? e.fallFlyTicks + 1 : 0;
+    std::copy(e.move, e.move + 3, e.moveO);
+    for (int k = 0; k < 3; ++k) e.move[k] = float(move[k]);
+    // ElytraAnimationState.tick
+    std::copy(e.elytraRot, e.elytraRot + 3, e.elytraRotO);
+    float tx = kPi / 12, ty = 0, tz = -kPi / 12;
+    if (fallFlying) {
+        float ratio = 1.0f;
+        const double len = std::sqrt(move[0] * move[0] + move[1] * move[1] + move[2] * move[2]);
+        if (move[1] < 0 && len > 1e-4) ratio = 1.0f - float(std::pow(-move[1] / len, 1.5));
+        tx = kPi / 12 + (kPi / 9 - kPi / 12) * ratio;
+        tz = -kPi / 12 + (-kPi / 2 + kPi / 12) * ratio;
+    } else if (crouching) {
+        tx = kPi * 2.0f / 9.0f, tz = -kPi / 4, ty = 0.08726646f;
+    }
+    e.elytraRot[0] += (tx - e.elytraRot[0]) * 0.3f;
+    e.elytraRot[1] += (ty - e.elytraRot[1]) * 0.3f;
+    e.elytraRot[2] += (tz - e.elytraRot[2]) * 0.3f;
+}
+
+int bedFacingAt(const World& world, const BlockRegistry& registry, int x, int y, int z) {
+    const std::string& state = registry.name(world.block(x, y, z));
+    if (state.find("_bed") == std::string::npos) return -1;
+    if (state.find("facing=south") != std::string::npos) return 0;
+    if (state.find("facing=west") != std::string::npos) return 1;
+    if (state.find("facing=north") != std::string::npos) return 2;
+    if (state.find("facing=east") != std::string::npos) return 3;
+    return -1;
+}
+
 int defaultSkinIndex(const u8 u[16]) {
     u64 msb = 0, lsb = 0;
     for (int i = 0; i < 8; ++i) msb = (msb << 8) | u[i], lsb = (lsb << 8) | u[8 + i];
@@ -158,6 +193,11 @@ EntityWorld::EntityWorld(EntityAssets& assets, World& world, BlockRegistry& regi
         d.nameVisible = id({"DATA_CUSTOM_NAME_VISIBLE"});
         d.livingFlags = id({"DATA_LIVING_ENTITY_FLAGS"});
         d.attachedTo = id({"DATA_ATTACHED_TO_TARGET"});
+        d.sleepPos = id({"SLEEPING_POS_ID"});
+        d.ticksFrozen = id({"DATA_TICKS_FROZEN"});
+        d.paddleLeft = id({"DATA_ID_PADDLE_LEFT"});
+        d.paddleRight = id({"DATA_ID_PADDLE_RIGHT"});
+        d.chest = id({"DATA_ID_CHEST"});
         categories_[i] = categoryFor(t.name);
         // Synched data only carries values that differ from the default: start registry variants at the
         // default each entity defines (VariantUtils.getDefaultOrAny(..., DEFAULT)).
@@ -267,7 +307,7 @@ void readEntityData(net::Reader& r, EventQueue& q, int entityEffect) {
             case 8: v.i = r.boolean(); break;                                       // boolean
             case 9: v.f[0] = r.f32(), v.f[1] = r.f32(), v.f[2] = r.f32(); break;  // rotations
             case 10: v.i = r.i64v(); break;                                         // block pos
-            case 11: v.i = r.boolean() ? r.i64v() : 0; break;                       // optional block pos
+            case 11: v.f[0] = r.boolean() ? 1.0f : 0.0f, v.i = v.f[0] > 0 ? r.i64v() : 0; break;  // optional block pos
             case 12: v.i = r.varInt(); break;                                       // direction
             case 13:                                                                // optional entity reference
                 if (r.boolean()) r.skip(16);
@@ -845,7 +885,15 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
             if (verbose_) LOG("entities: %d %s living flags %d", e.id, name.c_str(), int(v.i));
             if (!(v.i & 1)) e.useTicks = 0;
             e.livingFlags = u8(v.i);
-        } else if (idx == d.mainGene) e.variant = int(v.i);
+        } else if (idx == d.sleepPos && v.serializer == 11) {
+            e.hasSleepPos = v.f[0] > 0;
+            if (e.hasSleepPos)
+                e.sleepPos[0] = int(v.i >> 38), e.sleepPos[1] = int((v.i << 52) >> 52), e.sleepPos[2] = int((v.i << 26) >> 38);
+        } else if (idx == d.ticksFrozen && v.serializer == 1) e.ticksFrozen = int(v.i);
+        else if (idx == d.paddleLeft && v.serializer == 8) { if (e.id != localControl_) e.paddle[0] = v.i != 0; }
+        else if (idx == d.paddleRight && v.serializer == 8) { if (e.id != localControl_) e.paddle[1] = v.i != 0; }
+        else if (idx == d.chest && v.serializer == 8) e.hasChest = v.i != 0;
+        else if (idx == d.mainGene) e.variant = int(v.i);
         else if (idx == d.hiddenGene) e.variant2 = int(v.i);
     }
 }
@@ -960,7 +1008,18 @@ void EntityWorld::tickEntity(Entity& e) {
         }
     }
 
+    // AbstractBoat.tick: the paddles turn pi/8 per tick while rowing (getRowingTime lerps from the previous step).
+    for (int i = 0; i < 2; ++i) e.paddlePos[i] = e.paddle[i] ? e.paddlePos[i] + kPi / 8 : 0.0f;
     if (e.category != Category::Living && e.category != Category::Player) return;
+    {  // pose animation state (swimming / gliding / elytra wings), the bed of a sleeping entity
+        const double move[3] = {e.pos[0] - e.prevPos[0], e.pos[1] - e.prevPos[1], e.pos[2] - e.prevPos[2]};
+        std::shared_lock lock(world_.mutex());
+        const u16 at = world_.block(int(std::floor(e.pos[0])), int(std::floor(e.pos[1] + 0.3)), int(std::floor(e.pos[2])));
+        const BlockInfo& b = registry_.infos()[at];
+        e.inWater = b.waterlogged || (b.fluid && registry_.name(at).find("water") != std::string::npos);
+        e.bedFacing = e.hasSleepPos ? bedFacingAt(world_, registry_, e.sleepPos[0], e.sleepPos[1], e.sleepPos[2]) : -1;
+        tickPoseAnimation(e, move, (e.sharedFlags & 0x80) != 0, e.pose == 5);
+    }
     // LivingEntity.aiStep (client): head lerp, walk animation.
     if (e.lerpHeadSteps > 0) {
         e.headYaw = rotLerp(1.0f / float(e.lerpHeadSteps), e.headYaw, e.lerpHeadYaw);

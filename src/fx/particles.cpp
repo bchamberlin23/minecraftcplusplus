@@ -186,8 +186,8 @@ void Particles::attach(net::Client& client) {
     client.onPlay("explode", [this](net::Reader& r) {
         NetExplosion e{};
         for (double& c : e.pos) c = r.f64();
-        r.f32();   // radius
-        r.i32v();  // block count
+        e.radius = r.f32();
+        e.blockCount = r.i32v();
         if (r.boolean()) r.f64(), r.f64(), r.f64();  // knockback (handled by the UI)
         e.particle = r.varInt();
         if (!r.ok || !skipOptions(&r, e.particle)) return;
@@ -199,8 +199,11 @@ void Particles::attach(net::Client& client) {
         }
         const i32 n = r.varInt();  // block particles: WeightedList<ExplosionParticleInfo>
         for (i32 i = 0; i < n && r.ok && i < 64; ++i) {
-            if (!skipOptions(&r, r.varInt())) return;
-            r.f32(), r.f32(), r.varInt();  // scaling, speed, weight
+            BlockParticleInfo b{};
+            b.type = r.varInt();
+            if (!readOptions(&r, b.type, b.opt)) return;
+            b.scaling = r.f32(), b.speed = r.f32(), b.weight = r.varInt();
+            if (b.weight > 0) e.blockParticles.push_back(b);
         }
         e.playSound = r.boolean();
         if (!r.ok) return;
@@ -217,15 +220,20 @@ void Particles::attach(net::Client& client) {
 }
 
 bool Particles::skipOptions(void* reader, int type) const {
+    Options unused;
+    return readOptions(reader, type, unused);
+}
+
+bool Particles::readOptions(void* reader, int type, Options& o) const {
     net::Reader& r = *static_cast<net::Reader*>(reader);
     if (type < 0 || size_t(type) >= types_.size()) return false;
     switch (types_[size_t(type)].opt) {
         case Opt::None: break;
-        case Opt::Block: r.varInt(); break;
-        case Opt::Dust: r.i32v(), r.f32(); break;
-        case Opt::DustTransition: r.i32v(), r.i32v(), r.f32(); break;
-        case Opt::Spell: r.i32v(), r.f32(); break;
-        case Opt::Color: r.i32v(); break;
+        case Opt::Block: o.block = r.varInt(); break;
+        case Opt::Dust: o.color = 0xFF000000u | u32(r.i32v()), o.scale = r.f32(), o.hasColor = true; break;
+        case Opt::DustTransition: o.color = 0xFF000000u | u32(r.i32v()), r.i32v(), o.scale = r.f32(), o.hasColor = true; break;
+        case Opt::Spell: o.color = u32(r.i32v()), o.power = r.f32(), o.hasColor = true; break;
+        case Opt::Color: o.color = u32(r.i32v()), o.hasColor = true; break;
         case Opt::Float: r.f32(); break;
         case Opt::VarInt: r.varInt(); break;
         case Opt::Int: r.i32v(); break;
@@ -1123,8 +1131,51 @@ void Particles::weather(const double cam[3]) {
     }
 }
 
+// ClientExplosionTracker.tick: up to 512 debris / smoke particles per tick over this tick's explosions (picked by
+// block count), each at a random point of the blast sphere that is air, flying outwards (ExplosionParticleInfo).
+void Particles::tickExplosions() {
+    if (trackedExplosions_.empty()) return;
+    long long total = 0;
+    for (const NetExplosion& e : trackedExplosions_) total += std::max(e.blockCount, 0);
+    const int count = int(std::min<long long>(total, 512));
+    for (int i = 0; i < count; ++i) {
+        long long pick = std::uniform_int_distribution<long long>(0, total - 1)(rng_);
+        const NetExplosion* ex = nullptr;
+        for (const NetExplosion& e : trackedExplosions_)
+            if ((pick -= std::max(e.blockCount, 0)) < 0) {
+                ex = &e;
+                break;
+            }
+        if (!ex) break;
+        double dir[3] = {randf() * 2.0 - 1.0, randf() * 2.0 - 1.0, randf() * 2.0 - 1.0};
+        const double len = std::sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
+        if (len < 1.0e-5) dir[0] = dir[1] = dir[2] = 0;  // Vec3.normalize of a (near) zero vector
+        else for (double& d : dir) d /= len;
+        const float radius = std::cbrt(randf()) * ex->radius;
+        const double local[3] = {dir[0] * radius, dir[1] * radius, dir[2] * radius};
+        const double pos[3] = {ex->pos[0] + local[0], ex->pos[1] + local[1], ex->pos[2] + local[2]};
+        const u16 at = blockAt(int(std::floor(pos[0])), int(std::floor(pos[1])), int(std::floor(pos[2])));
+        if (registry_.infos()[at].kind != KindAir) continue;  // BlockState.isAir
+        const float speed = 0.5f / (radius / ex->radius + 0.1f) * randf() * randf() + 0.3f;
+        int weights = 0;
+        for (const BlockParticleInfo& b : ex->blockParticles) weights += b.weight;
+        int w = std::uniform_int_distribution<int>(0, std::max(weights - 1, 0))(rng_);
+        const BlockParticleInfo* info = &ex->blockParticles.back();
+        for (const BlockParticleInfo& b : ex->blockParticles)
+            if ((w -= b.weight) < 0) {
+                info = &b;
+                break;
+            }
+        add(info->type, ex->pos[0] + local[0] * info->scaling, ex->pos[1] + local[1] * info->scaling,
+            ex->pos[2] + local[2] * info->scaling, dir[0] * speed * info->speed, dir[1] * speed * info->speed,
+            dir[2] * speed * info->speed, &info->opt);
+    }
+    trackedExplosions_.clear();
+}
+
 void Particles::tick() {
     ++ticks_;
+    tickExplosions();
     // Weather from the server (ClientPacketListener.handleGameEvent).
     for (auto [type, value] : weatherQueue_) {
         if (type == 1) rainTarget_ = 1.0f, rain_ = 0.0f;  // start raining: the level ramps up via event 7
@@ -1193,6 +1244,7 @@ void Particles::frame(double dt, const double cam[3]) {
         s.x = e.pos[0], s.y = e.pos[1], s.z = e.pos[2];
         s.dx = 1, s.sx = 1, s.count = 0;
         spawns.push_back(s);
+        if (!e.blockParticles.empty()) trackedExplosions_.push_back(e);  // ClientLevel.trackExplosionEffects
     }
     std::shared_lock lock(world_.mutex());
     for (CachedBlock& c : blockCache2_) c.y = INT32_MIN;  // the world may have changed since the last frame

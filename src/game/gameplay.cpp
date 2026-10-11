@@ -13,6 +13,7 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <optional>
 
 namespace {
 
@@ -41,8 +42,115 @@ Gameplay::Gameplay(World& world, BlockRegistry& registry, const GameReports& rep
     const char* v = std::getenv("MCPP_GAMEPLAY_VERBOSE");
     verbose_ = v && *v == '1';
     const std::vector<std::string> components = registryNames(reports, "minecraft:data_component_type");
-    for (size_t i = 0; i < components.size(); ++i)
+    for (size_t i = 0; i < components.size(); ++i) {
         if (components[i] == "minecraft:charged_projectiles") chargedProjectilesType_ = int(i);
+        if (components[i] == "minecraft:tool") toolType_ = int(i);
+        if (components[i] == "minecraft:can_break") canBreakType_ = int(i);
+    }
+    blockNames_ = registryNames(reports, "minecraft:block");
+}
+
+namespace {
+// HolderSet<Block> from the network: a tag ("#minecraft:mineable/pickaxe") or block names.
+std::vector<std::string> readBlockSet(net::Reader& r, const std::vector<std::string>& blockNames) {
+    std::vector<std::string> out;
+    const i32 c = r.varInt();
+    if (c == 0) {
+        out.push_back("#" + std::string(r.str()));
+        return out;
+    }
+    for (i32 i = 0; i < c - 1 && r.ok; ++i) {
+        const i32 id = r.varInt();
+        if (id >= 0 && size_t(id) < blockNames.size()) out.push_back(blockNames[size_t(id)]);
+    }
+    return out;
+}
+}  // namespace
+
+const ItemRules::Tool* Gameplay::heldTool(const ui::ItemStack* s) {
+    if (!s) return nullptr;
+    if (toolType_ >= 0) {
+        if (std::find(s->removed.begin(), s->removed.end(), toolType_) != s->removed.end()) return nullptr;
+        for (const ui::ItemStack::Component& c : s->added) {
+            if (c.type != toolType_) continue;
+            auto it = toolCache_.find(c.data);
+            if (it == toolCache_.end()) {  // Tool.STREAM_CODEC
+                ItemRules::Tool t;
+                net::Reader r(reinterpret_cast<const u8*>(c.data.data()), c.data.size());
+                const i32 n = r.varInt();
+                for (i32 i = 0; i < n && r.ok; ++i) {
+                    ItemRules::Rule rule;
+                    rule.blocks = rules_.blocks(readBlockSet(r, blockNames_));
+                    if (r.boolean()) rule.speed = r.f32();
+                    if (r.boolean()) rule.correct = r.boolean() ? 1 : 0;
+                    t.rules.push_back(std::move(rule));
+                }
+                t.defaultSpeed = r.f32();
+                t.damagePerBlock = r.varInt();
+                t.canDestroyInCreative = r.boolean();
+                if (!r.ok) return rules_.tool(itemName(s->item));
+                if (verbose_) LOG("gameplay: held tool component, %zu rules, default speed %.2f", t.rules.size(), t.defaultSpeed);
+                it = toolCache_.emplace(c.data, std::move(t)).first;
+            }
+            return &it->second;
+        }
+    }
+    return rules_.tool(itemName(s->item));
+}
+
+bool Gameplay::adventureMayBreak(int x, int y, int z) {
+    const ui::ItemStack* s = mainHand();
+    if (!s || canBreakType_ < 0) return false;
+    const std::string& state = registry_.name(world_.block(x, y, z));
+    const std::string block = state.substr(0, state.find('['));
+    auto property = [&](const std::string& name) -> std::optional<std::string> {  // the state's property value
+        const size_t open = state.find('[');
+        if (open == std::string::npos) return std::nullopt;
+        const std::string key = name + "=";
+        for (size_t p = open + 1; p < state.size();) {
+            const size_t end = std::min(state.find(',', p), state.find(']', p));
+            if (state.compare(p, key.size(), key) == 0) return state.substr(p + key.size(), end - p - key.size());
+            if (end == std::string::npos) break;
+            p = end + 1;
+        }
+        return std::nullopt;
+    };
+    auto less = [](const std::string& a, const std::string& b) {  // Comparable property values (ints numerically)
+        char* ea = nullptr;
+        char* eb = nullptr;
+        const long ia = std::strtol(a.c_str(), &ea, 10), ib = std::strtol(b.c_str(), &eb, 10);
+        if (!a.empty() && !b.empty() && *ea == 0 && *eb == 0) return ia < ib;
+        return a < b;
+    };
+    for (const ui::ItemStack::Component& c : s->added) {
+        if (c.type != canBreakType_) continue;
+        net::Reader r(reinterpret_cast<const u8*>(c.data.data()), c.data.size());
+        const i32 n = r.varInt();
+        for (i32 i = 0; i < n && r.ok; ++i) {  // AdventureModePredicate.test: any BlockPredicate matches
+            bool match = true;
+            if (r.boolean() && !rules_.blockIn(rules_.blocks(readBlockSet(r, blockNames_)), block)) match = false;
+            if (r.boolean()) {  // StatePropertiesPredicate
+                const i32 props = r.varInt();
+                for (i32 k = 0; k < props && r.ok; ++k) {
+                    const std::string name(r.str());
+                    const std::optional<std::string> value = property(name);
+                    if (r.boolean()) {
+                        const std::string exact(r.str());
+                        if (!value || *value != exact) match = false;
+                    } else {
+                        std::optional<std::string> lo, hi;
+                        if (r.boolean()) lo = std::string(r.str());
+                        if (r.boolean()) hi = std::string(r.str());
+                        if (!value || (lo && less(*value, *lo)) || (hi && less(*hi, *value))) match = false;
+                    }
+                }
+            }
+            if (r.boolean()) r.nbt();  // block entity NBT: not known here; the server decides
+            if (r.varInt() != 0 || r.varInt() != 0) return true;  // component matchers: not decoded, let the server decide
+            if (match && r.ok) return true;
+        }
+    }
+    return false;
 }
 
 Gameplay::~Gameplay() = default;
@@ -264,10 +372,10 @@ void Gameplay::setPlayer(Game& game, ui::Ui& ui) {
     };
     game.onUseTick = [this] { tickUse(); };
     game.canDestroyInCreative = [this] {  // Item.canDestroyBlock: the tool component's can_destroy_blocks_in_creative
-        const ui::ItemStack* s = mainHand();
-        const ItemRules::Tool* t = s ? rules_.tool(itemName(s->item)) : nullptr;
+        const ItemRules::Tool* t = heldTool(mainHand());
         return !t || t->canDestroyInCreative;
     };
+    game.adventureMayBreak = [this](int x, int y, int z) { return adventureMayBreak(x, y, z); };
 }
 
 void Gameplay::frame() {
@@ -485,8 +593,7 @@ float Gameplay::destroyProgress(int, int, int, u16 state) {
     const ItemRules::Hardness h = rules_.hardness(key);
     if (h.destroyTime == -1.0f) return 0.0f;
     const std::string_view block = std::string_view(key).substr(0, key.find('['));
-    const ui::ItemStack* held = mainHand();
-    const ItemRules::Tool* tool = held ? rules_.tool(itemName(held->item)) : nullptr;
+    const ItemRules::Tool* tool = heldTool(mainHand());
     float speed = tool ? rules_.miningSpeed(*tool, block) : 1.0f;
     const bool correct = !h.requiresTool || (tool && rules_.correctForDrops(*tool, block));
     if (speed > 1.0f) speed += float(attribute("mining_efficiency", 0.0));

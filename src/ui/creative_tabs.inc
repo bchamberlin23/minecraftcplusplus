@@ -210,33 +210,34 @@ static const char* const kTab3[] = {
     "lightning_rod", "exposed_lightning_rod", "weathered_lightning_rod", "oxidized_lightning_rod",
     "waxed_lightning_rod", "waxed_exposed_lightning_rod", "waxed_weathered_lightning_rod",
     "waxed_oxidized_lightning_rod", "flower_pot", "decorated_pot", "armor_stand", "item_frame", "glow_item_frame",
-    "painting", "bookshelf", "chiseled_bookshelf", "oak_shelf", "spruce_shelf", "birch_shelf", "jungle_shelf",
-    "acacia_shelf", "dark_oak_shelf", "mangrove_shelf", "cherry_shelf", "pale_oak_shelf", "poplar_shelf",
-    "bamboo_shelf", "crimson_shelf", "warped_shelf", "lectern", "tinted_glass", "oak_sign", "oak_hanging_sign",
-    "spruce_sign", "spruce_hanging_sign", "birch_sign", "birch_hanging_sign", "jungle_sign", "jungle_hanging_sign",
-    "acacia_sign", "acacia_hanging_sign", "dark_oak_sign", "dark_oak_hanging_sign", "mangrove_sign",
-    "mangrove_hanging_sign", "cherry_sign", "cherry_hanging_sign", "pale_oak_sign", "pale_oak_hanging_sign",
-    "poplar_sign", "poplar_hanging_sign", "bamboo_sign", "bamboo_hanging_sign", "crimson_sign",
-    "crimson_hanging_sign", "warped_sign", "warped_hanging_sign", "chest", "copper_chest", "exposed_copper_chest",
-    "weathered_copper_chest", "oxidized_copper_chest", "waxed_copper_chest", "waxed_exposed_copper_chest",
-    "waxed_weathered_copper_chest", "waxed_oxidized_copper_chest", "barrel", "ender_chest", "shulker_box",
-    "white_shulker_box", "light_gray_shulker_box", "gray_shulker_box", "black_shulker_box", "brown_shulker_box",
-    "red_shulker_box", "orange_shulker_box", "yellow_shulker_box", "lime_shulker_box", "green_shulker_box",
-    "cyan_shulker_box", "light_blue_shulker_box", "blue_shulker_box", "purple_shulker_box", "magenta_shulker_box",
-    "pink_shulker_box", "respawn_anchor", "white_bed", "light_gray_bed", "gray_bed", "black_bed", "brown_bed",
-    "red_bed", "orange_bed", "yellow_bed", "lime_bed", "green_bed", "cyan_bed", "light_blue_bed", "blue_bed",
-    "purple_bed", "magenta_bed", "pink_bed", "straw_bed", "candle", "white_candle", "light_gray_candle",
-    "gray_candle", "black_candle", "brown_candle", "red_candle", "orange_candle", "yellow_candle", "lime_candle",
-    "green_candle", "cyan_candle", "light_blue_candle", "blue_candle", "purple_candle", "magenta_candle",
-    "pink_candle", "white_banner", "light_gray_banner", "gray_banner", "black_banner", "brown_banner", "red_banner",
-    "orange_banner", "yellow_banner", "lime_banner", "green_banner", "cyan_banner", "light_blue_banner",
-    "blue_banner", "purple_banner", "magenta_banner", "pink_banner", "skeleton_skull", "wither_skeleton_skull",
-    "player_head", "zombie_head", "creeper_head", "piglin_head", "dragon_head", "dragon_egg", "end_portal_frame",
-    "vault", "ender_eye", "copper_golem_statue", "exposed_copper_golem_statue", "weathered_copper_golem_statue",
-    "oxidized_copper_golem_statue", "waxed_copper_golem_statue", "waxed_exposed_copper_golem_statue",
-    "waxed_weathered_copper_golem_statue", "waxed_oxidized_copper_golem_statue", "infested_stone",
-    "infested_cobblestone", "infested_stone_bricks", "infested_mossy_stone_bricks", "infested_cracked_stone_bricks",
-    "infested_chiseled_stone_bricks", "infested_deepslate", nullptr};
+    "painting", "@paintings:placeable", "bookshelf", "chiseled_bookshelf", "oak_shelf", "spruce_shelf", "birch_shelf",
+    "jungle_shelf", "acacia_shelf", "dark_oak_shelf", "mangrove_shelf", "cherry_shelf", "pale_oak_shelf",
+    "poplar_shelf", "bamboo_shelf", "crimson_shelf", "warped_shelf", "lectern", "tinted_glass", "oak_sign",
+    "oak_hanging_sign", "spruce_sign", "spruce_hanging_sign", "birch_sign", "birch_hanging_sign", "jungle_sign",
+    "jungle_hanging_sign", "acacia_sign", "acacia_hanging_sign", "dark_oak_sign", "dark_oak_hanging_sign",
+    "mangrove_sign", "mangrove_hanging_sign", "cherry_sign", "cherry_hanging_sign", "pale_oak_sign",
+    "pale_oak_hanging_sign", "poplar_sign", "poplar_hanging_sign", "bamboo_sign", "bamboo_hanging_sign",
+    "crimson_sign", "crimson_hanging_sign", "warped_sign", "warped_hanging_sign", "chest", "copper_chest",
+    "exposed_copper_chest", "weathered_copper_chest", "oxidized_copper_chest", "waxed_copper_chest",
+    "waxed_exposed_copper_chest", "waxed_weathered_copper_chest", "waxed_oxidized_copper_chest", "barrel",
+    "ender_chest", "shulker_box", "white_shulker_box", "light_gray_shulker_box", "gray_shulker_box",
+    "black_shulker_box", "brown_shulker_box", "red_shulker_box", "orange_shulker_box", "yellow_shulker_box",
+    "lime_shulker_box", "green_shulker_box", "cyan_shulker_box", "light_blue_shulker_box", "blue_shulker_box",
+    "purple_shulker_box", "magenta_shulker_box", "pink_shulker_box", "respawn_anchor", "white_bed", "light_gray_bed",
+    "gray_bed", "black_bed", "brown_bed", "red_bed", "orange_bed", "yellow_bed", "lime_bed", "green_bed", "cyan_bed",
+    "light_blue_bed", "blue_bed", "purple_bed", "magenta_bed", "pink_bed", "straw_bed", "candle", "white_candle",
+    "light_gray_candle", "gray_candle", "black_candle", "brown_candle", "red_candle", "orange_candle",
+    "yellow_candle", "lime_candle", "green_candle", "cyan_candle", "light_blue_candle", "blue_candle",
+    "purple_candle", "magenta_candle", "pink_candle", "white_banner", "light_gray_banner", "gray_banner",
+    "black_banner", "brown_banner", "red_banner", "orange_banner", "yellow_banner", "lime_banner", "green_banner",
+    "cyan_banner", "light_blue_banner", "blue_banner", "purple_banner", "magenta_banner", "pink_banner",
+    "@ominous_banner", "skeleton_skull", "wither_skeleton_skull", "player_head", "zombie_head", "creeper_head",
+    "piglin_head", "dragon_head", "dragon_egg", "end_portal_frame", "vault", "ender_eye", "copper_golem_statue",
+    "exposed_copper_golem_statue", "weathered_copper_golem_statue", "oxidized_copper_golem_statue",
+    "waxed_copper_golem_statue", "waxed_exposed_copper_golem_statue", "waxed_weathered_copper_golem_statue",
+    "waxed_oxidized_copper_golem_statue", "infested_stone", "infested_cobblestone", "infested_stone_bricks",
+    "infested_mossy_stone_bricks", "infested_cracked_stone_bricks", "infested_chiseled_stone_bricks",
+    "infested_deepslate", nullptr};
 static const char* const kTab4[] = {
     "redstone", "redstone_torch", "redstone_block", "repeater", "comparator", "target", "waxed_copper_bulb",
     "waxed_exposed_copper_bulb", "waxed_weathered_copper_bulb", "waxed_oxidized_copper_bulb", "lever", "oak_button",
@@ -273,11 +274,11 @@ static const char* const kTab7[] = {
     "dark_oak_chest_boat", "mangrove_boat", "mangrove_chest_boat", "cherry_boat", "cherry_chest_boat",
     "pale_oak_boat", "pale_oak_chest_boat", "poplar_boat", "poplar_chest_boat", "bamboo_raft", "bamboo_chest_raft",
     "rail", "powered_rail", "detector_rail", "activator_rail", "minecart", "hopper_minecart", "chest_minecart",
-    "furnace_minecart", "tnt_minecart", "music_disc_13", "music_disc_cat", "music_disc_blocks", "music_disc_chirp",
-    "music_disc_far", "music_disc_mall", "music_disc_mellohi", "music_disc_stal", "music_disc_strad",
-    "music_disc_ward", "music_disc_11", "music_disc_creator_music_box", "music_disc_wait", "music_disc_creator",
-    "music_disc_precipice", "music_disc_otherside", "music_disc_relic", "music_disc_5", "music_disc_pigstep",
-    "music_disc_tears", "music_disc_lava_chicken", "music_disc_bounce", nullptr};
+    "furnace_minecart", "tnt_minecart", "@goat_horns", "music_disc_13", "music_disc_cat", "music_disc_blocks",
+    "music_disc_chirp", "music_disc_far", "music_disc_mall", "music_disc_mellohi", "music_disc_stal",
+    "music_disc_strad", "music_disc_ward", "music_disc_11", "music_disc_creator_music_box", "music_disc_wait",
+    "music_disc_creator", "music_disc_precipice", "music_disc_otherside", "music_disc_relic", "music_disc_5",
+    "music_disc_pigstep", "music_disc_tears", "music_disc_lava_chicken", "music_disc_bounce", nullptr};
 static const char* const kTab8[] = {
     "wooden_sword", "stone_sword", "copper_sword", "iron_sword", "golden_sword", "diamond_sword", "netherite_sword",
     "wooden_spear", "stone_spear", "copper_spear", "iron_spear", "golden_spear", "diamond_spear", "netherite_spear",
@@ -298,8 +299,8 @@ static const char* const kTab9[] = {
     "dried_kelp", "beef", "cooked_beef", "porkchop", "cooked_porkchop", "mutton", "cooked_mutton", "chicken",
     "cooked_chicken", "rabbit", "cooked_rabbit", "cod", "cooked_cod", "salmon", "cooked_salmon", "tropical_fish",
     "pufferfish", "bread", "cookie", "cake", "pumpkin_pie", "rotten_flesh", "spider_eye", "mushroom_stew",
-    "beetroot_soup", "rabbit_stew", "milk_bucket", "honey_bottle", "@ominous_bottles", "@potion:potion",
-    "@potion:splash_potion", "@potion:lingering_potion", nullptr};
+    "beetroot_soup", "rabbit_stew", "@suspicious_stews", "milk_bucket", "honey_bottle", "@ominous_bottles",
+    "@potion:potion", "@potion:splash_potion", "@potion:lingering_potion", nullptr};
 static const char* const kTab10[] = {
     "coal", "charcoal", "emerald", "lapis_lazuli", "amethyst_shard", "quartz", "raw_copper", "raw_iron", "raw_gold",
     "diamond", "ancient_debris", "copper_nugget", "iron_nugget", "gold_nugget", "copper_ingot", "iron_ingot",
@@ -329,7 +330,7 @@ static const char* const kTab10[] = {
     "silence_armor_trim_smithing_template", "tide_armor_trim_smithing_template", "snout_armor_trim_smithing_template",
     "rib_armor_trim_smithing_template", "eye_armor_trim_smithing_template", "spire_armor_trim_smithing_template",
     "flow_armor_trim_smithing_template", "bolt_armor_trim_smithing_template", "experience_bottle", "trial_key",
-    "ominous_trial_key", nullptr};
+    "ominous_trial_key", "@enchanted_books", nullptr};
 static const char* const kTab11[] = {
     "spawner", "trial_spawner", "creaking_heart", "chicken_spawn_egg", "cow_spawn_egg", "pig_spawn_egg",
     "sheep_spawn_egg", "camel_spawn_egg", "donkey_spawn_egg", "horse_spawn_egg", "mule_spawn_egg", "cat_spawn_egg",
@@ -352,7 +353,7 @@ static const char* const kTab11[] = {
     "shulker_spawn_egg", nullptr};
 static const char* const kTab12[] = {
     "command_block", "chain_command_block", "repeating_command_block", "command_block_minecart", "jigsaw",
-    "structure_block", "structure_void", "barrier", "debug_stick", "test_instance_block", nullptr};
+    "structure_block", "structure_void", "barrier", "debug_stick", "test_instance_block", "@paintings:other", nullptr};
 static const char* const kTab13[] = {
     nullptr};
 static const TabDef kTabDefs[] = {
@@ -371,3 +372,21 @@ static const TabDef kTabDefs[] = {
     {"itemGroup.op", "command_block", TabKind::Category, 0, 5, true, true, true, "items", kTab12},
     {"itemGroup.inventory", "chest", TabKind::Inventory, 0, 6, true, false, false, "inventory", kTab13},
 };
+// PaintingVariantTags.PLACEABLE and InstrumentTags.GOAT_HORNS members (tag order).
+static const char* const kPlaceablePaintings[] = {
+    "minecraft:kebab", "minecraft:aztec", "minecraft:alban", "minecraft:aztec2", "minecraft:bomb", "minecraft:plant",
+    "minecraft:wasteland", "minecraft:pool", "minecraft:courbet", "minecraft:sea", "minecraft:sunset",
+    "minecraft:creebet", "minecraft:wanderer", "minecraft:graham", "minecraft:match", "minecraft:bust",
+    "minecraft:stage", "minecraft:void", "minecraft:skull_and_roses", "minecraft:wither", "minecraft:fighters",
+    "minecraft:pointer", "minecraft:pigscene", "minecraft:burning_skull", "minecraft:skeleton",
+    "minecraft:donkey_kong", "minecraft:baroque", "minecraft:humble", "minecraft:meditative",
+    "minecraft:prairie_ride", "minecraft:unpacked", "minecraft:backyard", "minecraft:bouquet", "minecraft:cavebird",
+    "minecraft:changing", "minecraft:cotan", "minecraft:endboss", "minecraft:fern", "minecraft:finding",
+    "minecraft:lowmist", "minecraft:orb", "minecraft:owlemons", "minecraft:passage", "minecraft:pond",
+    "minecraft:sunflowers", "minecraft:tides", "minecraft:dennis", nullptr};
+static const char* const kGoatHorns[] = {"minecraft:ponder_goat_horn", "minecraft:sing_goat_horn", "minecraft:seek_goat_horn", "minecraft:feel_goat_horn", "minecraft:admire_goat_horn", "minecraft:call_goat_horn", "minecraft:yearn_goat_horn", "minecraft:dream_goat_horn", nullptr};
+struct StewEffect {
+    const char* effect;
+    int ticks;
+};
+static const StewEffect kSuspiciousStews[] = {{"saturation", 7}, {"blindness", 220}, {"nausea", 140}, {"night_vision", 100}, {"fire_resistance", 60}, {"weakness", 140}, {"regeneration", 140}, {"jump_boost", 100}, {"poison", 220}, {"wither", 140}};

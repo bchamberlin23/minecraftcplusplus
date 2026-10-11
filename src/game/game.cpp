@@ -130,10 +130,8 @@ CameraState Game::handCamera() const {
 
 CameraState Game::viewCamera() const {
     CameraState c = camera();
-    if (cameraMode == 0) {
-        if (viewCameraOverride) viewCameraOverride(c);
-        return applyBob(*this, c);
-    }
+    if (viewCameraOverride) viewCameraOverride(c);
+    if (cameraMode == 0) return applyBob(*this, c);
     if (cameraMode == 2) c.yaw += float(kPi), c.pitch = -c.pitch;
     const double cp = std::cos(c.pitch);
     const double back[3] = {std::sin(c.yaw) * cp, std::sin(c.pitch), -std::cos(c.yaw) * cp};
@@ -406,7 +404,8 @@ bool Game::destroyBlock(int x, int y, int z) {
 
 // MultiPlayerGameMode.startDestroyBlock (the packet goes out after the prediction, like startPrediction).
 bool Game::startDestroyBlock(int x, int y, int z, int face) {
-    if (gameMode == 2 || gameMode == 3) return false;  // blockActionRestricted (adventure without can_break)
+    // Player.blockActionRestricted: spectators never, adventure only with a matching can_break on the held item.
+    if (gameMode == 3 || (gameMode == 2 && !(adventureMayBreak && adventureMayBreak(x, y, z)))) return false;
     if (instabuild) {
         const bool breaks = !(canDestroyInCreative && !canDestroyInCreative()) && world_.block(x, y, z) != 0;
         sendDig(kStartDestroy, x, y, z, face, breaks);

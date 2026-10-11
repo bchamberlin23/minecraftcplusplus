@@ -6,6 +6,7 @@
 #include "ui/ui_state.h"
 #include "world/world.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace ui {
@@ -88,13 +89,23 @@ void handlers(UiState& s, net::Client& client) {
             if (found == 1) {
                 bed.pos[0] = int(packed >> 38), bed.pos[1] = int((packed << 52) >> 52), bed.pos[2] = int((packed << 26) >> 38);
             }
+            if (sp->game) {
+                sp->game->sleeping = bed.sleeping;
+                std::copy(bed.pos, bed.pos + 3, sp->game->bedPos);
+            }
         });
     });
-    client.onPlayPeek("respawn", [sp](net::Reader&) { sp->post([] { bed.sleeping = false; }); });
+    client.onPlayPeek("respawn", [sp](net::Reader&) {
+        sp->post([sp] {
+            bed.sleeping = false;
+            if (sp->game) sp->game->sleeping = false;
+        });
+    });
 }
 
-void attached(UiState&) {
+void attached(UiState& s) {
     bed.sleeping = false;
+    if (s.game) s.game->sleeping = false;
     sw.lastMode = sw.previousMode = -1;
 }
 
@@ -102,6 +113,10 @@ void attached(UiState&) {
 // orientation reversed, level, then moved 0.15 up.
 void sleepingCamera(UiState& s, CameraState& c) {
     if (!bed.sleeping) return;
+    if (s.game->cameraMode != 0) {  // detached: from the sleeping eyes (0.2 above the bed) along the player's look
+        c.x = bed.pos[0] + 0.5, c.y = bed.pos[1] + 0.6875 + 0.2, c.z = bed.pos[2] + 0.5;
+        return;
+    }
     const std::string& state = s.registry->name(s.world->block(bed.pos[0], bed.pos[1], bed.pos[2]));
     float bedYaw = 0;  // Direction.toYRot of the bed's facing: south 0, west 90, north 180, east 270
     if (state.find("facing=west") != std::string::npos) bedYaw = 90;

@@ -172,6 +172,7 @@ void Ui::State::drawHud(Canvas& c) {
         if (!offhand.empty()) blitSprite(c, sprites.sprite("hud/hotbar_offhand_left"), float(center - 91 - 29), H - 23, 29, 24);
         for (int i = 0; i < 9; ++i) drawItem(c, inventory.slots[size_t(36 + i)], float(center - 90 + i * 20 + 2), H - 16 - 3);
         if (!offhand.empty()) drawItem(c, offhand, float(center - 91 - 26), H - 16 - 3);
+        drawHotbarAttackIndicator(*this, c);  // gameplay_hud.cpp
     }
     // Status effect icons (Hud.extractEffects), top right: beneficial first row, the rest below.
     if (screen != Screen::Inventory) {
@@ -500,7 +501,10 @@ void Ui::State::drawTextField(Canvas& c, TextField& f, float x, float y, float w
     const int curRel = f.cursor - f.scroll;
     const bool cursorVisible = curRel >= 0 && curRel <= int(visible.size());
     const bool blink = focused && int((clock - f.blinkStart) / 0.3) % 2 == 0;
-    float endX = font.draw(c, visible, x, y, color, shadow);
+    Text formatted;
+    float endX = &f == &chatInput && chatFormatter && chatFormatter(visible, f.scroll, formatted)
+                     ? font.draw(c, formatted, x, y, color, shadow)
+                     : font.draw(c, visible, x, y, color, shadow);
     const bool atEnd = f.cursor >= int(f.value.size());
     const float cursorX = cursorVisible ? x + float(font.width(visible.substr(0, size_t(curRel)))) : endX;
     if (blink && cursorVisible) {

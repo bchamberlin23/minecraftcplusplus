@@ -38,6 +38,9 @@ public:
         std::vector<Rule> rules;
     };
     const Tool* tool(std::string_view itemName);  // "minecraft:wooden_pickaxe"; nullptr: no tool component
+    // Block indices of block names and "#tag" references (the indices Tool rules use).
+    std::vector<u32> blocks(const std::vector<std::string>& namesOrTags) const;
+    bool blockIn(const std::vector<u32>& set, std::string_view blockName) const;
     // Tool.getMiningSpeed / isCorrectForDrops for a block (name without properties).
     float miningSpeed(const Tool& t, std::string_view blockName) const;
     bool correctForDrops(const Tool& t, std::string_view blockName) const;

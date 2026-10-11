@@ -974,6 +974,7 @@ const std::vector<EquipmentLayer>& ItemModels::equipmentLayers(const std::string
                 e.undyed = d.is_object() && d.contains("color_when_undyed") ? i32(d["color_when_undyed"].get<i64>() & 0xFFFFFF) : -1;
             }
             e.playerTexture = l.value("use_player_texture", false);
+            e.path = std::string("entity/equipment/") + layerType + "/" + strip(l.value("texture", ""));
             layers.push_back(e);
         }
     return impl_->equipLayers.emplace(key, std::move(layers)).first->second;
@@ -990,6 +991,43 @@ const std::vector<EquipmentLayer>& ItemModels::itemLayers(int item, int type) {
         slot = eq.asset.empty() ? &kNone : &equipmentLayers(eq.asset, kTypes[type]);
     }
     return *slot;
+}
+
+bool ItemModels::mountLayer(std::string_view entity, int slot, bool baby, const char*& model, const char*& layerType) {
+    struct Row {
+        const char* entity;
+        int slot;
+        const char *model, *babyModel, *layer;
+    };
+    // The renderers' SimpleEquipmentLayer / LlamaDecorLayer registrations (no baby model: babies draw nothing).
+    static const Row kRows[] = {
+        {"horse", 6, "horse_armor#main", nullptr, "horse_body"},
+        {"horse", 7, "horse#saddle", nullptr, "horse_saddle"},
+        {"donkey", 7, "donkey#saddle", nullptr, "donkey_saddle"},
+        {"mule", 7, "mule#saddle", nullptr, "mule_saddle"},
+        {"zombie_horse", 6, "undead_horse_armor#main", nullptr, "horse_body"},
+        {"zombie_horse", 7, "zombie_horse#saddle", nullptr, "zombie_horse_saddle"},
+        {"skeleton_horse", 6, "undead_horse_armor#main", nullptr, "horse_body"},
+        {"skeleton_horse", 7, "skeleton_horse#saddle", nullptr, "skeleton_horse_saddle"},
+        {"llama", 6, "llama#decor", nullptr, "llama_body"},
+        {"trader_llama", 6, "llama#decor", "llama_baby#decor", "llama_body"},  // babies: the trader decor only
+        {"pig", 7, "pig#saddle", nullptr, "pig_saddle"},
+        {"strider", 7, "strider#saddle", nullptr, "strider_saddle"},
+        {"camel", 7, "camel#saddle", nullptr, "camel_saddle"},
+        {"camel_husk", 7, "camel_husk#saddle", nullptr, "camel_husk_saddle"},
+        {"wolf", 6, "wolf_armor#main", nullptr, "wolf_body"},
+        {"happy_ghast", 6, "happy_ghast_harness#main", "happy_ghast_baby_harness#main", "happy_ghast_body"},
+        {"nautilus", 6, "nautilus_armor#main", nullptr, "nautilus_body"},
+        {"nautilus", 7, "nautilus#saddle", nullptr, "nautilus_saddle"},
+    };
+    if (entity.starts_with("minecraft:")) entity.remove_prefix(10);
+    for (const Row& r : kRows)
+        if (r.slot == slot && entity == r.entity) {
+            model = baby ? r.babyModel : r.model;
+            layerType = r.layer;
+            return model != nullptr;
+        }
+    return false;
 }
 
 std::string ItemModels::blockParticleTexture(const std::string& blockName) {

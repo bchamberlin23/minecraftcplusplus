@@ -467,6 +467,7 @@ void Riding::boatTick(ent::Entity& e) {
     e.vel[2] += std::cos(e.yaw * kDegf) * acceleration;
     paddleLeft_ = (right && !left) || up;
     paddleRight_ = (left && !right) || up;
+    e.paddle[0] = paddleLeft_, e.paddle[1] = paddleRight_;  // the paddle animation follows our own input
     if (client_) {
         net::Writer w;  // ServerboundPaddleBoatPacket
         w.boolean(paddleLeft_), w.boolean(paddleRight_);

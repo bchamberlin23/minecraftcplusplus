@@ -704,6 +704,34 @@ int EntityRenderer::equipmentLayers(const Entity& e, const TypeDef& d, Layer* ou
         for (const EquipmentLayer& l : items_->itemLayers(chest, 3))
                 if (l.tex >= 0 && n < max) out[n++] = {elytra, l.tex, kWhite, u8(Elytra | ((e.equipFoil & 16) ? Glint : 0))};
     }
+    // SimpleEquipmentLayer / LlamaDecorLayer: body armour, carpets and saddles (posed like the base model).
+    if (e.info && d.anim != Anim::Humanoid && d.anim != Anim::Zombie && d.anim != Anim::Skeleton) {
+        const std::string& name = e.info->name;
+        for (int slot : {6, 7}) {
+            const char *modelName, *layerType;
+            if (!ItemModels::mountLayer(name, slot, e.baby, modelName, layerType)) continue;
+            const int item = e.equipment[slot];
+            std::string asset = item >= 0 ? items_->equippable(item).asset : std::string();
+            if (item >= 0 && items_->equippable(item).slot != slot) asset.clear();
+            if (slot == 6 && name.ends_with("llama") && e.baby) asset.clear();  // carpets: adults only
+            if (asset.empty() && slot == 6 && name == "minecraft:trader_llama") asset = e.baby ? "trader_llama_baby" : "trader_llama";
+            if (asset.empty()) continue;
+            const int model = assets_.model(modelName);
+            if (model < 0) continue;
+            bool glint = (e.equipFoil >> slot) & 1;
+            for (const EquipmentLayer& l : items_->equipmentLayers(asset, layerType)) {
+                if (l.tex < 0 || n >= max) continue;
+                u32 color = kWhite;
+                if (l.dyeable) {
+                    const i32 dye = e.equipDye[slot] >= 0 ? e.equipDye[slot] : l.undyed;
+                    if (dye < 0) continue;
+                    color = abgr(u32(dye));
+                }
+                out[n++] = {model, l.tex, color, u8(Armor | (glint ? Glint : 0))};
+                glint = false;
+            }
+        }
+    }
     return n;
 }
 
@@ -744,14 +772,53 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
     } else if (living) {
         const float bodyYaw = lerpAngle(pt, e.prevBodyYaw, e.bodyYaw);
         const float headYaw = lerpAngle(pt, e.prevHeadYaw, e.headYaw);
-        if (e.category == Category::Player && e.pose == 5) root = mul(root, translate(0, -2.0f / 16.0f, 0));
+        const bool player = e.category == Category::Player;
+        const bool sleeping = e.pose == 2, spinAttack = (e.livingFlags & 4) != 0, fallFlying = (e.sharedFlags & 0x80) != 0;
+        const float swimAmount = e.swimAmountO + (e.swimAmount - e.swimAmountO) * pt;
+        if (player && e.pose == 5) root = mul(root, translate(0, -2.0f / 16.0f, 0));
+        // LivingEntityRenderer.submit: a sleeping entity lies with its head on the bed's pillow.
+        static constexpr int kBedStep[4][2] = {{0, 1}, {-1, 0}, {0, -1}, {1, 0}};  // Direction 2D: S, W, N, E
+        if (sleeping && e.bedFacing >= 0) {
+            const float headOffset = (e.info ? e.info->eye : 1.62f) - 0.1f;
+            root = mul(root, translate(-kBedStep[e.bedFacing][0] * headOffset, 0, -kBedStep[e.bedFacing][1] * headOffset));
+        }
         if (d.special == SpArmorStand) {
             root = mul(root, rotY((180.0f - yaw) * kDeg));
         } else {
-            root = mul(root, rotY((180.0f - bodyYaw) * kDeg));
+            // LivingEntityRenderer.setupRotations (frozen shaking, death roll, riptide spin, sleeping).
+            float bodyRot = bodyYaw;
+            if (fullyFrozen(e)) bodyRot += float(std::cos(std::floor(float(e.age) + pt) * 3.25f) * kPi * 0.4f);
+            if (!sleeping) root = mul(root, rotY((180.0f - bodyRot) * kDeg));
             if (e.deathTime > 0) {
                 float fall = std::sqrt(std::max(0.0f, (float(e.deathTime) + pt - 1.0f) / 20.0f * 1.6f));
                 root = mul(root, rotZ(std::min(fall, 1.0f) * d.flip * kDeg));
+            } else if (spinAttack) {
+                root = mul(root, rotX((-90.0f - pitch) * kDeg));
+                root = mul(root, rotY((float(e.age) + pt) * -75.0f * kDeg));
+            } else if (sleeping) {
+                static constexpr float kSleepRot[4] = {90.0f, 0.0f, 270.0f, 180.0f};  // sleepDirectionToRotation
+                root = mul(root, rotY((e.bedFacing >= 0 ? kSleepRot[e.bedFacing] : bodyRot) * kDeg));
+                root = mul(root, rotZ(d.flip * kDeg));
+                root = mul(root, rotY(270.0f * kDeg));
+            }
+            // AvatarRenderer.setupRotations: gliding and swimming / crawling bodies.
+            if (player && fallFlying) {
+                const float ft = float(e.fallFlyTicks) + pt;
+                const float flyScale = std::clamp(ft * ft / 100.0f, 0.0f, 1.0f);
+                if (!spinAttack) root = mul(root, rotX(flyScale * (-90.0f - pitch) * kDeg));
+                float mv[3], look[3];
+                for (int k = 0; k < 3; ++k) mv[k] = e.moveO[k] + (e.move[k] - e.moveO[k]) * pt;
+                look[0] = -std::sin(yaw * kDeg) * std::cos(pitch * kDeg), look[2] = std::cos(yaw * kDeg) * std::cos(pitch * kDeg);
+                const float mh = mv[0] * mv[0] + mv[2] * mv[2], lh = look[0] * look[0] + look[2] * look[2];
+                if (mh > 1e-5f && lh > 1e-5f) {
+                    const float dot = (mv[0] * look[0] + mv[2] * look[2]) / std::sqrt(mh * lh);
+                    const float sgn = mv[0] * look[2] - mv[2] * look[0];
+                    root = mul(root, rotY((sgn > 0 ? 1.0f : sgn < 0 ? -1.0f : 0.0f) * std::acos(std::min(1.0f, std::abs(dot)))));
+                }
+            } else if (player && swimAmount > 0) {
+                const float target = e.inWater ? -90.0f - pitch : -90.0f;
+                root = mul(root, rotX(swimAmount * target * kDeg));
+                if (e.pose == 3) root = mul(root, translate(0, -1.0f, 0.3f));
             }
         }
         root = mul(root, scale(-1, -1, 1));
@@ -788,6 +855,17 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         s.baby = e.baby;
         s.crouching = e.pose == 5;
         s.riding = e.vehicle >= 0;
+        s.swimAmount = swimAmount;
+        s.fallFlying = fallFlying;
+        if (fallFlying) {  // HumanoidMobRenderer.extractHumanoidRenderState: speedValue from the delta movement
+            float v = 0;
+            for (int k = 0; k < 3; ++k) {
+                const float m = e.moveO[k] + (e.move[k] - e.moveO[k]) * pt;
+                v += m * m;
+            }
+            v /= 0.2f;
+            s.speedValue = std::max(1.0f, v * v * v);
+        }
         s.aggressive = (e.mobFlags & 4) != 0;
         const bool rightHanded = e.mainArm != 0;
         s.rightItem = rightHanded ? e.equipment[0] >= 0 : e.equipment[1] >= 0;
@@ -831,6 +909,13 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         root = mul(root, translate(0, -1.501f, 0));
     }
 
+    // DonkeyModel / LlamaModel: the chests show only on chested animals.
+    const bool hideChests = !e.hasChest && e.info &&
+                            (e.info->name.ends_with("llama") || e.info->name == "minecraft:donkey" || e.info->name == "minecraft:mule");
+    // EquineSaddleModel: the reins show only while ridden.
+    const bool hideReins = e.equipment[7] >= 0 && e.info && (e.info->name.ends_with("horse") || e.info->name == "minecraft:donkey" ||
+                                                             e.info->name == "minecraft:mule") &&
+                           std::find(ridden_.begin(), ridden_.end(), e.id) == ridden_.end();
     PartPose rolePose[RoleCount];
     M34 roleMat[RoleCount];
     u64 roleSet = 0, baseHidden = 0, roleMatSet = 0;
@@ -846,13 +931,26 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         for (size_t i = 0; i < parts; ++i) poses_[i] = m.parts[i].pose;
         u64 hiddenRoles = 0;
         M34 layerRoot = root;
-        if (L.flags & Elytra) {  // WingsLayer: translate(0, 0, 0.125); ElytraModel crouching pose
-            layerRoot = mul(root, translate(0, 0, 0.125f));
-            if (s.crouching) {
-                const i16 lw = m.role(LeftWing), rw = m.role(RightWing);
-                if (lw >= 0) poses_[size_t(lw)].y = 3, poses_[size_t(lw)].xRot = 0.6981317f, poses_[size_t(lw)].zRot = -kPi / 4;
-                if (rw >= 0) poses_[size_t(rw)].y = 3, poses_[size_t(rw)].xRot = 0.6981317f, poses_[size_t(rw)].zRot = kPi / 4;
+        if (d.special == SpBoat) {  // BoatModel / RaftModel.animatePaddle from AbstractBoat.getRowingTime
+            for (size_t i = 0; i < parts; ++i) {
+                const bool left = m.parts[i].name == "left_paddle";
+                if (!left && m.parts[i].name != "right_paddle") continue;
+                const int side = left ? 0 : 1;
+                const float t = e.paddle[side] ? e.paddlePos[side] - kPi / 8 * (1.0f - pt) : 0.0f;
+                auto clampedLerp = [](float a, float lo, float hi) { return lo + std::clamp(a, 0.0f, 1.0f) * (hi - lo); };
+                poses_[i].xRot = clampedLerp((std::sin(-t) + 1.0f) / 2.0f, -kPi / 3, -kPi / 12);
+                poses_[i].yRot = clampedLerp((std::sin(-t + 1.0f) + 1.0f) / 2.0f, -kPi / 4, kPi / 4);
+                if (side == 1) poses_[i].yRot = kPi - poses_[i].yRot;
             }
+        }
+        if (L.flags & Elytra) {  // WingsLayer: translate(0, 0, 0.125); ElytraModel.setupAnim (ElytraAnimationState)
+            layerRoot = mul(root, translate(0, 0, 0.125f));
+            const i16 lw = m.role(LeftWing), rw = m.role(RightWing);
+            float r[3];
+            for (int k = 0; k < 3; ++k) r[k] = e.elytraRotO[k] + (e.elytraRot[k] - e.elytraRotO[k]) * pt;
+            const float wy = s.crouching ? 3.0f : 0.0f;
+            if (lw >= 0) poses_[size_t(lw)].y = wy, poses_[size_t(lw)].xRot = r[0], poses_[size_t(lw)].yRot = r[1], poses_[size_t(lw)].zRot = r[2];
+            if (rw >= 0) poses_[size_t(rw)].y = wy, poses_[size_t(rw)].xRot = r[0], poses_[size_t(rw)].yRot = -r[1], poses_[size_t(rw)].zRot = -r[2];
         } else if ((L.flags & Armor) && roleSet) {  // HumanoidModel.copyPropertiesTo: the parent's pose by part
             for (size_t i = 0; i < parts; ++i) {
                 const Role r = m.parts[i].role;
@@ -880,6 +978,8 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
                 *reinterpret_cast<M34*>(&mats_[i]) = mul(parent, local);
             }
             hidden_[i] = ((hiddenRoles >> part.role) & 1) && part.role != RoleNone ? 1 : 0;
+            if (hideChests && (part.name == "left_chest" || part.name == "right_chest")) hidden_[i] = 1;
+            if (hideReins && (part.name == "left_saddle_line" || part.name == "right_saddle_line")) hidden_[i] = 1;
             if (part.parent >= 0 && hidden_[size_t(part.parent)]) hidden_[i] = 1;
         }
         if (li == 0 && living)
@@ -1176,6 +1276,10 @@ void EntityRenderer::build(const PassContext& ctx) {
     stats_ = {};
     stats_.entities = u32(entities.size());
     attachments_.clear();
+    ridden_.clear();
+    for (const auto& [id, en] : entities)
+        if (en.vehicle >= 0) ridden_.push_back(en.vehicle);
+    if (world_.localControl() >= 0) ridden_.push_back(world_.localControl());
     casters_.clear();
     built_ = false;
     if ((entities.empty() && !localPlayer_ && !localShadow_) || !mapped_) return;

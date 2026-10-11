@@ -1,6 +1,9 @@
-// Chat screen extras: command suggestions (CommandSuggestions: the server completes the typed command; the list above
+// Chat screen extras: command suggestions (CommandSuggestions: the command tree the server sent parses the input
+// locally (argument colours, usage hints, errors) and completes literals; arguments ask the server; the list above
 // the input, Tab / arrows / mouse) and chat component events (hover tooltips, click actions: ChatScreen
 // .handleComponentClicked / Screen.defaultHandleGameClickEvent).
+#include "assets/game_reports.h"
+#include "ui/command_tree.h"
 #include "ui/frontend.h"
 #include "ui/mp_hud.h"
 #include "ui/ui_state.h"
@@ -38,8 +41,20 @@ struct ChatExt {
     bool tracking = false;
     bool open = false;  // drawn since the chat screen opened
     float lastMx = -1, lastMy = -1;
+    // The parse of the input with the command tree (currentParse).
+    std::string parsedValue;
+    bool haveParse = false, parsed = false;
+    cmd::Parse parse;
+    int ctxParent = -1, ctxStart = 0;  // the suggestion context of the last completion
+    // commandUsage: usage hints / parse errors above the input when no suggestion list shows.
+    std::vector<Text> usage;
+    int usageX = 0, usageW = 0;
 };
 ChatExt cx;
+struct Commands {  // the server's command tree (ClientboundCommandsPacket); kept over ChatExt resets
+    cmd::Tree tree;
+};
+Commands commands;
 
 constexpr int kLimit = 10;          // ChatScreen: suggestionLineLimit
 constexpr u32 kFill = 0xD0000000;   // ChatScreen: fillColor
@@ -115,17 +130,75 @@ void showSuggestions(UiState& s) {  // CommandSuggestions.showSuggestions
     select(s, 0);
 }
 
-// Input changed (ChatScreen.onEdited -> CommandSuggestions.updateCommandInfo): ask the server to complete commands.
+// CommandDispatcher.parse of the input with the server's tree (redone when the text changes).
+void updateParse(UiState& s) {
+    const std::string& v = s.chatInput.value;
+    if (cx.parsed && v == cx.parsedValue) return;
+    cx.parsed = true;
+    cx.parsedValue = v;
+    cx.haveParse = !v.empty() && v[0] == '/' && commands.tree.valid();
+    if (cx.haveParse) cx.parse = cmd::parse(commands.tree, v, 1);
+}
+
+// CommandSuggestions.updateUsageInfo: parse errors when the cursor is at the end and nothing completes, else the
+// usage of the arguments at the cursor (fillNodeUsage), else the trailing-data error.
+void updateUsage(UiState& s) {
+    cx.usage.clear();
+    if (!cx.haveParse) return;
+    const auto& f = s.chatInput;
+    const Lang* lang = &s.res.lang();
+    bool trailing = false;
+    if (f.cursor == int(f.value.size())) {
+        if (cx.result.empty() && !cx.parse.exceptions.empty()) {
+            int literals = 0;
+            for (const auto& [node, e] : cx.parse.exceptions) {
+                if (e.literalIncorrect) ++literals;
+                else cx.usage.push_back(cmd::errorText(e, lang));
+            }
+            if (literals > 0) cx.usage.push_back(cmd::errorText(cmd::unknownArgument(cx.parse), lang));
+        } else if (cx.parse.canRead()) {
+            trailing = true;
+        }
+    }
+    if (cx.usage.empty()) {
+        std::vector<Text> entries;
+        for (const std::string& u : cmd::argumentUsage(commands.tree, cx.ctxParent)) entries.push_back(Text(u, colorStyle(0xAAAAAA)));
+        cmd::Error e;
+        if (entries.empty() && trailing && cmd::parseException(cx.parse, e)) cx.usage.push_back(cmd::errorText(e, lang));
+        cx.usage.insert(cx.usage.end(), entries.begin(), entries.end());
+    }
+    cx.usageW = 0;
+    for (const Text& t : cx.usage) cx.usageW = std::max(cx.usageW, s.font.width(t));
+    cx.usageX = cx.usage.empty() ? 0 : std::clamp(screenX(s, cx.ctxStart), 0, 4 + (s.guiW() - 4) - cx.usageW);
+}
+
+// Input changed (ChatScreen.onEdited -> CommandSuggestions.updateCommandInfo): complete locally from the command tree
+// (literals, booleans) or ask the server (other arguments, or no tree).
 void update(UiState& s) {
     const auto& f = s.chatInput;
+    updateParse(s);
     if (cx.tracking && f.value == cx.lastValue) return;
     cx.tracking = true;
     cx.lastValue = f.value;
     hide();
     cx.haveResult = false;
+    cx.usage.clear();
     if (f.value.empty() || f.value[0] != '/' || f.cursor < 1 || !s.online()) {
         cx.pendingId = -1;
         return;
+    }
+    if (cx.haveParse) {
+        const cmd::Completion comp = cmd::complete(commands.tree, cx.parse, f.cursor);
+        cx.ctxParent = comp.parent, cx.ctxStart = comp.startPos;
+        if (!comp.askServer) {  // the tree answers it: no request
+            cx.pendingId = -1;
+            cx.haveResult = true, cx.start = comp.start, cx.length = f.cursor - comp.start;
+            cx.result.clear();
+            for (const std::string& t : comp.local) cx.result.push_back({t});
+            updateUsage(s);
+            showSuggestions(s);
+            return;
+        }
     }
     cx.pendingId = ++cx.nextId;
     cx.pendingText = f.value.substr(0, size_t(f.cursor));
@@ -139,6 +212,27 @@ void update(UiState& s) {
 void registerHandlers(UiState& s, net::Client& client) {
     UiState* sp = &s;
     const Lang* lang = &s.res.lang();
+    // ClientboundCommandsPacket: the commands this player may use, as a Brigadier tree.
+    std::vector<std::string> argTypes;
+    if (const nlohmann::json& reg = s.reports->registries(); reg.contains("minecraft:command_argument_type"))
+        for (const auto& e : reg["minecraft:command_argument_type"]["entries"].items()) {
+            const int id = e.value().value("protocol_id", -1);
+            if (id < 0) continue;
+            if (size_t(id) >= argTypes.size()) argTypes.resize(size_t(id) + 1);
+            argTypes[size_t(id)] = e.key();
+        }
+    client.onPlay("commands", [sp, argTypes](net::Reader& r) {
+        auto tree = std::make_shared<cmd::Tree>();
+        if (!cmd::decode(r, argTypes, *tree)) {
+            LOG("ui: command tree not decoded");
+            return;
+        }
+        if (std::getenv("MCPP_UI_VERBOSE")) LOG("ui: command tree, %zu nodes", tree->nodes.size());
+        sp->post([tree] {
+            commands.tree = std::move(*tree);
+            cx.parsed = false;
+        });
+    });
     client.onPlay("command_suggestions", [sp, lang](net::Reader& r) {
         const int id = r.varInt(), start = r.varInt(), length = r.varInt();
         const i32 n = r.varInt();
@@ -159,6 +253,7 @@ void registerHandlers(UiState& s, net::Client& client) {
         sp->post([sp, id, start, length, list = std::move(list)] {
             if (id != cx.pendingId || sp->screen != Screen::Chat) return;
             cx.haveResult = true, cx.start = start, cx.length = length, cx.result = list;
+            updateUsage(*sp);
             showSuggestions(*sp);  // autoSuggestions (default on)
         });
     });
@@ -168,7 +263,16 @@ UiModuleRegistrar reg([] {
     UiModule m;
     m.name = "chat_ext";
     m.registerHandlers = registerHandlers;
-    m.attached = [](UiState&) { cx = ChatExt{}; };
+    m.attached = [](UiState& s) {
+        cx = ChatExt{};
+        UiState* sp = &s;
+        s.chatFormatter = [sp](const std::string& visible, int offset, Text& out) {  // CommandSuggestions.formatChat
+            updateParse(*sp);
+            if (!cx.haveParse) return false;
+            out = cmd::format(cx.parse, visible, offset);
+            return true;
+        };
+    };
     m.tick = [](UiState& s) {
         if (s.screen != Screen::Chat) cx.open = false;
     };
@@ -348,6 +452,12 @@ void chatExtDraw(UiState& s, Canvas& c) {
         if (hovered && cx.list[size_t(cx.current)].hasTooltip)
             s.drawTooltip(c, {cx.list[size_t(cx.current)].tooltip}, mx, my);
         return;
+    }
+    // CommandSuggestions.extractUsage: anchored to the bottom, one line per entry.
+    for (size_t i = 0; i < cx.usage.size(); ++i) {
+        const int y = s.guiH() - 27 - 12 * int(i);
+        c.fill(float(cx.usageX - 1), float(y), float(cx.usageX + cx.usageW + 1), float(y + 12), kFill);
+        s.font.draw(c, cx.usage[i], float(cx.usageX), float(y + 2), 0xFFFFFFFF, true);
     }
     // Hovered chat component: its hover event.
     Style st;

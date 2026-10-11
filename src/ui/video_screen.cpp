@@ -175,6 +175,24 @@ void Ui::State::buildVideoButtons() {
         });
         button(x1, y, "Shader Options...", [this] { openPackOptions(); }, !settings.shaderPack.empty());
     }
+    y += 24;
+    {  // AccessibilityOptionsScreen bobView, VideoSettingsScreen attackIndicator (options.generic_value captions)
+        auto value = [this](const char* key, const std::string& v) {
+            return translatable("options.generic_value", {Text(res.translate(key)), Text(v)}, &res.lang()).plain();
+        };
+        button(x0, y, value("options.viewBobbing", res.translate(settings.bobView ? "options.on" : "options.off")), [this] {
+            settings.bobView = !settings.bobView;
+            settings.save();
+            buildButtons();
+        });
+        static const char* kIndicator[3] = {"options.off", "options.attack.crosshair", "options.attack.hotbar"};
+        button(x1, y, value("options.attackIndicator", res.translate(kIndicator[std::clamp(settings.attackIndicator, 0, 2)])),
+               [this] {
+                   settings.attackIndicator = (settings.attackIndicator + 1) % 3;
+                   settings.save();
+                   buildButtons();
+               });
+    }
     Button done;
     done.x = float(W / 2 - 100), done.y = float(H - 30), done.w = 200, done.label = Text(res.translate("gui.done"));
     done.onPress = [this] {
@@ -192,8 +210,9 @@ void Ui::State::drawVideoScreen(Canvas& c) {
     drawButtons(c);
     Upscalers& up = init.renderer->upscalers();
     const upscale::Caps& caps = up.caps();
-    float y = 32 + 5 * 24 + 6;
+    float y = 32 + 6 * 24 + 6;
     auto line = [&](const std::string& s, u32 color) {
+        if (y + 10 > float(H - 32)) return;  // keep clear of the Done button
         drawCentered(c, Text(s), float(W / 2), y, color, false);
         y += 10;
     };

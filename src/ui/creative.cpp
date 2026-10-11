@@ -8,6 +8,7 @@
 #include "ui/frontend.h"
 #include "ui/ui_state.h"
 
+#include <algorithm>
 #include <cmath>
 #include <unordered_map>
 
@@ -36,6 +37,7 @@ std::string shortName(const std::string& n) { return n.substr(n.find(':') + 1); 
 struct Creative {
     bool built = false;
     std::vector<ItemStack> tabItems[kTabCount];
+    std::vector<ItemStack> searchItems[kTabCount];  // what each tab adds to search (TabVisibility.SEARCH_TAB_ONLY)
     std::unordered_map<int, std::vector<int>> tabsOfItem;  // item id -> category tabs that list it
     int selected = 0;           // like the game's static selectedTab: kept between openings
     std::vector<ItemStack> shown;  // ItemPickerMenu.items
@@ -51,6 +53,7 @@ bool tabVisible(int i) { return std::string(kTabDefs[i].title) != "itemGroup.op"
 void buildTabs(UiState& s) {
     if (g.built) return;
     g.built = true;
+    if (s.client && !s.items.registriesSet()) s.items.setRegistries(*s.client);
     auto stack = [&](const char* name) {
         ItemStack st;
         st.item = s.items.id(name), st.count = 1;
@@ -63,11 +66,109 @@ void buildTabs(UiState& s) {
     int potions = 0;
     if (const nlohmann::json& reg = s.reports->registries(); reg.contains("minecraft:potion"))
         potions = int(reg["minecraft:potion"]["entries"].size());
+    auto bytes = [](const net::Writer& w) { return std::string(w.buf.begin(), w.buf.end()); };
+    auto indexOf = [](const std::vector<Items::RegistryInfo>& v, const std::string& id) {
+        for (size_t i = 0; i < v.size(); ++i)
+            if (v[i].id == id) return int(i);
+        return -1;
+    };
+    auto enchantedBook = [&](int id, int level) {  // EnchantmentHelper.createBook
+        ItemStack st = stack("enchanted_book");
+        net::Writer w;
+        w.varInt(1), w.varInt(id), w.varInt(level);
+        component(st, "stored_enchantments", bytes(w));
+        st.storedEnchants.emplace_back(id, level);
+        return st;
+    };
     for (int t = 0; t < kTabCount; ++t) {
         std::vector<ItemStack>& out = g.tabItems[t];
+        std::vector<ItemStack>& searchOut = g.searchItems[t];
         for (const char* const* p = kTabDefs[t].items; *p; ++p) {
             const std::string e = *p;
-            if (e.starts_with("@potion:")) {  // PotionContents(potion): optional potion, no colour, no effects, no name
+            const size_t before = out.size();
+            if (e.starts_with("@paintings:")) {
+                // generatePresetPaintings: the (non-)placeable variants by area, then width (stable over registry order).
+                const auto& all = s.items.paintings();
+                std::vector<int> ids;
+                for (size_t i = 0; i < all.size(); ++i) {
+                    bool placeable = false;
+                    for (const char* const* q = kPlaceablePaintings; *q; ++q) placeable |= all[i].id == *q;
+                    if (placeable == (e == "@paintings:placeable")) ids.push_back(int(i));
+                }
+                std::stable_sort(ids.begin(), ids.end(), [&](int a, int b) {
+                    const int aa = all[size_t(a)].width * all[size_t(a)].height, ab = all[size_t(b)].width * all[size_t(b)].height;
+                    return aa != ab ? aa < ab : all[size_t(a)].width < all[size_t(b)].width;
+                });
+                for (int id : ids) {
+                    ItemStack st = stack("painting");
+                    net::Writer w;
+                    w.varInt(id + 1);  // Holder: registry id + 1
+                    component(st, "painting/variant", bytes(w));
+                    st.painting = id;
+                    out.push_back(st);
+                }
+            } else if (e == "@goat_horns") {  // generateInstrumentTypes(GOAT_HORN, InstrumentTags.GOAT_HORNS)
+                for (const char* const* q = kGoatHorns; *q; ++q) {
+                    const int id = indexOf(s.items.instruments(), *q);
+                    if (id < 0) continue;
+                    ItemStack st = stack("goat_horn");
+                    net::Writer w;
+                    w.varInt(id + 1);
+                    component(st, "instrument", bytes(w));
+                    st.instrument = id;
+                    out.push_back(st);
+                }
+            } else if (e == "@suspicious_stews") {  // generateSuspiciousStews: one per distinct flower effect
+                for (const StewEffect& se : kSuspiciousStews) {
+                    const int effect = s.items.mobEffectId(se.effect);
+                    if (effect < 0) continue;
+                    ItemStack st = stack("suspicious_stew");
+                    net::Writer w;
+                    w.varInt(1), w.varInt(effect), w.varInt(se.ticks);
+                    component(st, "suspicious_stew_effects", bytes(w));
+                    st.stewEffects.emplace_back(effect, se.ticks);
+                    out.push_back(st);
+                }
+            } else if (e == "@enchanted_books") {
+                // OnlyMaxLevel in the tab (PARENT_TAB_ONLY), AllLevels in search (SEARCH_TAB_ONLY).
+                const auto& all = s.items.enchantments();
+                for (size_t i = 0; i < all.size(); ++i) out.push_back(enchantedBook(int(i), all[i].maxLevel));
+                for (size_t i = 0; i < all.size(); ++i)
+                    for (int level = 1; level <= all[i].maxLevel; ++level) searchOut.push_back(enchantedBook(int(i), level));
+                continue;
+            } else if (e == "@ominous_banner") {  // Raid.getOminousBannerInstance
+                ItemStack st = stack("white_banner");
+                static const std::pair<const char*, int> kLayers[] = {
+                    {"minecraft:rhombus", 9}, {"minecraft:stripe_bottom", 8}, {"minecraft:stripe_center", 7},
+                    {"minecraft:border", 8},  {"minecraft:stripe_middle", 15}, {"minecraft:half_horizontal", 8},
+                    {"minecraft:circle", 8},  {"minecraft:border", 15}};  // DyeColor ids
+                const auto& patterns = s.items.bannerPatterns();
+                net::Writer w;
+                int n = 0;
+                for (auto [id, dye] : kLayers) n += std::find(patterns.begin(), patterns.end(), id) != patterns.end();
+                w.varInt(n);
+                for (auto [id, dye] : kLayers)
+                    if (auto it = std::find(patterns.begin(), patterns.end(), id); it != patterns.end())
+                        w.varInt(int(it - patterns.begin()) + 1), w.varInt(dye);
+                component(st, "banner_patterns", bytes(w));
+                const int patternsType = s.items.componentType("banner_patterns");
+                net::Writer td;
+                td.boolean(false), td.varInt(1), td.varInt(patternsType);
+                component(st, "tooltip_display", bytes(td));
+                st.hiddenTooltip.push_back(patternsType);
+                // item_name: {translate: "block.minecraft.ominous_banner"} as network NBT
+                const std::string key = "block.minecraft.ominous_banner";
+                net::Writer nm;
+                nm.u8v(10), nm.u8v(8), nm.u16v(9), nm.bytes("translate", 9), nm.u16v(u16(key.size())), nm.bytes(key.data(), key.size());
+                nm.u8v(0);
+                component(st, "item_name", bytes(nm));
+                st.hasItemName = true, st.itemName = translatable(key, {}, s.lang());
+                net::Writer rr;
+                rr.varInt(1);  // Rarity.UNCOMMON
+                component(st, "rarity", bytes(rr));
+                st.rarity = 1;
+                out.push_back(st);
+            } else if (e.starts_with("@potion:")) {  // PotionContents(potion): optional potion, no colour, no effects, no name
                 for (int id = 0; id < potions; ++id) {
                     ItemStack st = stack(e.c_str() + 8);
                     net::Writer w;
@@ -92,6 +193,7 @@ void buildTabs(UiState& s) {
                 ItemStack st = stack(e.c_str());
                 if (st.item >= 0) out.push_back(st);
             }
+            searchOut.insert(searchOut.end(), out.begin() + ptrdiff_t(before), out.end());
         }
         if (kTabDefs[t].kind == TabKind::Category && tabVisible(t))
             for (const ItemStack& st : out) {
@@ -102,7 +204,7 @@ void buildTabs(UiState& s) {
     // Search: every category tab's items in tab order, without duplicates (type and components).
     for (int t = 0; t < kTabCount; ++t) {
         if (kTabDefs[t].kind != TabKind::Category || !tabVisible(t)) continue;
-        for (const ItemStack& st : g.tabItems[t]) {
+        for (const ItemStack& st : g.searchItems[t]) {
             bool dup = false;
             for (const ItemStack& o : g.tabItems[6])
                 if (o.item == st.item && o.sameItemSameComponents(st)) dup = true;
@@ -261,9 +363,18 @@ std::vector<Text> tooltipFor(UiState& s, const ItemStack& st, bool creativeSlot)
     if (tab().kind == TabKind::Category && creativeSlot) return lines;
     auto it = g.tabsOfItem.find(st.item);
     if (it != g.tabsOfItem.end() && !lines.empty()) {
-        int at = 1;
+        // CreativeModeTab.contains: the tabs whose search contents hold this exact stack (item and components);
+        // stacks we cannot match exactly (component order from elsewhere) fall back to the tabs listing the item.
+        std::vector<int> tabs;
         for (int t : it->second)
-            lines.insert(lines.begin() + at++, Text(s.res.translate(kTabDefs[t].title), colorStyle(0x5555FF)));
+            for (const ItemStack& o : g.searchItems[t])
+                if (o.sameItemSameComponents(st)) {
+                    tabs.push_back(t);
+                    break;
+                }
+        if (tabs.empty()) tabs = it->second;
+        int at = 1;
+        for (int t : tabs) lines.insert(lines.begin() + at++, Text(s.res.translate(kTabDefs[t].title), colorStyle(0x5555FF)));
     }
     return lines;
 }

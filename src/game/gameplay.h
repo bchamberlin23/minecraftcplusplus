@@ -72,6 +72,10 @@ public:
 
 private:
     float destroyProgress(int x, int y, int z, u16 state);
+    // The held stack's Tool: its own minecraft:tool component (added / removed), else the item's default.
+    const ItemRules::Tool* heldTool(const ui::ItemStack* s);
+    // Player.blockActionRestricted in adventure mode: the held stack's can_break (AdventureModePredicate) allows it.
+    bool adventureMayBreak(int x, int y, int z);
     void predictUse(const struct RayHit* target, bool afterEntity);
     bool startUsing(int hand);  // LivingEntity.startUsingItem
     void tickUse();
@@ -95,6 +99,9 @@ private:
     bool verbose_ = false;
     int loggedState_ = -1;
     int chargedProjectilesType_ = -1;  // data component type id of minecraft:charged_projectiles
+    int toolType_ = -1, canBreakType_ = -1;  // data component type ids of minecraft:tool / minecraft:can_break
+    std::vector<std::string> blockNames_;     // block registry by network id
+    std::unordered_map<std::string, ItemRules::Tool> toolCache_;  // decoded tool components by their bytes
     std::mt19937 rng_{0x5EEDu};
     std::map<std::string, int, std::less<>> effects_;        // name -> amplifier
     std::map<std::string, double, std::less<>> attributes_;  // name -> value

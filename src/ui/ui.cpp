@@ -102,6 +102,8 @@ bool Settings::load() {
         else if (k == "vsync") video.vsync = v == "true";
         else if (k == "maxFps") video.fpsLimit = u32(std::clamp(std::atoi(v.c_str()), 0, 1000));
         else if (k == "shaderPack") shaderPack = v;
+        else if (k == "bobView") bobView = v == "true";
+        else if (k == "attackIndicator") attackIndicator = ((std::atoi(v.c_str()) % 3) + 3) % 3;  // ByIdMap WRAP
     }
     loaded = true;
     return true;
@@ -119,6 +121,7 @@ void Settings::save() const {
       << "\nframeGeneration:" << video.frameGenKey() << "\nlowLatency:" << VideoSettings::lowLatencyKey(video.lowLatency)
       << "\nvsync:" << (video.vsync ? "true" : "false") << "\nmaxFps:" << video.fpsLimit << "\n";
     f << "shaderPack:" << shaderPack << "\n";
+    f << "bobView:" << (bobView ? "true" : "false") << "\nattackIndicator:" << attackIndicator << "\n";
 }
 
 float Settings::radiansPerPixel() const {
@@ -499,10 +502,10 @@ void Ui::registerHandlers(net::Client& client) {
         const int level = r.varInt(), total = r.varInt();
         s->post([s, progress, level, total] { s->xpProgress = progress, s->xpLevel = level, s->xpTotal = total; });
     });
-    client.onPlayPeek("set_entity_data", [s](net::Reader& r) {  // our air supply (entity data index 1)
+    client.onPlayPeek("set_entity_data", [s](net::Reader& r) {  // our air supply (index 1) and ticks frozen (7)
         const int entity = r.varInt();
-        int air = -1;
-        for (int guard = 0; guard < 4 && r.ok; ++guard) {
+        int air = -1, frozen = -1;
+        for (int guard = 0; guard < 8 && r.ok; ++guard) {
             const int index = r.u8v();
             if (index == 0xFF) break;
             const int type = r.varInt();
@@ -510,10 +513,16 @@ void Ui::registerHandlers(net::Client& client) {
             else if (type == 1) {
                 const int v = r.varInt();
                 if (index == 1) air = v;
-            } else break;
+                if (index == 7) frozen = v;
+            } else if (type == 3) r.f32();
+            else if (type == 8) r.boolean();
+            else if (type == 20) r.varInt();  // pose
+            else break;
         }
-        if (air >= 0) s->post([s, entity, air] {
-            if (s->session && entity == s->session->entityId()) s->air = air, s->serverAir = true;
+        if (air >= 0 || frozen >= 0) s->post([s, entity, air, frozen] {
+            if (!s->session || entity != s->session->entityId()) return;
+            if (air >= 0) s->air = air, s->serverAir = true;
+            if (frozen >= 0) s->ticksFrozen = frozen;
         });
     });
     // Registry ids resolved once (the handlers run for every entity on the network thread).
@@ -818,6 +827,9 @@ void Ui::attachSession(net::Client* client, net::Session* session) {
 }
 
 void Ui::setEntities(ent::EntityWorld* entities) { s_->entities = entities; }
+void Ui::setItemModels(ent::ItemModels* models) { s_->itemModels = models; }
+
+int Ui::ticksFrozen() const { return s_->ticksFrozen; }
 
 const ItemStack* Ui::playerSlot(int slot) const {
     const auto& slots = s_->inventory.slots;
@@ -951,6 +963,9 @@ void Ui::beginFrame(double dt) {
         for (auto& fn : pending) fn();
     }
     s.frontEndFrame();  // title.cpp
+    if (s.game) s.game->bobView = s.settings.bobView;  // the View Bobbing option
+    // The server's data-driven registries (enchantment / painting / instrument names, creative contents).
+    if (s.client && s.client->inPlay() && !s.items.registriesSet()) s.items.setRegistries(*s.client);
     if (s.session && !s.session->connected() && !s.quit) {
         // Connection lost: nothing more will arrive; keep the UI usable for quitting.
     }

@@ -7,7 +7,23 @@
 
 namespace ui {
 
+static void drawSpyglass(Ui::State& s, Canvas& c);
+
+// Hud.extractTextureOverlay: a full-screen texture tinted white with `alpha`.
+static void textureOverlay(Canvas& c, const Sprite* tex, float alpha) {
+    if (!tex) return;
+    const int gw = c.guiWidth(), gh = c.guiHeight();
+    const u32 color = (u32(std::clamp(alpha, 0.0f, 1.0f) * 255.0f + 0.5f) << 24) | 0xFFFFFF;
+    blitTexture(c, tex, 0, 0, 0, 0, float(gw), float(gh), gw, gh, color);
+}
+
 void drawCameraOverlays(Ui::State& s, Canvas& c) {
+    drawSpyglass(s, c);
+    // Hud.extractCameraOverlays, after the scope: the powder snow frost by Entity.getPercentFrozen.
+    if (s.ticksFrozen > 0) textureOverlay(c, s.sprites.texture("misc/powder_snow_outline"), float(std::min(s.ticksFrozen, 140)) / 140.0f);
+}
+
+static void drawSpyglass(Ui::State& s, Canvas& c) {
     // Hud.extractCameraOverlays: the scope grows from half size towards 1.125 (lerp 0.5 per game tick).
     static float scopeScale = 0.5f;
     const float deltaTicks = float(s.frameMs / 50.0);
@@ -52,6 +68,7 @@ int drawVehicleHealth(Ui::State& s, Canvas& c, int xRight, int yBase) {
 }
 
 void drawAttackIndicator(Ui::State& s, Canvas& c) {
+    if (s.settings.attackIndicator != 1) return;  // AttackIndicatorStatus.CROSSHAIR
     const Game& g = *s.game;
     const float scale = g.attackStrengthScale(0.0f);
     const bool full = g.crosshairOnLiving && scale >= 1.0f && g.attackStrengthDelay() > 5.0f;
@@ -67,6 +84,18 @@ void drawAttackIndicator(Ui::State& s, Canvas& c) {
                              float(progress), 4);
     }
     c.setInvert(false);
+}
+
+void drawHotbarAttackIndicator(Ui::State& s, Canvas& c) {
+    if (s.settings.attackIndicator != 2) return;  // AttackIndicatorStatus.HOTBAR (Hud.extractItemHotbar)
+    const float scale = s.game->attackStrengthScale(0.0f);
+    if (scale >= 1.0f) return;
+    const int y = c.guiHeight() - 20, x = c.guiWidth() / 2 + 91 + 6;  // beside the hotbar, away from the off hand (left)
+    const int progress = int(scale * 19.0f);
+    blitSprite(c, s.sprites.sprite("hud/hotbar_attack_indicator_background"), float(x), float(y), 18, 18);
+    if (progress > 0)
+        blitSpriteRegion(c, s.sprites.sprite("hud/hotbar_attack_indicator_progress"), 18, 18, 0, 18 - progress, float(x),
+                         float(y + 18 - progress), 18, float(progress));
 }
 
 bool drawJumpBar(Ui::State& s, Canvas& c, int left, int top) {

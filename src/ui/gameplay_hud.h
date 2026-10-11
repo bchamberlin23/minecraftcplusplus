@@ -13,5 +13,7 @@ int drawVehicleHealth(Ui::State& s, Canvas& c, int xRight, int yBase);
 bool drawJumpBar(Ui::State& s, Canvas& c, int left, int top);
 // Hud.extractCrosshair with the attack indicator option on CROSSHAIR (the default): the attack strength under it.
 void drawAttackIndicator(Ui::State& s, Canvas& c);
+// The attack indicator option on HOTBAR: the attack strength beside the hotbar (Hud.extractItemHotbar).
+void drawHotbarAttackIndicator(Ui::State& s, Canvas& c);
 
 }  // namespace ui

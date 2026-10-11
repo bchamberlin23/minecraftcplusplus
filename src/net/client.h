@@ -117,6 +117,14 @@ public:
     void onPlayPeek(const std::string& packet, PacketHandler handler) { playPeeks_[packet].push_back(std::move(handler)); }
     bool sendPlay(const char* packet, const Writer& body) { return send(Play, packet, body); }  // any thread
     const Dimension& dimension() const { return dimension_; }  // network thread / after JoinEvent
+    // Data-driven registries the UI reads (enchantment, painting_variant, instrument, banner_pattern): entries in
+    // network id order with their network NBT ("" when the server sent none). Complete once inPlay().
+    struct RegistryEntry {
+        std::string id;   // "minecraft:sharpness"
+        std::string nbt;  // network NBT (nameless root)
+    };
+    const std::vector<RegistryEntry>& registryEntries(const std::string& registry) const;
+    bool inPlay() const { return phase_ == Play; }
 
 private:
     enum Phase { Login, Configuration, Play, PhaseCount };
@@ -159,6 +167,7 @@ private:
     std::vector<Dimension> dimensionTypes_;
     int biomeBits_ = 7;
     std::vector<u8> biomeIds_;  // the server's biome registry order -> World biome ids
+    std::unordered_map<std::string, std::vector<RegistryEntry>> registries_;  // written in configuration only
     Dimension dimension_;
 };
 

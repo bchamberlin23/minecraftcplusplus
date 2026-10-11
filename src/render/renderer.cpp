@@ -773,9 +773,9 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     fc.camBlock[0] = i32(bx), fc.camBlock[1] = i32(by), fc.camBlock[2] = i32(bz);
     fc.camFrac[0] = float(cam.x - bx), fc.camFrac[1] = float(cam.y - by), fc.camFrac[2] = float(cam.z - bz);
     std::memcpy(fc.fogColor, fogColor_, sizeof(fogColor_));
-    fc.fogParams[0] = viewDistance * 0.6f;
-    fc.fogParams[1] = viewDistance;
-    fc.fogParams[2] = viewDistance;
+    fc.fogParams[0] = std::min(viewDistance * 0.6f, fogLimit_[0]);
+    fc.fogParams[1] = std::min(viewDistance, fogLimit_[1]);
+    fc.fogParams[2] = std::min(viewDistance, fogLimit_[1]);
     fc.fogParams[3] = daylight_;
     lightmap_.pack(fc.lightmap);
     const u32 tints[8] = {0xFFFFFF, 0x91BD59, 0x77AB2F, 0x80A755, 0x619961, 0x3F76E4, 0x208030, 0x8B1A00};

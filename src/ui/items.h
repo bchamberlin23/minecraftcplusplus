@@ -9,6 +9,9 @@
 
 class GameReports;
 class BlockRegistry;
+namespace net {
+class Client;
+}
 
 namespace ui {
 
@@ -33,6 +36,10 @@ struct ItemStack {
     int enchantments = 0;  // count
     i64 dyedColor = -1, potionColor = -1;
     int potion = -1;
+    std::vector<std::pair<int, int>> enchantList, storedEnchants;  // (enchantment network id, level)
+    std::vector<std::pair<int, int>> stewEffects;                  // (mob_effect id, duration ticks)
+    int instrument = -1, painting = -1;                            // registry network ids
+    std::vector<int> hiddenTooltip;                                // tooltip_display hidden component types
 
     bool empty() const { return item < 0 || count <= 0; }
     bool sameItemSameComponents(const ItemStack& o) const;
@@ -61,6 +68,24 @@ public:
     std::vector<Text> tooltip(const ItemStack& s) const;
     bool foil(const ItemStack& s) const { return s.glint >= 0 ? s.glint == 1 : s.enchantments > 0; }
 
+    // Data-driven registries the server synced (net::Client::registryEntries): names and tooltip data of
+    // enchantments, painting variants, instruments; banner pattern ids. Set once the client is in play.
+    struct RegistryInfo {
+        std::string id;              // "minecraft:sharpness"
+        Text description;            // enchantment / instrument description
+        int maxLevel = 1;            // enchantment max_level
+        int width = 0, height = 0;   // painting size (blocks)
+        bool hasTitle = false, hasAuthor = false;
+        Text title, author;          // painting
+    };
+    void setRegistries(const net::Client& client);
+    bool registriesSet() const { return registriesSet_; }
+    const std::vector<RegistryInfo>& enchantments() const { return enchantments_; }
+    const std::vector<RegistryInfo>& paintings() const { return paintings_; }
+    const std::vector<RegistryInfo>& instruments() const { return instruments_; }
+    const std::vector<std::string>& bannerPatterns() const { return bannerPatterns_; }
+    int mobEffectId(std::string_view name) const;  // static registry protocol id, -1 if unknown
+
     // Protocol. Item stacks: ItemStack.OPTIONAL_STREAM_CODEC / OPTIONAL_UNTRUSTED (delimited components).
     bool read(net::Reader& r, ItemStack& out) const;
     void write(net::Writer& w, const ItemStack& s, bool delimited) const;
@@ -77,6 +102,11 @@ private:
     std::vector<std::string> componentNames_;
     std::unordered_map<std::string, int> componentIds_;
     std::vector<std::string> potions_;
+    std::vector<std::string> mobEffects_;
+    std::unordered_map<std::string, int> mobEffectIds_;
+    std::vector<RegistryInfo> enchantments_, paintings_, instruments_;
+    std::vector<std::string> bannerPatterns_;
+    bool registriesSet_ = false;
     std::vector<bool> blockItem_;
     const Lang* lang_ = nullptr;
 };

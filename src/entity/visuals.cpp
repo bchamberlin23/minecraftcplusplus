@@ -339,6 +339,7 @@ void Visuals::setPlayer(Game& game, ui::Ui& ui, const std::string& name, std::fu
     Impl& m = *impl_;
     m.game = &game;
     m.ui = &ui;
+    ui.setItemModels(&m.models);
     m.playerName = name;
     m.gameMode = std::move(gameMode);
     game.onSwing = [&m] {  // LivingEntity.swing
@@ -1160,6 +1161,8 @@ void Visuals::Impl::tickLocal() {
     while (e.bodyYaw - e.prevBodyYaw < -180.0f) e.prevBodyYaw -= 360.0f;
     while (e.bodyYaw - e.prevBodyYaw >= 180.0f) e.prevBodyYaw += 360.0f;
     ++e.age;
+    const double move[3] = {p.pos[0] - p.prev[0], p.pos[1] - p.prev[1], p.pos[2] - p.prev[2]};
+    tickPoseAnimation(e, move, p.pose == Player::Pose::FallFlying, p.pose == Player::Pose::Crouching);
 }
 
 void Visuals::Impl::update() {
@@ -1190,6 +1193,18 @@ void Visuals::Impl::update() {
         e.pitch = e.prevPitch = p.pitch / kDeg;
         // Pose: crouching 5, swimming / crawling 3, gliding 1 (net.minecraft.world.entity.Pose).
         e.pose = p.pose == Player::Pose::Crouching ? 5 : p.pose == Player::Pose::Swimming ? 3 : p.pose == Player::Pose::FallFlying ? 1 : 0;
+        e.sharedFlags = u8(p.pose == Player::Pose::FallFlying ? 0x80 : 0);
+        e.ticksFrozen = ui ? ui->ticksFrozen() : 0;
+        e.inWater = p.inWater;
+        e.bedFacing = -1;
+        if (game->sleeping) {  // lying in the bed (setPosToBed)
+            e.pose = 2;
+            const int* b = game->bedPos;
+            e.pos[0] = b[0] + 0.5, e.pos[1] = b[1] + 0.6875, e.pos[2] = b[2] + 0.5;
+            std::copy(e.pos, e.pos + 3, e.prevPos);
+            std::shared_lock lock(world.world().mutex());
+            e.bedFacing = bedFacingAt(world.world(), world.registry(), b[0], b[1], b[2]);
+        }
         e.vehicle = game->vehicleId;  // the sitting pose
         // The item use (third-person arm poses): LivingEntity flags and ticks using the item.
         e.livingFlags = game->use.active ? u8(1 | (game->use.hand ? 2 : 0)) : 0;
@@ -1444,7 +1459,9 @@ void Visuals::Impl::buildTags(const PassContext& ctx) {
         const bool discrete = e.pose == 5;  // crouching
         float h = e.info->height;
         if (player && discrete) h = 1.5f;
+        if (player && (e.pose == 1 || e.pose == 3 || e.pose == 4)) h = 0.6f;  // gliding, swimming / crawling, riptide
         if (e.baby && e.category == Category::Living) h *= 0.5f;
+        if (e.pose == 2) h = 0.2f;  // sleeping (LivingEntity.SLEEPING_DIMENSIONS)
         const float x = float(p[0] - cam[0]), y = float(p[1] - cam[1]) + h + 0.5f, z = float(p[2] - cam[2]);
         const float d2 = x * x + y * y + z * z;
         if (d2 > 64.0f * 64.0f || (discrete && d2 >= 1024.0f)) continue;

@@ -145,6 +145,20 @@ struct Entity {
     u8 chargedCrossbow = 0;  // bit 0: the main hand holds a charged crossbow, bit 1: the off hand (local player only)
     int attachedTo = -1;     // firework rocket: the entity it is attached to (DATA_ATTACHED_TO_TARGET), -1 none
     int unloadedTicks = 0;  // ticks spent outside the loaded world
+    // Pose animation (ticked by tickPoseAnimation): LivingEntity swimAmount / fallFlyTicks, ElytraAnimationState,
+    // the delta movement of this and the previous tick (fall-flying body turn), the bed (SLEEPING_POS_ID).
+    float swimAmount = 0, swimAmountO = 0;
+    int fallFlyTicks = 0;
+    float elytraRot[3] = {}, elytraRotO[3] = {};
+    float move[3] = {}, moveO[3] = {};
+    bool inWater = false;
+    bool hasSleepPos = false;
+    int sleepPos[3] = {};
+    int bedFacing = -1;  // BedBlock.getBedOrientation as Direction 2D data value (0 S, 1 W, 2 N, 3 E), -1 none
+    int ticksFrozen = 0;  // DATA_TICKS_FROZEN (fully frozen at 140)
+    bool paddle[2] = {};  // boat: DATA_ID_PADDLE_LEFT / RIGHT (a boat the local player drives: its own input)
+    bool hasChest = false;  // donkeys, mules, llamas: DATA_ID_CHEST
+    float paddlePos[2] = {};  // AbstractBoat.paddlePositions (radians)
     // Player skin (default skins chosen from the UUID like the game).
     bool slim = false;
     int skin = -1;
@@ -225,7 +239,8 @@ public:
            swellDir = -1, powered = -1, mainHand = -1, skinParts = -1, horseVariant = -1, villagerData = -1,
            tameFlags = -1, collar = -1, anger = -1, standFlags = -1, standPose = -1, hurt = -1, hurtDir = -1,
            damage = -1, mainGene = -1, hiddenGene = -1, mobFlags = -1, noGravity = 5, inGround = -1, rotation = -1,
-           painting = -1, nameVisible = 3, livingFlags = -1, attachedTo = -1;
+           painting = -1, nameVisible = 3, livingFlags = -1, attachedTo = -1, sleepPos = -1, ticksFrozen = -1,
+           paddleLeft = -1, paddleRight = -1, chest = -1;
     };
 
 private:
@@ -268,5 +283,14 @@ private:
 
 // Default player skin like DefaultPlayerSkin.get(uuid): floorMod(uuid.hashCode(), 18).
 int defaultSkinIndex(const u8 uuid[16]);
+
+// One entity tick of the pose animation state: swim amount (LivingEntity.updateSwimAmount), fall-flying ticks,
+// ElytraAnimationState.tick. move: this tick's delta movement; fallFlying: shared flag 7 (the local player's own
+// state for the avatar).
+void tickPoseAnimation(Entity& e, const double move[3], bool fallFlying, bool crouching);
+// BedBlock.getBedOrientation at a block (Direction 2D data value, -1 if it is not a bed). Caller holds the world lock.
+int bedFacingAt(const World& world, const BlockRegistry& registry, int x, int y, int z);
+// LivingEntity.isFullyFrozen.
+inline bool fullyFrozen(const Entity& e) { return e.ticksFrozen >= 140; }
 
 }  // namespace ent
