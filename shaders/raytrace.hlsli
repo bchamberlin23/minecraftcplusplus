@@ -11,8 +11,25 @@
 #define RAYTRACE_HLSLI
 
 RaytracingAccelerationStructure gScene : register(t6);
+#ifndef RT_CUBE_QUADS  // terrain.hlsl has them as gQuads already
 StructuredBuffer<uint4> gRtCube : register(t0);  // CubeQuad (mesher.h)
+#endif
 StructuredBuffer<uint> gRtModel : register(t7);  // model quads, 12 words each
+
+cbuffer PathTrace : register(b4) {
+    float4 gPtParams;  // x = traced radius (blocks), y = blend band (blocks), z = history valid (0 / 1), w = max history
+    uint4 gPtOpts;     // x = debug view (MCPP_PT_DEBUG), y = bounces, z = samples per pixel, w = frame
+    uint4 gPtJobs;     // x = build jobs, y = first job (element), z = quads to expand, w = vertex buffer offset (bytes)
+    uint4 gPtSlots;    // x = previous history slot, y = this frame's history slot
+    float4 gPtMove;    // camera position - previous camera position (blocks)
+    uint4 gPtLights;   // x = light sections this frame, y = their first element, z = frame light capacity
+};
+
+// Path tracer targets (render resolution): PathTracer::Tex / Rw.
+Texture2D<float4> gPtTex[8] : register(t8, space4);
+RWTexture2D<float4> gPtRw[8] : register(u8, space4);
+static const uint kPtLight = 0, kPtHist0 = 1, kPtGeom0 = 3, kPtNormalRough = 5, kPtDiffAlbedo = 6, kPtSpecAlbedo = 7;
+RWTexture2D<float> gPtHitDist : register(u19, space4);  // specular hit distance (RR guide)
 
 static const uint kKindOpaque = 0, kKindCutout = 1, kKindTranslucent = 2, kKindModel = 3;
 static const float3 kRtNormal[6] = {
@@ -155,6 +172,128 @@ bool rtClosest(float3 origin, float3 dir, float tmax, out RtSurface s) {
     s = rtSurface(q.CommittedInstanceID(), rtKind(q.CommittedInstanceContributionToHitGroupIndex(), q.CommittedGeometryIndex()),
                   q.CommittedPrimitiveIndex(), q.CommittedTriangleBarycentrics(), origin, dir, q.CommittedRayT());
     return true;
+}
+
+// ---- ray queries with translucent surfaces ----------------------------------------------------------------------
+
+// Light through a translucent surface (water, glass, ice) crossed at distance t (and t blocks of water before it when
+// the ray starts below the surface).
+float3 rtTransmit(uint slot, uint prim, float2 bary, float3 pos, float t) {
+    uint baseLayer;
+    float3 uvl = rtUvLayer(slot, kKindTranslucent, prim, bary, pos, baseLayer);
+    uint m = matClass(gMaterial[baseLayer]);
+    if (m == kMatWater) return exp(-gWater.rgb * min(t, 32.0)) * 0.95;
+    float4 tex = gTextures.SampleLevel(gSampler, uvl, 0);
+    if (m == kMatIce) return 0.85;
+    return lerp(1.0, srgbToLinear(tex.rgb) * 0.95, tex.a);  // glass, stained glass, slime, honey...
+}
+
+// Visibility (transmittance) along a ray: 0 behind anything opaque.
+float3 rtVisibility(float3 origin, float3 dir, float tmax) {
+    RayDesc ray;
+    ray.Origin = origin;
+    ray.Direction = dir;
+    ray.TMin = 0;
+    ray.TMax = tmax;
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q;
+    q.TraceRayInline(gScene, RAY_FLAG_NONE, 0xFF, ray);
+    float3 trans = 1;
+    while (q.Proceed()) {
+        if (q.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
+        uint kind = rtKind(q.CandidateInstanceContributionToHitGroupIndex(), q.CandidateGeometryIndex());
+        float t = q.CandidateTriangleRayT();
+        if (kind == kKindTranslucent)
+            trans *= rtTransmit(q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics(),
+                                origin + dir * t, t);
+        else if (rtAlphaTest(q.CandidateInstanceID(), kind, q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics(),
+                             origin + dir * t))
+            q.CommitNonOpaqueTriangleHit();
+    }
+    return q.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0 : trans;
+}
+
+// Closest opaque / alpha-tested hit; translucent surfaces in front of it attenuate (`trans`).
+bool rtClosestThrough(float3 origin, float3 dir, float tmax, out RtSurface s, out float3 trans) {
+    RayDesc ray;
+    ray.Origin = origin;
+    ray.Direction = dir;
+    ray.TMin = 0;
+    ray.TMax = tmax;
+    RayQuery<RAY_FLAG_NONE> q;
+    q.TraceRayInline(gScene, RAY_FLAG_NONE, 0xFF, ray);
+    float tt[2] = {1e30, 1e30};
+    float3 tc[2] = {float3(1, 1, 1), float3(1, 1, 1)};
+    uint n = 0;
+    while (q.Proceed()) {
+        if (q.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
+        uint kind = rtKind(q.CandidateInstanceContributionToHitGroupIndex(), q.CandidateGeometryIndex());
+        float t = q.CandidateTriangleRayT();
+        if (kind == kKindTranslucent) {
+            if (n < 2) {
+                tt[n] = t;
+                tc[n] = rtTransmit(q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics(),
+                                   origin + dir * t, t);
+                ++n;
+            }
+        } else if (rtAlphaTest(q.CandidateInstanceID(), kind, q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics(),
+                               origin + dir * t)) {
+            q.CommitNonOpaqueTriangleHit();
+        }
+    }
+    bool hit = q.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
+    float tHit = hit ? q.CommittedRayT() : 1e30;
+    trans = 1;
+    [unroll] for (uint i = 0; i < 2; ++i)
+        if (tt[i] < tHit) trans *= tc[i];
+    if (!hit) {
+        s = (RtSurface)0;
+        return false;
+    }
+    s = rtSurface(q.CommittedInstanceID(), rtKind(q.CommittedInstanceContributionToHitGroupIndex(), q.CommittedGeometryIndex()),
+                  q.CommittedPrimitiveIndex(), q.CommittedTriangleBarycentrics(), origin, dir, q.CommittedRayT());
+    return true;
+}
+
+// ---- light ----------------------------------------------------------------------------------------------------
+
+float rayEps(float dist) { return 0.003 + dist * 0.0004; }
+
+// What the game's light levels say about light at a surface (beyond the last traced bounce).
+float3 cachedLight(float sky, float block, float3 n) {
+    float hemi = 0.65 + 0.35 * n.y;
+    return gAmbient.rgb * skyCurve(sky) * hemi + gCave.rgb * hemi + gBlockColor.rgb * blockCurve(block);
+}
+
+float3 emission(float3 albedo, uint mat) {
+    if (mat == kMatGlow) return albedo * gShadeMisc.z;
+    if (mat == kMatEmissive) return albedo * gShadeMisc.z * smoothstep(0.45, 0.85, max(max(albedo.r, albedo.g), albedo.b));
+    return 0;
+}
+
+// Specular albedo for RR's guide (DLSS-RR integration guide 4.2.1, Ray Tracing Gems ch. 32).
+float3 envBrdfApprox2(float3 specularColor, float alpha, float NoV) {
+    NoV = abs(NoV);
+    float4 X = float4(1.0, NoV, NoV * NoV, NoV * NoV * NoV);
+    float4 Y = float4(1.0, alpha, alpha * alpha, alpha * alpha * alpha);
+    float2x2 M1 = float2x2(0.99044, -1.28514, 1.29678, -0.755907);
+    float3x3 M2 = float3x3(1.0, 2.92338, 59.4188, 20.3225, -27.0302, 222.592, 121.563, 626.13, 316.627);
+    float2x2 M3 = float2x2(0.0365463, 3.32707, 9.0632, -9.04756);
+    float3x3 M4 = float3x3(1.0, 3.59685, -1.36772, 9.04401, -16.3174, 9.22949, 5.56589, 19.7886, -20.2123);
+    float bias = dot(mul(M1, X.xy), Y.xy) * rcp(dot(mul(M2, X.xyw), Y.xyw));
+    float scale = dot(mul(M3, X.xy), Y.xy) * rcp(dot(mul(M4, X.xzw), Y.xyw));
+    bias *= saturate(specularColor.g * 50);
+    return mad(specularColor, max(0, scale), max(0, bias));
+}
+
+// Radiance leaving a surface hit by a reflection ray: hard sun / moon shadow, the light levels for the rest.
+float3 rtHitRadiance(RtSurface h, float dist) {
+    float4 tex = gTextures.SampleLevel(gSampler, float3(h.uv, h.layer), 0);
+    float3 albedo = srgbToLinear(tex.rgb * h.tint);
+    float3 light = cachedLight(h.sky, h.block, h.n);
+    float ndl = dot(h.n, gLightDir.xyz);
+    if (ndl > 0 && dot(gLightColor.rgb, 1) > 0)
+        light += gLightColor.rgb * ndl * rtVisibility(h.pos + h.n * rayEps(dist), gLightDir.xyz, 1e4);
+    return albedo * light + emission(albedo, matClass(h.mat));
 }
 
 #endif

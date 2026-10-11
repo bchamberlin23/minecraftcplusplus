@@ -456,6 +456,7 @@ public:
         sl::Resource diffuse{sl::ResourceType::eTex2d, in.diffuseAlbedo, nullptr, nullptr, guide};
         sl::Resource specular{sl::ResourceType::eTex2d, in.specularAlbedo, nullptr, nullptr, guide};
         sl::Resource normals{sl::ResourceType::eTex2d, in.normalRoughness, nullptr, nullptr, guide};
+        sl::Resource hitDist{sl::ResourceType::eTex2d, in.specularHitDistance, nullptr, nullptr, guide};
         const sl::ResourceTag tags[] = {
             {&color, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eValidUntilEvaluate, &renderExt},
             {&output, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eValidUntilEvaluate, &outExt},
@@ -464,6 +465,7 @@ public:
             {&diffuse, sl::kBufferTypeAlbedo, sl::ResourceLifecycle::eValidUntilEvaluate, &renderExt},
             {&specular, sl::kBufferTypeSpecularAlbedo, sl::ResourceLifecycle::eValidUntilEvaluate, &renderExt},
             {&normals, sl::kBufferTypeNormalRoughness, sl::ResourceLifecycle::eValidUntilEvaluate, &renderExt},
+            {&hitDist, sl::kBufferTypeSpecularHitDistance, sl::ResourceLifecycle::eValidUntilEvaluate, &renderExt},
         };
         sl::ViewportHandle vp(kViewport);
         const sl::BaseStructure* inputs[std::size(tags) + 1] = {&vp};

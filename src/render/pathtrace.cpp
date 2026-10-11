@@ -8,6 +8,8 @@
 #include "PathTraceCS.h"
 #include "PtAccumCS.h"
 #include "PtComposeCS.h"
+#include "TerrainFwdPtPS.h"
+#include "TerrainFwdVS.h"
 #include "render/upscalers/upscalers.h"
 #include "PtClearCS.h"
 #include "LightGatherCS.h"
@@ -99,6 +101,34 @@ bool Renderer::PathTracer::create() {
         !compute(g_LightGatherCS, sizeof(g_LightGatherCS), psoGather_) || !compute(g_LightCdfCS, sizeof(g_LightCdfCS), psoCdf_))
         return false;
 
+    {  // translucent terrain with traced reflections (as Shading's psoFwd_)
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC d{};
+        d.pRootSignature = r.rootSig_.Get();
+        d.VS = {g_TerrainFwdVS, sizeof(g_TerrainFwdVS)};
+        d.PS = {g_TerrainFwdPtPS, sizeof(g_TerrainFwdPtPS)};
+        auto& rt = d.BlendState.RenderTarget[0];
+        rt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+        rt.BlendEnable = TRUE;
+        rt.SrcBlend = D3D12_BLEND_SRC_ALPHA;
+        rt.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+        rt.BlendOp = D3D12_BLEND_OP_ADD;
+        rt.SrcBlendAlpha = D3D12_BLEND_ONE;
+        rt.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+        rt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+        d.RTVFormats[0] = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        d.NumRenderTargets = 1;
+        d.SampleMask = UINT_MAX;
+        d.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+        d.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+        d.RasterizerState.DepthClipEnable = TRUE;
+        d.DepthStencilState.DepthEnable = TRUE;
+        d.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+        d.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_GREATER_EQUAL;
+        d.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        d.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+        d.SampleDesc.Count = 1;
+        if (!check(r.device_->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&psoFwd_)), "translucent pipeline")) return false;
+    }
     jobs_ = r.createBuffer(u64(kJobBytes) * kMaxJobs * Renderer::kFrames, D3D12_HEAP_TYPE_UPLOAD);
     instances_ = r.createBuffer(u64(kInstanceBytes) * kMaxSections * Renderer::kFrames, D3D12_HEAP_TYPE_UPLOAD);
     constants_ = r.createBuffer(u64(kConstantBytes) * Renderer::kFrames, D3D12_HEAP_TYPE_UPLOAD);
@@ -200,6 +230,14 @@ bool Renderer::PathTracer::createTargets() {
         u.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
         r.device_->CreateUnorderedAccessView(targets_[i].Get(), nullptr, &u,
                                              r.cpuDescriptor(descBase_ + kTableSize + kTargetBase + i));
+    }
+    {
+        hitDist_ = sh.texture(DXGI_FORMAT_R32_FLOAT, w, h, 1, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, kUav, nullptr);
+        if (!hitDist_) return false;
+        D3D12_UNORDERED_ACCESS_VIEW_DESC u{};
+        u.Format = DXGI_FORMAT_R32_FLOAT;
+        u.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        r.device_->CreateUnorderedAccessView(hitDist_.Get(), nullptr, &u, r.cpuDescriptor(descBase_ + kTableSize + 19));
     }
     for (u32 i = 0; i < 2; ++i) {
         reservoirs_[i] = sh.texture(DXGI_FORMAT_R32G32B32A32_UINT, w, h, 1, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, kUav,
@@ -693,7 +731,18 @@ void Renderer::PathTracer::fillGuides(UpscaleInputs& u) const {
     u.diffuseAlbedo = targets_[TgtDiffAlbedo].Get();
     u.specularAlbedo = targets_[TgtSpecAlbedo].Get();
     u.normalRoughness = targets_[TgtNormalRough].Get();
+    u.specularHitDistance = hitDist_.Get();
     u.guideState = kUav;
+}
+
+ID3D12PipelineState* Renderer::PathTracer::bindTranslucent(ID3D12GraphicsCommandList* list, u32 frame) {
+    if (!haveTlas_ || debug_ == 1 || debug_ == 2) return nullptr;
+    list->SetGraphicsRootShaderResourceView(RootTlas, tlas_[frame]->GetGPUVirtualAddress());
+    list->SetGraphicsRootShaderResourceView(RootModelQuads, r.modelQuads_->GetGPUVirtualAddress());
+    list->SetGraphicsRootDescriptorTable(RootPtSrv, r.gpuDescriptor(descBase_));
+    list->SetGraphicsRootDescriptorTable(RootPtUav, r.gpuDescriptor(descBase_ + kTableSize));
+    list->SetGraphicsRootConstantBufferView(RootPtConstants, constants_->GetGPUVirtualAddress() + u64(frame) * kConstantBytes);
+    return psoFwd_.Get();
 }
 
 std::string Renderer::PathTracer::status() const {

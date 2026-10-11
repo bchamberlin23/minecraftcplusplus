@@ -1031,7 +1031,8 @@ void Renderer::Shading::record(ID3D12GraphicsCommandList* list, const FrameInput
     passConstants(list, false, zero8);
     if (haveWorld) {
         bindWorldBuffers();
-        worldPass(psoFwd_.Get(), 2, r.cubeQuads_.Get());
+        ID3D12PipelineState* traced = r.pt_ ? r.pt_->bindTranslucent(list, in.frameIndex) : nullptr;
+        worldPass(traced ? traced : psoFwd_.Get(), 2, r.cubeQuads_.Get());
     }
     mark(list, "translucent");
 

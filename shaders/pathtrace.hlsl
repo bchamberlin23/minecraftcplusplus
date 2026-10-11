@@ -16,15 +16,6 @@
 #include "shading.hlsli"
 #include "raytrace.hlsli"
 
-cbuffer PathTrace : register(b4) {
-    float4 gPtParams;  // x = traced radius (blocks), y = blend band (blocks), z = history valid (0 / 1), w = max history
-    uint4 gPtOpts;     // x = debug view (MCPP_PT_DEBUG), y = bounces, z = samples per pixel, w = frame
-    uint4 gPtJobs;     // x = build jobs, y = first job (element), z = quads to expand, w = vertex buffer offset (bytes)
-    uint4 gPtSlots;    // x = previous history slot, y = this frame's history slot
-    float4 gPtMove;    // camera position - previous camera position (blocks)
-    uint4 gPtLights;   // x = light sections this frame, y = their first element, z = frame light capacity
-};
-
 struct BuildJob {
     uint slot, firstQuad, vertexBase, ptIndex;
     uint4 counts;  // quads per kind: opaque, cutout, translucent, model
@@ -46,10 +37,6 @@ StructuredBuffer<uint2> gLightSections : register(t5, space4);  // (pt index, di
 // Light ids in reservoirs are stable across frames: pt index << 8 | index in the section.
 RWTexture2D<uint4> gPtRes[2] : register(u16, space4);  // ReSTIR reservoirs: light id, sample uv, W, M
 
-// Path tracer targets (render resolution): PathTracer::Tex / Rw.
-Texture2D<float4> gPtTex[8] : register(t8, space4);
-RWTexture2D<float4> gPtRw[8] : register(u8, space4);
-static const uint kPtLight = 0, kPtHist0 = 1, kPtGeom0 = 3, kPtNormalRough = 5, kPtDiffAlbedo = 6, kPtSpecAlbedo = 7;
 
 // Shared-exponent HDR colour in 32 bits (DXGI_FORMAT_R9G9B9E5_SHAREDEXP layout).
 uint packRgb9e5(float3 c) {
@@ -219,91 +206,11 @@ float3 coneDir(float3 d, float cosMax, float2 u) {
     return normalize(t * (s * cos(a)) + b * (s * sin(a)) + d * c);
 }
 
-// ---- ray queries with translucent surfaces ----------------------------------------------------------------------
-
-// Light through a translucent surface (water, glass, ice) crossed at distance t (and t blocks of water before it when
-// the ray starts below the surface).
-float3 rtTransmit(uint slot, uint prim, float2 bary, float3 pos, float t) {
-    uint baseLayer;
-    float3 uvl = rtUvLayer(slot, kKindTranslucent, prim, bary, pos, baseLayer);
-    uint m = matClass(gMaterial[baseLayer]);
-    if (m == kMatWater) return exp(-gWater.rgb * min(t, 32.0)) * 0.95;
-    float4 tex = gTextures.SampleLevel(gSampler, uvl, 0);
-    if (m == kMatIce) return 0.85;
-    return lerp(1.0, srgbToLinear(tex.rgb) * 0.95, tex.a);  // glass, stained glass, slime, honey...
-}
-
-// Visibility (transmittance) along a ray: 0 behind anything opaque.
-float3 rtVisibility(float3 origin, float3 dir, float tmax) {
-    RayDesc ray;
-    ray.Origin = origin;
-    ray.Direction = dir;
-    ray.TMin = 0;
-    ray.TMax = tmax;
-    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q;
-    q.TraceRayInline(gScene, RAY_FLAG_NONE, 0xFF, ray);
-    float3 trans = 1;
-    while (q.Proceed()) {
-        if (q.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
-        uint kind = rtKind(q.CandidateInstanceContributionToHitGroupIndex(), q.CandidateGeometryIndex());
-        float t = q.CandidateTriangleRayT();
-        if (kind == kKindTranslucent)
-            trans *= rtTransmit(q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics(),
-                                origin + dir * t, t);
-        else if (rtAlphaTest(q.CandidateInstanceID(), kind, q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics(),
-                             origin + dir * t))
-            q.CommitNonOpaqueTriangleHit();
-    }
-    return q.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0 : trans;
-}
-
-// Closest opaque / alpha-tested hit; translucent surfaces in front of it attenuate (`trans`).
-bool rtClosestThrough(float3 origin, float3 dir, float tmax, out RtSurface s, out float3 trans) {
-    RayDesc ray;
-    ray.Origin = origin;
-    ray.Direction = dir;
-    ray.TMin = 0;
-    ray.TMax = tmax;
-    RayQuery<RAY_FLAG_NONE> q;
-    q.TraceRayInline(gScene, RAY_FLAG_NONE, 0xFF, ray);
-    float tt[2] = {1e30, 1e30};
-    float3 tc[2] = {float3(1, 1, 1), float3(1, 1, 1)};
-    uint n = 0;
-    while (q.Proceed()) {
-        if (q.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
-        uint kind = rtKind(q.CandidateInstanceContributionToHitGroupIndex(), q.CandidateGeometryIndex());
-        float t = q.CandidateTriangleRayT();
-        if (kind == kKindTranslucent) {
-            if (n < 2) {
-                tt[n] = t;
-                tc[n] = rtTransmit(q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics(),
-                                   origin + dir * t, t);
-                ++n;
-            }
-        } else if (rtAlphaTest(q.CandidateInstanceID(), kind, q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics(),
-                               origin + dir * t)) {
-            q.CommitNonOpaqueTriangleHit();
-        }
-    }
-    bool hit = q.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
-    float tHit = hit ? q.CommittedRayT() : 1e30;
-    trans = 1;
-    [unroll] for (uint i = 0; i < 2; ++i)
-        if (tt[i] < tHit) trans *= tc[i];
-    if (!hit) {
-        s = (RtSurface)0;
-        return false;
-    }
-    s = rtSurface(q.CommittedInstanceID(), rtKind(q.CommittedInstanceContributionToHitGroupIndex(), q.CommittedGeometryIndex()),
-                  q.CommittedPrimitiveIndex(), q.CommittedTriangleBarycentrics(), origin, dir, q.CommittedRayT());
-    return true;
-}
-
 // ---- light ------------------------------------------------------------------------------------------------------
 
 static const float kSunCos = 0.99993;  // ~0.7 degrees: the sun / moon disc as seen through the shadows
 
-float rayEps(float dist) { return 0.003 + dist * 0.0004; }
+
 
 // Sun / moon light arriving at p (normal n), times the cosine (radiance per albedo, like shadeSurface's diffuse).
 float3 sunLight(float3 p, float3 n, float dist, bool foliage, inout Rng rng) {
@@ -316,17 +223,6 @@ float3 sunLight(float3 p, float3 n, float dist, bool foliage, inout Rng rng) {
     return gLightColor.rgb * cosTerm * rtVisibility(origin, l, 1e4);
 }
 
-// What the game's light levels say about light at a surface (beyond the last traced bounce).
-float3 cachedLight(float sky, float block, float3 n) {
-    float hemi = 0.65 + 0.35 * n.y;
-    return gAmbient.rgb * skyCurve(sky) * hemi + gCave.rgb * hemi + gBlockColor.rgb * blockCurve(block);
-}
-
-float3 emission(float3 albedo, uint mat) {
-    if (mat == kMatGlow) return albedo * gShadeMisc.z;
-    if (mat == kMatEmissive) return albedo * gShadeMisc.z * smoothstep(0.45, 0.85, max(max(albedo.r, albedo.g), albedo.b));
-    return 0;
-}
 
 // Radiance leaving a surface hit by a bounce ray (towards the ray), with `bounces` more bounces after it.
 float3 bounceRadiance(RtSurface s, float dist, uint bounces, bool emissive, inout Rng rng) {
@@ -651,21 +547,6 @@ void PtAccumCS(uint2 px : SV_DispatchThreadID) {
 
 // ---- DLSS Ray Reconstruction: noisy radiance + guide buffers ------------------------------------------------------
 
-// Specular albedo for RR's guide (DLSS-RR integration guide 4.2.1, Ray Tracing Gems ch. 32).
-float3 envBrdfApprox2(float3 specularColor, float alpha, float NoV) {
-    NoV = abs(NoV);
-    float4 X = float4(1.0, NoV, NoV * NoV, NoV * NoV * NoV);
-    float4 Y = float4(1.0, alpha, alpha * alpha, alpha * alpha * alpha);
-    float2x2 M1 = float2x2(0.99044, -1.28514, 1.29678, -0.755907);
-    float3x3 M2 = float3x3(1.0, 2.92338, 59.4188, 20.3225, -27.0302, 222.592, 121.563, 626.13, 316.627);
-    float2x2 M3 = float2x2(0.0365463, 3.32707, 9.0632, -9.04756);
-    float3x3 M4 = float3x3(1.0, 3.59685, -1.36772, 9.04401, -16.3174, 9.22949, 5.56589, 19.7886, -20.2123);
-    float bias = dot(mul(M1, X.xy), Y.xy) * rcp(dot(mul(M2, X.xyw), Y.xyw));
-    float scale = dot(mul(M3, X.xy), Y.xy) * rcp(dot(mul(M4, X.xzw), Y.xyw));
-    bias *= saturate(specularColor.g * 50);
-    return mad(specularColor, max(0, scale), max(0, bias));
-}
-
 [numthreads(8, 8, 1)]
 void PtComposeCS(uint2 px : SV_DispatchThreadID) {
     if (any(px >= uint2(gScreen.xy))) return;
@@ -690,6 +571,7 @@ void PtComposeCS(uint2 px : SV_DispatchThreadID) {
     gPtRw[kPtDiffAlbedo][px] = float4(albedo, 1);
     gPtRw[kPtSpecAlbedo][px] = float4(spec, 1);
     gPtRw[kPtNormalRough][px] = float4(n, rough);
+    gPtHitDist[px] = 0;  // the water pass writes its reflections' distance
 
     PtPixel p = ptPixel(px);
     if (!p.traced) {

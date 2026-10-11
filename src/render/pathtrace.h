@@ -46,6 +46,8 @@ struct Renderer::PathTracer {
     Upscaler* rayReconstruction() const;
     // Its guide buffers (render resolution, UNORDERED_ACCESS).
     void fillGuides(UpscaleInputs& u) const;
+    // Translucent terrain with ray traced reflections: binds what TerrainFwdPtPS reads, returns its pipeline.
+    ID3D12PipelineState* bindTranslucent(ID3D12GraphicsCommandList* list, u32 frame);
     std::string status() const;
 
     // ---- acceleration structure memory ----
@@ -92,6 +94,8 @@ struct Renderer::PathTracer {
     ComPtr<ID3D12Device5> dev5_;
     ComPtr<ID3D12PipelineState> psoBlasGen_, psoTrace_, psoAccum_, psoClear_, psoGather_, psoCdf_, psoCompose_;
     bool rrUsed_ = false;  // DLSS-RR denoised the last frame
+    ComPtr<ID3D12PipelineState> psoFwd_;
+    ComPtr<ID3D12Resource> hitDist_;  // R32_FLOAT specular hit distance (u19)
     ComPtr<ID3D12Resource> targets_[TgtCount], reservoirs_[2];
     ComPtr<ID3D12Resource> lights_, lightCounts_, frameLights_, frameLightCount_, lightSections_, lightPower_, frameSecs_,
         frameSecCdf_, lightSlot_;

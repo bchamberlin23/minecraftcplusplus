@@ -43,6 +43,7 @@ struct UpscaleInputs {
     ID3D12Resource* diffuseAlbedo = nullptr;
     ID3D12Resource* specularAlbedo = nullptr;
     ID3D12Resource* normalRoughness = nullptr;
+    ID3D12Resource* specularHitDistance = nullptr;  // R32_FLOAT: distance to what reflections show (0: none)
     D3D12_RESOURCE_STATES guideState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 };
 
