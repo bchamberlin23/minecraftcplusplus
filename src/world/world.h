@@ -139,6 +139,7 @@ public:
     // Chunks changed since the last save, as (cx << 32 | cz) keys.
     const std::unordered_set<u64>& dirtyChunks() const { return dirtyChunks_; }
     void clearDirtyChunks() { dirtyChunks_.clear(); }
+    void markChunkDirty(int cx, int cz) { dirtyChunks_.insert(chunkKey(cx, cz)); }  // saved like an edited chunk
     // Generated chunks regenerate identically from the seed, so lighting them is not a change.
     void setTrackChanges(bool track) { trackChanges_ = track; }
     static u64 chunkKey(int cx, int cz) { return (u64(u32(cx)) << 32) | u32(cz); }

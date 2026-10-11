@@ -1,0 +1,522 @@
+// Front end: the server list (JoinMultiplayerScreen / ServerSelectionList) with live status pings and LAN worlds,
+// Add / Edit Server, Direct Connection. Our list is %LOCALAPPDATA%\minecraftCplusplus\servers.json; the game's
+// servers.dat is imported into it once and never written.
+#include "ui/frontend.h"
+#include "world/nbt_dom.h"
+
+#include <algorithm>
+#include <fstream>
+#include <thread>
+
+namespace ui {
+
+namespace {
+
+constexpr int kHeader = 33, kFooter = 60, kRowH = 36, kRowW = 305;
+
+bool isServerScreen(Screen s) {
+    return s == Screen::Servers || s == Screen::EditServer || s == Screen::DirectConnect || s == Screen::Confirm ||
+           s == Screen::Loading;
+}
+
+std::string lastDirect(const fs::path& json) {
+    std::vector<u8> bytes;
+    if (!readFile(json, bytes)) return {};
+    const auto j = nlohmann::json::parse(bytes.begin(), bytes.end(), nullptr, false);
+    return j.is_object() ? j.value("lastDirect", "") : "";
+}
+
+void saveAll(State& s, const std::string* direct = nullptr) {
+    FrontEndState& f = *s.fe;
+    const std::string keep = direct ? *direct : lastDirect(f.cfg.serversFile);
+    saveServers(f.cfg.serversFile, f.servers);
+    // lastDirect rides along in the same file.
+    std::vector<u8> bytes;
+    if (!readFile(f.cfg.serversFile, bytes)) return;
+    auto j = nlohmann::json::parse(bytes.begin(), bytes.end(), nullptr, false);
+    if (!j.is_object()) return;
+    j["lastDirect"] = keep;
+    std::ofstream(f.cfg.serversFile, std::ios::trunc) << j.dump(2) << "\n";
+}
+
+void refreshPings(State& s) {
+    FrontEndState& f = *s.fe;
+    f.pings = std::make_shared<PingBoard>();
+    for (const ServerEntry& e : f.servers) {
+        if (f.pings->results.count(e.ip)) continue;
+        f.pings->results[e.ip] = {};
+        // Detached: a slow server never holds up the menu (the board outlives the screen).
+        std::thread([board = f.pings, ip = e.ip, protocol = f.protocol] {
+            net::ServerStatus st = net::pingServer(ip, protocol);
+            LOG("ping: %s -> %s", ip.c_str(),
+                st.ok ? (std::to_string(st.pingMs) + " ms, " + std::to_string(st.online) + "/" + std::to_string(st.max) +
+                         " players, " + st.versionName).c_str()
+                      : st.error.c_str());
+            std::lock_guard lock(board->mutex);
+            board->results[ip].status = std::move(st);
+            board->results[ip].done = true;
+        }).detach();
+    }
+}
+
+void connect(State& s, const std::string& address) {
+    FrontEndState& f = *s.fe;
+    std::vector<std::wstring> a = launch::stickyArguments();
+    a.insert(a.end(), {L"--connect", widen(address), L"--name", widen(f.cfg.playerName)});
+    LOG("ui: joining %s", address.c_str());
+    f.failTitle = tr(s, "connect.failed");
+    startChild(s, a, tr(s, "connect.connecting"), Screen::Servers, true);
+}
+
+int rowCount(State& s) { return int(s.fe->servers.size()) + 1 + int(s.fe->lanWorlds.size()); }
+float maxScroll(State& s) { return std::max(0.0f, float(rowCount(s) * kRowH + 4) - float(s.guiH() - kHeader - kFooter)); }
+
+void joinSelected(State& s) {
+    FrontEndState& f = *s.fe;
+    const int n = int(f.servers.size());
+    if (f.serverSel >= 0 && f.serverSel < n) return connect(s, f.servers[size_t(f.serverSel)].ip);
+    const int lan = f.serverSel - n - 1;
+    if (lan >= 0 && lan < int(f.lanWorlds.size())) connect(s, f.lanWorlds[size_t(lan)].address);
+}
+
+void openEditServer(State& s, int index) {
+    FrontEndState& f = *s.fe;
+    f.editServer = index;
+    f.serverName.text = TextField{};
+    f.serverIp.text = TextField{};
+    if (index >= 0 && index < int(f.servers.size())) {
+        f.serverName.text.value = f.servers[size_t(index)].name;
+        f.serverIp.text.value = f.servers[size_t(index)].ip;
+    } else {
+        f.serverName.text.value = s.res.translate("selectServer.defaultName");
+    }
+    for (Field* fl : {&f.serverName, &f.serverIp})
+        fl->text.cursor = fl->text.selection = int(fl->text.value.size());
+    s.openScreen(Screen::EditServer);
+}
+
+void saveEditServer(State& s) {
+    FrontEndState& f = *s.fe;
+    std::string ip = f.serverIp.text.value, name = f.serverName.text.value;
+    while (!ip.empty() && ip.back() == ' ') ip.pop_back();
+    while (!ip.empty() && ip.front() == ' ') ip.erase(ip.begin());
+    if (ip.empty()) return;
+    if (name.empty()) name = s.res.translate("selectServer.defaultName");
+    if (f.editServer >= 0 && f.editServer < int(f.servers.size())) {
+        ServerEntry& e = f.servers[size_t(f.editServer)];
+        if (e.ip != ip) e.icon.clear();
+        e.name = name, e.ip = ip;
+    } else {
+        f.servers.push_back({name, ip, {}});
+        f.serverSel = int(f.servers.size()) - 1;
+    }
+    saveAll(s);
+    openServers(s);
+}
+
+void deleteServer(State& s) {
+    FrontEndState& f = *s.fe;
+    if (f.serverSel < 0 || f.serverSel >= int(f.servers.size())) return;
+    const int index = f.serverSel;
+    State* p = &s;
+    showConfirm(s, tr(s, "selectServer.deleteQuestion"),
+                Text(formatJava(s.res.translate("selectServer.deleteWarning"), {f.servers[size_t(index)].name})),
+                s.res.translate("selectServer.deleteButton"),
+                [p, index] {
+                    FrontEndState& fe = *p->fe;
+                    if (index < int(fe.servers.size())) fe.servers.erase(fe.servers.begin() + index);
+                    fe.serverSel = -1;
+                    saveAll(*p);
+                    openServers(*p);
+                },
+                Screen::Servers);
+}
+
+void moveServer(State& s, int index, int delta) {
+    FrontEndState& f = *s.fe;
+    const int to = index + delta;
+    if (index < 0 || to < 0 || index >= int(f.servers.size()) || to >= int(f.servers.size())) return;
+    std::swap(f.servers[size_t(index)], f.servers[size_t(to)]);
+    f.serverSel = to;
+    saveAll(s);
+    s.buildButtons();
+}
+
+const char* pingSprite(int ms) {
+    return ms < 150 ? "server_list/ping_5" : ms < 300 ? "server_list/ping_4" : ms < 600 ? "server_list/ping_3"
+         : ms < 1000 ? "server_list/ping_2" : "server_list/ping_1";
+}
+
+}  // namespace
+
+// --- servers.json / servers.dat -----------------------------------------------------------------------------------
+
+std::vector<ServerEntry> loadServers(const fs::path& json, const fs::path& dat) {
+    std::vector<ServerEntry> out;
+    std::vector<u8> bytes;
+    if (readFile(json, bytes)) {
+        const auto j = nlohmann::json::parse(bytes.begin(), bytes.end(), nullptr, false);
+        if (j.is_object() && j.contains("servers") && j["servers"].is_array())
+            for (const auto& e : j["servers"])
+                if (e.is_object()) out.push_back({e.value("name", ""), e.value("ip", ""), e.value("icon", "")});
+        return out;
+    }
+    // First run: the game's list (uncompressed NBT: servers = [{name, ip, icon, hidden}]).
+    NbtValue root;
+    if (!dat.empty() && readFile(dat, bytes) && nbtRead(bytes.data(), bytes.size(), root))
+        if (NbtValue* list = root.find("servers"))
+            for (NbtValue& e : list->items) {
+                const NbtValue* hidden = e.find("hidden");
+                if (hidden && hidden->i) continue;
+                ServerEntry s;
+                if (const NbtValue* v = e.find("name")) s.name = v->s;
+                if (const NbtValue* v = e.find("ip")) s.ip = v->s;
+                if (const NbtValue* v = e.find("icon")) s.icon = v->s;
+                if (!s.ip.empty()) out.push_back(std::move(s));
+            }
+    LOG("ui: imported %zu servers from %s", out.size(), utf8(dat).c_str());
+    saveServers(json, out);
+    return out;
+}
+
+void saveServers(const fs::path& json, const std::vector<ServerEntry>& servers) {
+    nlohmann::json j;
+    j["servers"] = nlohmann::json::array();
+    for (const ServerEntry& e : servers) {
+        nlohmann::json o{{"name", e.name}, {"ip", e.ip}};
+        if (!e.icon.empty()) o["icon"] = e.icon;
+        j["servers"].push_back(std::move(o));
+    }
+    std::error_code ec;
+    fs::create_directories(json.parent_path(), ec);
+    const fs::path tmp = json.wstring() + L".tmp";
+    {
+        std::ofstream f(tmp, std::ios::trunc);
+        f << j.dump(2) << "\n";
+        if (!f) return;
+    }
+    fs::rename(tmp, json, ec);
+}
+
+// --- server list --------------------------------------------------------------------------------------------------
+
+void openServers(State& s) {
+    FrontEndState& f = *s.fe;
+    if (!f.protocol) f.protocol = net::gameProtocol(f.cfg.jar, &f.gameVersion);
+    f.servers = loadServers(f.cfg.serversFile, f.cfg.serversDat);
+    if (f.serverSel >= int(f.servers.size())) f.serverSel = -1;
+    if (!f.lan.running() && !f.lan.start()) LOG("ui: LAN discovery unavailable");
+    refreshPings(s);
+    s.openScreen(Screen::Servers);
+}
+
+void serversFrame(State& s) {
+    FrontEndState& f = *s.fe;
+    if (f.lan.running() && !isServerScreen(s.screen)) {
+        f.lan.stop();
+        f.lanWorlds.clear();
+    }
+    if (f.lan.running()) {
+        const size_t before = f.lanWorlds.size();
+        f.lanWorlds = f.lan.entries();
+        if (f.lanWorlds.size() != before && s.screen == Screen::Servers) s.buildButtons();
+    }
+    if (!f.pings) return;
+    // Favicons are kept in the list, like the game does in servers.dat.
+    std::lock_guard lock(f.pings->mutex);
+    for (ServerEntry& e : f.servers) {
+        auto it = f.pings->results.find(e.ip);
+        if (it == f.pings->results.end() || !it->second.done || it->second.status.faviconBase64.empty()) continue;
+        if (e.icon != it->second.status.faviconBase64) {
+            e.icon = it->second.status.faviconBase64;
+            f.serversDirty = true;
+        }
+    }
+    if (f.serversDirty) {
+        f.serversDirty = false;
+        saveServers(f.cfg.serversFile, f.servers);
+    }
+}
+
+void buildServers(State& s) {
+    FrontEndState& f = *s.fe;
+    const int W = s.guiW(), H = s.guiH();
+    State* p = &s;
+    const int n = int(f.servers.size());
+    const bool server = f.serverSel >= 0 && f.serverSel < n;
+    const bool any = server || (f.serverSel > n && f.serverSel - n - 1 < int(f.lanWorlds.size()));
+    const float x0 = float(W / 2 - 154), y0 = float(H - 52), y1 = float(H - 28);
+    addButton(s, x0, y0, 100, tr(s, "selectServer.select"), [p] { joinSelected(*p); }, any);
+    addButton(s, x0 + 104, y0, 100, tr(s, "selectServer.direct"), [p] {
+        FrontEndState& fe = *p->fe;
+        fe.directIp.text = TextField{};
+        fe.directIp.text.value = lastDirect(fe.cfg.serversFile);
+        fe.directIp.text.cursor = fe.directIp.text.selection = int(fe.directIp.text.value.size());
+        p->openScreen(Screen::DirectConnect);
+    });
+    addButton(s, x0 + 208, y0, 100, tr(s, "selectServer.add"), [p] { openEditServer(*p, -1); });
+    addButton(s, x0, y1, 74, tr(s, "selectServer.edit"), [p] { openEditServer(*p, p->fe->serverSel); }, server);
+    addButton(s, x0 + 78, y1, 74, tr(s, "selectServer.delete"), [p] { deleteServer(*p); }, server);
+    addButton(s, x0 + 156, y1, 74, tr(s, "selectServer.refresh"), [p] { openServers(*p); });
+    addButton(s, x0 + 234, y1, 74, tr(s, "gui.back"), [p] { p->openScreen(Screen::Title); });
+    f.onBack = [p] { p->openScreen(Screen::Title); };
+    f.onEnter = [p] { joinSelected(*p); };
+}
+
+void drawServers(State& s, Canvas& c) {
+    FrontEndState& f = *s.fe;
+    const int W = c.guiWidth(), H = c.guiHeight();
+    menuBackground(s, c);
+    s.drawCentered(c, tr(s, "multiplayer.title"), float(W / 2), 12, 0xFFFFFFFF);
+    const float top = float(kHeader), bottom = float(H - kFooter);
+    listBackground(s, c, top, bottom);
+    const float rowLeft = float(W / 2 - kRowW / 2 + 2), right = rowLeft + kRowW - 6;
+    f.serverScroll = std::clamp(f.serverScroll, 0.0f, maxScroll(s));
+    std::vector<Text> tooltip;
+    std::unordered_map<std::string, PingBoard::Result> results;
+    if (f.pings) {
+        std::lock_guard lock(f.pings->mutex);
+        results = f.pings->results;
+    }
+    c.pushScissor(0, top, float(W), bottom);
+    const int n = int(f.servers.size());
+    for (int row = 0; row < rowCount(s); ++row) {
+        const float y = top + 4 + float(row) * kRowH - f.serverScroll;
+        if (y + kRowH < top || y > bottom) continue;
+        const bool hovered = s.mouseX >= rowLeft - 2 && s.mouseX < rowLeft + kRowW - 2 && s.mouseY >= y - 2 &&
+                             s.mouseY < y + kRowH - 2 && s.mouseY >= top && s.mouseY < bottom;
+        if (row == f.serverSel) {
+            c.fill(rowLeft - 2, y - 2, rowLeft + kRowW - 2, y + kRowH - 2, 0xFFFFFFFF);
+            c.fill(rowLeft - 1, y - 1, rowLeft + kRowW - 3, y + kRowH - 3, 0xFF000000);
+        }
+        if (row == n) {  // LANHeader: scanning, with LoadingDotsText
+            static const char* dots[] = {"O o o", "o O o", "o o O", "o O o"};
+            s.drawCentered(c, tr(s, "lanServer.scanning"), float(W / 2), y + 1, 0xFFFFFFFF);
+            s.drawCentered(c, Text(dots[int(s.clock * 3.0) % 4]), float(W / 2), y + 12, 0xFF808080);
+            continue;
+        }
+        if (row > n) {  // NetworkServerEntry
+            const net::LanListener::Entry& lan = f.lanWorlds[size_t(row - n - 1)];
+            blitTexture(c, s.sprites.texture("misc/unknown_server"), rowLeft, y, 0, 0, 32, 32, 32, 32);
+            s.drawText(c, tr(s, "lanServer.title"), rowLeft + 35, y + 1, 0xFFFFFFFF, true);
+            s.drawText(c, Text(fitText(s.font, lan.motd, kRowW - 40)), rowLeft + 35, y + 12, 0xFF808080, true);
+            s.drawText(c, Text(lan.address), rowLeft + 35, y + 23, 0xFF808080, true);
+            if (hovered) {
+                c.fill(rowLeft, y, rowLeft + 32, y + 32, 0xA0909090);
+                blitSprite(c, s.sprites.sprite(s.mouseX < rowLeft + 32 ? "server_list/join_highlighted" : "server_list/join"), rowLeft, y, 32, 32);
+            }
+            continue;
+        }
+        const ServerEntry& e = f.servers[size_t(row)];
+        const auto it = results.find(e.ip);
+        const bool done = it != results.end() && it->second.done;
+        const net::ServerStatus* st = done ? &it->second.status : nullptr;
+        // Icon: the status favicon, else the one kept in the list.
+        const Sprite* icon = nullptr;
+        if (!e.icon.empty()) {
+            const std::string key = "server:" + e.ip;
+            icon = s.fe->icons.count(key) && s.fe->iconSource[key] == e.icon ? &s.fe->icons[key] : nullptr;
+            if (!icon) {
+                std::vector<u8> png;
+                if (st && !st->favicon.empty() && st->faviconBase64 == e.icon) png = st->favicon;
+                else {  // decode the kept base64 once
+                    static const std::string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+                    u32 acc = 0;
+                    int bits = 0;
+                    for (char ch : e.icon) {
+                        const size_t v = chars.find(ch);
+                        if (v == std::string::npos) continue;
+                        acc = (acc << 6) | u32(v), bits += 6;
+                        if (bits >= 8) bits -= 8, png.push_back(u8(acc >> bits));
+                    }
+                }
+                Image img;
+                if (decodeImage(png, img)) icon = iconSprite(s, key, img, e.icon);
+            }
+        }
+        if (icon) blitSprite(c, icon, rowLeft, y, 32, 32);
+        else blitTexture(c, s.sprites.texture("misc/unknown_server"), rowLeft, y, 0, 0, 32, 32, 32, 32);
+        s.drawText(c, Text(fitText(s.font, e.name, kRowW - 110)), rowLeft + 35, y + 1, 0xFFFFFFFF, true);
+        // MOTD (two lines), status icon and player count / version.
+        const char* statusSprite = nullptr;
+        Text status, motd;
+        Text statusTip;
+        std::vector<Text> playersTip;
+        if (!done) {
+            const int frame = int(s.clock * 10.0 + row * 2) & 7;
+            const int k = frame > 4 ? 8 - frame : frame;
+            static const char* pinging[] = {"server_list/pinging_1", "server_list/pinging_2", "server_list/pinging_3",
+                                            "server_list/pinging_4", "server_list/pinging_5"};
+            statusSprite = pinging[k];
+            motd = Text(s.res.translate("multiplayer.status.pinging"), colorStyle(0x808080));
+            statusTip = tr(s, "multiplayer.status.pinging");
+        } else if (!st->ok) {
+            statusSprite = "server_list/unreachable";
+            motd = Text(s.res.translate(st->error == "unknown host" ? "multiplayer.status.cannot_resolve"
+                                                                   : "multiplayer.status.cannot_connect"),
+                        colorStyle(0xFF0000));
+            statusTip = tr(s, "multiplayer.status.no_connection");
+        } else {
+            motd = st->description.is_null() ? Text() : parseJsonComponent(st->description, s.lang());
+            if (st->protocol != f.protocol && f.protocol) {
+                statusSprite = "server_list/incompatible";
+                status = Text(st->versionName, colorStyle(0xFF5555));
+                statusTip = tr(s, "multiplayer.status.incompatible");
+            } else {
+                statusSprite = pingSprite(st->pingMs);
+                statusTip = trf(s, "multiplayer.status.ping", {Text(std::to_string(std::max(0, st->pingMs)))});
+            }
+            if (st->online >= 0 && status.empty()) {
+                status = Text(std::to_string(st->online), colorStyle(0xAAAAAA));
+                status.append("/", colorStyle(0x555555));
+                status.append(std::to_string(st->max), colorStyle(0xAAAAAA));
+            }
+            for (const std::string& name : st->sample) playersTip.push_back(Text(name));
+            if (st->online > int(st->sample.size()) && !st->sample.empty())
+                playersTip.push_back(trf(s, "multiplayer.status.and_more", {Text(std::to_string(st->online - int(st->sample.size())))}));
+        }
+        const std::vector<Text> lines = s.font.split(motd, kRowW - 32 - 2 - 6);
+        for (size_t i = 0; i < std::min<size_t>(lines.size(), 2); ++i)
+            s.drawText(c, lines[i], rowLeft + 35, y + 12 + 9 * float(i), 0xFF808080, true);
+        const float iconX = right - 10 - 5;
+        if (statusSprite) blitSprite(c, s.sprites.sprite(statusSprite), iconX, y, 10, 8);
+        const int statusW = s.font.width(status);
+        const float statusX = iconX - float(statusW) - 5;
+        if (!status.empty()) s.drawText(c, status, statusX, y + 1, 0xFF808080, true);
+        if (s.mouseX >= iconX && s.mouseX <= iconX + 10 && s.mouseY >= y && s.mouseY <= y + 8 && !statusTip.empty())
+            tooltip = {statusTip};
+        else if (!playersTip.empty() && s.mouseX >= statusX && s.mouseX <= statusX + float(statusW) && s.mouseY >= y && s.mouseY <= y + 8)
+            tooltip = playersTip;
+        if (hovered) {  // join (right half), move up / down (left quarters)
+            c.fill(rowLeft, y, rowLeft + 32, y + 32, 0xA0909090);
+            const float rx = s.mouseX - rowLeft, ry = s.mouseY - y;
+            const bool overRight = rx >= 16 && rx < 32 && ry >= 0 && ry < 32;
+            blitSprite(c, s.sprites.sprite(overRight ? "server_list/join_highlighted" : "server_list/join"), rowLeft, y, 32, 32);
+            if (row > 0)
+                blitSprite(c, s.sprites.sprite(rx < 16 && ry < 16 ? "server_list/move_up_highlighted" : "server_list/move_up"),
+                           rowLeft, y, 32, 32);
+            if (row < n - 1)
+                blitSprite(c, s.sprites.sprite(rx < 16 && ry >= 16 && ry < 32 ? "server_list/move_down_highlighted" : "server_list/move_down"),
+                           rowLeft, y, 32, 32);
+        }
+    }
+    c.popScissor();
+    if (const float ms = maxScroll(s); ms > 0) {
+        const float x = rowLeft + kRowW + 4, h = bottom - top;
+        const float bar = std::max(32.0f, h * h / (h + ms)), by = top + (h - bar) * f.serverScroll / ms;
+        blitSprite(c, s.sprites.sprite("widget/scroller_background"), x, top, 6, h);
+        blitSprite(c, s.sprites.sprite("widget/scroller"), x, by, 6, bar);
+    }
+    s.drawButtons(c);
+    if (!tooltip.empty()) s.drawTooltip(c, tooltip, s.mouseX, s.mouseY);
+}
+
+void serversInput(State& s, const Window::InputEvent& e) {
+    using E = Window::InputEvent;
+    FrontEndState& f = *s.fe;
+    const int W = s.guiW(), H = s.guiH();
+    const float top = float(kHeader), bottom = float(H - kFooter), rowLeft = float(W / 2 - kRowW / 2 + 2);
+    const int n = int(f.servers.size());
+    auto selectable = [&](int row) { return row >= 0 && row < rowCount(s) && row != n; };
+    if (e.type == E::Wheel) {
+        f.serverScroll = std::clamp(f.serverScroll - float(e.code) * kRowH / 2, 0.0f, maxScroll(s));
+        return;
+    }
+    if (e.type == E::Key && e.down && (e.code == VK_UP || e.code == VK_DOWN)) {
+        int row = f.serverSel;
+        do row += e.code == VK_DOWN ? 1 : -1;
+        while (row >= 0 && row < rowCount(s) && !selectable(row));
+        if (selectable(row)) {
+            f.serverSel = row;
+            const float y = 4 + float(row) * kRowH;
+            f.serverScroll = std::clamp(f.serverScroll, y + kRowH - (bottom - top), y);
+            s.buildButtons();
+        }
+        return;
+    }
+    if (e.type == E::Button && e.down && e.code == 0 && s.mouseY >= top && s.mouseY < bottom && s.mouseX >= rowLeft - 2 &&
+        s.mouseX < rowLeft + kRowW - 2) {
+        const int row = int(std::floor((s.mouseY - top - 4 + 2 + f.serverScroll) / kRowH));
+        if (!selectable(row)) return;
+        f.serverSel = row;
+        s.buildButtons();
+        const float y = top + 4 + float(row) * kRowH - f.serverScroll;
+        const float rx = s.mouseX - rowLeft, ry = s.mouseY - y;
+        const bool dbl = doubleClicked(s, row);
+        if (row < n && rx >= 0 && rx < 16 && ry >= 0 && ry < 16 && row > 0) return moveServer(s, row, -1);
+        if (row < n && rx >= 0 && rx < 16 && ry >= 16 && ry < 32 && row < n - 1) return moveServer(s, row, 1);
+        if (dbl || (rx >= 16 && rx < 32 && ry >= 0 && ry < 32) || (row > n && rx >= 0 && rx < 32 && ry >= 0 && ry < 32))
+            joinSelected(s);
+        return;
+    }
+    s.buttonsInput(e);
+}
+
+// --- Add / Edit Server (ManageServerScreen) -----------------------------------------------------------------------
+
+void buildEditServer(State& s) {
+    FrontEndState& f = *s.fe;
+    const int W = s.guiW(), H = s.guiH();
+    State* p = &s;
+    const float x = float(W / 2 - 100);
+    f.serverName.x = x, f.serverName.y = 66, f.serverName.w = 200;
+    f.serverIp.x = x, f.serverIp.y = 106, f.serverIp.w = 200;
+    f.serverIp.text.maxLength = 128;
+    setFields(s, {&f.serverName, &f.serverIp}, 0);
+    Button& done = addButton(s, x, float(H / 4 + 96 + 18), 200, tr(s, "addServer.add"), [p] { saveEditServer(*p); });
+    done.labelFn = [p] { return tr(*p, "addServer.add"); };
+    addButton(s, x, float(H / 4 + 120 + 18), 200, tr(s, "gui.cancel"), [p] { openServers(*p); });
+    f.onBack = [p] { openServers(*p); };
+    f.onEnter = [p] { saveEditServer(*p); };
+}
+
+void drawEditServer(State& s, Canvas& c) {
+    FrontEndState& f = *s.fe;
+    const int W = c.guiWidth();
+    const float x = float(W / 2 - 100);
+    menuBackground(s, c);
+    s.drawCentered(c, tr(s, f.editServer >= 0 ? "manageServer.edit.title" : "manageServer.add.title"), float(W / 2), 17,
+                   0xFFFFFFFF);
+    s.drawText(c, tr(s, "manageServer.enterName"), x, 53, 0xFFA0A0A0, true);
+    s.drawText(c, tr(s, "manageServer.enterIp"), x, 94, 0xFFA0A0A0, true);
+    // Done needs an address (ManageServerScreen.updateAddButtonStatus).
+    for (Button& b : s.buttons)
+        if (b.labelFn) b.active = !f.serverIp.text.value.empty();
+    drawFields(s, c);
+    s.drawButtons(c);
+}
+
+// --- Direct Connection (DirectJoinServerScreen) -------------------------------------------------------------------
+
+void buildDirectConnect(State& s) {
+    FrontEndState& f = *s.fe;
+    const int W = s.guiW(), H = s.guiH();
+    State* p = &s;
+    const float x = float(W / 2 - 100);
+    f.directIp.x = x, f.directIp.y = 116, f.directIp.w = 200;
+    f.directIp.text.maxLength = 128;
+    setFields(s, {&f.directIp}, 0);
+    auto join = [p] {
+        FrontEndState& fe = *p->fe;
+        std::string ip = fe.directIp.text.value;
+        while (!ip.empty() && ip.back() == ' ') ip.pop_back();
+        if (ip.empty()) return;
+        saveAll(*p, &ip);
+        connect(*p, ip);
+    };
+    addButton(s, x, float(H / 4 + 96 + 12), 200, tr(s, "selectServer.select"), join);
+    addButton(s, x, float(H / 4 + 120 + 12), 200, tr(s, "gui.cancel"), [p] { openServers(*p); });
+    f.onBack = [p] { openServers(*p); };
+    f.onEnter = join;
+}
+
+void drawDirectConnect(State& s, Canvas& c) {
+    const int W = c.guiWidth();
+    menuBackground(s, c);
+    s.drawCentered(c, tr(s, "selectServer.direct"), float(W / 2), 20, 0xFFFFFFFF);
+    s.drawText(c, tr(s, "manageServer.enterIp"), float(W / 2 - 100), 100, 0xFFA0A0A0, true);
+    drawFields(s, c);
+    s.drawButtons(c);
+}
+
+}  // namespace ui

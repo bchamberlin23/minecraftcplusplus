@@ -2,6 +2,7 @@
 
 #include "assets/assets.h"
 #include "assets/game_reports.h"
+#include "ui/frontend.h"
 #include "ui/ui_state.h"
 #include "world/terrain.h"
 
@@ -292,7 +293,7 @@ int Ui::State::menuSlotForInventory(const Menu& m, int idx) const {
 
 // --- Ui -----------------------------------------------------------------------------------------------------
 
-Ui::Ui() : s_(std::make_unique<State>()) {}
+Ui::Ui() : s_(std::make_unique<State>()) { s_->fe = std::make_unique<FrontEndState>(); }
 Ui::~Ui() = default;
 
 Settings& Ui::settings() { return s_->settings; }
@@ -415,6 +416,7 @@ bool Ui::init(const Init& in) {
     if (!s.settings.loaded) s.settings.renderDistance = in.detailChunks;
     in.terrain->setDetailRadius(float(std::min(s.settings.renderDistance, in.detailChunks)) * 16.0f);
     s.initNativeMods();  // mods_screen.cpp
+    frontEndInit(s);     // title.cpp: the title screen in menu mode
     return true;
 }
 
@@ -857,6 +859,7 @@ void Ui::beginFrame(double dt) {
         }
         for (auto& fn : pending) fn();
     }
+    s.frontEndFrame();  // title.cpp
     if (s.session && !s.session->connected() && !s.quit) {
         // Connection lost: nothing more will arrive; keep the UI usable for quitting.
     }
@@ -955,8 +958,9 @@ void Ui::endFrame() {
         s.pass->glint[4] = -float(std::fmod(ms, 110000.0) / 110000.0), s.pass->glint[5] = float(std::fmod(ms, 30000.0) / 30000.0);
         s.pass->glint[6] = float(16 * scale) * 2.0f;
     }
-    if (!s.hudHidden) s.drawHud(c);
-    if (!s.hudHidden) s.drawModHud(c);  // native mods
+    const bool hud = !s.hudHidden && !s.fe->cfg.menu;  // the title screen has no HUD
+    if (hud) s.drawHud(c);
+    if (hud) s.drawModHud(c);  // native mods
     if (s.debug) s.drawDebug(c);
     if (s.screen != Screen::None) s.drawScreen(c);
 }

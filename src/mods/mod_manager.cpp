@@ -290,7 +290,7 @@ Manager::~Manager() {
     int argc = 0;
     if (wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc)) {
         for (int i = 1; i < argc; ++i) {
-            if (std::wstring_view(argv[i]) == L"--script") {
+            if (std::wstring_view(argv[i]) == L"--script" || std::wstring_view(argv[i]) == L"--handoff") {
                 ++i;
                 continue;
             }
@@ -301,7 +301,9 @@ Manager::~Manager() {
     STARTUPINFOW si{};
     si.cb = sizeof(si);
     PROCESS_INFORMATION pi{};
-    if (CreateProcessW(exe, cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+    // Without a console (started from a shortcut) the new instance gets none either.
+    if (CreateProcessW(exe, cmd.data(), nullptr, nullptr, FALSE, GetConsoleWindow() ? 0 : CREATE_NO_WINDOW, nullptr, nullptr,
+                       &si, &pi)) {
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
     }

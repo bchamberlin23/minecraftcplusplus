@@ -169,6 +169,35 @@ const char* difficultyName(i64 d) {
     }
 }
 
+// A server.properties value (java.util.Properties escaping, non-ASCII as \uXXXX).
+std::string propertyValue(const std::string& v) {
+    std::string out;
+    for (size_t i = 0; i < v.size();) {
+        u32 cp = u8(v[i]);
+        const int n = cp < 0x80 ? 1 : cp < 0xE0 ? 2 : cp < 0xF0 ? 3 : 4;
+        if (n > 1) {
+            cp &= 0xFFu >> (n + 1);
+            for (int k = 1; k < n && i + size_t(k) < v.size(); ++k) cp = (cp << 6) | (u8(v[i + size_t(k)]) & 0x3F);
+        }
+        i += size_t(n);
+        if (cp == '\\' || cp == ':' || cp == '=' || cp == '#' || cp == '!') {
+            out += '\\';
+            out += char(cp);
+        } else if (cp >= 0x20 && cp < 0x7F) {
+            out += char(cp);
+        } else {
+            auto unit = [&](u32 u) {
+                char b[8];
+                std::snprintf(b, sizeof(b), "\\u%04X", unsigned(u & 0xFFFF));
+                out += b;
+            };
+            if (cp >= 0x10000) unit(0xD800 + ((cp - 0x10000) >> 10)), unit(0xDC00 + ((cp - 0x10000) & 0x3FF));
+            else unit(cp);
+        }
+    }
+    return out;
+}
+
 }  // namespace
 
 LocalServer::~LocalServer() { stop(); }
@@ -304,6 +333,28 @@ void LocalServer::importHostPlayer() {
     }
 }
 
+void LocalServer::finishNewWorld() {
+    NbtValue root;
+    std::string rootName;
+    if (!readNbtGz(config_.world / "level.dat", root, &rootName)) return;
+    NbtValue* data = root.find("Data");
+    if (!data) return;
+    NbtValue name = NbtValue::make(TagString);
+    name.s = config_.create->levelName.empty() ? config_.world.filename().string() : config_.create->levelName;
+    const std::string levelName = name.s;
+    data->set("LevelName", std::move(name));
+    NbtValue cheats = NbtValue::make(TagByte);
+    cheats.i = config_.create->cheats ? 1 : 0;
+    data->set("allowCommands", std::move(cheats));
+    NbtValue mode = NbtValue::make(TagInt);  // the world's game mode (the server only gives it to players)
+    const std::string& m = config_.create->gameMode;
+    mode.i = m == "creative" ? 1 : m == "adventure" ? 2 : m == "spectator" ? 3 : 0;
+    data->set("GameType", std::move(mode));
+    if (writeNbtGz(config_.world / "level.dat", root, rootName))
+        LOG("server  new world \"%s\" set up for singleplayer (cheats %s)", levelName.c_str(),
+            config_.create->cheats ? "on" : "off");
+}
+
 bool LocalServer::start(const Config& config) {
     config_ = config;
     const wchar_t* local = _wgetenv(L"LOCALAPPDATA");
@@ -316,7 +367,9 @@ bool LocalServer::start(const Config& config) {
         LOG("error: the game's Java runtime was not found; launch the game once from the launcher");
         return false;
     }
-    if (!ensureServerJar(jar) || !backupIfUpgrading()) return false;
+    std::error_code existsEc;
+    creating_ = config.create && !fs::exists(config.world / "level.dat", existsEc);
+    if (!ensureServerJar(jar) || (!creating_ && !backupIfUpgrading())) return false;
     // Fabric mods in the mods folder: Fabric's server runs them on top of this server.jar (mods/fabric_server.h).
     if (const auto fabric = mods::Manager::get().fabricMods(); !fabric.empty()) {
         if (!mods::prepareFabricServer(runDir_.parent_path(), config.minecraftDir, config.version, jar, fabric, runDir_, jar))
@@ -326,7 +379,18 @@ bool LocalServer::start(const Config& config) {
                 "(see the Mods & Packs screen)");
     }
     offlineUuid_ = uuidString(offlineUuid(config.player));
-    exportHostPlayer();
+    if (creating_) {
+        // The owner's singleplayer player data is written once the server stops (importHostPlayer).
+        std::string id;
+        for (char c : config.ownerUuid)
+            if (c != '-') id += char(std::tolower(u8(c)));
+        if (id.size() == 32)
+            hostUuid_ = id.substr(0, 8) + "-" + id.substr(8, 4) + "-" + id.substr(12, 4) + "-" + id.substr(16, 4) + "-" +
+                        id.substr(20);
+        fs::create_directories(config.world, existsEc);
+    } else {
+        exportHostPlayer();
+    }
 
     NbtValue level;
     readNbtGz(config.world / "level.dat", level);
@@ -335,6 +399,13 @@ bool LocalServer::start(const Config& config) {
         NbtValue* v = data ? data->find(key) : nullptr;
         return v ? v->i : fallback;
     };
+    // 26.x keeps difficulty and hardcore in difficulty_settings; older saves at the top of Data.
+    std::string difficulty = difficultyName(num("Difficulty", 2));
+    bool hardcore = num("hardcore", 0) != 0;
+    if (NbtValue* ds = data ? data->find("difficulty_settings") : nullptr) {
+        if (NbtValue* d = ds->find("difficulty"); d && d->type == TagString && !d->s.empty()) difficulty = d->s;
+        if (NbtValue* h = ds->find("hardcore")) hardcore = h->i != 0;
+    }
     port_ = config.port ? config.port : freePort();
     {
         std::ofstream eula(runDir_ / "eula.txt", std::ios::trunc);
@@ -355,13 +426,16 @@ bool LocalServer::start(const Config& config) {
           << "allow-flight=true\n"
           << "enable-command-block=true\n"
           << "max-players=8\n"
-          << "gamemode=" << gameModeName(num("GameType", 0)) << "\n"
-          << "difficulty=" << difficultyName(num("Difficulty", 2)) << "\n"
-          << "hardcore=" << (num("hardcore", 0) ? "true" : "false") << "\n"
-          << "motd=" << config.world.filename().string() << " (minecraftCplusplus)\n";
+          << "gamemode=" << (creating_ ? config.create->gameMode : gameModeName(num("GameType", 0))) << "\n"
+          << "difficulty=" << (creating_ ? config.create->difficulty : difficulty) << "\n"
+          << "hardcore=" << ((creating_ ? config.create->hardcore : hardcore) ? "true" : "false") << "\n";
+        if (creating_)
+            p << "level-seed=" << propertyValue(config.create->seed) << "\n"
+              << "generate-structures=" << (config.create->structures ? "true" : "false") << "\n";
+        p << "motd=" << config.world.filename().string() << " (minecraftCplusplus)\n";
         // Cheats on in the save: the player may run commands, as in singleplayer.
         std::ofstream ops(runDir_ / "ops.json", std::ios::trunc);
-        if (num("allowCommands", 0))
+        if (num("allowCommands", 0) || (creating_ && config.create->cheats))
             ops << "[{\"uuid\":\"" << offlineUuid_ << "\",\"name\":\"" << config.player
                 << "\",\"level\":4,\"bypassesPlayerLimit\":false}]\n";
         else
@@ -425,6 +499,7 @@ void LocalServer::readOutput() {
                 LOG("server: %s", line.c_str());
                 if (line.find("FAILED TO BIND") != std::string::npos) failed_ = true;
             } else if (line.find("Preparing level") != std::string::npos || line.find("Upgrading") != std::string::npos ||
+                       line.find("Preparing spawn area") != std::string::npos ||
                        line.find("Stopping server") != std::string::npos ||
                        (line.find("Loading ") != std::string::npos && line.find(" mods:") != std::string::npos) ||
                        line.starts_with("\t- ")) {  // Fabric's mod list
@@ -465,5 +540,6 @@ void LocalServer::stop(double timeoutSeconds) {
     if (job_) CloseHandle(job_);
     process_ = job_ = stdoutRead_ = nullptr;
     importHostPlayer();
+    if (creating_) finishNewWorld();
     LOG("server  %8.1f ms  local server saved and stopped", t.ms());
 }

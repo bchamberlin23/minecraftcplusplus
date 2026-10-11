@@ -13,6 +13,8 @@
 #include "mods/mod_manager.h"
 #include "net/local_server.h"
 #include "net/session.h"
+#include "net/status.h"
+#include "platform/launch.h"
 #include "platform/ownership.h"
 #include "platform/window.h"
 #include "render/renderer.h"
@@ -26,6 +28,7 @@
 #include "worldgen/feature_api.h"
 #include "worldgen/gen_service.h"
 #include "worldgen/gentest.h"
+#include "worldgen/structures.h"
 #include "world/world.h"
 
 #include <algorithm>
@@ -34,6 +37,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <numeric>
+#include <random>
 
 namespace {
 
@@ -73,6 +77,11 @@ struct Options {
     std::string upscaler, upscaleQuality, frameGen, lowLatency;  // --upscaler / --upscale-quality / --framegen / --low-latency
     float sharpness = -1;                  // --sharpness 0..1
     int fpsLimit = -1;                     // --fps-limit (0 = unlimited)
+    // Front end (ui/title.cpp): the title screen when no world or server is given.
+    fs::path savesDir, serversFile, serversDat;  // --saves-dir / --servers-file / --servers-dat (tests: scratch copies)
+    std::string menu;                            // --menu worlds|servers: the title screen opens that list
+    std::wstring childScript;                    // --child-script: test script for the instance the menu starts
+    std::optional<LocalServer::Config::Create> create;  // --create-*: a new world, made by the local server
 };
 
 void usage() {
@@ -86,6 +95,10 @@ void usage() {
         "                          [--upscaler taa|dlss|fsr|xess] [--upscale-quality native|ultraqualityplus|ultraquality|quality|\n"
         "                           balanced|performance|ultraperformance] [--sharpness 0..1]\n"
         "                          [--framegen off|dlss|dlss2x|dlss3x|dlss4x|fsr|xess] [--low-latency off|on|boost] [--fps-limit <n>]\n"
+        "                          [--saves-dir <dir>] [--servers-file <servers.json>] [--servers-dat <servers.dat>]\n"
+        "                          [--menu worlds|servers] [--child-script <file>] [--create-name <name> --create-seed <seed>\n"
+        "                           --create-mode survival|hardcore|creative --create-difficulty <d> --create-cheats 0|1]\n"
+        "without --world / --connect / --play: the title screen\n"
         "controls: click to capture the mouse, WASD move, Space jump (double-tap: fly), Shift sneak / descend,\n"
         "          Ctrl sprint, left click break, right click place, middle click pick, 1-9 / wheel hotbar, Esc release");
 }
@@ -156,6 +169,7 @@ void selfTest(Game& game, World& world, BlockRegistry& registry, int frame) {
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
+    launch::initProcess(argc, argv);  // log file without a console, handoff from the previous instance
     Options opt;
     for (int i = 1; i < argc; ++i) {
         std::wstring a = argv[i];
@@ -206,10 +220,39 @@ int wmain(int argc, wchar_t** argv) {
         else if (a == L"--low-latency") opt.lowLatency = fs::path(next()).string();
         else if (a == L"--sharpness") opt.sharpness = float(_wtof(next().c_str()));
         else if (a == L"--fps-limit") opt.fpsLimit = _wtoi(next().c_str());
-        else {
+        else if (a == L"--saves-dir") opt.savesDir = next();
+        else if (a == L"--servers-file") opt.serversFile = next();
+        else if (a == L"--servers-dat") opt.serversDat = next();
+        else if (a == L"--menu") opt.menu = fs::path(next()).string();
+        else if (a == L"--child-script") opt.childScript = next();
+        else if (a == L"--handoff" || a == L"--window") next();  // platform/launch.h
+        else if (a.starts_with(L"--create-")) {
+            if (!opt.create) opt.create.emplace();
+            const std::wstring v = next();
+            const std::u8string u = fs::path(v).u8string();
+            const std::string s(u.begin(), u.end());
+            if (a == L"--create-name") opt.create->levelName = s;
+            else if (a == L"--create-seed") opt.create->seed = s;
+            else if (a == L"--create-mode") opt.create->gameMode = s;
+            else if (a == L"--create-difficulty") opt.create->difficulty = s;
+            else if (a == L"--create-cheats") opt.create->cheats = v == L"1";
+            else if (a == L"--create-structures") opt.create->structures = v != L"0";
+        } else {
             usage();
             return 1;
         }
+    }
+
+    if (opt.create && opt.create->gameMode == "hardcore")  // hardcore: survival, hard, one life
+        opt.create->gameMode = "survival", opt.create->hardcore = true, opt.create->difficulty = "hard";
+    // No world, server or tool given: the title screen, over a live world panorama (ui/title.cpp).
+    const bool menu = opt.world.empty() && opt.connect.empty() && !opt.play && opt.gentestDir.empty() && !opt.bench &&
+                      !opt.selftest && !opt.audioTest;
+    if (menu) {
+        opt.detail = std::min(opt.detail, 10);        // a vista: little full detail, far terrain beyond
+        if (opt.genRadius < 0) opt.genRadius = 10;
+        if (opt.farBlocks < 0) opt.farBlocks = opt.fog = std::min(opt.fog, 8192.0f);
+        if (opt.sky.time < 0) opt.sky.time = 1500;  // morning light
     }
 
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
@@ -235,10 +278,25 @@ int wmain(int argc, wchar_t** argv) {
             ownership.reason.c_str());
         return 1;
     }
-    fs::path worldDir = opt.world.empty()                       ? newestWorld(mc / "saves")
+    const fs::path saves = opt.savesDir.empty() ? mc / "saves" : opt.savesDir;
+    // The title screen's panorama is a world of its own, generated once into a cache (seed and spot picked at
+    // random, ui::writeTitleWorld) and loaded from it afterwards: detailed from the first frame.
+    const wchar_t* localApp = _wgetenv(L"LOCALAPPDATA");
+    const fs::path titleDir = fs::path(localApp ? localApp : L".") / "minecraftCplusplus" / "title" / version;
+    std::error_code titleEc;
+    if (menu) fs::create_directories(titleDir, titleEc);
+    i64 cachedSeed = 0;
+    const bool titleCached = menu && World::readSeed(titleDir, cachedSeed);
+    const bool titleChunks =
+        titleCached &&
+        fs::directory_iterator(titleDir / "dimensions" / "minecraft" / "overworld" / "region", titleEc) != fs::directory_iterator();
+    fs::path worldDir = menu                                    ? titleDir
+                        : opt.world.empty()                     ? newestWorld(saves)
                         : fs::exists(opt.world / "level.dat") ? opt.world
-                                                              : mc / "saves" / opt.world;
-    if (opt.connect.empty() && (worldDir.empty() || !fs::exists(worldDir / "level.dat"))) {
+                                                              : saves / opt.world;
+    if (opt.create && fs::exists(worldDir / "level.dat")) opt.create.reset();  // made already (a restart)
+    if (opt.connect.empty() && !menu && !(opt.play && opt.create) &&
+        (worldDir.empty() || !fs::exists(worldDir / "level.dat"))) {
         LOG("error: world not found");
         return 1;
     }
@@ -253,12 +311,21 @@ int wmain(int argc, wchar_t** argv) {
     // --- singleplayer (--play): the official server runs the game's rules on this world in the background
     // while the save is shown right away; the game switches to it once it is up ---
     std::unique_ptr<LocalServer> localServer;
+    net::LanHost lanHost;  // Open to LAN (pause menu) / --lan: announcements (and a forwarded port)
     if (opt.play && opt.connect.empty()) {
         if (opt.name == "Player") opt.name = ownership.playerName;
         localServer = std::make_unique<LocalServer>();
-        if (!localServer->start({mc, version, worldDir, opt.name, 0, opt.lan, std::min(opt.detail, 32)})) return 1;
-        if (localServer->upgrading()) {  // the server rewrites the save first: read it only afterwards
-            LOG("server  upgrading the world to %s first...", version.c_str());
+        LocalServer::Config sc{mc, version, worldDir, opt.name, 0, opt.lan, std::min(opt.detail, 32)};
+        sc.create = opt.create;
+        sc.ownerUuid = ownership.playerId;
+        if (!localServer->start(sc)) return 1;
+        if (opt.lan) {  // already listening on all interfaces: announce it on the LAN like the game
+            std::string error;
+            lanHost.start(opt.name + " - " + worldDir.filename().string(), localServer->port(), localServer->port(), false, error);
+        }
+        if (localServer->upgrading() || localServer->creating()) {  // the server writes the save first: read it after
+            LOG(localServer->creating() ? "server  creating the world first..." : "server  upgrading the world to %s first...",
+                version.c_str());
             while (!localServer->ready() && localServer->running()) Sleep(100);
             if (!localServer->ready()) return 1;
         }
@@ -285,7 +352,7 @@ int wmain(int argc, wchar_t** argv) {
     auto biomeTask = std::async(std::launch::async, [&] { return biomeColors.init(jar); });
     ent::EntityAssets entityAssets;
     auto entityTask = std::async(std::launch::async, [&] {
-        return haveReports && entityAssets.load(mc, version, jar, fs::path(local ? local : L".") / "minecraftCplusplus" / "models",
+        return !menu && haveReports && entityAssets.load(mc, version, jar, fs::path(local ? local : L".") / "minecraftCplusplus" / "models",
                                                 reports);
     });
     ui::Ui ui;  // before the clients (their handlers post to it) and the renderer (its pass)
@@ -303,7 +370,8 @@ int wmain(int argc, wchar_t** argv) {
     LoadStats ls;
     // The save loads while the other loaders finish (they are only needed once a client or the window exists).
     std::future<bool> worldTask;
-    if (opt.connect.empty())
+    if (menu && !titleChunks) world.initEmpty(-4, 19);  // the title screen's world is all generated (overworld height)
+    if (opt.connect.empty() && (!menu || titleChunks))
         worldTask = std::async(std::launch::async, [&] {
             return world.load(worldDir, registry, int(std::floor(player.x)) >> 4, int(std::floor(player.z)) >> 4,
                               opt.radius, ls);
@@ -329,10 +397,9 @@ int wmain(int argc, wchar_t** argv) {
     std::unique_ptr<net::Client> netClient;
     std::unique_ptr<net::Session> session;
     if (!opt.connect.empty()) {
-        std::string host = opt.connect;
-        u16 port = 25565;
-        if (const size_t c = host.rfind(':'); c != std::string::npos && host.find(':') == c)
-            port = u16(std::atoi(host.c_str() + c + 1)), host.resize(c);
+        const net::ServerAddress address = net::resolveAddress(net::parseAddress(opt.connect));  // + SRV, like the game
+        const std::string host = address.host;
+        const u16 port = address.port;
         netClient = std::make_unique<net::Client>(reports, registry);
         audio.attachNet(*netClient);
         if (haveEntities) entities.attach(*netClient), blockEntityRenderer.attach(*netClient), visuals.attach(*netClient);
@@ -359,7 +426,8 @@ int wmain(int argc, wchar_t** argv) {
     if (wantSave && !canSave) LOG("note: the world is open in another program (session.lock); running read-only");
 
     Window window;
-    if (!window.create(L"minecraftCplusplus", opt.width, opt.height)) {
+    // An instance started by another (platform/launch.h) opens where that window was, invisible until its first frames.
+    if (!window.create(L"minecraftCplusplus", opt.width, opt.height, launch::placement(), launch::handoffChild())) {
         LOG("error: cannot create window");
         return 1;
     }
@@ -403,13 +471,16 @@ int wmain(int argc, wchar_t** argv) {
     std::unique_ptr<wg::DataPack> gamedata;
     std::unique_ptr<wg::ChunkGenerator> generator;
     std::unique_ptr<wg::FeatureSystem> features;
+    std::unique_ptr<wg::StructureSystem> structures;  // villages, mineshafts... placed with the features
     std::unique_ptr<wg::GenService> genService;
     struct FarStop {  // destroyed before the generator the far threads call into
         Terrain& terrain;
         ~FarStop() { terrain.stopFar(); }
     } farStop{terrain};
     i64 seed = 0;
-    if (opt.generate && World::readSeed(worldDir, seed)) {
+    std::mt19937_64 titleRandom(std::random_device{}());
+    if (const char* s = std::getenv("MCPP_TITLE_SEED")) titleRandom.seed(std::strtoull(s, nullptr, 10));  // tests
+    if (opt.generate && (menu && !titleCached ? (seed = i64(titleRandom()), true) : World::readSeed(worldDir, seed))) {
         t = Timer();
         gamedata = std::make_unique<wg::DataPack>();
         if (gamedata->open(jar)) generator = std::make_unique<wg::ChunkGenerator>(*gamedata, registry, seed);
@@ -437,6 +508,8 @@ int wmain(int argc, wchar_t** argv) {
             features = std::make_unique<wg::FeatureSystem>(generator->noise(), registry, generator->biomes(),
                                                            generator->possibleBiomes());
             LOG("features    %6.1f ms", ft.ms());
+            structures = std::make_unique<wg::StructureSystem>(*generator, features.get(), registry, seed);
+            if (structures->ok()) features->setStructures(structures.get());
             const char* genThreads = std::getenv("MCPP_GEN_THREADS");  // profiling override
             genService = std::make_unique<wg::GenService>(*generator, features.get(), exists, load,
                                                           genThreads ? unsigned(std::atoi(genThreads))
@@ -477,8 +550,76 @@ int wmain(int argc, wchar_t** argv) {
     std::deque<std::unique_ptr<wg::GenChunk>> genBacklog;  // generated chunks waiting for the per-frame budget
     Lighting genLighting(world, registry);
 
+    if (menu && !titleCached && generator && generator->ok()) {
+        // Title screen panorama: of a few spots near spawn the most varied land, seen from above it.
+        Timer vt;
+        wg::DensityContext ctx;
+        std::vector<u16> column;
+        const u16 stone = registry.idFor("minecraft:stone");
+        auto ground = [&](int x, int z, bool& water) {
+            generator->baseColumn(x, z, column, ctx);
+            int top = -1, solid = -1;
+            for (int i = int(column.size()) - 1; i >= 0 && solid < 0; --i) {
+                if (column[size_t(i)] != wg::GenChunk::kAir && top < 0) top = i;
+                if (column[size_t(i)] == stone) solid = i;
+            }
+            water = top > solid;
+            return generator->minY() + std::max(top, 0);
+        };
+        double bestScore = -1e9;
+        int bx = 0, bz = 0, by = 100;
+        std::uniform_real_distribution<double> angle(0, 2 * 3.14159265), dist(0, 1200);
+        for (int cand = 0; cand < 10; ++cand) {
+            const double a = angle(titleRandom), d = dist(titleRandom);
+            const int cx = int(std::cos(a) * d), cz = int(std::sin(a) * d);
+            int lo = 1 << 20, hi = -(1 << 20), wet = 0, center = 0;
+            for (int gz = -2; gz <= 2; ++gz)
+                for (int gx = -2; gx <= 2; ++gx) {
+                    bool water = false;
+                    const int h = ground(cx + gx * 48, cz + gz * 48, water);
+                    lo = std::min(lo, h), hi = std::max(hi, h), wet += water;
+                    if (std::abs(gx) <= 1 && std::abs(gz) <= 1) center = std::max(center, h);
+                }
+            const double score = double(hi - lo) - 6.0 * wet + 0.2 * double(center - generator->seaLevel());
+            if (score > bestScore) bestScore = score, bx = cx, bz = cz, by = std::max(center, generator->seaLevel());
+        }
+        player.x = bx + 0.5, player.z = bz + 0.5, player.y = by + 22;
+        player.yaw = float(angle(titleRandom) * 180.0 / 3.14159265), player.pitch = 9;
+        cam.x = player.x, cam.y = player.y + 1.62, cam.z = player.z;
+        cam.yaw = player.yaw * kPi / 180.0f, cam.pitch = player.pitch * kPi / 180.0f;
+        LOG("title   %8.1f ms  panorama at %d %d %d (seed %lld)", vt.ms(), bx, by, bz, (long long)seed);
+        const double pos[3] = {player.x, player.y, player.z};
+        if (!ui::writeTitleWorld(titleDir, seed, gameDataVersion(jar), pos, player.yaw, player.pitch))
+            LOG("warning: could not write the title screen world to %s", titleDir.string().c_str());
+    }
     Game game(world, registry, terrain, renderer, player);
     if (session) session->attach(game, terrain);
+    {  // Front end: title screen, lists, switching instances (ui/title.cpp)
+        ui::FrontEnd fe;
+        const wchar_t* localDir = _wgetenv(L"LOCALAPPDATA");
+        fe.menu = menu;
+        fe.minecraftDir = mc, fe.savesDir = saves, fe.jar = jar, fe.version = version;
+        fe.serversFile = !opt.serversFile.empty() ? opt.serversFile
+                                                   : fs::path(localDir ? localDir : L".") / "minecraftCplusplus" / "servers.json";
+        fe.serversDat = !opt.serversDat.empty() ? opt.serversDat : mc / "servers.dat";
+        fe.playerName = opt.name != "Player" ? opt.name : ownership.playerName;
+        fe.openScreen = opt.menu;
+        fe.childScript = opt.childScript;
+        fe.worldDir = worldDir;
+        if (opt.create) fe.worldName = opt.create->levelName;
+        fe.singleplayer = localServer != nullptr;
+        fe.lanPort = opt.lan && localServer ? localServer->port() : 0;
+        fe.openToLan = [&](const std::string& motd, const std::string& mode, bool cheats, u16 port, std::string& error) {
+            if (!localServer) return false;
+            // The server listens on loopback only (unless --lan): the LAN port is forwarded to it.
+            if (!lanHost.start(motd, port, localServer->port(), !opt.lan, error)) return false;
+            localServer->command("defaultgamemode " + mode);
+            if (cheats) localServer->command("op @a");  // commands for everyone here (and the host)
+            LOG("lan: open to LAN on port %u as \"%s\"", port, motd.c_str());
+            return true;
+        };
+        ui.setFrontEnd(fe);
+    }
     if (!ui.init({&registry, &renderer, &window, &game, &world, &terrain, opt.detail})) return 1;
     if (session) ui.attachSession(netClient.get(), session.get());
     if (!opt.script.empty()) ui.loadScript(opt.script);
@@ -498,6 +639,7 @@ int wmain(int argc, wchar_t** argv) {
             LOG("warning: unknown --low-latency %s", opt.lowLatency.c_str());
         if (opt.sharpness >= 0) v.sharpness = opt.sharpness;
         if (opt.fpsLimit >= 0) v.fpsLimit = u32(opt.fpsLimit);
+        if (menu && (v.fpsLimit == 0 || v.fpsLimit > 60)) v.fpsLimit = 60;  // menus need no more
         if (opt.vsync) v.vsync = true;
         if (opt.renderScale != 1.0f) v.renderScaleOverride = opt.renderScale;
         renderer.upscalers().apply(v);
@@ -614,6 +756,8 @@ int wmain(int argc, wchar_t** argv) {
             const int base = opt.shotFrame > 30 ? opt.shotFrame - 20 : 0;  // let generation settle first
             selfTest(game, world, registry, frame - base);
             cam = game.camera();
+        } else if (menu) {
+            cam.yaw += dt * 0.035f;  // the title panorama turns slowly
         } else {
             game.frame(window, dt);
             cam = game.viewCamera();  // F5: the detached camera
@@ -623,7 +767,7 @@ int wmain(int argc, wchar_t** argv) {
 
         Timer phase;
         double genMs = 0, terrainMs = 0;
-        if (genService && (!session || session->dimension().name == "minecraft:overworld")) {
+        if (genService && (!session || session->dimension().name == "minecraft:overworld") && !(menu && ui.switching())) {
             if (now - genScan > 0.25) {  // ask for missing chunks around the camera, nearest first
                 genScan = now;
                 const int ccx = int(std::floor(cam.x)) >> 4, ccz = int(std::floor(cam.z)) >> 4;
@@ -655,6 +799,7 @@ int wmain(int argc, wchar_t** argv) {
                     std::unique_lock lock(world.mutex());
                     waitMs = ct.ms();
                     if (!world.insertChunk(c->cx, c->cz, c->minY, c->height, c->blocks.data())) continue;
+                    if (menu) world.markChunkDirty(c->cx, c->cz);  // the title screen's world keeps what it generates
                     insertMs = ct.ms();
                     u8 surface[16];  // surface biome of each 4x4 column, for biome colours
                     for (int q = 0; q < 16; ++q) {
@@ -718,14 +863,49 @@ int wmain(int argc, wchar_t** argv) {
                           dt > 0 ? 1.0f / dt : 0.0f,
                           shown > 1 ? (" (" + std::to_string(int(float(shown) / std::max(dt, 1e-4f))) + " shown)").c_str() : "",
                           rs.gpuMs, commands, game.status().c_str());
-            window.setTitle(title);
+            window.setTitle(menu ? "minecraftCplusplus" : title);  // the title screen: no debug line
         }
         if (shot) LOG("screenshot written to %s", opt.screenshot.string().c_str());
         if (now - saveTime > 300.0) {  // the game autosaves every 5 minutes too
             saveTime = now;
             saveNow("autosave");
         }
+        // First frames drawn: an instance started by another shows its window now (the title screen waits for some
+        // far terrain, briefly).
+        if (frame >= 2 && (!menu || terrain.stats().farRegions >= 24 || now - loopStart > 2.0)) launch::ready(window);
+        if (menu && ui.switching()) {  // the next instance is loading: give it the machine
+            if (genService) genService->setWanted({});
+            Sleep(15);
+        }
         if ((opt.bench && frame + 1 >= kBenchFrames) || (shot && !opt.bench) || timeUp || ui.quitRequested()) break;
+    }
+    // "Save and Quit to Title" / "Disconnect" / "Back to Title Screen": save, stop the local server, then hand the
+    // window over to a title instance (platform/launch.h), showing progress meanwhile.
+    if (ui.titleRequested()) {
+        ui.showSaving();
+        if (netClient) netClient->stop();
+        auto stopping = std::async(std::launch::async, [&] {
+            saveNow("exit");
+            if (localServer) localServer->stop();
+        });
+        double prev = nowSeconds();
+        bool open = true;
+        auto idleFrame = [&] {
+            u32 w, h;
+            if (window.takeResize(w, h)) renderer.resize(w, h);
+            renderer.beginFrame();
+            const double now = nowSeconds();
+            ui.beginFrame(now - prev);
+            prev = now;
+            ui.endFrame();
+            renderer.render(cam, opt.fog, ui.screenshotRequest());
+        };
+        while ((open = window.pump()) && stopping.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) idleFrame();
+        stopping.wait();
+        if (open) {
+            ui.startTitle();
+            while (window.pump() && !ui.quitRequested()) idleFrame();
+        }
     }
     saveNow("exit");
     if (session) session->report();

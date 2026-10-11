@@ -64,12 +64,13 @@ public:
     u32 pixelWidth() const { return pxW_; }
     u32 pixelHeight() const { return pxH_; }
 
-    // Pose: GUI coordinates are mapped by x * s + tx (in GUI units) before the GUI scale.
+    // Pose: GUI coordinates are mapped by an affine transform (in GUI units) before the GUI scale.
     void push();
     void pop();
     void translate(float x, float y);
     void scaleBy(float s);
     void scaleBy(float sx, float sy);
+    void rotate(float radians);  // clockwise on screen (y points down), like the game's pose rotate
 
     void fill(float x0, float y0, float x1, float y1, u32 argb);
     void gradient(float x0, float y0, float x1, float y1, u32 top, u32 bottom);
@@ -88,11 +89,11 @@ public:
 
 private:
     struct Pose {
-        float sx = 1, sy = 1, tx = 0, ty = 0;
+        float m00 = 1, m01 = 0, m10 = 0, m11 = 1, tx = 0, ty = 0;  // [m00 m01; m10 m11] * (x, y) + t
     };
     void point(float x, float y, float& px, float& py) const {
-        px = (x * pose_.sx + pose_.tx) * float(scale_);
-        py = (y * pose_.sy + pose_.ty) * float(scale_);
+        px = (pose_.m00 * x + pose_.m01 * y + pose_.tx) * float(scale_);
+        py = (pose_.m10 * x + pose_.m11 * y + pose_.ty) * float(scale_);
     }
     void vertex(float x, float y, float u, float v, u32 abgr, u32 mode);
     void newBatch();

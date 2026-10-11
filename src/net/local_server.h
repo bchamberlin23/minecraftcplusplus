@@ -11,6 +11,7 @@
 
 #include <atomic>
 #include <mutex>
+#include <optional>
 #include <thread>
 
 #include <windows.h>
@@ -25,12 +26,24 @@ public:
         u16 port = 0;           // 0: any free port
         bool lan = false;       // listen on all interfaces (friends can join) instead of loopback only
         int viewDistance = 12;  // chunks the server sends; farther terrain is this engine's own LOD
+        // A new world (Create New World): the server creates `world` with these settings; once it stops, level.dat
+        // gets the singleplayer setup the game expects (LevelName, cheats, the owner's player data).
+        struct Create {
+            std::string levelName;           // shown in the world list
+            std::string seed;                // empty: random; text seeds are hashed like the game does
+            std::string gameMode = "survival";  // survival / creative / adventure / spectator
+            std::string difficulty = "normal";  // peaceful / easy / normal / hard
+            bool hardcore = false, cheats = false, structures = true;
+        };
+        std::optional<Create> create;
+        std::string ownerUuid;  // the Java profile id: whose singleplayer player data the save keeps (new worlds)
     };
 
     ~LocalServer();
     bool start(const Config& config);  // prepares files and launches; returns without waiting
     bool ready() const { return ready_; }      // accepting connections
     bool upgrading() const { return upgrading_; }  // the world is being converted to this version first
+    bool creating() const { return creating_; }    // the server is creating the world (Config::create)
     bool running() const;
     u16 port() const { return port_; }
     // Fabric server: the block table its helper mod wrote (Client::Config::serverRegistries), else empty.
@@ -47,6 +60,7 @@ private:
     bool backupIfUpgrading();
     bool exportHostPlayer();   // host -> offline player file
     void importHostPlayer();   // offline player file -> host
+    void finishNewWorld();     // level.dat of a created world: name, cheats (the dedicated server leaves them out)
     void readOutput();
 
     Config config_;
@@ -57,5 +71,5 @@ private:
     std::atomic<bool> ready_{false}, failed_{false};
     std::mutex stdinMutex_;
     u16 port_ = 0;
-    bool stopped_ = false, upgrading_ = false;
+    bool stopped_ = false, upgrading_ = false, creating_ = false;
 };

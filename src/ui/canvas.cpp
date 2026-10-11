@@ -72,13 +72,19 @@ void Canvas::pop() {
     poses_.pop_back();
 }
 void Canvas::translate(float x, float y) {
-    pose_.tx += x * pose_.sx;
-    pose_.ty += y * pose_.sy;
+    pose_.tx += pose_.m00 * x + pose_.m01 * y;
+    pose_.ty += pose_.m10 * x + pose_.m11 * y;
 }
 void Canvas::scaleBy(float s) { scaleBy(s, s); }
 void Canvas::scaleBy(float sx, float sy) {
-    pose_.sx *= sx;
-    pose_.sy *= sy;
+    pose_.m00 *= sx, pose_.m10 *= sx;
+    pose_.m01 *= sy, pose_.m11 *= sy;
+}
+void Canvas::rotate(float radians) {
+    const float c = std::cos(radians), s = std::sin(radians);
+    const Pose p = pose_;
+    pose_.m00 = p.m00 * c + p.m01 * s, pose_.m01 = -p.m00 * s + p.m01 * c;
+    pose_.m10 = p.m10 * c + p.m11 * s, pose_.m11 = -p.m10 * s + p.m11 * c;
 }
 
 void Canvas::vertex(float x, float y, float u, float v, u32 abgr, u32 mode) {

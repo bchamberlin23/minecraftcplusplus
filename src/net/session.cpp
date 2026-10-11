@@ -168,6 +168,7 @@ void Session::handle(Event& e) {
         sentSlot_ = -1;  // the hotbar selection is ours: tell the server again
     } else if (auto* d = std::get_if<DisconnectEvent>(&e)) {
         LOG("net: disconnected: %s", d->reason.c_str());
+        disconnectReason_ = d->reason;
     }
 }
 

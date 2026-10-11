@@ -2525,6 +2525,7 @@ FeatureSystem::FeatureSystem(const NoiseState& noise, BlockRegistry& blocks, Bio
 FeatureSystem::~FeatureSystem() = default;
 
 void FeatureSystem::setStructures(const StructureSystem* structures) { impl_->structures = structures; }
+const StructureSystem* FeatureSystem::structures() const { return impl_->structures; }
 const FeatureEnv& FeatureSystem::env() const { return *impl_->env; }
 float FeatureSystem::temperature(u16 biome, const BlockPos& p) const { return impl_->shared.temperature(biome, p); }
 

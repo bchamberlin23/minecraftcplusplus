@@ -3,6 +3,9 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <atomic>
+#include <cstdarg>
+#include <cstdlib>
 
 double nowSeconds() {
     static const double inv = [] {
@@ -38,4 +41,35 @@ bool readFile(const fs::path& path, std::vector<u8>& out) {
     }
     CloseHandle(h);
     return ok;
+}
+
+namespace {
+std::atomic<LogSink> g_logSink{nullptr};
+}  // namespace
+
+void setLogSink(LogSink sink) { g_logSink = sink; }
+
+void logLine(const char* fmt, ...) {
+    static const double start = nowSeconds();
+    static const bool stamps = std::getenv("MCPP_LOG_TIME") != nullptr;  // seconds since start before each line
+    if (stamps) std::printf("[%8.3f] ", nowSeconds() - start);
+    char stack[2048];
+    std::vector<char> heap;
+    char* buf = stack;
+    va_list args;
+    va_start(args, fmt);
+    const int n = std::vsnprintf(stack, sizeof(stack) - 1, fmt, args);
+    va_end(args);
+    if (n < 0) return;
+    if (size_t(n) >= sizeof(stack) - 1) {
+        heap.resize(size_t(n) + 2);
+        va_start(args, fmt);
+        std::vsnprintf(heap.data(), heap.size() - 1, fmt, args);
+        va_end(args);
+        buf = heap.data();
+    }
+    buf[n] = '\n';
+    std::fwrite(buf, 1, size_t(n) + 1, stdout);  // one write: lines from different threads do not interleave
+    std::fflush(stdout);
+    if (const LogSink sink = g_logSink.load()) sink(buf, size_t(n));
 }

@@ -184,6 +184,7 @@ public:
     bool fluidSource(u16 s) const { return f.fluidIsSource(s); }
     bool waterFluid(u16 s) const { return f.isWaterFluid(s); }
     bool fullCollision(u16 s) const;  // isCollisionShapeFullBlock
+    bool fullOutline(u16 s) const;    // Block.isShapeFullBlock(getShape)
 
     u16 rotate(u16 s, Rot r) const;   // BlockState.rotate
     u16 mirror(u16 s, Mir m) const;   // BlockState.mirror
@@ -477,11 +478,15 @@ public:
     const std::vector<u16>& baseColumn(DensityContext& ctx, int x, int z) const;  // thread-local cache
 
     const FeatureEnv* featureEnv() const;
+    // ChunkAccess.markPosForPostProcessing: positions whose shape is updated when their chunk is finished.
+    void markPostProcess(const BlockPos& p) const;
+    std::vector<BlockPos> takeMarks(int cx, int cz) const;
 
 private:
     struct HeightCache;
     std::unique_ptr<HeightCache> heights_;
-    mutable std::mutex tagMutex_;
+    mutable std::mutex tagMutex_, markMutex_;
+    mutable std::unordered_map<u64, std::vector<BlockPos>> marks_;
     mutable std::unordered_map<std::string, std::vector<bool>> biomeTags_;
 };
 

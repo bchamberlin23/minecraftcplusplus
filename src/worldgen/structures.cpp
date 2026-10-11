@@ -5,6 +5,7 @@
 
 #include "assets/assets.h"
 #include "worldgen/jigsaw.h"
+#include "worldgen/structure_template.h"
 #include "worldgen/structure_core.h"
 
 #include <algorithm>
@@ -483,8 +484,12 @@ StructureSystem::StructureSystem(const ChunkGenerator& generator, const FeatureS
             }
         }
         if (!s) {
+            // Keep its place in the registry order: the decoration step indices count every structure.
+            struct Unsupported final : Structure {
+                std::optional<Stub> findGenerationPoint(GenCtx&) const override { return std::nullopt; }
+            };
+            s = std::make_unique<Unsupported>();
             ++unsupported;
-            continue;
         }
         s->id = id;
         s->type = type;
@@ -647,6 +652,24 @@ void StructureSystem::placeStep(int step, GenRegion& level, int cx, int cz, Worl
             std::lock_guard lock(start->placeMutex);
             start->placeInChunk(c, random, chunkBB);
         }
+    }
+}
+
+void StructureSystem::postProcess(const std::array<GenChunk*, 9>& chunks) const {
+    const Impl& im = *impl_;
+    if (!chunks[4]) return;
+    std::vector<BlockPos> marks = im.env->takeMarks(chunks[4]->cx, chunks[4]->cz);
+    if (marks.empty()) return;
+    const StructureEnv& env = *im.env;
+    static const NoiseBiomeFn kNoBiome = [](int, int, int) { return u16(0); };
+    GenRegion level(chunks, env.facts, env.gen.zoom(), kNoBiome, env.seed, env.seaLevel());
+    PlaceCtx c{level, env, env.b, chunks[4]->cx, chunks[4]->cz};
+    setThreadSB(&env.b);
+    for (const BlockPos& p : marks) {
+        const u16 s = level.block(p);
+        if (env.b.is(s, "minecraft:water") || env.b.is(s, "minecraft:lava")) continue;  // LiquidBlock
+        const u16 ns = updateFromNeighbourShapes(c, s, p);
+        if (ns != s) level.setBlock(p, ns);
     }
 }
 

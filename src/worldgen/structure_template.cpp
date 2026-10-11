@@ -403,6 +403,19 @@ public:
         for (size_t i = 0; i < indices.size(); ++i) indices[i] = int(i);
         for (size_t i = indices.size(); i > 1; --i) std::swap(indices[i - 1], indices[size_t(r->nextInt(int(i)))]);
         int replaced = 0;
+        static const bool debug = std::getenv("MCPP_CAPPED_DEBUG") != nullptr;
+        if (const char* d = std::getenv("MCPP_CAPPED_DUMP")) {
+            int dx, dy, dz;
+            if (std::sscanf(d, "%d,%d,%d", &dx, &dy, &dz) == 3 && dx == position.x && dy == position.y && dz == position.z) {
+                static std::mutex m;
+                std::lock_guard lock(m);
+                static int n = 0;
+                if (n++ == 0)
+                    for (size_t i = 0; i < processed.size(); ++i)
+                        LOG("capdump %zu %d %d %d %s %d %d %d", i, processed[i].pos.x, processed[i].pos.y, processed[i].pos.z,
+                            c.b.name(processed[i].state).c_str(), originals[i].pos.x, originals[i].pos.y, originals[i].pos.z);
+            }
+        }
         for (size_t k = 0; k < indices.size() && replaced < maxToReplace; ++k) {
             const int index = indices[k];
             ProcInfo altered = processed[size_t(index)];
@@ -410,6 +423,9 @@ public:
             if (kept && !(altered == processed[size_t(index)])) {
                 ++replaced;
                 processed[size_t(index)] = altered;
+                if (debug)
+                    LOG("capped at %d %d %d (list %zu, max %d): index %d -> %d %d %d", position.x, position.y, position.z, processed.size(),
+                        maxToReplace, index, altered.pos.x, altered.pos.y, altered.pos.z);
             }
         }
     }
@@ -494,7 +510,7 @@ public:
 class LavaSubmergedProcessor final : public Processor {
 public:
     bool process(PlaceCtx& c, const BlockPos&, const BlockPos&, const BlockPos&, ProcInfo& info, const PlaceSettings&) const override {
-        if (c.b.is(c.get(info.pos), "minecraft:lava") && !c.b.fullCollision(info.state)) {
+        if (c.b.is(c.get(info.pos), "minecraft:lava") && !c.b.fullOutline(info.state)) {
             info.state = c.b.lava;
         }
         return true;
@@ -806,9 +822,91 @@ bool fenceGateConnects(const SB& b, u16 s, Direction d) {  // FenceGateBlock.con
 
 }  // namespace
 
+namespace {
+
+// WallBlock.connectsTo
+bool wallConnects(const SB& b, u16 s, bool faceSolid, Direction d) {
+    const std::string_view n = b.blockName(s);
+    const bool bars = n.ends_with("_pane") || n == "minecraft:iron_bars" || n.ends_with("_bars");
+    return b.tag(s, "minecraft:walls") || (!connectionException(b, s) && faceSolid) || bars || fenceGateConnects(b, s, d);
+}
+
+// WallBlock.isCovered: the block above's collision shape, where it touches its bottom face, covers the test
+// rectangle (x0..x1, z0..z1 in 1/16 block).
+bool coveredFromAbove(const SB& b, u16 top, int x0, int z0, int x1, int z1) {
+    const BlockInfo& bi = b.reg.infos()[top];
+    if (!bi.collisionCount) return false;
+    for (int x = x0; x < x1; ++x)
+        for (int z = z0; z < z1; ++z) {
+            const float cx = (float(x) + 0.5f) / 16.0f, cz = (float(z) + 0.5f) / 16.0f;
+            bool hit = false;
+            for (u32 i = 0; i < bi.collisionCount && !hit; ++i) {
+                const Box& bx = b.reg.box(bi.collisionFirst + i);
+                hit = bx.min[1] <= 0.0001f && bx.max[1] > 0.0001f && bx.min[0] <= cx && cx <= bx.max[0] && bx.min[2] <= cz && cz <= bx.max[2];
+            }
+            if (!hit) return false;
+        }
+    return true;
+}
+
+// WallBlock.updateShape(level, state, topPos, topNeighbour, n, e, s, w): the sides' heights and the post.
+u16 wallShape(PlaceCtx& c, u16 state, u16 top, const bool conn[4]) {
+    const SB& b = c.b;
+    static constexpr const char* kSide[4] = {"north", "east", "south", "west"};
+    static constexpr int kTest[4][4] = {{7, 0, 9, 9}, {7, 7, 16, 9}, {7, 7, 9, 16}, {0, 7, 9, 9}};  // NORTH/EAST/SOUTH/WEST_TEST
+    u16 s = state;
+    for (int i = 0; i < 4; ++i) {
+        const bool covered = coveredFromAbove(b, top, kTest[i][0], kTest[i][1], kTest[i][2], kTest[i][3]);
+        s = b.with(s, kSide[i], conn[i] ? (covered ? "tall" : "low") : "none");
+    }
+    const bool topFull = coveredFromAbove(b, top, 7, 7, 9, 9);  // POST_TEST
+    bool post;
+    if (b.tag(top, "minecraft:walls") && b.prop(top, "up") == "true") {
+        post = true;
+    } else {
+        const bool n = b.prop(s, "north") == "none", e = b.prop(s, "east") == "none", so = b.prop(s, "south") == "none",
+                   w = b.prop(s, "west") == "none";
+        const bool corner = (n && so && w && e) || n != so || w != e;
+        if (corner) post = true;
+        else if ((b.prop(s, "north") == "tall" && b.prop(s, "south") == "tall") || (b.prop(s, "east") == "tall" && b.prop(s, "west") == "tall"))
+            post = false;
+        else
+            post = b.tag(top, "minecraft:wall_post_override") || topFull;
+    }
+    return b.with(s, "up", post);
+}
+
+}  // namespace
+
 u16 updateShape(PlaceCtx& c, u16 state, const BlockPos& pos, Direction dir, const BlockPos& npos, u16 neighbour) {
     const SB& b = c.b;
     if (b.isAir(state)) return state;
+    // Walls.
+    if (b.tag(state, "minecraft:walls") && dir != Down) {
+        static constexpr Direction kSides[4] = {North, East, South, West};
+        bool conn[4];
+        for (int i = 0; i < 4; ++i) {
+            const Direction d = kSides[i];
+            if (dir == d)
+                conn[i] = wallConnects(b, neighbour, b.f.sturdy(neighbour, opposite(d)), opposite(d));
+            else
+                conn[i] = b.prop(state, kDirNames[d]) != "none";
+        }
+        const u16 top = dir == Up ? neighbour : u16(c.get(pos.offset(0, 1, 0)));
+        return wallShape(c, state, top, conn);
+    }
+    // Blocks that break without support.
+    {
+        const std::string_view n = b.blockName(state);
+        if ((n == "minecraft:torch" || n == "minecraft:soul_torch" || n == "minecraft:redstone_torch") && dir == Down)
+            return b.f.has(neighbour, fact::CenterUp) ? state : b.air;
+        if (n == "minecraft:wall_torch" || n == "minecraft:soul_wall_torch" || n == "minecraft:redstone_wall_torch" ||
+            n == "minecraft:ladder") {
+            const auto f = b.dir(state);
+            if (f && dir == opposite(*f)) return b.f.sturdy(neighbour, *f) ? state : b.air;
+            return state;
+        }
+    }
     // Snowy dirt.
     if (dir == Up && b.has(state, "snowy") && (b.is(state, "minecraft:grass_block") || b.is(state, "minecraft:podzol") ||
                                                b.is(state, "minecraft:mycelium")))

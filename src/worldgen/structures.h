@@ -8,6 +8,7 @@
 // Starts are computed lazily per chunk and cached; everything here is thread-safe.
 #include "worldgen/generator.h"
 
+#include <array>
 #include <memory>
 #include <string>
 #include <vector>
@@ -36,6 +37,9 @@ public:
     std::unique_ptr<DensityAddition> beardifier(int cx, int cz) const;
     // ChunkGenerator.applyBiomeDecoration's structure part of one GenerationStep for the region's centre chunk.
     void placeStep(int step, GenRegion& level, int cx, int cz, WorldgenRandom& random, i64 decorationSeed) const;
+    // LevelChunk.postProcessGeneration for the blocks structure pieces marked in chunks[4] (fences, torches, ladders,
+    // bars): their shapes are updated from their final neighbours. Call when the chunk's 3x3 is decorated.
+    void postProcess(const std::array<GenChunk*, 9>& chunks) const;
 
     // Reports for verification: the valid starts originating in a chunk.
     struct PieceReport {

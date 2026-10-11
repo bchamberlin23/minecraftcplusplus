@@ -1,6 +1,8 @@
 // Screens: player inventory and server containers (AbstractContainerScreen + AbstractContainerMenu click
 // logic), the creative item list, pause and options menus, chat input.
+#include "audio/audio.h"
 #include "render/renderer.h"
+#include "ui/frontend.h"
 #include "ui/ui_state.h"
 #include "world/terrain.h"
 
@@ -413,6 +415,7 @@ void Ui::State::buildButtons() {
     auto tr = [&](const char* key) { return Text(res.translate(key)); };
     if (screen == Screen::Mods) return buildModsButtons();  // mods_screen.cpp
     if (screen == Screen::Video) return buildVideoButtons();  // video_screen.cpp
+    if (frontEndScreen()) return buildFrontEndButtons();     // title.cpp
     if (screen == Screen::Pause) {
         const int gridW = 212, gridH = 50 + 20 + 4 * 24;
         const int left = (W - gridW) / 2, top = int(float(H - gridH) * 0.25f);
@@ -436,9 +439,16 @@ void Ui::State::buildButtons() {
         full(y, Text("Mods & Packs"), [this] { openScreen(Screen::Mods); });  // mods_screen.cpp
         y += 24;
         half(0, y, tr("menu.options"), [this] { openScreen(Screen::Options); });
-        half(1, y, tr("options.worldOptions.button"), nullptr, false);
+        if (fe->cfg.singleplayer)  // title.cpp
+            half(1, y, tr("menu.shareToLan"), [this] { openToLanScreen(*this); }, fe->lanOpenPort == 0);
+        else
+            half(1, y, tr("options.worldOptions.button"), nullptr, false);
         y += 24;
-        full(y, tr(online() ? "menu.disconnect" : "menu.returnToMenu"), [this] { quit = true; });
+        full(y, tr(online() && !fe->cfg.singleplayer ? "menu.disconnect" : "menu.returnToMenu"), [this] {
+            fe->titleMenu = online() && !fe->cfg.singleplayer ? "servers" : "";
+            fe->titleRequested = true;
+            quit = true;
+        });
     } else if (screen == Screen::Death) {  // DeathScreen
         Button respawn;
         respawn.x = float(W / 2 - 100), respawn.y = float(H / 4 + 72), respawn.label = tr("deathScreen.respawn");
@@ -452,7 +462,11 @@ void Ui::State::buildButtons() {
         };
         buttons.push_back(std::move(respawn));
         Button title;
-        title.x = float(W / 2 - 100), title.y = float(H / 4 + 96), title.label = tr("deathScreen.titleScreen"), title.active = false;
+        title.x = float(W / 2 - 100), title.y = float(H / 4 + 96), title.label = tr("deathScreen.titleScreen");
+        title.onPress = [this] {
+            fe->titleRequested = true;
+            quit = true;
+        };
         buttons.push_back(std::move(title));
     } else if (screen == Screen::Options) {
         const int x0 = W / 2 - 155, x1 = W / 2 + 5;
@@ -521,7 +535,7 @@ void Ui::State::buildButtons() {
         done.x = float(W / 2 - 100), done.y = float(H / 6 + 168), done.w = 200, done.label = tr("gui.done");
         done.onPress = [this] {
             settings.save();
-            openScreen(Screen::Pause);
+            openScreen(fe->cfg.menu ? Screen::Title : Screen::Pause);
         };
         buttons.push_back(std::move(done));
     }
@@ -561,6 +575,7 @@ bool Ui::State::buttonsInput(const Window::InputEvent& e) {
             b.value = std::clamp((mouseX - (b.x + 4)) / (b.w - 8), 0.f, 1.f);
             if (b.onSlide) b.onSlide(b.value);
         } else if (b.onPress) {
+            audio::playUiClick();  // ui.button.click, like the game's buttons
             auto fn = b.onPress;  // may rebuild the button list
             fn();
         }
@@ -579,6 +594,7 @@ void Ui::State::drawScreen(Canvas& c) {
         b.value = std::clamp((mouseX - (b.x + 4)) / (b.w - 8), 0.f, 1.f);
         if (b.onSlide) b.onSlide(b.value);
     }
+    if (frontEndScreen()) return drawFrontEnd(c);  // title.cpp
     switch (screen) {
         case Screen::Chat: {
             drawChat(c, true);
@@ -791,11 +807,12 @@ void Ui::State::screenInput(const Window::InputEvent& e) {
     }
     if (screen == Screen::Mods) return modsInput(e);  // mods_screen.cpp
     if (screen == Screen::Video) return videoInput(e);  // video_screen.cpp
+    if (frontEndScreen()) return frontEndInput(e);     // title.cpp
     if (screen == Screen::Pause || screen == Screen::Options) {
         if (e.type == E::Key && e.down && e.code == VK_ESCAPE) {
             if (screen == Screen::Options) {
                 settings.save();
-                openScreen(Screen::Pause);
+                openScreen(fe->cfg.menu ? Screen::Title : Screen::Pause);
             } else {
                 closeScreen();
             }

@@ -29,6 +29,8 @@ class GameReports;
 
 namespace ui {
 
+struct FrontEndState;  // frontend.h
+
 // A server (or local) menu: the player inventory (container 0) or an open container.
 struct Menu {
     int containerId = 0;
@@ -74,7 +76,11 @@ struct Button {
     std::function<Text()> labelFn;
 };
 
-enum class Screen { None, Chat, Inventory, Container, Creative, Pause, Options, Death, Mods, Video };
+enum class Screen {
+    None, Chat, Inventory, Container, Creative, Pause, Options, Death, Mods, Video,
+    // Front end (frontend.h)
+    Title, Worlds, CreateWorld, EditWorld, Confirm, Servers, EditServer, DirectConnect, Loading, Message, OpenToLan
+};
 
 struct Ui::State {
     Init init;
@@ -273,6 +279,13 @@ struct Ui::State {
     void modsInput(const Window::InputEvent& e);
     void drawModHud(Canvas& c);
     void initNativeMods();
+    // --- title.cpp, worlds.cpp, servers.cpp: title screen, world / server lists, switching instances ---
+    std::unique_ptr<FrontEndState> fe;
+    bool frontEndScreen() const { return screen >= Screen::Title; }
+    void buildFrontEndButtons();
+    void drawFrontEnd(Canvas& c);
+    void frontEndInput(const Window::InputEvent& e);
+    void frontEndFrame();  // per frame: the next instance's progress, pings, disconnects
     // Last member: native mods unload first (their on_unload may still use the UI).
     mods::NativeMods nativeMods;
 };

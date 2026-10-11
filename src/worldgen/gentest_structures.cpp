@@ -7,7 +7,9 @@
 #include "assets/assets.h"
 #include "world/nbt_dom.h"
 #include "worldgen/feature_api.h"
+#include "worldgen/gen_service.h"
 #include "worldgen/generator.h"
+#include "worldgen/structure_core.h"
 #include "worldgen/structures.h"
 
 #include <libdeflate.h>
@@ -18,6 +20,7 @@
 #include <memory>
 #include <mutex>
 #include <set>
+#include <chrono>
 #include <thread>
 
 namespace {
@@ -90,6 +93,8 @@ struct SavedChunk {
     std::set<std::string> references;  // "id@x,z"
     bool hasReferences = false;
     std::vector<u16> blocks;  // full chunks
+    // PostProcessing still pending: the chunk never ticked, so LevelChunk.postProcessGeneration did not run on it.
+    std::set<std::array<int, 3>> pendingPost;
 };
 
 int statusRank(const std::string& s) {
@@ -144,6 +149,13 @@ int runStructureTest(BlockRegistry& registry, const fs::path& jar, const fs::pat
             c.cx = rx * 32 + (idx & 31), c.cz = rz * 32 + (idx >> 5);
             if (NbtValue* st = root.find("Status")) c.status = st->s;
             if (statusRank(c.status) < 1) continue;
+            if (NbtValue* pp = root.find("PostProcessing"))
+                for (size_t i = 0; i < pp->items.size(); ++i)
+                    for (const NbtValue& v : pp->items[i].items) {
+                        const int packed = int(v.i);
+                        c.pendingPost.insert({c.cx * 16 + (packed & 15), (gen.minY() >> 4) * 16 + int(i) * 16 + ((packed >> 4) & 15),
+                                              c.cz * 16 + ((packed >> 8) & 15)});
+                    }
             if (NbtValue* s = root.find("structures")) {
                 if (NbtValue* starts = s->find("starts"))
                     for (size_t k = 0; k < starts->names.size(); ++k) {
@@ -275,6 +287,49 @@ int runStructureTest(BlockRegistry& registry, const fs::path& jar, const fs::pat
     }
     LOG("structtest: references: %zu chunks, %zu identical, %zu missing, %zu extra", refChunks, refSame, refMissing, refExtra);
     int result = (totalMatched == totalTheirs && totalOurs == totalTheirs) ? 0 : 2;
+
+    // ---- the game's path: GenService (terrain with the beardifier, decoration with structures, post-processing on
+    // delivery) for the full chunks in GENTEST_AREA the server post-processed ----
+    if (mode == "service") {
+        std::map<std::pair<int, int>, const SavedChunk*> want;
+        for (const SavedChunk& c : saved)
+            if (!c.blocks.empty() && c.status == "minecraft:full" && c.pendingPost.empty()) want[{c.cx, c.cz}] = &c;
+        if (want.empty()) return result;
+        std::vector<std::pair<int, int>> order;
+        for (const auto& [k, c] : want) order.push_back(k);
+        const auto [ox, oz] = order[order.size() / 2];
+        std::stable_sort(order.begin(), order.end(), [&](const auto& a, const auto& b) {
+            return std::max(std::abs(a.first - ox), std::abs(a.second - oz)) < std::max(std::abs(b.first - ox), std::abs(b.second - oz));
+        });
+        t = Timer();
+        wg::GenService service(gen, &features, [](int, int) { return false; }, [](int, int, wg::GenChunk&) {},
+                               std::max(2u, std::thread::hardware_concurrency() / 2));
+        service.setWanted(order);
+        std::map<std::pair<int, int>, std::unique_ptr<wg::GenChunk>> got;
+        while (got.size() < want.size() && t.ms() < 600000) {
+            for (auto& c : service.take(1024)) got[{c->cx, c->cz}] = std::move(c);
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        const double ms = t.ms();
+        size_t bad = 0, total = 0, badIn = 0, totalIn = 0;
+        for (const auto& [k, g] : got) {
+            const auto it = want.find(k);
+            if (it == want.end()) continue;
+            const SavedChunk& c = *it->second;
+            const bool referenced = !structures.referencesOf(c.cx, c.cz).empty();
+            for (size_t j = 0; j < c.blocks.size(); ++j) {
+                const bool differs = registry.name(c.blocks[j]) != registry.name(g->blocks[j]);
+                bad += differs, ++total;
+                if (referenced) badIn += differs, ++totalIn;
+            }
+        }
+        LOG("structtest: service: %zu of %zu chunks delivered in %.1f ms (terrain %.2f ms avg; %s)", got.size(), want.size(), ms,
+            service.averageMs(), service.debugCounts().c_str());
+        LOG("structtest: service: %zu of %zu blocks differ (%.4f%%); in chunks with structure references %zu of %zu (%.4f%%)", bad,
+            total, 100.0 * double(bad) / double(std::max<size_t>(total, 1)), badIn, totalIn,
+            100.0 * double(badIn) / double(std::max<size_t>(totalIn, 1)));
+        return got.size() == want.size() ? result : 2;
+    }
     if (mode != "all") return result;
 
     // ---- terrain (with the beardifier) of the chunks saved at "terrain" ----
@@ -360,6 +415,34 @@ int runStructureTest(BlockRegistry& registry, const fs::path& jar, const fs::pat
         features.decorate(region, zoom, noiseBiome);
     }
     LOG("structtest: decorated %zu chunks in %.1f ms (%.2f ms each)", decorate.size(), t.ms(), t.ms() / double(decorate.size()));
+    // FULL status: the shape updates of the blocks structure pieces marked.
+    // Chunks the server never ticked still have their PostProcessing lists: there our marks are compared with them.
+    std::map<std::pair<int, int>, const SavedChunk*> savedAt;
+    for (const SavedChunk& c : saved) savedAt[{c.cx, c.cz}] = &c;
+    size_t marksPending = 0, marksMatched = 0, postChunks = 0, pendingChunks = 0;
+    if (!noStructures && !std::getenv("GENTEST_NOPOST"))
+        for (const auto& [x, z] : decorate) {
+            if (auto s = savedAt.find({x, z}); s != savedAt.end() && !s->second->pendingPost.empty()) {
+                ++pendingChunks;
+                for (const auto& p : structures.env().takeMarks(x, z)) {
+                    ++marksPending;
+                    marksMatched += s->second->pendingPost.count({p.x, p.y, p.z});
+                }
+                continue;
+            }
+            ++postChunks;
+            std::array<wg::GenChunk*, 9> region{};
+            bool all = true;
+            for (int dz = -1; dz <= 1; ++dz)
+                for (int dx = -1; dx <= 1; ++dx) {
+                    auto it = chunks.find({x + dx, z + dz});
+                    region[size_t((dz + 1) * 3 + dx + 1)] = it == chunks.end() ? nullptr : it->second.get();
+                    all = all && it != chunks.end();
+                }
+            if (all) structures.postProcess(region);
+        }
+    LOG("structtest: post-processed %zu chunks; %zu chunks still pending on the server: %zu of our %zu marks there are in "
+        "its PostProcessing lists", postChunks, pendingChunks, marksMatched, marksPending);
 
     // Categories: blocks inside a structure piece of a start referencing the chunk (by structure) or not.
     struct BlockStat {

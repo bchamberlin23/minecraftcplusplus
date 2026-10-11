@@ -150,3 +150,7 @@ target_link_options(minecraftCplusplus PRIVATE $<$<CONFIG:Release>:/LTCG /OPT:RE
 add_library(hello_mod SHARED examples/hello_mod/hello_mod.c)
 target_include_directories(hello_mod PRIVATE src/mods)
 target_compile_definitions(hello_mod PRIVATE _CRT_SECURE_NO_WARNINGS)
+
+# --- minecraftCplusplusW.exe: starts the game without a console window (shortcuts, tools/make_shortcut.ps1) -----
+add_executable(minecraftCplusplusW WIN32 tools/launcher/launcher.cpp)
+target_compile_definitions(minecraftCplusplusW PRIVATE UNICODE _UNICODE)

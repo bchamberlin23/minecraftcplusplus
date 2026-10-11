@@ -1,6 +1,7 @@
 #include "worldgen/gen_service.h"
 
 #include "worldgen/feature_api.h"
+#include "worldgen/structures.h"
 
 #include <windows.h>
 
@@ -129,7 +130,23 @@ void GenService::schedule() {
                     decorateQueue_.push_back({ncx, ncz});
                 }
             }
-        if (ready) {
+        const StructureSystem* structures = features_ ? features_->structures() : nullptr;
+        if (ready && structures) {  // post-processing reads the neighbours: wait until no decoration writes them
+            std::array<GenChunk*, 9> region{};
+            for (int dz = -1; dz <= 1 && ready; ++dz)
+                for (int dx = -1; dx <= 1 && ready; ++dx) {
+                    Entry* n = find(cx + dx, cz + dz);
+                    ready = n && n->chunk && n->pins == 0;
+                    if (ready) region[size_t((dz + 1) * 3 + (dx + 1))] = n->chunk.get();
+                }
+            if (ready) {
+                auto out = std::make_unique<GenChunk>(*region[4]);
+                region[4] = out.get();
+                structures->postProcess(region);  // LevelChunk.postProcessGeneration, on the delivered copy
+                done_.push_back(std::move(out));
+                find(cx, cz)->delivered = true;
+            }
+        } else if (ready) {
             Entry& e = chunks_[key(cx, cz)];
             done_.push_back(std::make_unique<GenChunk>(*e.chunk));
             e.delivered = true;
@@ -192,7 +209,9 @@ void GenService::terrainWorker() {
         }
         Timer t;
         auto chunk = std::make_unique<GenChunk>();
-        generator_.generate(c.first, c.second, *chunk, ctx);
+        const StructureSystem* structures = features_ ? features_->structures() : nullptr;
+        const auto beardifier = structures ? structures->beardifier(c.first, c.second) : nullptr;  // terrain adaptation
+        generator_.generate(c.first, c.second, *chunk, ctx, nullptr, beardifier.get());
         std::lock_guard lock(mutex_);
         totalMs_ += t.ms();
         ++generated_;

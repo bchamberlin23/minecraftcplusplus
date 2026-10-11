@@ -26,6 +26,7 @@ public:
     // Call once per frame before the game update.
     void frame(double dt);
     bool connected() const { return client_.alive(); }
+    const std::string& disconnectReason() const { return disconnectReason_; }  // why the server closed the connection
     // Keep chunks the server unloads (they stay visible at a distance, like the rest of the save).
     void setKeepForgotten(bool keep) { keepForgotten_ = keep; }
     int entityId() const { return entityId_; }
@@ -80,6 +81,7 @@ private:
     u64 applied_ = 0, edits_ = 0, acks_ = 0, corrections_ = 0, serverChanges_ = 0;
     bool verbose_ = false;  // MCPP_NET_VERBOSE=1: log edits sent and block changes received
     bool keepForgotten_ = false;
+    std::string disconnectReason_;
 };
 
 }  // namespace net

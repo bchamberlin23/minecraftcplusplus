@@ -110,10 +110,30 @@ std::string_view SB::prop(u16 s, std::string_view k) const { return reg.property
 const std::string& SB::name(u16 s) const { return reg.name(s); }
 std::string_view SB::blockName(u16 s) const { return baseName(reg.name(s)); }
 
+namespace {
+// The boxes (disjoint, like VoxelShape.toAabbs) fill the unit cube.
+bool fillsCube(const BlockRegistry& reg, u32 first, u32 count) {
+    double volume = 0;
+    for (u32 i = 0; i < count; ++i) {
+        const Box& b = reg.box(first + i);
+        double v = 1;
+        for (int a = 0; a < 3; ++a) v *= std::max(0.0, double(std::min(b.max[a], 1.0f)) - double(std::max(b.min[a], 0.0f)));
+        volume += v;
+    }
+    return volume >= 0.9999;
+}
+}  // namespace
+
 bool SB::fullCollision(u16 s) const {
-    for (int d = 0; d < 6; ++d)
-        if (!f.collisionFull(s, d)) return false;
-    return true;
+    // Block.isShapeFullBlock(getCollisionShape) from the game's exact shapes (mud, soul sand... are not full).
+    const BlockInfo& bi = reg.infos()[s];
+    return bi.collisionCount > 0 && fillsCube(reg, bi.collisionFirst, bi.collisionCount);
+}
+
+bool SB::fullOutline(u16 s) const {
+    const BlockInfo& bi = reg.infos()[s];
+    if (bi.selectionCount) return fillsCube(reg, bi.selectionFirst, bi.selectionCount);
+    return bi.collisionCount > 0 && fillsCube(reg, bi.collisionFirst, bi.collisionCount);
 }
 
 namespace {
@@ -602,7 +622,24 @@ const FeatureEnv* StructureEnv::featureEnv() const { return features ? &features
 
 float StructureEnv::temperature(u16 biome, const BlockPos& p) const { return features ? features->temperature(biome, p) : 0.5f; }
 
-void PlaceCtx::markPostProcess(const BlockPos& p) const { (void)p; }
+void PlaceCtx::markPostProcess(const BlockPos& p) const { env.markPostProcess(p); }
+
+void StructureEnv::markPostProcess(const BlockPos& p) const {
+    const u64 k = (u64(u32(p.x >> 4)) << 32) | u32(p.z >> 4);
+    std::lock_guard lock(markMutex_);
+    std::vector<BlockPos>& v = marks_[k];
+    if (std::find(v.begin(), v.end(), p) == v.end()) v.push_back(p);
+}
+
+std::vector<BlockPos> StructureEnv::takeMarks(int cx, int cz) const {
+    const u64 k = (u64(u32(cx)) << 32) | u32(cz);
+    std::lock_guard lock(markMutex_);
+    auto it = marks_.find(k);
+    if (it == marks_.end()) return {};
+    std::vector<BlockPos> v = std::move(it->second);
+    marks_.erase(it);
+    return v;
+}
 
 RandomSource& PlaceCtx::random() const {
     static thread_local LegacyRandom fallback(0);
@@ -729,7 +766,7 @@ int StructureEnv::baseHeight(DensityContext& ctx, int x, int z, HType t) const {
         }
         h = {i16(surface), i16(floor), i16(motion), 0};
         std::lock_guard lock(shard.mutex);
-        if (shard.map.size() > 200000) shard.map.clear();
+        if (shard.map.size() > 32768) shard.map.clear();  // bounded: ~2M columns over all shards
         shard.map.emplace(k, h);
     }
     switch (t) {

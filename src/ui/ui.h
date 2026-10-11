@@ -42,6 +42,30 @@ struct Settings {
     float radiansPerPixel() const;
 };
 
+// Title screen, world / server lists and switching between them (title.cpp, worlds.cpp, servers.cpp). Each world
+// and the title screen run in their own instance of the program (platform/launch.h).
+struct FrontEnd {
+    bool menu = false;          // this instance is the title screen (no world)
+    fs::path minecraftDir, savesDir, jar;
+    fs::path serversFile;       // our server list (servers.json); servers.dat is imported from it once
+    fs::path serversDat;        // the game's server list (read only)
+    std::string version;        // installed game version ("26.3")
+    std::string playerName;     // the Java profile (multiplayer name)
+    std::string openScreen;     // --menu worlds|servers: open that list first
+    std::wstring childScript;   // tests: --script for the next instance
+    // In a world:
+    fs::path worldDir;          // the save (singleplayer / viewer)
+    std::string worldName;      // its name when level.dat does not have it yet (a world being created)
+    bool singleplayer = false;  // through the local server: Open to LAN is offered
+    u16 lanPort = 0;            // already open to LAN on this port (--lan)
+    // Open to LAN: publishes the local server (game mode for others, the host's cheats, port); error on failure.
+    std::function<bool(const std::string& motd, const std::string& gameMode, bool cheats, u16 port, std::string& error)>
+        openToLan;
+};
+
+// The title screen's panorama world (a cache, generated once): level.dat with the seed and the camera spot.
+bool writeTitleWorld(const fs::path& dir, i64 seed, int dataVersion, const double pos[3], float yawDeg, float pitchDeg);
+
 class Ui {
 public:
     struct Init {
@@ -69,6 +93,14 @@ public:
     void endFrame();
 
     bool quitRequested() const;
+    // Front end (title.cpp): before init(). The title screen opens with init() in menu mode.
+    void setFrontEnd(const FrontEnd& fe);
+    bool titleRequested() const;   // "Save and Quit to Title" / "Disconnect" / "Back to Title Screen" (quit follows)
+    bool switching() const;        // the next instance is loading: background work can pause
+    // Leaving a world for the title screen: a progress screen while the world saves, then the title instance starts
+    // and quitRequested() turns true once it shows its window.
+    void showSaving();
+    void startTitle();
     bool menuOpen() const;  // a full-screen menu / inventory is open (frame generation pauses, vendor guidance)
     const fs::path* screenshotRequest();  // scripted screenshots: pass to Renderer::render
     bool loadScript(const fs::path& file);

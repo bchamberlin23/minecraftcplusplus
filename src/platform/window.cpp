@@ -1,6 +1,11 @@
 #include "platform/window.h"
 
-bool Window::create(const wchar_t* title, int width, int height) {
+#include <dwmapi.h>
+
+#pragma comment(lib, "dwmapi.lib")
+
+bool Window::create(const wchar_t* title, int width, int height, const Placement* placement, bool cloaked) {
+    if (placement && placement->width > 0 && placement->height > 0) width = placement->width, height = placement->height;
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);
     wc.style = CS_HREDRAW | CS_VREDRAW;
@@ -12,9 +17,17 @@ bool Window::create(const wchar_t* title, int width, int height) {
 
     RECT r{0, 0, width, height};
     AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
-    hwnd_ = CreateWindowExW(0, wc.lpszClassName, title, WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
-                            r.right - r.left, r.bottom - r.top, nullptr, nullptr, wc.hInstance, this);
+    const bool placed = placement && placement->width > 0;
+    hwnd_ = CreateWindowExW(0, wc.lpszClassName, title, WS_OVERLAPPEDWINDOW, placed ? placement->x : CW_USEDEFAULT,
+                            placed ? placement->y : CW_USEDEFAULT, r.right - r.left, r.bottom - r.top, nullptr, nullptr,
+                            wc.hInstance, this);
     if (!hwnd_) return false;
+    if (cloaked) {  // rendered to while invisible (the instance showing its loading screen stays in front)
+        const BOOL on = TRUE;
+        DwmSetWindowAttribute(hwnd_, DWMWA_CLOAK, &on, sizeof(on));
+        cloaked_ = true;
+    }
+    if (placed && placement->maximized) ShowWindow(hwnd_, SW_SHOWMAXIMIZED);
     RECT client;
     GetClientRect(hwnd_, &client);
     width_ = u32(client.right), height_ = u32(client.bottom);
@@ -25,8 +38,33 @@ bool Window::create(const wchar_t* title, int width, int height) {
     rid.hwndTarget = hwnd_;
     RegisterRawInputDevices(&rid, 1, sizeof(rid));
 
-    ShowWindow(hwnd_, SW_SHOW);
+    if (!(placed && placement->maximized)) ShowWindow(hwnd_, cloaked ? SW_SHOWNOACTIVATE : SW_SHOW);
     return true;
+}
+
+void Window::reveal() {
+    if (!cloaked_) return;
+    const BOOL off = FALSE;
+    DwmSetWindowAttribute(hwnd_, DWMWA_CLOAK, &off, sizeof(off));
+    cloaked_ = false;
+    SetWindowPos(hwnd_, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+    SetForegroundWindow(hwnd_);
+}
+
+Window::Placement Window::placement() const {
+    Placement p;
+    WINDOWPLACEMENT wp{};
+    wp.length = sizeof(wp);
+    if (!GetWindowPlacement(hwnd_, &wp)) return p;
+    // The restored rectangle (workspace coordinates match screen coordinates for windows without a toolbar
+    // docked on top); the client size is what create() takes.
+    RECT outer = wp.rcNormalPosition, frame{0, 0, 0, 0};
+    AdjustWindowRect(&frame, WS_OVERLAPPEDWINDOW, FALSE);
+    p.x = outer.left, p.y = outer.top;
+    p.width = (outer.right - outer.left) - (frame.right - frame.left);
+    p.height = (outer.bottom - outer.top) - (frame.bottom - frame.top);
+    p.maximized = wp.showCmd == SW_SHOWMAXIMIZED || IsZoomed(hwnd_);
+    return p;
 }
 
 bool Window::pump() {

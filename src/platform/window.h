@@ -5,7 +5,16 @@
 
 class Window {
 public:
-    bool create(const wchar_t* title, int width, int height);
+    // Where a window was (platform/launch.h passes it to the next instance): outer top-left, client size.
+    struct Placement {
+        int x = 0, y = 0, width = 0, height = 0;
+        bool maximized = false;
+    };
+    // placement: open there instead of the default position and size. cloaked: the window exists (and is sized,
+    // so it can be rendered to) but stays invisible until reveal().
+    bool create(const wchar_t* title, int width, int height, const Placement* placement = nullptr, bool cloaked = false);
+    void reveal();  // uncloaks, raises and focuses the window
+    Placement placement() const;
     bool pump();  // processes messages; false once the window is closed
     bool keyDown(int vk) const;
     void setMouseCaptured(bool captured);
@@ -66,5 +75,6 @@ private:
     bool scriptCursor_ = false;
     int scriptX_ = 0, scriptY_ = 0;
     wchar_t highSurrogate_ = 0;
+    bool cloaked_ = false;
     void push(InputEvent::Type type, int code, bool down, bool repeat = false);
 };

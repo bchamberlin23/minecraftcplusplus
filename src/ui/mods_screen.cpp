@@ -3,6 +3,7 @@
 // native mods (mods/native_mods.h): host callbacks, block / chat events and their HUD.
 #include "assets/assets.h"
 #include "mods/mod_manager.h"
+#include "ui/frontend.h"
 #include "ui/ui_state.h"
 #include "world/world.h"
 
@@ -142,7 +143,7 @@ void Ui::State::buildModsButtons() {
         mods::Manager::get().requestRestart();
         quit = true;
     }, mm.restartNeeded());
-    add(bx + 292, 72, Text(res.translate("gui.done")), [this] { openScreen(Screen::Pause); });
+    add(bx + 292, 72, Text(res.translate("gui.done")), [this] { openScreen(fe->cfg.menu ? Screen::Title : Screen::Pause); });
 }
 
 void Ui::State::drawModsScreen(Canvas& c) {
@@ -205,7 +206,7 @@ void Ui::State::drawModsScreen(Canvas& c) {
 
 void Ui::State::modsInput(const Window::InputEvent& e) {
     using E = Window::InputEvent;
-    if (e.type == E::Key && e.down && e.code == VK_ESCAPE) return openScreen(Screen::Pause);
+    if (e.type == E::Key && e.down && e.code == VK_ESCAPE) return openScreen(fe->cfg.menu ? Screen::Title : Screen::Pause);
     if (e.type == E::Wheel) {
         modsScroll -= e.code > 0 ? 1 : -1;
         buildButtons();

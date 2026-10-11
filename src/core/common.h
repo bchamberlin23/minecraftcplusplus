@@ -26,11 +26,11 @@ struct Timer {
     double ms() const { return (nowSeconds() - t0) * 1000.0; }
 };
 
-#define LOG(...)                    \
-    do {                            \
-        std::printf(__VA_ARGS__);   \
-        std::printf("\n");          \
-        std::fflush(stdout);        \
-    } while (0)
+// One printf-formatted line to stdout (flushed), also handed to the log sink when one is set
+// (platform/launch.h: a parent instance's loading screen follows its child's startup this way).
+void logLine(const char* fmt, ...);
+using LogSink = void (*)(const char* line, size_t size);
+void setLogSink(LogSink sink);
+#define LOG(...) logLine(__VA_ARGS__)
 
 bool readFile(const fs::path& path, std::vector<u8>& out);
