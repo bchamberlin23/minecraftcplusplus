@@ -663,6 +663,9 @@ int wmain(int argc, wchar_t** argv) {
             LOG("lan: open to LAN on port %u as \"%s\"", port, motd.c_str());
             return true;
         };
+        fe.pauseServer = [&](bool paused) {  // the local server's console (op level 4)
+            if (localServer) localServer->command(paused ? "tick freeze" : "tick unfreeze");
+        };
         ui.setFrontEnd(fe);
     }
     if (!ui.init({&registry, &renderer, &window, &game, &world, &terrain, opt.detail})) return 1;

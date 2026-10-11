@@ -182,6 +182,7 @@ struct Sky::NetState {
     std::string level;                          // dimension of the last login / respawn
     bool joined = false;
     int bolts = 0;  // lightning bolts added since the last frame
+    bool frozen = false;  // ClientboundTickingStatePacket: the server's ticking is frozen (/tick freeze, pause)
 };
 
 // SimplexNoise (2D) as used by Biome's static temperature noises.
@@ -359,6 +360,13 @@ void Sky::attach(net::Client& client, const GameReports* reports) {
         n->gameTime = gameTime;
         for (const NetState::Clock& c : clocks) n->clocks.push_back(c);
     });
+    client.onPlayPeek("ticking_state", [n](net::Reader& r) {  // TickRateManager: a frozen level's clocks stand still
+        r.f32();  // tick rate
+        const bool frozen = r.boolean();
+        if (!r.ok) return;
+        std::lock_guard lock(n->mutex);
+        n->frozen = frozen;
+    });
     client.onPlayPeek("game_event", [n](net::Reader& r) {
         const int type = r.u8v();
         const float param = r.f32();
@@ -502,6 +510,12 @@ void Sky::update(const CameraState& cam, double dt) {
     applyNet();
     now_ += dt;
     dt = std::min(dt, 0.25);
+    bool frozen;
+    {
+        std::lock_guard lock(net_->mutex);
+        frozen = net_->frozen;
+    }
+    if (frozen) dt = 0;  // ClientLevel.tickTime does not run while the tick rate manager is frozen
     if (debug_.time < 0)
         for (auto& [name, ticks] : clocks_) {
             auto rate = clockRates_.find(name);

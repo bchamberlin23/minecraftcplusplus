@@ -7,8 +7,10 @@
 #include "core/common.h"
 #include "render/upscalers/video_settings.h"
 
+#include <array>
 #include <functional>
 #include <memory>
+#include <string_view>
 
 class Window;
 class Renderer;
@@ -30,6 +32,32 @@ namespace ui {
 
 struct ItemStack;
 
+// Key mappings (Options.keyMappings, then the hotbar slots), bound to Windows virtual keys; mouse buttons are
+// VK_LBUTTON / VK_RBUTTON / VK_MBUTTON / VK_XBUTTON1 / VK_XBUTTON2, 0 is unbound (keybinds.cpp).
+enum class Key : u8 {
+    Attack, Use, Forward, Left, Back, Right, Jump, Sneak, Sprint, Drop, Inventory, Chat, PlayerList, PickItem, Command,
+    Friends, SocialInteractions, ToggleGui, ToggleSpectatorShaderEffects, Screenshot, TogglePerspective, SmoothCamera,
+    Fullscreen, SpectatorOutlines, SpectatorHotbar, SwapOffhand, SaveToolbarActivator, LoadToolbarActivator,
+    Advancements, QuickActions, DebugOverlay, DebugModifier,
+    Hotbar1, Hotbar2, Hotbar3, Hotbar4, Hotbar5, Hotbar6, Hotbar7, Hotbar8, Hotbar9,
+    DebugReloadChunk, DebugShowHitboxes, DebugClearChat, DebugCrash, DebugShowChunkBorders, DebugShowAdvancedTooltips,
+    DebugCopyRecreateCommand, DebugSpectate, DebugSwitchGameMode, DebugDebugOptions, DebugFocusPause,
+    DebugDumpDynamicTextures, DebugReloadResourcePacks, DebugProfiling, DebugCopyLocation, DebugDumpVersion,
+    DebugProfilingChart, DebugFpsCharts, DebugNetworkCharts, DebugLightmapTexture, DebugImprovedTransparency,
+    Count
+};
+constexpr size_t kKeyCount = size_t(Key::Count);
+struct KeyDef {
+    const char* name;      // "key.forward" (options.txt key_<name>, the translation key)
+    const char* category;  // "movement" (key.category.minecraft.<category>; KeyMapping.Category order)
+    int defaultKey;        // virtual key
+    int order = 0;         // within the category (KeyMapping.order), then by translated name
+};
+const KeyDef& keyDef(Key k);
+std::string keyName(int vk);              // InputConstants name: "key.keyboard.w", "key.mouse.left"
+int keyFromName(std::string_view name);   // 0: unknown / unbound
+extern const char* const kModelParts[7];  // PlayerModelPart ids in mask bit order (options.txt modelPart_<id>)
+
 struct Settings {
     float fov = 70;           // degrees (vertical), 30..110
     int renderDistance = 32;  // full-detail radius in chunks
@@ -40,7 +68,21 @@ struct Settings {
     std::string shaderPack;    // shader pack in use (render/packs; "" = the built-in pipeline)
     bool bobView = true;       // "View Bobbing" (options.txt bobView)
     int attackIndicator = 1;   // AttackIndicatorStatus id: 0 off, 1 crosshair, 2 hotbar (options.txt attackIndicator)
+    std::array<int, kKeyCount> keys = defaultKeys();  // key_<name>
+    bool fullscreen = false;
+    // Controls / Mouse Settings
+    bool toggleCrouch = false, toggleSprint = false, autoJump = false;
+    bool invertMouseX = false, invertMouseY = false, discreteMouseScroll = false;
+    double mouseWheelSensitivity = 1.0;  // 10^(-2..1) like Options.logMouse
+    // Skin Customization (client_information): main hand 0 left 1 right, PlayerModelPart bits (cape 0 .. hat 6)
+    int mainHand = 1;
+    int modelParts = 0x7F;
+    bool allowServerListing = true;
+    bool pauseOnLostFocus = true, advancedItemTooltips = false;
     bool loaded = false;
+
+    int key(Key k) const { return keys[size_t(k)]; }
+    static std::array<int, kKeyCount> defaultKeys();
 
     static fs::path path();
     bool load();
@@ -65,6 +107,8 @@ struct FrontEnd {
     std::string worldName;      // its name when level.dat does not have it yet (a world being created)
     bool singleplayer = false;  // through the local server: Open to LAN is offered
     u16 lanPort = 0;            // already open to LAN on this port (--lan)
+    // Singleplayer pause (IntegratedServer pausing while a pause screen is open): freezes / resumes the local server.
+    std::function<void(bool paused)> pauseServer;
     // Open to LAN: publishes the local server (game mode for others, the host's cheats, port); error on failure.
     std::function<bool(const std::string& motd, const std::string& gameMode, bool cheats, u16 port, std::string& error)>
         openToLan;

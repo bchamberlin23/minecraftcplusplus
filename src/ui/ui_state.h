@@ -68,6 +68,9 @@ struct Layout {
 };
 Layout layoutFor(const Menu& m);
 
+// What the client tells the server about its options (main hand, skin parts, server listing).
+net::Client::Information clientInformation(const Settings& s);
+
 struct ChatLine {
     Text text;
     int addedTick = 0;
@@ -84,10 +87,13 @@ struct Button {
     float value = 0;
     std::function<void(float)> onSlide;
     std::function<Text()> labelFn;
+    std::function<Text()> tooltip;  // shown while hovered (Tooltip, split at 170 pixels); empty text: none
 };
 
 enum class Screen {
     None, Chat, Inventory, Container, Creative, Pause, Options, Death, Mods, Video, PackOptions,
+    // Options sub-screens (options_screens.cpp; VideoExtra: video_screen.cpp)
+    Online, SkinCustomization, Sounds, Controls, MouseSettings, KeyBinds, Accessibility, VideoExtra,
     // Registered screens (modules.h ScreenDef): signs and books, advancements, statistics, game mode switcher, bed
     Sign, BookEdit, BookView, Advancements, Stats, GameModeSwitcher, InBed,
     // Front end (frontend.h)
@@ -245,7 +251,16 @@ struct Ui::State {
     bool spectator() const { return gameMode() == 3; }
     bool survivalLike() const { return gameMode() == 0 || gameMode() == 2; }
     int guiScale() const;
+    // --- keybinds.cpp ---
+    Text keyLabel(int vk) const;                                   // a bound key as the game shows it
+    bool isKey(Key k, const Window::InputEvent& e) const;         // a press of the key bound to k
     void openScreen(Screen s);
+    void toggleFullscreen();
+    void applyControls();          // Settings -> Game (keys, toggles, mouse options), every frame
+    bool keyCaptureActive = false;  // Key Binds: the next key / button binds (no other key handling)
+    bool paused = false;             // Minecraft.isPaused: singleplayer (not LAN) with a pause screen open
+    double lastActiveTime = 0;       // Minecraft.pauseIfInactive: the window last had the focus (clock)
+    void updatePause();
     void closeScreen(bool sendClose = true);
     void syncHotbarToGame();
     void addChat(const Text& message);
@@ -272,7 +287,9 @@ struct Ui::State {
     void screenInput(const Window::InputEvent& e);
     void buildButtons();
     void drawButtons(Canvas& c);
-    bool buttonsInput(const Window::InputEvent& e);
+    void drawButton(Canvas& c, size_t i, bool hoverable = true);
+    // Clicks on buttons [first, last) (an options list takes the clicks inside it, the rest outside).
+    bool buttonsInput(const Window::InputEvent& e, size_t first = 0, size_t last = SIZE_MAX);
     Menu& activeMenu() { return container ? *container : inventory; }
     void containerClick(int slot, int button, int input);  // simulates locally and sends container_click
     void creativeSetSlot(int menuSlot, const ItemStack& s);
@@ -280,10 +297,7 @@ struct Ui::State {
     void swapHands();
     int menuSlotForInventory(const Menu& m, int inventoryIndex) const;  // Inventory index (0-8 hotbar, 40 offhand)
 
-    // --- video_screen.cpp: Video Settings (shaders, DLSS / FSR / XeSS, frame generation, latency, VSync, FPS cap) ---
-    void buildVideoButtons();
-    void drawVideoScreen(Canvas& c);
-    void videoInput(const Window::InputEvent& e);
+    // --- video_screen.cpp: Video Settings, and Shaders & Upscaling (DLSS / FSR / XeSS, frame generation, latency) ---
     void applyVideo(VideoSettings v);
     // --- render/packs/pack_screen.cpp: a shader pack's option screens ---
     std::shared_ptr<packs::PackOptionsModel> packOptions;
@@ -298,9 +312,11 @@ struct Ui::State {
 
     // --- mods_screen.cpp: Mods & Packs screen (mods/mod_manager.h), native mods' HUD ---
     int modsScroll = 0;  // first list row shown
+    Screen modsReturn = Screen::None;  // opened from Options (Resource Packs...): back there, else pause / title
     void buildModsButtons();
     void drawModsScreen(Canvas& c);
     void modsInput(const Window::InputEvent& e);
+    void modsBack();
     void drawModHud(Canvas& c);
     void initNativeMods();
     // --- title.cpp, worlds.cpp, servers.cpp: title screen, world / server lists, switching instances ---

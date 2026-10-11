@@ -5,6 +5,7 @@
 #include "world/lighting.h"
 
 #include <algorithm>
+#include <array>
 #include <functional>
 #include <unordered_map>
 
@@ -71,6 +72,18 @@ public:
     // the crosshair and hotbar; onPickBlock replaces the local middle-click pick.
     bool inputSuspended = false, drawHud = true, handleEscape = true;
     float sensitivity = 0.0025f;  // mouse look, radians per count
+    // Key bindings and control options (the UI's Settings, set every frame): Windows virtual keys, mouse buttons as
+    // VK_LBUTTON (1) / VK_RBUTTON (2) / VK_MBUTTON (4)...; 0 is unbound. Defaults are the game's.
+    struct Keys {
+        int forward = 'W', left = 'A', back = 'S', right = 'D', jump = 0x20, sneak = 0xA0, sprint = 0xA2;  // Space, LShift, LCtrl
+        int attack = 1, use = 2, pickItem = 4, perspective = 0x74;                                           // mouse, F5
+        int hotbar[9] = {'1', '2', '3', '4', '5', '6', '7', '8', '9'};
+    } keys;
+    bool toggleCrouch = false, toggleSprint = false;  // ToggleKeyMapping: a press switches the key on / off
+    bool invertMouseX = false, invertMouseY = false, discreteScroll = false;
+    double wheelSensitivity = 1.0;  // mouseWheelSensitivity (ScrollWheelHandler)
+    // Singleplayer pause (Minecraft.isPaused): the client does not tick (no movement, no input, no digging).
+    bool paused = false;
     std::function<void(int x, int y, int z)> onPickBlock;
     // Right click on a block that reacts to use (containers, doors...): true sends the use to the server as is
     // instead of placing the held block.
@@ -175,6 +188,7 @@ public:
 
 private:
     PlayerInput readInput(Window& window);
+    bool held(Window& window, int vk) const;  // a bound key / button is down while the mouse is captured
     void handleClicks(Window& window, double dt, int rightPresses, int middlePresses, int wheel);
     void tickAttack(bool down);  // Minecraft.handleKeybinds: queued attack presses, then continueAttack
     void tickCameraFeedback();
@@ -203,10 +217,13 @@ private:
     int selected_ = 0;
     double repeatTimer_ = 0;
     double lastJumpPress_ = -1, clock_ = 0;
-    bool jumpWasDown_ = false, escWasDown_ = false, f5WasDown_ = false;
+    bool escWasDown_ = false;
     bool useConsumed_ = false;  // the last useTarget(place) placed a block or used the targeted block
     bool usingItem_ = false;    // onUseItem sent, the use key not yet released
-    bool keyWasDown_[9] = {};
+    bool crouchToggled_ = false, sprintToggled_ = false;
+    double scrollAccum_ = 0;  // ScrollWheelHandler.accumulatedScrollY
+    std::array<u16, 256> presses_{};  // this frame's key / button presses (Window::takePresses)
+    int presses(int vk) const { return vk > 0 && vk < 256 ? presses_[size_t(vk)] : 0; }
     // MultiPlayerGameMode / Minecraft digging state.
     struct Dig {
         bool active = false;

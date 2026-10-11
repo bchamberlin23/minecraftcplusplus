@@ -1,6 +1,7 @@
 // Sleeping (InBedChatScreen: chat with a "Leave Bed" button while the server keeps the player in bed, and the
 // lying-down first-person camera of Camera.setup), the debug key combinations F3 + F4 (GameModeSwitcherScreen) and
-// F3 + N (spectator toggle), and F3 alone toggling the debug overlay on release (KeyboardHandler).
+// F3 + N (spectator toggle), F3 + H (advanced tooltips), F3 + P (pause on lost focus), F3 + D (clear chat), and F3
+// alone toggling the debug overlay on release (KeyboardHandler; all with the bound debug keys).
 #include "assets/assets.h"
 #include "audio/audio.h"
 #include "ui/ui_state.h"
@@ -152,28 +153,62 @@ void tick(UiState& s) {
     }
 }
 
+// KeyboardHandler.debugFeedbackTranslated: "[Debug]:" in bold yellow, then the message.
+void debugFeedback(UiState& s, const char* key) {
+    Style prefix = colorStyle(0xFFFF55);
+    prefix.bold = 1;
+    Text t(s.res.translate("debug.prefix"), prefix);
+    t.append(" " + s.res.translate(key));
+    s.addChat(t);
+}
+
 bool worldKey(UiState& s, const InputEvent& e) {
-    if (e.type != InputEvent::Key) return false;
-    if (e.code == VK_F3) {
+    if (e.type != InputEvent::Key || e.repeat) return false;
+    const int overlay = s.settings.key(Key::DebugOverlay), modifier = s.settings.key(Key::DebugModifier);
+    if (overlay && e.code == overlay && overlay != modifier) {  // its own key: toggles on the press
+        if (e.down) s.debug = !s.debug;
+        return true;
+    }
+    if (modifier && e.code == modifier) {
         if (e.down) {
             sw.f3Down = true;
         } else {
-            if (!sw.usedAsModifier) s.debug = !s.debug;  // F3 released alone
+            if (!sw.usedAsModifier && overlay == modifier) s.debug = !s.debug;  // F3 released alone
             sw.usedAsModifier = false;
             sw.f3Down = false;
         }
         return true;
     }
-    if (!e.down || !s.window->keyDown(VK_F3)) return false;
-    if (e.code == VK_F4) {  // GameModeSwitcherScreen
+    if (!e.down || !modifier || !s.window->keyDown(modifier)) return false;
+    if (s.isKey(Key::DebugSwitchGameMode, e)) {  // GameModeSwitcherScreen
         sw.usedAsModifier = true;
         if (s.online()) s.openScreen(Screen::GameModeSwitcher);
         return true;
     }
-    if (e.code == 'N') {  // spectator <-> the previous game mode
+    if (s.isKey(Key::DebugSpectate, e)) {  // spectator <-> the previous game mode
         sw.usedAsModifier = true;
         if (s.gameMode() == 3) sendGameMode(s, sw.previousMode >= 0 && sw.previousMode != 3 ? sw.previousMode : 1);
         else sendGameMode(s, 3);
+        return true;
+    }
+    if (s.isKey(Key::DebugShowAdvancedTooltips, e)) {
+        sw.usedAsModifier = true;
+        s.settings.advancedItemTooltips = !s.settings.advancedItemTooltips;
+        debugFeedback(s, s.settings.advancedItemTooltips ? "debug.advanced_tooltips.on" : "debug.advanced_tooltips.off");
+        s.settings.save();
+        return true;
+    }
+    if (s.isKey(Key::DebugFocusPause, e)) {
+        sw.usedAsModifier = true;
+        s.settings.pauseOnLostFocus = !s.settings.pauseOnLostFocus;
+        debugFeedback(s, s.settings.pauseOnLostFocus ? "debug.pause_focus.on" : "debug.pause_focus.off");
+        s.settings.save();
+        return true;
+    }
+    if (s.isKey(Key::DebugClearChat, e)) {  // ChatComponent.clearMessages(false): the sent history stays
+        sw.usedAsModifier = true;
+        s.chatLines.clear();
+        s.chatMessages.clear();
         return true;
     }
     return false;
@@ -266,12 +301,12 @@ void switcherApply(UiState& s) {
 }
 
 void switcherInput(UiState& s, const InputEvent& e) {
-    if (e.type == InputEvent::Key && e.down && e.code == VK_F4) {
+    if (s.isKey(Key::DebugSwitchGameMode, e)) {
         sw.firstMouseSet = false;
         sw.hovered = (sw.hovered + 1) % 4;
         return;
     }
-    if (e.type == InputEvent::Key && !e.down && e.code == VK_F3) return switcherApply(s);
+    if (e.type == InputEvent::Key && !e.down && e.code == s.settings.key(Key::DebugModifier)) return switcherApply(s);
     if (e.type == InputEvent::Key && e.down && e.code == VK_ESCAPE) {
         s.closeScreen(false);
         sw.usedAsModifier = false;

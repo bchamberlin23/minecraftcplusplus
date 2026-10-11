@@ -55,7 +55,8 @@ Window::Placement Window::placement() const {
     Placement p;
     WINDOWPLACEMENT wp{};
     wp.length = sizeof(wp);
-    if (!GetWindowPlacement(hwnd_, &wp)) return p;
+    if (fullscreen_) wp = windowed_;  // the next instance opens windowed there (and goes fullscreen from options.txt)
+    else if (!GetWindowPlacement(hwnd_, &wp)) return p;
     // The restored rectangle (workspace coordinates match screen coordinates for windows without a toolbar
     // docked on top); the client size is what create() takes.
     RECT outer = wp.rcNormalPosition, frame{0, 0, 0, 0};
@@ -63,7 +64,7 @@ Window::Placement Window::placement() const {
     p.x = outer.left, p.y = outer.top;
     p.width = (outer.right - outer.left) - (frame.right - frame.left);
     p.height = (outer.bottom - outer.top) - (frame.bottom - frame.top);
-    p.maximized = wp.showCmd == SW_SHOWMAXIMIZED || IsZoomed(hwnd_);
+    p.maximized = wp.showCmd == SW_SHOWMAXIMIZED || (!fullscreen_ && IsZoomed(hwnd_));
     return p;
 }
 
@@ -78,7 +79,40 @@ bool Window::pump() {
 
 bool Window::keyDown(int vk) const {
     if (vk >= 0 && vk < 256 && injectedDown_[vk]) return true;
+    // Scripts inject the generic modifier keys; bindings name the left / right ones.
+    if ((vk == VK_LSHIFT || vk == VK_RSHIFT) && injectedDown_[VK_SHIFT]) return true;
+    if ((vk == VK_LCONTROL || vk == VK_RCONTROL) && injectedDown_[VK_CONTROL]) return true;
+    if ((vk == VK_LMENU || vk == VK_RMENU) && injectedDown_[VK_MENU]) return true;
+    if (vk == VK_SHIFT && (injectedDown_[VK_LSHIFT] || injectedDown_[VK_RSHIFT])) return true;
+    if (vk == VK_CONTROL && (injectedDown_[VK_LCONTROL] || injectedDown_[VK_RCONTROL])) return true;
     return GetForegroundWindow() == hwnd_ && (GetAsyncKeyState(vk) & 0x8000);
+}
+
+void Window::setFullscreen(bool on) {
+    if (on == fullscreen_ || !hwnd_) return;
+    if (on) {
+        windowed_.length = sizeof(windowed_);
+        GetWindowPlacement(hwnd_, &windowed_);
+        MONITORINFO mi{};
+        mi.cbSize = sizeof(mi);
+        GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &mi);
+        SetWindowLongPtrW(hwnd_, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+        fullscreen_ = true;
+        SetWindowPos(hwnd_, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right - mi.rcMonitor.left,
+                     mi.rcMonitor.bottom - mi.rcMonitor.top, SWP_FRAMECHANGED | SWP_NOOWNERZORDER | SWP_SHOWWINDOW);
+    } else {
+        SetWindowLongPtrW(hwnd_, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_VISIBLE);
+        fullscreen_ = false;
+        SetWindowPlacement(hwnd_, &windowed_);
+        SetWindowPos(hwnd_, nullptr, 0, 0, 0, 0,
+                     SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_SHOWWINDOW);
+    }
+    if (captured_) {  // the cursor stays confined to the new client area
+        RECT r;
+        GetClientRect(hwnd_, &r);
+        MapWindowPoints(hwnd_, nullptr, reinterpret_cast<POINT*>(&r), 2);
+        ClipCursor(&r);
+    }
 }
 
 void Window::cursorPos(int& x, int& y) const {
@@ -107,11 +141,13 @@ void Window::push(InputEvent::Type type, int code, bool down, bool repeat) {
 
 void Window::inject(const InputEvent& e) {
     if (e.type == InputEvent::Key && e.code >= 0 && e.code < 256) injectedDown_[e.code] = e.down;
+    if (e.type == InputEvent::Key && e.down && !e.repeat) press(e.code);
     if (e.type == InputEvent::Button && e.code >= 0 && e.code < 3)  // scripted buttons can be held (keyDown)
         injectedDown_[e.code == 0 ? VK_LBUTTON : e.code == 1 ? VK_RBUTTON : VK_MBUTTON] = e.down;
     InputEvent q = e;
     if (q.type == InputEvent::Button || q.type == InputEvent::Wheel) cursorPos(q.x, q.y);
     if (q.type == InputEvent::Button && q.down && captured_) {
+        press(q.code == 0 ? VK_LBUTTON : q.code == 1 ? VK_RBUTTON : VK_MBUTTON);
         if (q.code == 0) ++events_.left;
         if (q.code == 1) ++events_.right;
         if (q.code == 2) ++events_.middle;
@@ -178,6 +214,17 @@ LRESULT CALLBACK Window::proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return self ? self->handle(msg, wp, lp) : DefWindowProcW(hwnd, msg, wp, lp);
 }
 
+namespace {
+// The left / right key of a generic modifier (Shift, Ctrl, Alt) from the scan code and the extended-key flag.
+int sidedKey(WPARAM wp, LPARAM lp) {
+    const bool extended = (lp >> 24) & 1;
+    if (wp == VK_SHIFT) return int(MapVirtualKeyW(UINT((lp >> 16) & 0xFF), MAPVK_VSC_TO_VK_EX));
+    if (wp == VK_CONTROL) return extended ? VK_RCONTROL : VK_LCONTROL;
+    if (wp == VK_MENU) return extended ? VK_RMENU : VK_LMENU;
+    return int(wp);
+}
+}  // namespace
+
 LRESULT Window::handle(UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
         case WM_CLOSE: closed_ = true; return 0;
@@ -189,6 +236,7 @@ LRESULT Window::handle(UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         case WM_LBUTTONDOWN:
             push(InputEvent::Button, 0, true);
+            press(VK_LBUTTON);
             if (captured_)
                 ++events_.left;
             else if (clickCaptures_)
@@ -196,26 +244,39 @@ LRESULT Window::handle(UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         case WM_RBUTTONDOWN:
             push(InputEvent::Button, 1, true);
+            press(VK_RBUTTON);
             if (captured_) ++events_.right;
             return 0;
         case WM_MBUTTONDOWN:
             push(InputEvent::Button, 2, true);
+            press(VK_MBUTTON);
             if (captured_) ++events_.middle;
             return 0;
         case WM_LBUTTONUP: push(InputEvent::Button, 0, false); return 0;
         case WM_RBUTTONUP: push(InputEvent::Button, 1, false); return 0;
         case WM_MBUTTONUP: push(InputEvent::Button, 2, false); return 0;
+        case WM_XBUTTONDOWN:
+        case WM_XBUTTONUP: {
+            const bool second = GET_XBUTTON_WPARAM(wp) == XBUTTON2;
+            push(InputEvent::Button, second ? 4 : 3, msg == WM_XBUTTONDOWN);
+            if (msg == WM_XBUTTONDOWN) press(second ? VK_XBUTTON2 : VK_XBUTTON1);
+            return TRUE;
+        }
         case WM_MOUSEWHEEL:
             events_.wheel += GET_WHEEL_DELTA_WPARAM(wp) / WHEEL_DELTA;
             push(InputEvent::Wheel, GET_WHEEL_DELTA_WPARAM(wp) / WHEEL_DELTA, false);
             return 0;
         case WM_KEYDOWN:
-        case WM_SYSKEYDOWN:
-            push(InputEvent::Key, int(wp), true, (lp >> 30) & 1);
+        case WM_SYSKEYDOWN: {
+            const int vk = sidedKey(wp, lp);
+            const bool repeat = (lp >> 30) & 1;
+            push(InputEvent::Key, vk, true, repeat);
+            if (!repeat) press(vk);
             if (msg == WM_SYSKEYDOWN && wp != VK_F4) return 0;  // F10 / Alt would open the window menu
             break;
+        }
         case WM_KEYUP:
-        case WM_SYSKEYUP: push(InputEvent::Key, int(wp), false); break;
+        case WM_SYSKEYUP: push(InputEvent::Key, sidedKey(wp, lp), false); break;
         case WM_CHAR: {
             const wchar_t c = wchar_t(wp);
             if (c >= 0xD800 && c < 0xDC00) {

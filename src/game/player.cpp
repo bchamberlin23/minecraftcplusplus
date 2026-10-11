@@ -335,9 +335,95 @@ void Player::updatePose(const Physics& physics) {
     pose = fits(desired) ? desired : fits(Pose::Crouching) ? Pose::Crouching : Pose::Swimming;
 }
 
+// LocalPlayer.updateAutoJump: walking on the ground into an obstacle a jump can clear (more than half a block, up to
+// 1.2 plus Jump Boost) with room above jumps on the next tick.
+void Player::updateAutoJump(const Physics& physics, double xa, double za, const PlayerInput& raw, double speed) {
+    const bool moving = raw.forward != 0 || raw.strafe != 0;
+    const int bx = int(std::floor(pos[0])), bz = int(std::floor(pos[2]));
+    if (!autoJump || autoJumpTime_ > 0 || !onGround || raw.sneak || !moving ||
+        physics.jumpFactor(bx, int(std::floor(pos[1])), bz) < 1.0f)
+        return;
+    const double sy = std::sin(yaw), cy = std::cos(yaw);
+    double mx = xa, mz = za;
+    float distSq = float(mx * mx + mz * mz);
+    if (distSq <= 0.001f) {  // blocked already: the direction the input pushes
+        const double ix = speed * raw.strafe, iz = speed * raw.forward;
+        mx = ix * cy - iz * sy, mz = iz * cy + ix * sy;
+        distSq = float(mx * mx + mz * mz);
+        if (distSq <= 0.001f) return;
+    }
+    const float inv = 1.0f / std::sqrt(distSq);
+    const double dx = mx * inv, dz = mz * inv;
+    const double fx = -sy * std::cos(pitch), fz = cy * std::cos(pitch);  // Entity.getForward
+    if (float(fx * dx + fz * dz) < -0.15f) return;
+    // A cell blocks when a collision box of it (or reaching into it) overlaps it.
+    auto solid = [&](int x, int y, int z, double* top) {
+        std::vector<AABB> boxes;
+        const AABB cell{{double(x), double(y), double(z)}, {x + 1.0, y + 1.0, z + 1.0}};
+        physics.collisionBoxes(cell, boxes);
+        bool any = false;
+        for (const AABB& b : boxes)
+            if (b.intersects(cell)) {
+                if (top) *top = any ? std::max(*top, b.max[1]) : b.max[1];
+                any = true;
+            }
+        return any;
+    };
+    int ceilY = int(std::floor(box().max[1]));
+    if (solid(bx, ceilY, bz, nullptr) || solid(bx, ceilY + 1, bz, nullptr)) return;
+    ++ceilY;
+    float jumpHeight = 1.2f;
+    if (attr.jumpBoost >= 0) jumpHeight += float(attr.jumpBoost + 1) * 0.75f;
+    const double ahead = std::max(speed * 7.0, 1.0 / double(inv));
+    const double b0[3] = {pos[0], pos[1], pos[2]};
+    const double e0[3] = {pos[0] + xa + dx * ahead, pos[1], pos[2] + za + dz * ahead};
+    AABB test{{std::min(b0[0], e0[0]) - kWidth, b0[1], std::min(b0[2], e0[2]) - kWidth},
+              {std::max(b0[0], e0[0]) + kWidth, b0[1] + height(pose), std::max(b0[2], e0[2]) + kWidth}};
+    // Two segments half a body width left and right of the path, 0.51 above the feet.
+    const double rx = -dz * kWidth * 0.5, rz = dx * kWidth * 0.5;  // moveDir x up, scaled
+    auto segBox = [&](double side) {
+        const double ax = b0[0] + rx * side, az = b0[2] + rz * side, ex = e0[0] + rx * side, ez = e0[2] + rz * side;
+        const double y = b0[1] + 0.51;
+        return AABB{{std::min(ax, ex), y, std::min(az, ez)}, {std::max(ax, ex), y, std::max(az, ez)}};
+    };
+    auto touches = [](const AABB& a, const AABB& seg) {  // AABB.intersects(Vec3, Vec3)
+        for (int i = 0; i < 3; ++i)
+            if (!(a.min[i] < seg.max[i] && a.max[i] > seg.min[i])) return false;
+        return true;
+    };
+    const AABB left = segBox(-1), right = segBox(1);
+    std::vector<AABB> boxes;
+    physics.collisionBoxes(test, boxes);
+    bool found = false;
+    double obstacleHeight = 0;
+    for (const AABB& b : boxes) {
+        if (!b.intersects(test) || !(touches(b, left) || touches(b, right))) continue;
+        found = true;
+        obstacleHeight = b.max[1];
+        const int ox = int(std::floor((b.min[0] + b.max[0]) / 2)), oy = int(std::floor((b.min[1] + b.max[1]) / 2)),
+                  oz = int(std::floor((b.min[2] + b.max[2]) / 2));
+        for (int steps = 1; float(steps) < jumpHeight; ++steps) {
+            double top;
+            if (solid(ox, oy + steps, oz, &top)) {
+                obstacleHeight = top;
+                if (obstacleHeight - pos[1] > jumpHeight) return;
+            }
+            if (steps > 1 && solid(bx, ++ceilY, bz, nullptr)) return;
+        }
+        break;
+    }
+    if (!found) return;
+    const float ydelta = float(obstacleHeight - pos[1]);
+    if (ydelta > 0.5f && ydelta <= jumpHeight) autoJumpTime_ = 1;
+}
+
 void Player::tick(const Physics& physics, const PlayerInput& rawInput) {
     std::copy(pos, pos + 3, prev);
     PlayerInput input = rawInput;
+    if (autoJumpTime_ > 0) {  // LocalPlayer.aiStep: the auto jump presses jump for this tick
+        --autoJumpTime_;
+        input.jump = true;
+    }
     lastInput = rawInput;
     const bool jumpPressed = rawInput.jump && !wasJumping_;
     wasJumping_ = rawInput.jump;
@@ -590,7 +676,9 @@ void Player::tick(const Physics& physics, const PlayerInput& rawInput) {
                                   : (input.sprint ? 0.026 : 0.02);
     moveRelative(input, speed);
     climbClamp();
+    const double beforeMove[2] = {pos[0], pos[2]};
     move(physics, vel[0], vel[1], vel[2]);
+    updateAutoJump(physics, pos[0] - beforeMove[0], pos[2] - beforeMove[1], rawInput, walk);
     afterMove();
     // handleRelativeFrictionAndCalculateMovement: climbing ladders, and powder snow with leather boots.
     if ((horizontalCollision || input.jump) && (onClimbable || (wasInPowderSnow_ && attr.powderSnowWalker))) vel[1] = 0.2;

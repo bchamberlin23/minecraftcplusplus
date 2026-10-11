@@ -148,39 +148,46 @@ CameraState Game::viewCamera() const {
     return applyBob(*this, c);
 }
 
+bool Game::held(Window& w, int vk) const { return vk > 0 && w.mouseCaptured() && w.keyDown(vk); }
+
 PlayerInput Game::readInput(Window& w) {
     PlayerInput in;
     if (!w.mouseCaptured()) return in;
-    in.forward = float(w.keyDown('W')) - float(w.keyDown('S'));
-    in.strafe = float(w.keyDown('A')) - float(w.keyDown('D'));
-    in.jump = w.keyDown(VK_SPACE);
-    in.sneak = w.keyDown(VK_SHIFT);
-    in.sprint = w.keyDown(VK_CONTROL);
+    in.forward = float(held(w, keys.forward)) - float(held(w, keys.back));
+    in.strafe = float(held(w, keys.left)) - float(held(w, keys.right));
+    in.jump = held(w, keys.jump);
+    // ToggleKeyMapping: with the toggle option a press switches sneaking / sprinting on or off.
+    if (toggleCrouch && presses(keys.sneak) % 2) crouchToggled_ = !crouchToggled_;
+    if (toggleSprint && presses(keys.sprint) % 2) sprintToggled_ = !sprintToggled_;
+    in.sneak = toggleCrouch ? crouchToggled_ : held(w, keys.sneak);
+    in.sprint = toggleSprint ? sprintToggled_ : held(w, keys.sprint);
     return in;
 }
 
 void Game::frame(Window& w, double dt) {
-    clock_ += dt;
     float mdx, mdy;
     w.takeMouseDelta(mdx, mdy);
-    if (inputSuspended) mdx = mdy = 0;
+    presses_ = w.takePresses();
+    if (paused) {  // Minecraft.isPaused: nothing ticks; input is dropped
+        w.takeMouseEvents();
+        buildOverlay();
+        return;
+    }
+    clock_ += dt;
+    if (inputSuspended) mdx = mdy = 0, presses_ = {};
+    if (invertMouseX) mdx = -mdx;
+    if (invertMouseY) mdy = -mdy;
     player_.yaw += mdx * sensitivity;
     player_.pitch = std::clamp(player_.pitch + mdy * sensitivity, -1.55f, 1.55f);
 
-    const bool f5 = !inputSuspended && w.keyDown(VK_F5);
-    if (f5 && !f5WasDown_) cameraMode = (cameraMode + 1) % 3;
-    f5WasDown_ = f5;
+    if (presses(keys.perspective) % 2) cameraMode = (cameraMode + 1) % 3;
     const bool esc = w.keyDown(VK_ESCAPE);
     if (handleEscape && esc && !escWasDown_) w.setMouseCaptured(false);
     escWasDown_ = esc;
-    for (int i = 0; i < 9; ++i) {
-        const bool down = !inputSuspended && w.mouseCaptured() && w.keyDown('1' + i);
-        if (down && !keyWasDown_[i]) selected_ = i;
-        keyWasDown_[i] = down;
-    }
+    for (int i = 0; i < 9; ++i)
+        if (presses(keys.hotbar[i])) selected_ = i;
     // Double-tapping jump toggles flight, like creative mode.
-    const bool jump = !inputSuspended && w.mouseCaptured() && w.keyDown(VK_SPACE);
-    if (jump && !jumpWasDown_) {
+    for (int n = presses(keys.jump); n > 0; --n) {
         if (clock_ - lastJumpPress_ < 0.3 && player_.mayFly && !player_.noClip && !riding()) {
             player_.flying = !player_.flying;
             player_.vel[1] = 0;
@@ -189,13 +196,12 @@ void Game::frame(Window& w, double dt) {
             lastJumpPress_ = clock_;
         }
     }
-    jumpWasDown_ = jump;
 
     const PlayerInput input = inputSuspended ? PlayerInput{} : readInput(w);
     const Window::MouseEvents ev = w.takeMouseEvents();
     if (inputSuspended) pendingAttacks_ = 0;
-    else pendingAttacks_ = std::min(pendingAttacks_ + ev.left, 4);
-    const bool attackDown = !inputSuspended && w.mouseCaptured() && w.keyDown(VK_LBUTTON);
+    else pendingAttacks_ = std::min(pendingAttacks_ + presses(keys.attack), 4);
+    const bool attackDown = !inputSuspended && held(w, keys.attack);
     tickAccumulator_ += std::min(dt, 0.25);
     while (tickAccumulator_ >= kTick) {
         // Minecraft.tick: the keybinds (attack / digging) with a fresh pick, then the player.
@@ -229,7 +235,7 @@ void Game::frame(Window& w, double dt) {
             it = ticks_ > it->second.tick + 400 ? destructions_.erase(it) : std::next(it);
 
     retarget();
-    handleClicks(w, dt, ev.right, ev.middle, ev.wheel);
+    handleClicks(w, dt, presses(keys.use), presses(keys.pickItem), ev.wheel);
     buildOverlay();
 }
 
@@ -255,8 +261,15 @@ void Game::handleClicks(Window& w, double dt, int rightPresses, int middlePresse
         int right, middle, wheel;
     } ev{rightPresses, middlePresses, wheel};
     if (inputSuspended) return;
-    selected_ = ((selected_ - ev.wheel) % 9 + 9) % 9;
-    const bool rightHeld = w.mouseCaptured() && w.keyDown(VK_RBUTTON);
+    if (ev.wheel) {  // MouseHandler.onScroll (discrete scrolling, scroll sensitivity) and ScrollWheelHandler
+        const double scroll = (discreteScroll ? (ev.wheel > 0 ? 1.0 : -1.0) : double(ev.wheel)) * wheelSensitivity;
+        if (scrollAccum_ != 0 && (scroll > 0) != (scrollAccum_ > 0)) scrollAccum_ = 0;
+        scrollAccum_ += scroll;
+        const int steps = int(scrollAccum_);
+        scrollAccum_ -= steps;
+        selected_ = ((selected_ - steps) % 9 + 9) % 9;
+    }
+    const bool rightHeld = held(w, keys.use);
     repeatTimer_ -= dt;
     // Breaking runs in tickAttack; Minecraft.startUseItem does nothing while a block is being destroyed or the hands
     // are busy (paddling).

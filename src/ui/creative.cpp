@@ -359,7 +359,7 @@ void dropStack(UiState& s, const ItemStack& st) {  // handleCreativeModeItemDrop
 }
 
 std::vector<Text> tooltipFor(UiState& s, const ItemStack& st, bool creativeSlot) {
-    std::vector<Text> lines = s.items.tooltip(st);
+    std::vector<Text> lines = s.items.tooltip(st, s.settings.advancedItemTooltips);
     if (tab().kind == TabKind::Category && creativeSlot) return lines;
     auto it = g.tabsOfItem.find(st.item);
     if (it != g.tabsOfItem.end() && !lines.empty()) {
@@ -524,30 +524,32 @@ void input(UiState& s, const InputEvent& e) {
         }
         g.ignoreText = false;
         if (e.code == VK_ESCAPE) return s.closeScreen();
-        const bool number = e.code >= '1' && e.code <= '9';
+        int hotbar = -1;
+        for (int i = 0; i < 9; ++i)
+            if (s.isKey(Key(int(Key::Hotbar1) + i), e)) hotbar = i;
         // Hotbar keys over a slot (checkHotbarKeyPressed).
         auto hotbarKey = [&] {
-            if (!number || !s.carried.empty()) return false;
+            if (hotbar < 0 || !s.carried.empty()) return false;
             if (g.hoveredGrid >= 0) {
                 if (gridItem(g.hoveredGrid).empty() && searching) return false;
-                gridClick(s, g.hoveredGrid, e.code - '1', Swap);
+                gridClick(s, g.hoveredGrid, hotbar, Swap);
                 return true;
             }
             if (g.hoveredInv >= 0) {
-                localInventoryClick(s, g.hoveredInv, e.code - '1', Swap);
+                localInventoryClick(s, g.hoveredInv, hotbar, Swap);
                 return true;
             }
             return false;
         };
         if (!searching) {
-            if (e.code == 'T') {  // keyChat: jump to the search tab
+            if (s.isKey(Key::Chat, e)) {  // keyChat: jump to the search tab
                 g.ignoreText = true;
                 selectTab(s, searchTab());
                 return;
             }
             if (hotbarKey()) return;
-            if (e.code == 'E') return s.closeScreen();
-            if (e.code == 'Q' && s.carried.empty()) {
+            if (s.isKey(Key::Inventory, e)) return s.closeScreen();
+            if (s.isKey(Key::Drop, e) && s.carried.empty()) {
                 const bool all = s.window->keyDown(VK_CONTROL);
                 if (g.hoveredGrid >= 0) gridClick(s, g.hoveredGrid, all ? 1 : 0, Throw);
                 else if (g.hoveredInv >= 0 && !s.inventory.slots[size_t(g.hoveredInv)].empty()) {

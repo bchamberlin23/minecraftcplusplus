@@ -1,4 +1,4 @@
-// Shader pack option screens (Video Settings -> Shader Options...): the pack's own screens from shaders.properties
+// Shader pack option screens (Video Settings -> Shaders & Upscaling -> Shader Pack Options...): the pack's own screens from shaders.properties
 // with its lang names (render/packs/pack_options.h). Done saves the values (pack_api.h savePackSettings, Iris format)
 // and reloads the pack when it is the one in use; nothing restarts.
 #include "render/packs/pack_options.h"
@@ -29,11 +29,11 @@ void Ui::State::closePackOptions() {
             packs::setShaderPack(*init.renderer, packOptions->pack().path, packOptions->values());
     }
     packOptions.reset();
-    openScreen(Screen::Video);
+    openScreen(Screen::VideoExtra);
 }
 
 void Ui::State::buildPackButtons() {
-    if (!packOptions) return openScreen(Screen::Video);
+    if (!packOptions) return openScreen(Screen::VideoExtra);
     const int W = canvas ? guiW() : int(window->width()) / std::max(1, guiScale());
     const int H = canvas ? guiH() : int(window->height()) / std::max(1, guiScale());
     const std::string screenName = packScreens.empty() ? std::string() : packScreens.back();

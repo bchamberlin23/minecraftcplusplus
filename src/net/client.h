@@ -88,6 +88,18 @@ public:
         fs::path serverRegistries;  // optional: a local Fabric server's block table (net/fabric_sync.h)
     };
 
+    // ClientInformation (Options.buildPlayerInformation): sent in the configuration phase, again when it changes.
+    struct Information {
+        std::string language = "en_us";
+        int viewDistance = 12;
+        int chatVisibility = 0;  // full
+        bool chatColors = true;
+        u8 modelParts = 0x7F;    // PlayerModelPart masks (cape 1 .. hat 64)
+        int mainHand = 1;        // HumanoidArm id: 0 left, 1 right
+        bool textFiltering = false, allowListing = true;
+        int particles = 0;  // all
+    };
+
     Client(const GameReports& reports, BlockRegistry& registry);
     ~Client();
 
@@ -106,6 +118,8 @@ public:
     void sendUseItemOn(int x, int y, int z, int face, const float cursor[3], int sequence, int hand = 0);
     void sendCarriedItem(int slot);
     void sendCreativeSlot(int slot, int itemId, int count);  // inventory menu slot; itemId < 0 = empty
+    // Any thread; before start() it only sets what the login sends. Options.broadcastOptions in the play phase.
+    void setInformation(const Information& info);
 
     // Extensions (entities, UI, ...): play-phase packets by report name ("add_entity", "container_set_content").
     // A handler runs on the network thread, takes precedence over the built-in handling and must queue
@@ -144,6 +158,7 @@ private:
     const GameReports& reports_;
     BlockRegistry& registry_;
     Config config_;
+    Information info_;  // guarded by sendMutex_
     int protocol_ = 0;
     std::vector<std::string> clientbound_[PhaseCount];               // packet id -> name
     std::unordered_map<std::string, int> serverbound_[PhaseCount];  // name -> packet id

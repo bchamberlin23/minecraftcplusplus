@@ -96,7 +96,8 @@ public:
         bool powderSnowWalker = false;  // leather boots
         bool rocketBoost = false;       // a firework rocket is attached (FireworkRocketEntity pushing a glider)
     } attr;
-    std::function<void()> onStartFallFlying;  // LocalPlayer.aiStep: ServerboundPlayerCommandPacket START_FALL_FLYING
+    std::function<void()> onStartFallFlying;
+    bool autoJump = false;  // the Auto-Jump option (LocalPlayer.updateAutoJump)  // LocalPlayer.aiStep: ServerboundPlayerCommandPacket START_FALL_FLYING
 
     void tick(const Physics& physics, const PlayerInput& input);
     AABB box() const { return boxAt(pos, pose); }
@@ -117,4 +118,6 @@ private:
     double moved_[3] = {};  // the last move after collisions
     bool wasJumping_ = false, wasInPowderSnow_ = false;
     bool canFallAtLeast(const Physics& physics, double dx, double dz, double minHeight) const;
+    int autoJumpTime_ = 0;
+    void updateAutoJump(const Physics& physics, double xa, double za, const PlayerInput& raw, double speed);
 };

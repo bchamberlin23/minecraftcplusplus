@@ -413,10 +413,8 @@ void Ui::State::buildButtons() {
     buttons.clear();
     const int W = canvas ? guiW() : int(window->width()) / std::max(1, guiScale());
     const int H = canvas ? guiH() : int(window->height()) / std::max(1, guiScale());
-    const Lang* l = lang();
     auto tr = [&](const char* key) { return Text(res.translate(key)); };
     if (screen == Screen::Mods) return buildModsButtons();  // mods_screen.cpp
-    if (screen == Screen::Video) return buildVideoButtons();  // video_screen.cpp
     if (screen == Screen::PackOptions) return buildPackButtons();  // render/packs/pack_screen.cpp
     if (frontEndScreen()) return buildFrontEndButtons();     // title.cpp
     if (const ScreenDef* d = screenDef(screen); d && d->build) return d->build(*this);  // modules.h
@@ -480,106 +478,38 @@ void Ui::State::buildButtons() {
             quit = true;
         };
         buttons.push_back(std::move(title));
-    } else if (screen == Screen::Options) {
-        const int x0 = W / 2 - 155, x1 = W / 2 + 5;
-        int y = H / 6 - 12;
-        auto slider = [&](int x, int yy, float value, std::function<Text()> label, std::function<void(float)> slide) {
-            Button b;
-            b.x = float(x), b.y = float(yy), b.w = 150, b.slider = true, b.value = value, b.labelFn = std::move(label);
-            b.onSlide = std::move(slide);
-            buttons.push_back(std::move(b));
-        };
-        auto option = [this, l](const char* key, const std::string& value) {
-            return translatable("options.generic_value", {Text(res.translate(key)), Text(value)}, l);
-        };
-        slider(x0, y, (settings.fov - 30.f) / 80.f,
-               [this, option] {
-                   const int f = int(std::lround(settings.fov));
-                   if (f == 70) return option("options.fov", res.translate("options.fov.min"));
-                   if (f == 110) return option("options.fov", res.translate("options.fov.max"));
-                   return option("options.fov", std::to_string(f));
-               },
-               [this](float v) { settings.fov = std::round(30.f + v * 80.f); });
-        const int maxRd = std::max(2, init.detailChunks);
-        slider(x1, y, float(std::min(settings.renderDistance, maxRd) - 2) / float(std::max(1, maxRd - 2)),
-               [this, option, maxRd] {
-                   return option("options.renderDistance",
-                                 formatJava(res.translate("options.chunks"),
-                                            {std::to_string(std::min(settings.renderDistance, maxRd))}));
-               },
-               [this, maxRd](float v) {
-                   settings.renderDistance = 2 + int(std::lround(v * float(maxRd - 2)));
-                   terrain->setDetailRadius(float(settings.renderDistance) * 16.0f);
-               });
-        y += 24;
-        slider(x0, y, settings.sensitivity,
-               [this, option] {
-                   const int pct = int(std::lround(settings.sensitivity * 200.0f));
-                   return option("options.sensitivity", pct == 0 ? res.translate("options.sensitivity.min")
-                                                         : pct == 200 ? res.translate("options.sensitivity.max")
-                                                                      : std::to_string(pct) + "%");
-               },
-               [this](float v) { settings.sensitivity = v; });
-        {
-            Button b;
-            b.x = float(x1), b.y = float(y), b.w = 150;
-            b.labelFn = [this, option] {
-                return option("options.guiScale", settings.guiScale == 0 ? res.translate("options.guiScale.auto")
-                                                                         : std::to_string(settings.guiScale));
-            };
-            b.onPress = [this] {
-                // Cycle auto, 1 .. the largest scale this window allows.
-                int maxScale = 1;
-                const u32 w = window->width(), h = window->height();
-                while (w / u32(maxScale + 1) >= 320 && h / u32(maxScale + 1) >= 240) ++maxScale;
-                settings.guiScale = settings.guiScale >= maxScale ? 0 : settings.guiScale + 1;
-            };
-            buttons.push_back(std::move(b));
-        }
-        y += 24;
-        {  // video_screen.cpp
-            Button b;
-            b.x = float(x0), b.y = float(y), b.w = 310, b.label = Text("Video Settings...");
-            b.onPress = [this] { openScreen(Screen::Video); };
-            buttons.push_back(std::move(b));
-        }
-        Button done;
-        done.x = float(W / 2 - 100), done.y = float(H / 6 + 168), done.w = 200, done.label = tr("gui.done");
-        done.onPress = [this] {
-            settings.save();
-            openScreen(fe->cfg.menu ? Screen::Title : Screen::Pause);
-        };
-        buttons.push_back(std::move(done));
     }
 }
 
 void Ui::State::drawButtons(Canvas& c) {
-    for (size_t i = 0; i < buttons.size(); ++i) {
-        Button& b = buttons[i];
-        const bool hover = mouseX >= b.x && mouseY >= b.y && mouseX < b.x + b.w && mouseY < b.y + b.h;
-        if (b.slider) {
-            blitSprite(c, sprites.sprite(hover ? "widget/slider_highlighted" : "widget/slider"), b.x, b.y, b.w, b.h);
-            const float hx = b.x + float(int(b.value * (b.w - 8)));
-            blitSprite(c, sprites.sprite(hover || draggingSlider == int(i) ? "widget/slider_handle_highlighted" : "widget/slider_handle"),
-                       hx, b.y, 8, 20);
-        } else {
-            const char* sp = !b.active ? "widget/button_disabled" : hover ? "widget/button_highlighted" : "widget/button";
-            blitSprite(c, sprites.sprite(sp), b.x, b.y, b.w, b.h);
-        }
-        const Text label = b.labelFn ? b.labelFn() : b.label;
-        const u32 color = b.active ? 0xFFFFFFFF : 0xFFA0A0A0;
-        drawCentered(c, label, b.x + b.w / 2, b.y + (b.h - 8) / 2, color);
-    }
+    for (size_t i = 0; i < buttons.size(); ++i) drawButton(c, i);
 }
 
-bool Ui::State::buttonsInput(const Window::InputEvent& e) {
+void Ui::State::drawButton(Canvas& c, size_t i, bool hoverable) {
+    Button& b = buttons[i];
+    const bool hover = hoverable && mouseX >= b.x && mouseY >= b.y && mouseX < b.x + b.w && mouseY < b.y + b.h;
+    if (b.slider) {  // AbstractSliderButton: the handle lights up under the mouse (an inactive one never)
+        blitSprite(c, sprites.sprite("widget/slider"), b.x, b.y, b.w, b.h);
+        const float hx = b.x + float(int(b.value * (b.w - 8)));
+        const bool lit = b.active && (hover || draggingSlider == int(i));
+        blitSprite(c, sprites.sprite(lit ? "widget/slider_handle_highlighted" : "widget/slider_handle"), hx, b.y, 8, 20);
+    } else {
+        const char* sp = !b.active ? "widget/button_disabled" : hover ? "widget/button_highlighted" : "widget/button";
+        blitSprite(c, sprites.sprite(sp), b.x, b.y, b.w, b.h);
+    }
+    const Text label = b.labelFn ? b.labelFn() : b.label;
+    const u32 color = b.active ? 0xFFFFFFFF : 0xFFA0A0A0;
+    drawCentered(c, label, b.x + b.w / 2, b.y + (b.h - 8) / 2, color);
+}
+
+bool Ui::State::buttonsInput(const Window::InputEvent& e, size_t first, size_t last) {
     if (e.type != Window::InputEvent::Button || e.code != 0) return false;
     if (!e.down) {
         if (draggingSlider >= 0) settings.save();
         draggingSlider = -1;
         return false;
     }
-    for (size_t i = 0; i < buttons.size(); ++i) {
+    for (size_t i = first; i < buttons.size() && i < last; ++i) {
         Button& b = buttons[i];
         if (!b.active || mouseX < b.x || mouseY < b.y || mouseX >= b.x + b.w || mouseY >= b.y + b.h) continue;
         if (b.slider) {
@@ -617,7 +547,6 @@ void Ui::State::drawScreen(Canvas& c) {
             return;
         }
         case Screen::Mods: drawModsScreen(c); return;  // mods_screen.cpp
-        case Screen::Video: drawVideoScreen(c); return;  // video_screen.cpp
         case Screen::PackOptions: drawPackScreen(c); return;  // render/packs/pack_screen.cpp
         case Screen::Death: {
             c.gradient(0, 0, float(W), float(H), 0x60500000, 0xA0803030);
@@ -635,11 +564,9 @@ void Ui::State::drawScreen(Canvas& c) {
             drawButtons(c);
             return;
         }
-        case Screen::Pause:
-        case Screen::Options: {
+        case Screen::Pause: {
             c.gradient(0, 0, float(W), float(H), 0xC0101010, 0xD0101010);
-            const Text title(res.translate(screen == Screen::Pause ? "menu.game" : "options.title"));
-            drawCentered(c, title, float(W / 2), screen == Screen::Pause ? 40.f : 15.f, 0xFFFFFFFF);
+            drawCentered(c, Text(res.translate("menu.game")), float(W / 2), 40.f, 0xFFFFFFFF);
             drawButtons(c);
             return;
         }
@@ -746,7 +673,7 @@ void Ui::State::drawScreen(Canvas& c) {
         }
         drawItem(c, carried, mouseX - 8, mouseY - 8, true, remaining.empty() ? nullptr : remaining.c_str());
     } else if (hoveredSlot >= 0 && size_t(hoveredSlot) < m.slots.size() && !m.slots[size_t(hoveredSlot)].empty()) {
-        drawTooltip(c, items.tooltip(m.slots[size_t(hoveredSlot)]), mouseX, mouseY);
+        drawTooltip(c, items.tooltip(m.slots[size_t(hoveredSlot)], settings.advancedItemTooltips), mouseX, mouseY);
     }
     if (station && station->drawTop) station->drawTop(*this, c, m, l, left, top);
 }
@@ -792,19 +719,10 @@ void Ui::State::screenInput(const Window::InputEvent& e) {
         return;
     }
     if (screen == Screen::Mods) return modsInput(e);  // mods_screen.cpp
-    if (screen == Screen::Video) return videoInput(e);  // video_screen.cpp
     if (screen == Screen::PackOptions) return packInput(e);  // render/packs/pack_screen.cpp
     if (frontEndScreen()) return frontEndInput(e);     // title.cpp
-    if (screen == Screen::Pause || screen == Screen::Options) {
-        if (e.type == E::Key && e.down && e.code == VK_ESCAPE) {
-            if (screen == Screen::Options) {
-                settings.save();
-                openScreen(fe->cfg.menu ? Screen::Title : Screen::Pause);
-            } else {
-                closeScreen();
-            }
-            return;
-        }
+    if (screen == Screen::Pause) {
+        if (e.type == E::Key && e.down && e.code == VK_ESCAPE) return closeScreen();
         buttonsInput(e);
         return;
     }
@@ -826,12 +744,13 @@ void Ui::State::screenInput(const Window::InputEvent& e) {
     const bool outside = mouseX < left || mouseY < top || mouseX >= left + l.width || mouseY >= top + l.height;
     enum { Pickup, QuickMove, Swap, Clone, Throw, QuickCraft, PickupAll };
     if (e.type == E::Key && e.down) {
-        if (e.code == VK_ESCAPE || e.code == 'E') return closeScreen();
-        if (carried.empty() && slot >= 0) {
-            if (e.code >= '1' && e.code <= '9') return containerClick(slot, e.code - '1', Swap);
-            if (e.code == 'F') return containerClick(slot, 40, Swap);
+        if (e.code == VK_ESCAPE || isKey(Key::Inventory, e)) return closeScreen();
+        if (carried.empty() && slot >= 0) {  // checkHotbarKeyPressed
+            for (int i = 0; i < 9; ++i)
+                if (isKey(Key(int(Key::Hotbar1) + i), e)) return containerClick(slot, i, Swap);
+            if (isKey(Key::SwapOffhand, e)) return containerClick(slot, 40, Swap);
         }
-        if (slot >= 0 && size_t(slot) < m.slots.size() && !m.slots[size_t(slot)].empty() && e.code == 'Q')
+        if (slot >= 0 && size_t(slot) < m.slots.size() && !m.slots[size_t(slot)].empty() && isKey(Key::Drop, e))
             return containerClick(slot, window->keyDown(VK_CONTROL) ? 1 : 0, Throw);
         return;
     }

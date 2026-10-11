@@ -244,7 +244,7 @@ Text Items::hoverName(const ItemStack& s) const {
     return displayName(s).withStyle(colorStyle(kRarity[std::clamp(rarity, 0, 3)]));
 }
 
-std::vector<Text> Items::tooltip(const ItemStack& s) const {
+std::vector<Text> Items::tooltip(const ItemStack& s, bool advanced) const {
     std::vector<Text> lines{hoverName(s)};
     auto shown = [&](const char* component) {
         const int t = componentType(component);
@@ -303,11 +303,15 @@ std::vector<Text> Items::tooltip(const ItemStack& s) const {
         st.italic = 1;
         lines.push_back(l.withStyle(st));
     }
+    // ItemStack.addDetailsToTooltip, advanced: durability while damaged, then the item id in dark gray. (The component
+    // count line needs the item's default components, which the client does not have.)
+    if (!advanced) return lines;
     const int md = maxDamage(s);
-    if (s.damage > 0 && md > 0) {
+    if (s.damage > 0 && md > 0 && shown("damage")) {
         lines.push_back(Text(formatJava(lang_->count("item.durability") ? lang_->at("item.durability") : "Durability: %s / %s",
                                         {std::to_string(md - s.damage), std::to_string(md)})));
     }
+    lines.push_back(Text(name(s.item), colorStyle(0x555555)));
     return lines;
 }
 
