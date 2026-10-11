@@ -59,6 +59,7 @@ struct AckEvent {
 };
 struct AbilitiesEvent {
     bool flying = false, mayFly = false, instabuild = false;
+    float flyingSpeed = 0.05f, walkingSpeed = 0.1f;
 };
 struct GameModeEvent {
     int mode = 0;  // 0 survival, 1 creative, 2 adventure, 3 spectator

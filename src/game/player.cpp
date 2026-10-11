@@ -482,22 +482,22 @@ void Player::tick(const Physics& physics, const PlayerInput& rawInput) {
         else if (pos[1] < startY) fallDistance += startY - pos[1];
     };
 
+    // LocalPlayer.aiStep: up / down at 3x the ability's flying speed; Player.getFlyingSpeed: sprinting doubles it.
+    const double flyUp = double(flyingSpeed) * 3.0, flyMove = double(flyingSpeed) * (input.sprint ? 2.0 : 1.0);
     if (noClip) {  // spectators: always flying, no collisions (Entity.noPhysics)
         flying = true;
-        const double flySpeed = input.sprint ? 0.1 : 0.05;
-        if (input.jump) vel[1] += flySpeed * 3;
-        if (input.sneak) vel[1] -= flySpeed * 3;
-        moveRelative(input, flySpeed);
+        if (input.jump) vel[1] += flyUp;
+        if (input.sneak) vel[1] -= flyUp;
+        moveRelative(input, flyMove);
         for (int a = 0; a < 3; ++a) pos[a] += vel[a];
         onGround = horizontalCollision = false;
         vel[0] *= 0.91, vel[2] *= 0.91, vel[1] *= 0.6;
         return;
     }
     if (flying) {
-        const double flySpeed = input.sprint ? 0.1 : 0.05;
-        if (input.jump) vel[1] += flySpeed * 3;
-        if (input.sneak) vel[1] -= flySpeed * 3;
-        moveRelative(input, flySpeed);
+        if (input.jump) vel[1] += flyUp;
+        if (input.sneak) vel[1] -= flyUp;
+        moveRelative(input, flyMove);
         move(physics, vel[0], vel[1], vel[2]);
         vel[0] *= 0.91, vel[2] *= 0.91, vel[1] *= 0.6;
         fallDistance = 0;

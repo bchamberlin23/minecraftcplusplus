@@ -83,6 +83,8 @@ public:
     bool sprinting = false;          // LocalPlayer sprint state (started by the sprint key, ends like the game)
     bool canSprint = true;           // food > 6 (or may fly), set from the server's health updates
     bool mayFly = true;              // Abilities.mayfly (double-tapping jump toggles flight only then)
+    float flyingSpeed = 0.05f;       // Abilities flying / walking speed (the server's player_abilities)
+    float walkingSpeed = 0.1f;
     bool noClip = false;             // spectator: flies through blocks
     bool horizontalCollision = false;
     PlayerInput lastInput;           // this tick's raw input (sent to the server)

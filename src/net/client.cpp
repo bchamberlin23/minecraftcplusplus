@@ -457,9 +457,10 @@ bool Client::handlePlay(const std::string& name, Reader& r) {
         LOG("net: %s %s (y %d..%d), game mode %d", e.respawn ? "respawned in" : "joined", level.c_str(),
             dimension_.minY, dimension_.minY + dimension_.height - 1, e.gameMode);
         push(e);
-    } else if (name == "player_abilities") {
+    } else if (name == "player_abilities") {  // flags (invulnerable 1, flying 2, may fly 4, instabuild 8), speeds
         const u8 flags = r.u8v();
-        push(AbilitiesEvent{(flags & 2) != 0, (flags & 4) != 0, (flags & 8) != 0});
+        const float flyingSpeed = r.f32(), walkingSpeed = r.f32();
+        if (r.ok) push(AbilitiesEvent{(flags & 2) != 0, (flags & 4) != 0, (flags & 8) != 0, flyingSpeed, walkingSpeed});
     } else if (name == "game_event") {
         const u8 event = r.u8v();
         const float param = r.f32();
