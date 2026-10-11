@@ -97,7 +97,8 @@ bool Settings::load() {
             static const char* presets[] = {"off", "low", "medium", "high", "ultra", "pathtraced"};
             for (u8 i = 0; i < 6; ++i)
                 if (v == presets[i]) video.shaders = i, videoSaved = true;
-        } else if (k == "upscaler") VideoSettings::parseUpscaler(v, video.upscaler);
+        } else if (k == "pathTracing") VideoSettings::parsePathTracing(v, video.pathTracing);
+        else if (k == "upscaler") VideoSettings::parseUpscaler(v, video.upscaler);
         else if (k == "upscaleQuality") VideoSettings::parseQuality(v, video.quality);
         else if (k == "sharpness") video.sharpness = std::clamp(float(std::atof(v.c_str())), 0.f, 1.f);
         else if (k == "frameGeneration") video.parseFrameGen(v);
@@ -140,7 +141,8 @@ void Settings::save() const {
     f << "fov:" << fov << "\nrenderDistance:" << renderDistance << "\nguiScale:" << guiScale
       << "\nmouseSensitivity:" << sensitivity << "\n";
     static const char* presets[] = {"off", "low", "medium", "high", "ultra", "pathtraced"};
-    f << "shaders:" << presets[std::min<int>(video.shaders, 5)] << "\nupscaler:" << VideoSettings::upscalerKey(video.upscaler)
+    f << "shaders:" << presets[std::min<int>(video.shaders, 5)] << "\npathTracing:" << VideoSettings::pathTracingKey(video.pathTracing)
+      << "\nupscaler:" << VideoSettings::upscalerKey(video.upscaler)
       << "\nupscaleQuality:" << VideoSettings::qualityKey(video.quality) << "\nsharpness:" << video.sharpness
       << "\nframeGeneration:" << video.frameGenKey() << "\nlowLatency:" << VideoSettings::lowLatencyKey(video.lowLatency)
       << "\nvsync:" << (video.vsync ? "true" : "false") << "\nmaxFps:" << video.fpsLimit << "\n";

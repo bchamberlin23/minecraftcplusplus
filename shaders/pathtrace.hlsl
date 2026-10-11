@@ -114,7 +114,7 @@ void BlasGenCS(uint id : SV_DispatchThreadID) {
     float3 color = sum / wsum;
     color /= max(max(color.r, color.g), max(color.b, 1e-3));
     color = pow(color, 1.6);  // flames: warmer than their texels' average
-    float3 le = color * (wsum / opaque) * (kind == kKindModel ? 300.0 : 12.0) * pow(saturate(level / 15.0), 2.0);
+    float3 le = color * (wsum / opaque) * (kind == kKindModel ? 300.0 : 8.0) * pow(saturate(level / 15.0), 2.0);
     float area = length(cross(v[1] - v[0], v[2] - v[0]));
     InterlockedAdd(gLightPower[j.ptIndex], uint(min(luminance(le) * area * 16.0, 1e6)));
     uint i;
@@ -362,7 +362,10 @@ float3 lightContrib(LightPoint l, float3 p, float3 n, bool foliage, out float3 d
     float cl = -dot(l.n, dir);
     if (l.twoSided) cl = abs(cl);
     if (cs <= 0 || cl <= 0) return 0;
-    return l.le * (cs * cl * l.area / (kPi * max(d2, 0.25)));
+    // A window past ~48 blocks: block light in the game reaches 15 blocks; the largest emitters (lava lakes, lava
+    // falls) still light their surroundings without colouring whole valleys.
+    float win = saturate(1.0 - d2 * d2 / 5308416.0);  // 48^4
+    return l.le * (cs * cl * l.area / (kPi * max(d2, 0.25)) * win * win);
 }
 
 uint packUv(float2 uv) { return uint(saturate(uv.x) * 65535.0 + 0.5) | uint(saturate(uv.y) * 65535.0 + 0.5) << 16; }
