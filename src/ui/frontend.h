@@ -33,6 +33,8 @@ std::string worldFolderFor(const fs::path& saves, const std::string& name);  // 
 struct ServerEntry {
     std::string name, ip;
     std::string icon;  // base64 PNG (from servers.dat or the last status)
+    int packStatus = 0;  // ServerData.ServerPackStatus: 0 prompt, 1 enabled, 2 disabled
+    i32 acceptedCodeOfConduct = 0;  // String.hashCode of the accepted code of conduct, 0: none
 };
 // Our list; on first use it is imported from the game's servers.dat (which is only read).
 std::vector<ServerEntry> loadServers(const fs::path& json, const fs::path& dat);
@@ -103,6 +105,7 @@ struct FrontEndState {
     std::vector<net::LanListener::Entry> lanWorlds;
     Field serverName, serverIp, directIp;
     int editServer = -1;  // -1: adding
+    int editPackStatus = 0;  // the Server Resource Packs button
     bool serversDirty = false;
 
     // Loading the next instance / message
@@ -113,6 +116,7 @@ struct FrontEndState {
     double loadingStart = 0;
     bool loadingCancel = false;
     Screen failBack = Screen::Title;
+    std::function<void()> failAction;  // instead of returning to failBack (a transfer: back to the server list)
     Text failTitle;
     Text messageTitle, messageText;
     std::string messageButton;

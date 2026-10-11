@@ -116,6 +116,11 @@ struct FrontEnd {
     // Open to LAN: publishes the local server (game mode for others, the host's cheats, port); error on failure.
     std::function<bool(const std::string& motd, const std::string& gameMode, bool cheats, u16 port, std::string& error)>
         openToLan;
+    // Multiplayer: the server list entry this connection belongs to (its address; --connect, or the first server of a
+    // transfer), for its "Server Resource Packs" setting and accepted Code of Conduct.
+    std::string serverAddress;
+    // Server resource packs changed the client asset stack: reload what main.cpp owns (block textures); false: failed.
+    std::function<bool()> reloadResources;
 };
 
 // Map data from ClientboundMapItemDataPacket (main thread): the 128 x 128 packed map colours of a map id, nullptr if

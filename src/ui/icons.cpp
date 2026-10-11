@@ -635,6 +635,15 @@ void ItemIcons::init(const Resources& res, const Items& items, Atlas& atlas) {
     res.image("assets/minecraft/textures/colormap/foliage.png", impl_->foliage);
 }
 
+void ItemIcons::reload() {
+    Impl& m = *impl_;
+    m.jsonCache.clear(), m.texCache.clear(), m.models.clear();
+    m.icons.clear(), m.animatedIcons.clear();
+    m.atlas->reset();
+    m.res->image("assets/minecraft/textures/colormap/grass.png", m.grass);
+    m.res->image("assets/minecraft/textures/colormap/foliage.png", m.foliage);
+}
+
 void ItemIcons::setScale(int guiScale) {
     const int size = std::clamp(16 * guiScale, 16, 160);
     if (size == size_) return;

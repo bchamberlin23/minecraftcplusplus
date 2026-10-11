@@ -39,14 +39,20 @@ Session::Session(Client& client, World& world, BlockRegistry& registry, const Ga
     verbose_ = verbose && *verbose == '1';
 }
 
-bool Session::join(double timeoutSeconds, PlayerStart& start, Dimension& dimension) {
-    const double deadline = nowSeconds() + timeoutSeconds;
+bool Session::join(double timeoutSeconds, PlayerStart& start, Dimension& dimension, bool* deferred, bool patient) {
+    double deadline = nowSeconds() + timeoutSeconds;
     bool joined = false;
     while (nowSeconds() < deadline) {
+        if (patient && !client_.inPlay()) deadline = nowSeconds() + timeoutSeconds;
+        if (deferred && !joined && client_.hasCommon()) {
+            *deferred = true;
+            return false;
+        }
         client_.poll(incoming_);
         for (Event& e : incoming_) {
             if (auto* d = std::get_if<DisconnectEvent>(&e)) {
                 LOG("net: disconnected: %s", d->reason.c_str());
+                disconnectReason_ = d->reason;
                 return false;
             }
             if (auto* j = std::get_if<JoinEvent>(&e); j && !joined) {
@@ -194,6 +200,13 @@ void Session::handle(Event& e) {
     } else if (auto* d = std::get_if<DisconnectEvent>(&e)) {
         LOG("net: disconnected: %s", d->reason.c_str());
         disconnectReason_ = d->reason;
+    } else if (std::holds_alternative<ReconfigureEvent>(e)) {
+        // ClientPacketListener.handleConfigurationStart: the level goes; the login after the configuration brings
+        // the next one (and the player's position).
+        clearWorld();
+        predictions_.clear();
+        loadedSent_ = false;
+        LOG("net: reconfiguration: the level was cleared");
     }
 }
 

@@ -1130,6 +1130,8 @@ void Ui::beginFrame(double dt) {
         for (auto& fn : pending) fn();
     }
     s.frontEndFrame();  // title.cpp
+    for (const UiModule& m : uiModules())  // modules.h
+        if (m.frame) m.frame(s);
     if (s.game) s.game->bobView = s.settings.bobView;  // the View Bobbing option
     // The server's data-driven registries (enchantment / painting / instrument names, creative contents).
     if (s.client && s.client->inPlay() && !s.items.registriesSet()) s.items.setRegistries(*s.client);

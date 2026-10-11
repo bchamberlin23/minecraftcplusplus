@@ -575,16 +575,18 @@ void Ui::State::frontEndFrame() {
                 std::string error = f.child->error();
                 f.child.reset();
                 const Screen back = f.failBack;
+                std::function<void()> action = std::move(f.failAction);
                 if (error.empty()) error = "It closed while starting; see the log for details.";
                 showMessage(*this, f.failTitle.empty() ? Text("Could not open the world") : f.failTitle, Text(error),
                             res.translate(back == Screen::Servers ? "gui.toMenu" : "gui.back"),
-                            [this, back] { back == Screen::Servers ? openServers(*this) : back == Screen::Worlds ? openWorlds(*this) : openScreen(back); });
+                            action ? action : [this, back] { back == Screen::Servers ? openServers(*this) : back == Screen::Worlds ? openWorlds(*this) : openScreen(back); });
             }
         }
     }
     serversFrame(*this);
     // In a world: the server closed the connection (kicked, stopped, crashed).
-    if (!f.cfg.menu && session && !session->connected() && !f.leaving && !f.titleRequested && screen != Screen::Message) {
+    if (!f.cfg.menu && session && !session->connected() && !f.leaving && !f.titleRequested && screen != Screen::Message &&
+        !f.child) {  // (a transfer: the next instance is connecting)
         const bool multiplayer = !f.cfg.singleplayer;
         std::string reason = session->disconnectReason();
         if (reason.empty()) reason = res.translate("disconnect.endOfStream");

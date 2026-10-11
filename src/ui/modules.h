@@ -33,6 +33,7 @@ struct UiModule {
     void (*drawHudTop)(UiState& s, Canvas& c) = nullptr;  // over the chat (player list)
     bool (*worldKey)(UiState& s, const InputEvent& e) = nullptr;  // input while no screen is open; true: consumed
     void (*drawTop)(UiState& s, Canvas& c) = nullptr;  // over everything, screens and the title screen too (toasts)
+    void (*frame)(UiState& s) = nullptr;  // every frame before the input, in every instance (title screen, world)
 };
 struct UiModuleRegistrar {
     explicit UiModuleRegistrar(const UiModule& m);

@@ -595,6 +595,9 @@ void EntityWorld::attach(net::Client& client) {
         Event e;
         e.type = EventType::Damage;
         e.id = r.varInt();
+        e.a = r.varInt();      // damage_type network id (Client::registryId("minecraft:damage_type", ...))
+        r.varInt(), r.varInt();  // cause / direct entity id + 1
+        if (r.boolean()) r.f64(), r.f64(), r.f64();  // source position
         if (r.ok) q.events.push_back(e);
     });
     on("entity_event", [](net::Reader& r, EventQueue& q) {

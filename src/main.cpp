@@ -91,6 +91,7 @@ struct Options {
     std::wstring childScript;                    // --child-script: test script for the instance the menu starts
     std::optional<LocalServer::Config::Create> create;  // --create-*: a new world, made by the local server
     std::string friendJoin;                      // --friend-join <code>: a friend's world through the friends tunnel
+    fs::path transfer;                           // --transfer <file>: a server's transfer (cookies, the server entry)
 };
 
 void usage() {
@@ -99,7 +100,8 @@ void usage() {
         "                          [--size WxH] [--vsync] [--debug] [--bench] [--fly] [--screenshot <file.png>]\n"
         "                          [--cam x,y,z[,yaw,pitch]] [--readonly] [--selftest [--save]]\n"
         "                          [--no-gen] [--gen-radius <chunks>] [--far <blocks>] [--lod-quality <x, default 2>] [--gentest <region dir> <seed>]\n"
-        "                          [--connect <host[:port]> [--name <player>]] [--play [--lan]] [--seconds <n>] [--mods-dir <dir>]\n"
+        "                          [--connect <host[:port]> [--name <player>] [--transfer <file>]] [--play [--lan]]\n"
+        "                          [--seconds <n>] [--mods-dir <dir>]\n"
         "                          [--shaders off|low|medium|high|ultra (default high)] [--render-scale <0.33..1>]\n"
         "                          [--upscaler taa|dlss|fsr|xess] [--upscale-quality native|ultraqualityplus|ultraquality|quality|\n"
         "                           balanced|performance|ultraperformance] [--sharpness 0..1]\n"
@@ -243,6 +245,7 @@ int wmain(int argc, wchar_t** argv) {
         else if (a == L"--servers-dat") opt.serversDat = next();
         else if (a == L"--menu") opt.menu = fs::path(next()).string();
         else if (a == L"--child-script") opt.childScript = next();
+        else if (a == L"--transfer") opt.transfer = next();
         else if (a == L"--friend-join") opt.friendJoin = fs::path(next()).string(), opt.connect = "friend", opt.generate = false;
         else if (a == L"--handoff" || a == L"--window") next();  // platform/launch.h
         else if (a == L"--shaderpack" || a == L"--pack-option") packs::commandLine(a, next());  // render/packs/pack_api.h
@@ -448,6 +451,9 @@ int wmain(int argc, wchar_t** argv) {
     // --- multiplayer (--connect): log in; the world then comes from the server instead of a save ---
     std::unique_ptr<net::Client> netClient;
     std::unique_ptr<net::Session> session;
+    std::unique_ptr<net::Session> joiningSession;  // logging in on a worker (see the loop)
+    bool connectDeferred = false;  // --connect: the configuration waits for the player (prompts): joined in the loop
+    std::string serverEntry = opt.connect;  // the server list entry of this connection (a transfer keeps the first)
     if (friendTunnel.valid()) {  // the friend's world: through the tunnel's loopback port
         const u16 port = friendTunnel.get();
         if (!port) {
@@ -467,13 +473,36 @@ int wmain(int argc, wchar_t** argv) {
         sky.attach(*netClient, haveReports ? &reports : nullptr);
         packs::attachNetwork(*netClient);  // shader pack uniforms (isElytraFlying, heavyFog)
         ui.registerHandlers(*netClient);
-        if (!netClient->start({host, port, opt.name, jar})) return 1;
+        net::Client::Config config{host, port, opt.name, jar};
+        if (!opt.transfer.empty()) {  // ClientboundTransferPacket: the previous server's cookies and list entry
+            config.transfer = true;
+            std::vector<u8> bytes;
+            const auto j = readFile(opt.transfer, bytes) ? nlohmann::json::parse(bytes.begin(), bytes.end(), nullptr, false)
+                                                         : nlohmann::json();
+            if (j.is_object()) {
+                serverEntry = j.value("entry", serverEntry);
+                for (const auto& [key, value] : j.value("cookies", nlohmann::json::object()).items()) {
+                    const std::string h = value.is_string() ? value.get<std::string>() : std::string();
+                    std::string& payload = config.cookies[key];
+                    for (size_t i = 0; i + 1 < h.size(); i += 2) payload += char(std::stoi(h.substr(i, 2), nullptr, 16));
+                }
+            }
+            std::error_code ec;
+            fs::remove(opt.transfer, ec);
+        }
+        if (!netClient->start(config)) return 1;
         session = std::make_unique<net::Session>(*netClient, world, registry, reports);
         net::Dimension dim;
-        if (!session->join(30.0, player, dim)) return 1;
-        world.initEmpty(std::min(-4, dim.minY >> 4), std::max(19, (dim.minY + dim.height - 1) >> 4));
-        LOG("server  %8.1f ms  joined %s as %s at %.1f %.1f %.1f", t.ms(), opt.connect.c_str(), opt.name.c_str(),
-            player.x, player.y, player.z);
+        if (!session->join(30.0, player, dim, &connectDeferred) && !connectDeferred) return 1;
+        if (connectDeferred) {  // a pack prompt or the code of conduct: the window shows them, the join goes on there
+            joiningSession = std::move(session);
+            world.initEmpty(-4, 19);
+            LOG("server  %8.1f ms  the server's configuration needs the player; joining continues in the window", t.ms());
+        } else {
+            world.initEmpty(std::min(-4, dim.minY >> 4), std::max(19, (dim.minY + dim.height - 1) >> 4));
+            LOG("server  %8.1f ms  joined %s as %s at %.1f %.1f %.1f", t.ms(), opt.connect.c_str(), opt.name.c_str(),
+                player.x, player.y, player.z);
+        }
     }
     // --- end multiplayer ---
     if (worldTask.valid() && !worldTask.get()) return 1;
@@ -663,6 +692,7 @@ int wmain(int argc, wchar_t** argv) {
         if (!ui::writeTitleWorld(titleDir, seed, gameDataVersion(jar), pos, player.yaw, player.pitch))
             LOG("warning: could not write the title screen world to %s", titleDir.string().c_str());
     }
+    bool texturesReloaded = false;  // server resource packs: the block textures need uploading
     Game game(world, registry, terrain, renderer, player);
     if (session) session->attach(game, terrain);
     {  // Front end: title screen, lists, switching instances (ui/title.cpp)
@@ -691,6 +721,11 @@ int wmain(int argc, wchar_t** argv) {
             }
             LOG("lan: open to LAN on port %u as \"%s\"", port, motd.c_str());
             return true;
+        };
+        fe.serverAddress = serverEntry;
+        fe.reloadResources = [&] {  // server resource packs: the block textures (uploaded before the next frame)
+            texturesReloaded = registry.reloadTextures();
+            return texturesReloaded;
         };
         fe.pauseServer = [&](bool paused) {  // the local server's console (op level 4)
             if (localServer) localServer->command(paused ? "tick freeze" : "tick unfreeze");
@@ -786,7 +821,6 @@ int wmain(int argc, wchar_t** argv) {
     };
     bool escWas = false;
     std::future<bool> joining;  // singleplayer login on a worker (see the loop)
-    std::unique_ptr<net::Session> joiningSession;
     PlayerStart joinStart;
     net::Dimension joinDim;
     Timer joinTimer;
@@ -798,6 +832,10 @@ int wmain(int argc, wchar_t** argv) {
         u32 w, h;
         if (window.takeResize(w, h)) renderer.resize(w, h);
         const Timer frameTop;
+        if (texturesReloaded) {  // server resource packs changed block textures (ui/server_config.cpp)
+            texturesReloaded = false;
+            renderer.uploadTextures(registry.texturePixels(), registry.textureCount());
+        }
         renderer.beginFrame();  // low-latency sleep (Reflex / XeLL / Anti-Lag 2), frame limiter, simulation markers
         const double beginMs = frameTop.ms();
         double netMs = 0;
@@ -822,16 +860,26 @@ int wmain(int argc, wchar_t** argv) {
                 return joiningSession->join(30.0, joinStart, joinDim);
             });
         }
+        if (connectDeferred && !joining.valid()) {  // --connect after the prompts: no timeout while configuring
+            connectDeferred = false;
+            joinTimer = Timer();
+            joining = std::async(std::launch::async, [&] { return joiningSession->join(30.0, joinStart, joinDim, nullptr, true); });
+        }
         if (joining.valid() && joining.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-            if (joining.get()) {
+            const bool joined = joining.get();
+            if (joined || !localServer) {  // --connect: a failure shows as the session's disconnect
+                if (!joined && netClient->alive()) netClient->disconnect("Timed out");
                 session = std::move(joiningSession);
                 Player& p = game.player();
-                p.pos[0] = joinStart.x, p.pos[1] = joinStart.y, p.pos[2] = joinStart.z;
-                p.yaw = joinStart.yaw * kPi / 180.0f, p.pitch = joinStart.pitch * kPi / 180.0f;
-                session->setKeepForgotten(true);  // unloaded server chunks stay visible
+                if (joined) {
+                    p.pos[0] = joinStart.x, p.pos[1] = joinStart.y, p.pos[2] = joinStart.z;
+                    p.yaw = joinStart.yaw * kPi / 180.0f, p.pitch = joinStart.pitch * kPi / 180.0f;
+                }
+                if (localServer) session->setKeepForgotten(true);  // unloaded server chunks stay visible
                 session->attach(game, terrain);
                 ui.attachSession(netClient.get(), session.get());
-                LOG("server  %8.1f ms  playing through the local server as %s", joinTimer.ms(), opt.name.c_str());
+                LOG("server  %8.1f ms  playing through %s as %s", joinTimer.ms(), localServer ? "the local server" : opt.connect.c_str(),
+                    opt.name.c_str());
             } else {
                 joinFailed = true;
                 joiningSession.reset();

@@ -155,13 +155,18 @@ void Client::run() {
         std::lock_guard lock(mutex_);
         stats_.connectMs = sinceStart();
     }
-    // Handshake (intent: login), then login start with the offline-mode profile.
+    {
+        std::lock_guard lock(registryMutex_);
+        cookies_ = config_.cookies;
+    }
+    // Handshake (intent: login, or transfer after a ClientboundTransferPacket), then login start with the
+    // offline-mode profile.
     Writer hs;
     hs.varInt(0);  // the handshake phase's only packet
     hs.varInt(protocol_);
     hs.str(config_.host);
     hs.u16v(config_.port);
-    hs.varInt(2);
+    hs.varInt(config_.transfer ? 3 : 2);
     connection_.send(hs.buf);
     Writer hello;
     hello.str(config_.name);
@@ -177,24 +182,44 @@ void Client::run() {
         const int id = r.varInt();
         const Phase phase = Phase(phase_.load());
         const std::vector<std::string>& names = clientbound_[phase];
-        if (!r.ok || id < 0 || size_t(id) >= names.size()) continue;  // unknown: skip by length
+        if (!r.ok || id < 0 || size_t(id) >= names.size()) {  // unknown: skip by length
+            diagnose(phase, "#" + std::to_string(id), false, r.left(), r.left(), false);
+            continue;
+        }
         const std::string& name = names[size_t(id)];
+        const size_t size = r.left();
+        readLeft_ = size, readOverran_ = false;
         bool keepGoing, handled = false;
         if (phase == Login) {
-            keepGoing = handleLogin(name, r);
+            keepGoing = handleLogin(name, r, handled);
         } else {
             keepGoing = handleCommon(phase, name, r, handled);
             if (keepGoing && !handled)
-                keepGoing = phase == Configuration ? handleConfiguration(name, r) : handlePlay(name, r);
+                keepGoing = phase == Configuration ? handleConfiguration(name, r, handled) : handlePlay(name, r, handled);
         }
         if (!keepGoing) {
             reason.clear();
             break;
         }
+        diagnose(phase, name, handled, size, readLeft_, readOverran_);
     }
     connection_.close();
     alive_ = false;
     if (!quit_ && !reason.empty()) push(DisconnectEvent{reason});
+}
+
+void Client::diagnose(Phase phase, const std::string& name, bool handled, size_t size, size_t left, bool overran) {
+    // Packets one of the readers takes whole are understood; anything else is logged once per packet type.
+    const char* problem = !handled ? "unhandled" : overran ? "overran" : left ? "partial" : nullptr;
+    if (!problem || !diagnosed_.insert(std::string(kPhaseNames[phase]) + "/" + name + "/" + problem).second) return;
+    if (!handled)
+        LOG("net: [diag] %s packet %s ignored: nothing handles it (%zu bytes)", kPhaseNames[phase], name.c_str(), size);
+    else if (overran)
+        LOG("net: [diag] %s packet %s: a reader read past its end (%zu bytes): malformed or misread", kPhaseNames[phase],
+            name.c_str(), size);
+    else
+        LOG("net: [diag] %s packet %s read partially: %zu of %zu bytes left unread", kPhaseNames[phase], name.c_str(), left,
+            size);
 }
 
 namespace {
@@ -215,7 +240,8 @@ Writer informationPacket(const Client::Information& info) {
 }
 }  // namespace
 
-bool Client::handleLogin(const std::string& name, Reader& r) {
+bool Client::handleLogin(const std::string& name, Reader& r, bool& handled) {
+    handled = true;
     if (name == "login_compression") {
         connection_.setCompression(r.varInt());
     } else if (name == "custom_query") {  // no plugin channels: answer "not understood"
@@ -224,10 +250,7 @@ bool Client::handleLogin(const std::string& name, Reader& r) {
         w.boolean(false);
         send(Login, "custom_query_answer", w);
     } else if (name == "cookie_request") {
-        Writer w;
-        w.str(r.str());
-        w.boolean(false);
-        send(Login, "cookie_response", w);
+        send(Login, "cookie_response", cookieResponse(r));
     } else if (name == "hello") {
         // Online mode. To add: Microsoft account sign-in (MSA -> Xbox Live -> XSTS -> Minecraft services
         // access token), RSA-encrypt a random shared secret and the challenge with the server's public key,
@@ -241,6 +264,12 @@ bool Client::handleLogin(const std::string& name, Reader& r) {
     } else if (name == "login_finished") {
         r.skip(16);
         const std::string_view player = r.str();
+        const i32 properties = r.varInt();  // the profile's properties (skin textures): name, value, signature
+        for (i32 i = 0; i < properties && r.ok; ++i) {
+            r.str(), r.str();
+            if (r.boolean()) r.str();
+        }
+        r.skip(16);  // session id
         LOG("net: logged in as %.*s (protocol %d)", int(player.size()), player.data(), protocol_);
         switchPhase(Login, "login_acknowledged", Configuration);
         Writer brand;
@@ -253,7 +282,10 @@ bool Client::handleLogin(const std::string& name, Reader& r) {
             information = info_;
         }
         send(Configuration, "client_information", informationPacket(information));
+    } else {
+        handled = false;
     }
+    noteRead(r);
     return true;
 }
 
@@ -265,6 +297,20 @@ void Client::setInformation(const Information& info) {
     if (send(Play, "client_information", informationPacket(info)))  // ignored outside the play phase
         LOG("net: client information: main hand %s, skin parts 0x%02X, server listing %s", info.mainHand ? "right" : "left",
             info.modelParts, info.allowListing ? "on" : "off");
+}
+
+Writer Client::cookieResponse(Reader& r) {  // ClientboundCookieRequestPacket: the stored payload, if any
+    const std::string key(r.str());
+    Writer w;
+    w.str(key);
+    std::lock_guard lock(registryMutex_);
+    auto it = cookies_.find(key);
+    w.boolean(it != cookies_.end());
+    if (it != cookies_.end()) {
+        w.varInt(i32(it->second.size()));
+        w.bytes(it->second.data(), it->second.size());
+    }
+    return w;
 }
 
 // Packets shared by the configuration and play phases.
@@ -282,54 +328,177 @@ bool Client::handleCommon(Phase phase, const std::string& name, Reader& r, bool&
         push(DisconnectEvent{componentText(r.nbt(), &lang_)});
         return false;
     } else if (name == "cookie_request") {
-        Writer w;
-        w.str(r.str());
-        w.boolean(false);
-        send(phase, "cookie_response", w);
-    } else if (name == "resource_pack_push") {
-        const std::string_view id = r.bytes(16), url = r.str();
-        LOG("net: server resource pack %.*s declined (not supported)", int(url.size()), url.data());
-        Writer w;
-        w.bytes(id.data(), id.size());
-        w.varInt(1);  // declined
-        send(phase, "resource_pack", w);
+        send(phase, "cookie_response", cookieResponse(r));
+    } else if (name == "store_cookie") {  // ClientboundStoreCookiePacket: kept for this connection and transfers
+        const std::string key(r.str()), payload(r.byteArray());
+        if (r.ok && payload.size() <= 5120) {
+            std::lock_guard lock(registryMutex_);
+            cookies_[key] = payload;
+        }
+    } else if (name == "resource_pack_push") {  // answered by the main thread (ui/server_config.cpp)
+        PackPushEvent e;
+        e.id = std::string(r.bytes(16));
+        e.url = std::string(r.str());
+        e.hash = std::string(r.str());
+        e.required = r.boolean();
+        if (r.boolean()) e.prompt = std::string(r.nbt());
+        if (r.ok) pushCommon(std::move(e));
+    } else if (name == "resource_pack_pop") {
+        PackPopEvent e;
+        if (r.boolean()) e.id = std::string(r.bytes(16));
+        if (r.ok) pushCommon(std::move(e));
+    } else if (name == "transfer") {  // ClientCommonPacketListenerImpl.handleTransfer: this connection ends here
+        TransferEvent e;
+        e.host = std::string(r.str());
+        e.port = r.varInt();
+        if (!r.ok) return true;
+        LOG("net: transfer to %s:%d", e.host.c_str(), e.port);
+        pushCommon(std::move(e));
+        auto it = lang_.find("disconnect.transfer");
+        push(DisconnectEvent{it != lang_.end() ? it->second : "Transferred to another server"});
+        return false;
+    } else if (name == "custom_report_details") {  // shown in crash reports
+        std::map<std::string, std::string> details;
+        const i32 n = r.varInt();
+        for (i32 i = 0; i < n && r.ok; ++i) {
+            std::string key(r.str());
+            details[key] = std::string(r.str());
+        }
+        if (r.ok) {
+            std::lock_guard lock(registryMutex_);
+            reportDetails_ = std::move(details);
+        }
+    } else if (name == "update_tags") {  // both phases: replaces the tags of each registry listed
+        std::unordered_map<std::string, std::unordered_map<std::string, std::vector<int>>> tags;
+        const i32 registries = r.varInt();
+        for (i32 i = 0; i < registries && r.ok; ++i) {
+            auto& reg = tags[std::string(r.str())];
+            const i32 n = r.varInt();
+            for (i32 t = 0; t < n && r.ok; ++t) {
+                std::vector<int>& ids = reg[std::string(r.str())];
+                const i32 count = r.varInt();
+                for (i32 k = 0; k < count && r.ok; ++k) ids.push_back(r.varInt());
+            }
+        }
+        if (r.ok) {
+            std::lock_guard lock(registryMutex_);
+            for (auto& [registry, t] : tags) tags_[registry] = std::move(t);
+            if (phase == Play) ++registryVersion_;
+        }
     } else {
         handled = false;
     }
+    if (handled) noteRead(r);
     return true;
 }
 
-const std::vector<Client::RegistryEntry>& Client::registryEntries(const std::string& registry) const {
-    static const std::vector<RegistryEntry> kNone;
-    auto it = registries_.find(registry);
-    return it == registries_.end() ? kNone : it->second;
+void Client::pushCommon(CommonEvent e) {
+    std::lock_guard lock(mutex_);
+    common_.push_back(std::move(e));
 }
 
-bool Client::handleConfiguration(const std::string& name, Reader& r) {
+void Client::pollCommon(std::vector<CommonEvent>& out) {
+    std::lock_guard lock(mutex_);
+    for (CommonEvent& e : common_) out.push_back(std::move(e));
+    common_.clear();
+}
+
+bool Client::hasCommon() const {
+    std::lock_guard lock(mutex_);
+    return !common_.empty();
+}
+
+void Client::sendPackStatus(const std::string& id, int action) {
+    Writer w;
+    w.bytes(id.data(), id.size());
+    w.varInt(action);
+    std::lock_guard lock(sendMutex_);
+    if (phase_ != Login) sendRaw(Phase(phase_.load()), "resource_pack", w);
+}
+
+void Client::acceptCodeOfConduct() { send(Configuration, "accept_code_of_conduct", Writer{}); }
+
+void Client::disconnect(const std::string& reason) {
+    push(DisconnectEvent{reason});
+    quit_ = true;
+    connection_.close();
+}
+
+std::map<std::string, std::string> Client::cookies() const {
+    std::lock_guard lock(registryMutex_);
+    return cookies_;
+}
+
+std::string Client::serverBrand() const {
+    std::lock_guard lock(registryMutex_);
+    return serverBrand_;
+}
+
+std::map<std::string, std::string> Client::reportDetails() const {
+    std::lock_guard lock(registryMutex_);
+    return reportDetails_;
+}
+
+std::vector<Client::RegistryEntry> Client::registryEntries(const std::string& registry) const {
+    std::lock_guard lock(registryMutex_);
+    auto it = registries_.find(registry);
+    return it == registries_.end() ? std::vector<RegistryEntry>{} : it->second;
+}
+
+std::string Client::registryId(const std::string& registry, int networkId) const {
+    std::lock_guard lock(registryMutex_);
+    auto it = registries_.find(registry);
+    return it == registries_.end() || networkId < 0 || size_t(networkId) >= it->second.size()
+               ? std::string()
+               : it->second[size_t(networkId)].id;
+}
+
+std::vector<int> Client::tagEntries(const std::string& registry, const std::string& tag) const {
+    std::lock_guard lock(registryMutex_);
+    auto it = tags_.find(registry);
+    if (it == tags_.end()) return {};
+    auto t = it->second.find(tag.find(':') == std::string::npos ? "minecraft:" + tag : tag);
+    return t == it->second.end() ? std::vector<int>{} : t->second;
+}
+
+std::vector<std::string> Client::enabledFeatures() const {
+    std::lock_guard lock(registryMutex_);
+    return features_;
+}
+
+bool Client::handleConfiguration(const std::string& name, Reader& r, bool& handled) {
+    handled = true;
     if (name == "select_known_packs") {
         // Claim no packs, so the server sends every registry entry in full (dimension types included).
+        const i32 n = r.varInt();
+        for (i32 i = 0; i < n && r.ok; ++i) r.str(), r.str(), r.str();  // namespace, id, version
         Writer w;
         w.varInt(0);
         send(Configuration, "select_known_packs", w);
     } else if (name == "registry_data") {
+        // RegistryDataCollector: a registry sent again (reconfiguration) replaces its previous entries.
         const std::string registry(r.str());
         const i32 n = r.varInt();
-        if (registry == "minecraft:worldgen/biome") biomeBits_ = std::max(1, ceilLog2(u32(n)));
-        static const char* const kKept[] = {"minecraft:enchantment", "minecraft:painting_variant", "minecraft:instrument",
-                                            "minecraft:banner_pattern"};
-        std::vector<RegistryEntry>* kept = nullptr;
-        for (const char* k : kKept)
-            if (registry == k) kept = &registries_[registry], kept->clear();
+        if (registry == "minecraft:worldgen/biome") biomeBits_ = std::max(1, ceilLog2(u32(n))), biomeIds_.clear();
+        if (registry == "minecraft:dimension_type") dimensionTypes_.clear();
+        std::vector<RegistryEntry> entries;
         for (i32 i = 0; i < n && r.ok; ++i) {
             const std::string id(r.str());
             const std::string_view data = r.boolean() ? r.nbt() : std::string_view{};
-            if (kept) kept->push_back({id, std::string(data)});
+            entries.push_back({id, std::string(data)});
             if (registry == "minecraft:dimension_type") dimensionTypes_.push_back(parseDimensionType(id, data));
-            if (registry == "minecraft:worldgen/biome") {
-                if (i == 0) biomeIds_.clear();
-                biomeIds_.push_back(World::biomeId(id));
-            }
+            if (registry == "minecraft:worldgen/biome") biomeIds_.push_back(World::biomeId(id));
         }
+        std::lock_guard lock(registryMutex_);
+        registries_[registry] = std::move(entries);
+    } else if (name == "update_enabled_features") {  // the world's feature flags ("minecraft:vanilla", experiments)
+        std::vector<std::string> features;
+        const i32 n = r.varInt();
+        for (i32 i = 0; i < n && r.ok; ++i) features.emplace_back(r.str());
+        std::lock_guard lock(registryMutex_);
+        features_ = std::move(features);
+    } else if (name == "reset_chat") {
+        pushCommon(ResetChatEvent{});
     } else if (name == "custom_payload") {  // Fabric servers' handshake (net/fabric_sync.h)
         const std::string channel(r.str());
         Writer w;
@@ -348,27 +517,42 @@ bool Client::handleConfiguration(const std::string& name, Reader& r) {
             }
             w.str("fabric:registry/sync/complete");
             send(Configuration, "custom_payload", w);
+        } else if (channel == "minecraft:brand") {  // BrandPayload
+            const std::string brand(r.str());
+            std::lock_guard lock(registryMutex_);
+            serverBrand_ = brand;
+        } else if (diagnosed_.insert("configuration/custom_payload/" + channel).second) {
+            LOG("net: [diag] configuration custom_payload %s ignored (%zu bytes)", channel.c_str(), r.left());
         }
-    } else if (name == "code_of_conduct") {
-        const std::string_view text = r.str();
-        LOG("net: server code of conduct:\n%.*s", int(text.size()), text.data());
-        send(Configuration, "accept_code_of_conduct", Writer{});
+        r.skip(r.left());  // payloads of channels we do not speak are discarded (the game's DiscardedPayload)
+    } else if (name == "code_of_conduct") {  // answered by the main thread (ui/server_config.cpp)
+        pushCommon(CodeOfConductEvent{std::string(r.str())});
     } else if (name == "finish_configuration") {
+        ++registryVersion_;
         switchPhase(Configuration, "finish_configuration", Play);
+        pushCommon(ConfigurationEvent{false});
+    } else {
+        handled = false;
     }
+    if (handled) noteRead(r);
     return true;
 }
 
-bool Client::handlePlay(const std::string& name, Reader& r) {
+bool Client::handlePlay(const std::string& name, Reader& r, bool& handled) {
+    handled = true;
+    bool peeked = false;
     if (auto p = playPeeks_.find(name); p != playPeeks_.end())
         for (const PacketHandler& peek : p->second) {
             Reader copy = r;
             peek(copy);
+            noteRead(copy);
+            peeked = true;
         }
     if (auto h = playHandlers_.find(name); h != playHandlers_.end()) {
         for (auto& handler : h->second) {
             Reader copy = r;
             handler(copy);
+            noteRead(copy);
         }
         return true;
     }
@@ -435,7 +619,10 @@ bool Client::handlePlay(const std::string& name, Reader& r) {
     } else if (name == "forget_level_chunk") {
         const i64 v = r.i64v();
         push(ForgetEvent{int(i32(v & 0xFFFFFFFF)), int(i32(v >> 32))});
+    } else if (name == "chunk_batch_start" || name == "bundle_delimiter") {
+        // Nothing to do: batches are acknowledged when they finish; bundled packets are applied in order anyway.
     } else if (name == "chunk_batch_finished") {
+        r.varInt();  // batch size
         Writer w;
         w.f32(kChunksPerTick);
         send(Play, "chunk_batch_received", w);
@@ -463,10 +650,16 @@ bool Client::handlePlay(const std::string& name, Reader& r) {
             simulationDistance_ = r.varInt();
             r.boolean(), r.boolean(), r.boolean();  // reduced debug info, death screen, limited crafting
         }
-        const i32 type = r.varInt();
+        const i32 type = r.varInt();  // CommonPlayerSpawnInfo
         const std::string level(r.str());
         r.i64v();  // hashed seed
         e.gameMode = r.varInt();
+        r.u8v();                 // previous game mode
+        r.boolean(), r.boolean();  // debug, flat
+        if (r.boolean()) r.str(), r.i64v();  // last death location
+        r.varInt(), r.varInt();  // portal cooldown, sea level
+        if (e.respawn) r.u8v();  // data to keep
+        else r.boolean(), r.boolean();  // online mode, enforces secure chat
         if (!r.ok || type < 0 || size_t(type) >= dimensionTypes_.size()) {
             LOG("net: unknown dimension type %d", type);
             return true;
@@ -537,9 +730,15 @@ bool Client::handlePlay(const std::string& name, Reader& r) {
         const std::string text = componentText(r.nbt(), &lang_);
         const std::string sender = r.varInt() != 0 ? componentText(r.nbt(), &lang_) : "?";
         chat("<" + sender + "> " + text);
-    } else if (name == "start_configuration") {
+    } else if (name == "start_configuration") {  // reconfiguration: the level goes until the next login
         switchPhase(Play, "configuration_acknowledged", Configuration);
+        push(ReconfigureEvent{});
+        pushCommon(ConfigurationEvent{true});
+    } else {
+        handled = peeked;
+        return true;
     }
+    noteRead(r);
     return true;
 }
 

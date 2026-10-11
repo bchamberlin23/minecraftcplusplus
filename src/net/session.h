@@ -20,8 +20,11 @@ public:
     bool tracksChunk(int cx, int cz) const { return chunks_.count(World::chunkKey(cx, cz)) != 0; }  // loaded by the server
     Session(Client& client, World& world, BlockRegistry& registry, const GameReports& reports);
 
-    // Before the window opens: waits for the login and the first position from the server.
-    bool join(double timeoutSeconds, PlayerStart& start, Dimension& dimension);
+    // Before the window opens: waits for the login and the first position from the server. With `deferred`, returns
+    // early (false, *deferred set) when the configuration needs the main thread (Client::pollCommon: pack and code of
+    // conduct prompts); `patient`: the timeout only runs once the configuration is over (the player answers prompts).
+    bool join(double timeoutSeconds, PlayerStart& start, Dimension& dimension, bool* deferred = nullptr,
+              bool patient = false);
     // Starts applying the connection to the game (installs Game::onEdit).
     void attach(Game& game, Terrain& terrain);
     // Call once per frame before the game update.
