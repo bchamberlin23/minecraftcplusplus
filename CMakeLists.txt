@@ -138,6 +138,7 @@ add_shader(pathtrace.hlsl PtAccumCS cs_6_5)
 add_shader(pathtrace.hlsl PtComposeCS cs_6_5)
 add_shader(terrain.hlsl TerrainFwdPtPS ps_6_5)
 add_shader(pathtrace.hlsl PtClearCS cs_6_5)
+add_shader(pathtrace.hlsl EntityGenCS cs_6_5)
 add_shader(pathtrace.hlsl LightGatherCS cs_6_5)
 add_shader(pathtrace.hlsl LightCdfCS cs_6_5)
 # Vendor upscaler inputs (src/render/upscalers).

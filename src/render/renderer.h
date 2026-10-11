@@ -93,6 +93,16 @@ struct ShadowContext {
     D3D12_GPU_DESCRIPTOR_HANDLE blockTextures;
     D3D12_GPU_VIRTUAL_ADDRESS textureRemap;
 };
+// Posed entity geometry of this frame for the path tracer (Shaders: Path Traced), in entity.hlsl's layouts: model
+// quads (static, 96 bytes: pos[4] in model pixels, uv[4], normal, part) referenced by (quad, instance) pairs whose
+// instance (32 bytes, matrixBase first) selects the part matrices (3 float4 rows: part space -> camera-relative
+// blocks), and free quads (128 bytes, camera-relative pos[4] first). Offsets are bytes into `frameData`.
+struct RtEntities {
+    ID3D12Resource* modelQuads = nullptr;
+    ID3D12Resource* frameData = nullptr;
+    u64 matrices = 0, instances = 0, refs = 0, freeQuads = 0;
+    u32 refCount = 0, freeCount = 0;
+};
 class RenderPass {
 public:
     static constexpr DXGI_FORMAT kMotionFormat = DXGI_FORMAT_R16G16_FLOAT;
@@ -104,6 +114,8 @@ public:
     virtual void prepare(const PassContext&) {}
     // Pipeline shadow maps, once per updated cascade, after prepare (World-stage passes only).
     virtual void drawShadow(const ShadowContext&) {}
+    // Path tracing: this frame's posed geometry after prepare (World-stage passes); false = none.
+    virtual bool rtEntities(u32 /*frame*/, RtEntities&) { return false; }
 };
 enum class PassStage {
     Sky,    // first: after the clear, before any terrain (depth test/write off is up to the pass)

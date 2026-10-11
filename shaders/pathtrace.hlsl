@@ -123,6 +123,37 @@ void BlasGenCS(uint id : SV_DispatchThreadID) {
     gLights[j.ptIndex * kSectionLights + i] = uint2(kind << 30 | local, packRgb9e5(le));
 }
 
+// Entities: this frame's posed model quads and free quads (entity.hlsl layouts) -> camera-relative triangles.
+ByteAddressBuffer gEntQuads : register(t6, space4);
+ByteAddressBuffer gEntFrame : register(t7, space4);
+
+[numthreads(64, 1, 1)]
+void EntityGenCS(uint id : SV_DispatchThreadID) {
+    uint refs = gPtEntity.w & 0xFFFFF, frees = gPtEntity2.x;
+    if (id >= refs + frees) return;
+    float3 c[4];
+    if (id < refs) {
+        uint2 ref = gEntFrame.Load2(gPtEntity.z + id * 8);
+        uint q = ref.x * 96;
+        uint part = gEntQuads.Load(q + 92);
+        uint m = gPtEntity.x + (gEntFrame.Load(gPtEntity.y + ref.y * 32) + part) * 48;
+        float4 r0 = asfloat(gEntFrame.Load4(m)), r1 = asfloat(gEntFrame.Load4(m + 16)), r2 = asfloat(gEntFrame.Load4(m + 32));
+        [unroll] for (uint k = 0; k < 4; ++k) {
+            float4 p = float4(asfloat(gEntQuads.Load3(q + k * 12)) / 16.0, 1);
+            c[k] = float3(dot(r0, p), dot(r1, p), dot(r2, p));
+        }
+    } else {
+        uint f = gPtEntity2.y + (id - refs) * 128;
+        [unroll] for (uint k = 0; k < 4; ++k) c[k] = asfloat(gEntFrame.Load3(f + k * 12));
+    }
+    // The entity draws use triangles (0,1,2) (0,2,3); the shared index buffer (v0,v1,v2) (v2,v1,v3).
+    uint addr = id * 48;
+    gVertices.Store3(addr, asuint(c[1]));
+    gVertices.Store3(addr + 12, asuint(c[2]));
+    gVertices.Store3(addr + 24, asuint(c[0]));
+    gVertices.Store3(addr + 36, asuint(c[3]));
+}
+
 // Light counts of the sections being built start at zero.
 [numthreads(64, 1, 1)]
 void PtClearCS(uint id : SV_DispatchThreadID) {
@@ -226,8 +257,7 @@ float3 sunLight(float3 p, float3 n, float dist, bool foliage, inout Rng rng) {
 
 // Radiance leaving a surface hit by a bounce ray (towards the ray), with `bounces` more bounces after it.
 float3 bounceRadiance(RtSurface s, float dist, uint bounces, bool emissive, inout Rng rng) {
-    float4 tex = gTextures.SampleLevel(gSampler, float3(s.uv, s.layer), 0);
-    float3 albedo = srgbToLinear(tex.rgb * s.tint);
+    float3 albedo = rtAlbedo(s);
     uint mat = matClass(s.mat);
     bool foliage = mat == kMatLeaves || mat == kMatPlant;
     float3 light = sunLight(s.pos, s.n, dist, foliage, rng);
@@ -236,8 +266,7 @@ float3 bounceRadiance(RtSurface s, float dist, uint bounces, bool emissive, inou
         RtSurface h;
         float3 trans;
         if (rtClosestThrough(s.pos + s.n * rayEps(dist), d, gPtParams.x * 1.5, h, trans)) {
-            float4 t2 = gTextures.SampleLevel(gSampler, float3(h.uv, h.layer), 0);
-            float3 a2 = srgbToLinear(t2.rgb * h.tint);
+            float3 a2 = rtAlbedo(h);
             light += trans * (a2 * (sunLight(h.pos, h.n, dist, false, rng) + cachedLight(h.sky, h.block, h.n)) +
                               emission(a2, matClass(h.mat)));
         } else {

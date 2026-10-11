@@ -23,6 +23,8 @@ cbuffer PathTrace : register(b4) {
     uint4 gPtSlots;    // x = previous history slot, y = this frame's history slot
     float4 gPtMove;    // camera position - previous camera position (blocks)
     uint4 gPtLights;   // x = light sections this frame, y = their first element, z = frame light capacity
+    uint4 gPtEntity;   // entities (RtEntities, byte offsets): x = matrices, y = instances, z = refs, w = ref count
+    uint4 gPtEntity2;  // x = free quads, y = their offset
 };
 
 // Path tracer targets (render resolution): PathTracer::Tex / Rw.
@@ -116,10 +118,26 @@ bool rtAlphaTest(uint slot, uint kind, uint prim, float2 bary, float3 pos) {
     return gTextures.SampleLevel(gSampler, uvl, 0).a >= 0.5;
 }
 
+static const uint kRtEntities = 0xFFFFFF;  // InstanceID of the entities' instance (posed triangles, no materials)
+static const uint kKindEntity = 4;
+
+float3 rtAlbedo(RtSurface s) {
+    if (s.kind == kKindEntity) return 0.3;  // (mob textures are not looked up: a neutral grey)
+    return srgbToLinear(gTextures.SampleLevel(gSampler, float3(s.uv, s.layer), 0).rgb * s.tint);
+}
+
 RtSurface rtSurface(uint slot, uint kind, uint prim, float2 bary, float3 origin, float3 dir, float t) {
     RtSurface s;
     s.pos = origin + dir * t;
     s.kind = kind;
+    if (slot == kRtEntities) {
+        s = (RtSurface)0;
+        s.pos = origin + dir * t;
+        s.n = -dir;
+        s.kind = kKindEntity;
+        s.sky = 15;
+        return s;
+    }
     uint quad = prim >> 1;
     uint baseLayer;
     float3 uvl = rtUvLayer(slot, kind, prim, bary, s.pos, baseLayer);
@@ -287,8 +305,7 @@ float3 envBrdfApprox2(float3 specularColor, float alpha, float NoV) {
 
 // Radiance leaving a surface hit by a reflection ray: hard sun / moon shadow, the light levels for the rest.
 float3 rtHitRadiance(RtSurface h, float dist) {
-    float4 tex = gTextures.SampleLevel(gSampler, float3(h.uv, h.layer), 0);
-    float3 albedo = srgbToLinear(tex.rgb * h.tint);
+    float3 albedo = rtAlbedo(h);
     float3 light = cachedLight(h.sky, h.block, h.n);
     float ndl = dot(h.n, gLightDir.xyz);
     if (ndl > 0 && dot(gLightColor.rgb, 1) > 0)

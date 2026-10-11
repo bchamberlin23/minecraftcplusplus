@@ -94,6 +94,14 @@ struct Renderer::PathTracer {
     ComPtr<ID3D12Device5> dev5_;
     ComPtr<ID3D12PipelineState> psoBlasGen_, psoTrace_, psoAccum_, psoClear_, psoGather_, psoCdf_, psoCompose_;
     bool rrUsed_ = false;  // DLSS-RR denoised the last frame
+    // Entities (RenderPass::rtEntities): one BLAS rebuilt every frame from the posed triangles.
+    static constexpr u32 kEntityQuads = 1 << 18;
+    bool buildEntities(ID3D12GraphicsCommandList4* list, u32 frame, D3D12_GPU_VIRTUAL_ADDRESS cb, D3D12_GPU_VIRTUAL_ADDRESS ptCb);
+    ComPtr<ID3D12PipelineState> psoEntity_;
+    ComPtr<ID3D12Resource> entityVerts_, entityBlas_, entityScratch_;
+    u64 entityBlasBytes_ = 0, entityScratchBytes_ = 0;
+    ID3D12Resource *entQuadsSrc_ = nullptr, *entFrameSrc_ = nullptr;
+    u32 entityQuads_ = 0;
     ComPtr<ID3D12PipelineState> psoFwd_;
     ComPtr<ID3D12Resource> hitDist_;  // R32_FLOAT specular hit distance (u19)
     ComPtr<ID3D12Resource> targets_[TgtCount], reservoirs_[2];

@@ -12,6 +12,7 @@
 #include "TerrainFwdVS.h"
 #include "render/upscalers/upscalers.h"
 #include "PtClearCS.h"
+#include "EntityGenCS.h"
 #include "LightGatherCS.h"
 #include "LightCdfCS.h"
 
@@ -36,6 +37,8 @@ struct PtConstants {
     u32 slots[4];
     float move[4];
     u32 lights[4];
+    u32 entity[4];
+    u32 entity2[4];
 };
 static_assert(sizeof(PtConstants) <= Renderer::PathTracer::kConstantBytes);
 
@@ -98,7 +101,8 @@ bool Renderer::PathTracer::create() {
     };
     if (!compute(g_BlasGenCS, sizeof(g_BlasGenCS), psoBlasGen_) || !compute(g_PathTraceCS, sizeof(g_PathTraceCS), psoTrace_) ||
         !compute(g_PtAccumCS, sizeof(g_PtAccumCS), psoAccum_) || !compute(g_PtComposeCS, sizeof(g_PtComposeCS), psoCompose_) || !compute(g_PtClearCS, sizeof(g_PtClearCS), psoClear_) ||
-        !compute(g_LightGatherCS, sizeof(g_LightGatherCS), psoGather_) || !compute(g_LightCdfCS, sizeof(g_LightCdfCS), psoCdf_))
+        !compute(g_LightGatherCS, sizeof(g_LightGatherCS), psoGather_) || !compute(g_LightCdfCS, sizeof(g_LightCdfCS), psoCdf_) ||
+        !compute(g_EntityGenCS, sizeof(g_EntityGenCS), psoEntity_))
         return false;
 
     {  // translucent terrain with traced reflections (as Shading's psoFwd_)
@@ -133,6 +137,8 @@ bool Renderer::PathTracer::create() {
     instances_ = r.createBuffer(u64(kInstanceBytes) * kMaxSections * Renderer::kFrames, D3D12_HEAP_TYPE_UPLOAD);
     constants_ = r.createBuffer(u64(kConstantBytes) * Renderer::kFrames, D3D12_HEAP_TYPE_UPLOAD);
     vertices_ = r.createBuffer(u64(kQuadsPerFrame) * 4 * 12, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    entityVerts_ = r.createBuffer(u64(kEntityQuads) * 4 * 12, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    if (!entityVerts_) return false;
     postbuild_ = r.createBuffer(u64(kMaxJobs) * 8 * Renderer::kFrames, D3D12_HEAP_TYPE_DEFAULT,
                                 D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
     postbuildReadback_ = r.createBuffer(u64(kMaxJobs) * 8 * Renderer::kFrames, D3D12_HEAP_TYPE_READBACK);
@@ -594,6 +600,9 @@ void Renderer::PathTracer::build(ID3D12GraphicsCommandList* list, const Shading:
     }
 
     partMs_[2] += timer.ms();
+    // ---- entities: one BLAS of this frame's posed triangles (rebuilt every frame) ----
+    const bool entities = buildEntities(list4.Get(), fi, cb, ptCb);
+
     // ---- TLAS: every section in the radius with a BLAS, camera-relative ----
     // Built in cached memory, then copied: the descriptor's bit fields would read back from the write-combined upload
     // heap (microseconds each).
@@ -617,6 +626,16 @@ void Renderer::PathTracer::build(ID3D12GraphicsCommandList* list, const Shading:
         d.AccelerationStructure = asVa(en.blas);
     }
     instanceCount_ = count;
+    if (entities && count < instances.size() + 1) {
+        instances.resize(count + 1);
+        inst = instances.data();
+        D3D12_RAYTRACING_INSTANCE_DESC& d = inst[count++];
+        d = {};
+        d.Transform[0][0] = d.Transform[1][1] = d.Transform[2][2] = 1.0f;  // already camera-relative
+        d.InstanceID = 0xFFFFFF;
+        d.InstanceMask = 1;
+        d.AccelerationStructure = entityBlas_->GetGPUVirtualAddress();
+    }
     std::memcpy(instancesMapped_ + size_t(fi) * kMaxSections * kInstanceBytes, inst, size_t(count) * kInstanceBytes);
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS tin{};
     tin.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
@@ -743,6 +762,113 @@ ID3D12PipelineState* Renderer::PathTracer::bindTranslucent(ID3D12GraphicsCommand
     list->SetGraphicsRootDescriptorTable(RootPtUav, r.gpuDescriptor(descBase_ + kTableSize));
     list->SetGraphicsRootConstantBufferView(RootPtConstants, constants_->GetGPUVirtualAddress() + u64(frame) * kConstantBytes);
     return psoFwd_.Get();
+}
+
+bool Renderer::PathTracer::buildEntities(ID3D12GraphicsCommandList4* list, u32 fi, D3D12_GPU_VIRTUAL_ADDRESS cb,
+                                         D3D12_GPU_VIRTUAL_ADDRESS ptCb) {
+    RtEntities ents;
+    bool found = false;
+    for (RenderPass* p : r.passes_[int(PassStage::World)])
+        if (p->rtEntities(fi, ents)) {
+            found = true;
+            break;
+        }
+    if (!found || ents.refCount + ents.freeCount == 0) return false;
+    const u32 quads = std::min<u32>(ents.refCount + ents.freeCount, kEntityQuads);
+    if (ents.refCount > quads) ents.refCount = quads;
+    ents.freeCount = quads - ents.refCount;
+    if (ents.modelQuads != entQuadsSrc_ || ents.frameData != entFrameSrc_) {  // raw views (t6, t7 space4), once
+        r.waitIdle();
+        entQuadsSrc_ = ents.modelQuads, entFrameSrc_ = ents.frameData;
+        ID3D12Resource* res[2] = {ents.modelQuads, ents.frameData};
+        for (u32 i = 0; i < 2; ++i) {
+            D3D12_SHADER_RESOURCE_VIEW_DESC s{};
+            s.Format = DXGI_FORMAT_R32_TYPELESS;
+            s.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+            s.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            s.Buffer.NumElements = u32(res[i]->GetDesc().Width / 4);
+            s.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
+            r.device_->CreateShaderResourceView(res[i], &s, r.cpuDescriptor(descBase_ + 6 + i));
+        }
+    }
+    auto* k = reinterpret_cast<PtConstants*>(constantsMapped_ + size_t(fi) * kConstantBytes);
+    const u32 e[4] = {u32(ents.matrices), u32(ents.instances), u32(ents.refs), ents.refCount};
+    const u32 e2[4] = {ents.freeCount, u32(ents.freeQuads), 0, 0};
+    std::memcpy(k->entity, e, 16);
+    std::memcpy(k->entity2, e2, 16);
+
+    Shading& sh = *r.shading_;
+    sh.bindCompute(list, cb);
+    list->SetPipelineState(psoEntity_.Get());
+    list->SetComputeRootUnorderedAccessView(RootCounts, entityVerts_->GetGPUVirtualAddress());
+    list->SetComputeRootDescriptorTable(RootPtSrv, r.gpuDescriptor(descBase_));
+    list->SetComputeRootDescriptorTable(RootPtUav, r.gpuDescriptor(descBase_ + kTableSize));
+    list->SetComputeRootConstantBufferView(RootPtConstants, ptCb);
+    list->Dispatch((quads + 63) / 64, 1, 1);
+    D3D12_RESOURCE_BARRIER b{};
+    b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    b.Transition.pResource = entityVerts_.Get();
+    b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    b.Transition.StateBefore = kUav;
+    b.Transition.StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    list->ResourceBarrier(1, &b);
+
+    // Index buffer: 65536 quads at most per geometry.
+    D3D12_RAYTRACING_GEOMETRY_DESC geo[(kEntityQuads + 65535) / 65536]{};
+    u32 n = 0;
+    for (u32 first = 0; first < quads; first += 65536, ++n) {
+        const u32 count = std::min(quads - first, 65536u);
+        D3D12_RAYTRACING_GEOMETRY_DESC& g = geo[n];
+        g.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
+        g.Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
+        g.Triangles.IndexBuffer = r.indexBuffer_->GetGPUVirtualAddress();
+        g.Triangles.IndexCount = count * 6;
+        g.Triangles.IndexFormat = DXGI_FORMAT_R32_UINT;
+        g.Triangles.VertexBuffer = {entityVerts_->GetGPUVirtualAddress() + u64(first) * 48, 12};
+        g.Triangles.VertexCount = count * 4;
+        g.Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
+    }
+    D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS in{};
+    in.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
+    in.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD;
+    in.NumDescs = n;
+    in.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
+    in.pGeometryDescs = geo;
+    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO info{};
+    dev5_->GetRaytracingAccelerationStructurePrebuildInfo(&in, &info);
+    if (!entityBlas_ || entityBlasBytes_ < info.ResultDataMaxSizeInBytes) {
+        retire(entityBlas_);
+        entityBlasBytes_ = info.ResultDataMaxSizeInBytes * 3 / 2;
+        D3D12_HEAP_PROPERTIES hp{};
+        hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC d{};
+        d.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        d.Width = entityBlasBytes_;
+        d.Height = d.DepthOrArraySize = d.MipLevels = 1;
+        d.SampleDesc.Count = 1;
+        d.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        d.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        if (!check(r.device_->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &d, kAs, nullptr, IID_PPV_ARGS(&entityBlas_)),
+                   "entity BLAS"))
+            return false;
+    }
+    if (info.ScratchDataSizeInBytes > entityScratchBytes_) {
+        retire(entityScratch_);
+        entityScratchBytes_ = info.ScratchDataSizeInBytes * 3 / 2;
+        entityScratch_ = r.createBuffer(entityScratchBytes_, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    }
+    if (!entityScratch_) return false;
+    D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC d{};
+    d.DestAccelerationStructureData = entityBlas_->GetGPUVirtualAddress();
+    d.Inputs = in;
+    d.ScratchAccelerationStructureData = entityScratch_->GetGPUVirtualAddress();
+    list->BuildRaytracingAccelerationStructure(&d, 0, nullptr);
+    D3D12_RESOURCE_BARRIER uav{};
+    uav.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    uav.UAV.pResource = entityBlas_.Get();
+    list->ResourceBarrier(1, &uav);
+    entityQuads_ = quads;
+    return true;
 }
 
 std::string Renderer::PathTracer::status() const {
