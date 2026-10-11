@@ -169,6 +169,7 @@ struct Visuals::Impl {
     ComPtr<ID3D12PipelineState> psoCutMv, psoTrMv, psoGlintMv, psoPartCutMv, psoShadow;
     // Block cracks: multiplied into the colour; with the shader pipeline alpha blended into the entity layer.
     ComPtr<ID3D12PipelineState> psoCrumble, psoCrumbleMv;
+    ComPtr<ID3D12PipelineState> psoAdd;  // BlendFunction.LIGHTNING: src alpha + dst (lightning bolts)
     ComPtr<ID3D12Resource> store, upload, itemTex, fontTex;
     u8* mapped = nullptr;
     u32 descTable = UINT32_MAX;  // items, font
@@ -199,6 +200,16 @@ struct Visuals::Impl {
     float prevHandVp[16] = {};  // last frame's hand projection (unjittered) when the hand was in the World stage
     List tagSee, tagNormal;
     List cracks;  // block destruction overlays (LevelRenderer crumbling), drawn after the World stage's translucent list
+    // Lightning bolts (LightningBoltRenderer): additive quads in the AfterTranslucent stage. The shape's seed is the
+    // client's own (LightningBolt.seed), re-rolled with each flash like LightningBolt.tick.
+    List bolts;
+    struct Bolt {
+        u64 seed = 0;
+        int life = 2, flashes = 1, age = -1;
+    };
+    std::unordered_map<int, Bolt> boltStates;
+    u64 boltRandom = 0x2545F4914F6CDD1Dull;
+    void buildBolts(const PassContext& ctx);
     bool crackDraw = false;
     int crackRects[2][10] = {{-2, -2, -2, -2, -2, -2, -2, -2, -2, -2}, {-2, -2, -2, -2, -2, -2, -2, -2, -2, -2}};
     void buildCracks(const PassContext& ctx);
@@ -494,8 +505,9 @@ void StagePass::draw(const PassContext& ctx) {
             break;
         }
         case 2: {
-            m.tagSee.clear(), m.tagNormal.clear();
+            m.tagSee.clear(), m.tagNormal.clear(), m.bolts.clear();
             m.buildTags(ctx);
+            m.buildBolts(ctx);
             // Particles.
             const double cam[3] = {ctx.camX, ctx.camY, ctx.camZ};
             u32 opaque = 0, total = 0;
@@ -515,7 +527,7 @@ void StagePass::draw(const PassContext& ctx) {
             }
             m.uploadPending(ctx);
             m.writeCb(1, ctx, ctx.viewProj, false, false);
-            const bool a = m.flush(m.tagSee), b = m.flush(m.tagNormal);
+            const bool a = m.flush(m.tagSee), b = m.flush(m.tagNormal), bolt = m.flush(m.bolts);
             m.bindCommon(ctx);
             ID3D12GraphicsCommandList* list = ctx.list;
             const D3D12_GPU_VIRTUAL_ADDRESS va = m.upload->GetGPUVirtualAddress() + u64(ctx.frame) * kFrameBytes;
@@ -538,6 +550,7 @@ void StagePass::draw(const PassContext& ctx) {
                 particleDraw(m.psoPartCut.Get(), 0, opaque);
             }
             particleDraw(m.psoPartTr.Get(), opaque, total - opaque);
+            if (bolt) m.drawList(ctx, m.psoAdd.Get(), m.bolts, 1);
             if (a) m.drawList(ctx, m.psoTextSee.Get(), m.tagSee, 1);
             if (b) m.drawList(ctx, m.psoText.Get(), m.tagNormal, 1);
             m.stats().particles = total;
@@ -630,7 +643,7 @@ bool Visuals::Impl::createGpu(Renderer& r) {
     if (!check(device->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(), IID_PPV_ARGS(&rootSig)),
                "CreateRootSignature"))
         return false;
-    enum Blend { Opaque, Alpha, Glint, Crumble };
+    enum Blend { Opaque, Alpha, Glint, Crumble, Add };
     // targets: 1 colour; 2 colour + motion (written); 3 colour + motion (kept); 0 shadow map (depth only)
     auto pso = [&](const void* vs, size_t vsSize, const void* ps, size_t psSize, Blend blend, bool depthTest, bool depthWrite,
                    ComPtr<ID3D12PipelineState>& out, int targets = 1) {
@@ -654,6 +667,10 @@ bool Visuals::Impl::createGpu(Renderer& r) {
             rt.SrcBlend = D3D12_BLEND_DEST_COLOR, rt.DestBlend = D3D12_BLEND_SRC_COLOR, rt.BlendOp = D3D12_BLEND_OP_ADD;
             rt.SrcBlendAlpha = D3D12_BLEND_ZERO, rt.DestBlendAlpha = D3D12_BLEND_ONE, rt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
             rt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_RED | D3D12_COLOR_WRITE_ENABLE_GREEN | D3D12_COLOR_WRITE_ENABLE_BLUE;
+        } else if (blend == Add) {  // LIGHTNING: src colour * src alpha + dst (alpha untouched: additive in a premultiplied layer)
+            rt.BlendEnable = TRUE;
+            rt.SrcBlend = D3D12_BLEND_SRC_ALPHA, rt.DestBlend = D3D12_BLEND_ONE, rt.BlendOp = D3D12_BLEND_OP_ADD;
+            rt.SrcBlendAlpha = D3D12_BLEND_ZERO, rt.DestBlendAlpha = D3D12_BLEND_ONE, rt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
         }
         d.SampleMask = UINT_MAX;
         d.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
@@ -693,6 +710,7 @@ bool Visuals::Impl::createGpu(Renderer& r) {
         !pso(SH(VisualsVS), SH(VisualsGlintPS), Glint, true, false, psoGlintMv, 3) ||
         !pso(SH(VisualsVS), SH(VisualsCrumblingPS), Crumble, true, false, psoCrumble) ||
         !pso(SH(VisualsVS), SH(VisualsCrumblingPS), Alpha, true, false, psoCrumbleMv, 3) ||
+        !pso(SH(VisualsVS), SH(VisualsTranslucentPS), Add, true, false, psoAdd) ||
         !pso(SH(ParticleVS), SH(ParticleCutoutMvPS), Opaque, true, true, psoPartCutMv, 2) ||
         !pso(SH(VisualsShadowVS), SH(VisualsShadowPS), Opaque, true, true, psoShadow, 0))
         return false;
@@ -1396,6 +1414,7 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
     }
     // Item frames, paintings, dropped items.
     static int frameType = -2, glowFrameType = -2, paintingType = -2;
+    static const int ominousType = assets.typeId("minecraft:ominous_item_spawner");
     if (frameType == -2)
         frameType = assets.typeId("minecraft:item_frame"), glowFrameType = assets.typeId("minecraft:glow_item_frame"),
         paintingType = assets.typeId("minecraft:painting");
@@ -1459,7 +1478,7 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
             continue;
         }
         const bool frame = e.type == frameType || e.type == glowFrameType;
-        if (!frame && e.type != paintingType && e.category != Category::Item) continue;
+        if (!frame && e.type != paintingType && e.category != Category::Item && e.type != ominousType) continue;
         double p[3];
         for (int a = 0; a < 3; ++a) p[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt;
         const float rx = float(p[0] - cam[0]), ry = float(p[1] - cam[1]), rz = float(p[2] - cam[2]);
@@ -1471,7 +1490,7 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
         }
         Lists& L = *target;
         L.begin(u64(u32(id)) << 4 | 3);
-        const u32 light = lightAt(p[0], p[1], p[2]);
+        u32 light = lightAt(p[0], p[1], p[2]);
         if (frame) {  // ItemFrameRenderer
             const int dir = std::clamp(e.direction, 0, 5);
             Xf m = xfTranslate(rx, ry, rz);
@@ -1539,10 +1558,18 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
         const ItemMesh& mesh = models.mesh(e.itemId, e.itemDye, true);
         if (mesh.empty()) continue;
         const float age = float(e.age) + pt;
-        const float bobY = std::sin(age / 10.0f + e.bobOffset) * 0.1f + 0.1f;
-        const float spin = age / 20.0f + e.bobOffset;
-        Xf m = xfTranslate(rx, ry + bobY + (-mesh.groundMinY + 0.0625f), rz);
-        m = xfMul(m, xfRotY(spin));
+        Xf m;
+        if (e.type == ominousType) {  // OminousItemSpawnerRenderer: grows in over 50 ticks, spins 40 degrees a tick
+            const float s = std::min(age, 50.0f) / 50.0f;
+            m = xfMul(xfTranslate(rx, ry, rz), xfScale(s, s, s));
+            m = xfMul(m, xfRotY(wrapDegrees(age * 40.0f) * kDeg));
+            light = 0xFF;
+        } else {
+            const float bobY = std::sin(age / 10.0f + e.bobOffset) * 0.1f + 0.1f;
+            const float spin = age / 20.0f + e.bobOffset;
+            m = xfTranslate(rx, ry + bobY + (-mesh.groundMinY + 0.0625f), rz);
+            m = xfMul(m, xfRotY(spin));
+        }
         const int c = e.itemCount;
         const int amount = c > 48 ? 5 : c > 32 ? 4 : c > 16 ? 3 : c > 1 ? 2 : 1;
         u32 rng = u32(e.itemId) * 2654435761u + 7;
@@ -1670,6 +1697,90 @@ void Visuals::Impl::buildTags(const PassContext& ctx) {
         }
         ++self.stats_.tags;
     }
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Lightning bolts (LightningBoltRenderer)
+
+namespace {
+// LegacyRandomSource (java.util.Random): the bolt's shape from its seed.
+struct JavaRandom {
+    u64 seed;
+    explicit JavaRandom(u64 s) : seed((s ^ 0x5DEECE66Dull) & ((1ull << 48) - 1)) {}
+    int next(int bits) {
+        seed = (seed * 0x5DEECE66Dull + 0xBull) & ((1ull << 48) - 1);
+        return int(i64(seed) >> (48 - bits));
+    }
+    int nextInt(int bound) {
+        if ((bound & -bound) == bound) return int((i64(bound) * i64(next(31))) >> 31);
+        int bits, val;
+        do bits = next(31), val = bits % bound;
+        while (bits - val + (bound - 1) < 0);
+        return val;
+    }
+};
+}  // namespace
+
+void Visuals::Impl::buildBolts(const PassContext& ctx) {
+    static const int boltType = assets.typeId("minecraft:lightning_bolt");
+    const double cam[3] = {ctx.camX, ctx.camY, ctx.camZ};
+    const float pt = std::clamp(world.partialTick(), 0.0f, 1.0f);
+    auto rnd = [&] {  // the client's own randomness (seeds, flash counts)
+        boltRandom ^= boltRandom << 13, boltRandom ^= boltRandom >> 7, boltRandom ^= boltRandom << 17;
+        return boltRandom;
+    };
+    for (const auto& [id, e] : world.entities()) {
+        if (e.type != boltType) continue;
+        Bolt& b = boltStates[id];
+        if (b.age < 0) b.age = e.age, b.seed = rnd(), b.flashes = int(rnd() % 3) + 1;
+        for (; b.age < e.age; ++b.age)  // LightningBolt.tick (client): flashes re-roll the shape
+            if (--b.life < 0 && b.flashes > 0 && b.life < -int(rnd() % 10)) --b.flashes, b.life = 1, b.seed = rnd();
+        if (b.life < 0 && b.flashes == 0) continue;  // discarded on the client
+        float xOffsets[8], zOffsets[8], xOffset = 0, zOffset = 0;
+        JavaRandom r0(b.seed);
+        for (int h = 7; h >= 0; --h) {
+            xOffsets[h] = xOffset, zOffsets[h] = zOffset;
+            xOffset += float(r0.nextInt(11) - 5), zOffset += float(r0.nextInt(11) - 5);
+        }
+        const u32 first = u32(dyn.size());
+        auto quad = [&](float sx, float sz, float ex, float ez, int seg, float top, float bottom, bool rx, bool rz, bool lx, bool lz) {
+            MeshQuad q{};
+            const float y0 = float(seg * 16), y1 = float((seg + 1) * 16);
+            const float p[4][3] = {{sx + (rx ? bottom : -bottom), y0, sz + (rz ? bottom : -bottom)},
+                                   {ex + (rx ? top : -top), y1, ez + (rz ? top : -top)},
+                                   {ex + (lx ? top : -top), y1, ez + (lz ? top : -top)},
+                                   {sx + (lx ? bottom : -bottom), y0, sz + (lz ? bottom : -bottom)}};
+            std::memcpy(q.pos, p, sizeof(p));
+            q.normal = packNormal(0, 1, 0), q.color = 0x4C7F7373u;  // (0.45, 0.45, 0.5, 0.3)
+            q.tex = kTexSolid, q.flags = kQuadNoShade;
+            dyn.push_back(q);
+        };
+        for (int layer = 0; layer < 4 && dyn.size() + 64 <= kMaxDynamic; ++layer) {
+            JavaRandom r(b.seed);
+            for (int branch = 0; branch < 3; ++branch) {
+                const bool trunk = branch == 0;
+                const int start = 7 - branch, end = trunk ? 0 : start - 3 + 1;
+                float sx = xOffsets[start] - xOffset, sz = zOffsets[start] - zOffset;
+                for (int seg = start; seg >= end; --seg) {
+                    const float ex = sx, ez = sz;
+                    const int spread = trunk ? 5 : 15;
+                    sx += float(r.nextInt(spread * 2 + 1) - spread), sz += float(r.nextInt(spread * 2 + 1) - spread);
+                    float top = 0.1f + float(layer) * 0.2f, bottom = top;
+                    if (trunk) top *= float(seg) * 0.1f + 1.0f, bottom *= float(seg - 1) * 0.1f + 1.0f;
+                    quad(sx, sz, ex, ez, seg, top, bottom, false, false, true, false);
+                    quad(sx, sz, ex, ez, seg, top, bottom, true, false, true, true);
+                    quad(sx, sz, ex, ez, seg, top, bottom, true, true, false, true);
+                    quad(sx, sz, ex, ez, seg, top, bottom, false, true, false, false);
+                }
+            }
+        }
+        double p[3];
+        for (int a = 0; a < 3; ++a) p[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt - cam[a];
+        bolts.add(xfTranslate(float(p[0]), float(p[1]), float(p[2])), first, u32(dyn.size()) - first, 256u | 512u, 0xFFFFFFFF, 1);
+    }
+    if (frameCounter % 64 == 0)  // forget removed bolts
+        for (auto it = boltStates.begin(); it != boltStates.end();)
+            it = world.entities().count(it->first) ? std::next(it) : boltStates.erase(it);
 }
 
 // ---------------------------------------------------------------------------------------------------------
