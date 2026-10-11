@@ -4,6 +4,7 @@
 // visible list, so culling costs one small upload instead of a draw call per section.
 #include "blockentity/block_entities.h"
 
+#include "assets/assets.h"
 #include "entity/entity_render.h"
 #include "render/pack_sink.h"
 #include "world/world.h"
@@ -352,9 +353,10 @@ void BlockEntityRenderer::build(const PassContext& ctx) {
         }
     }
     cam_[0] = ctx.camX, cam_[1] = ctx.camY, cam_[2] = ctx.camZ;
+    shading_ = ctx.shading && !ctx.pack;
     const double now = nowSeconds();
     if (lastTime_ == 0) lastTime_ = now;
-    tickClock_ += std::clamp(now - lastTime_, 0.0, 0.5);
+    if (!frozen_) tickClock_ += std::clamp(now - lastTime_, 0.0, 0.5);  // TickRateManager: frozen levels do not tick
     lastTime_ = now;
 
     u8* frameBase = mapped_ + u64(ctx.frame) * kFrameBytes;
@@ -388,11 +390,11 @@ void BlockEntityRenderer::build(const PassContext& ctx) {
     ++buildFrame_;
     // Motion vectors of animating instances: last frame's corner positions per instance (block position).
     const double* camNow = cam_;
-    auto emitTracked = [&](const Instance& in, const Data* data) {
+    auto emitTracked = [&](int x, int y, int z, auto&& emit) {
         u32 before[3];
         for (int p = 0; p < 3; ++p) before[p] = u32(dyn_[p].size());
-        emitInstance(dyn, in, data, partial_);
-        const u64 key = (u64(u32(in.x) & 0x3FFFFFF) << 38) | (u64(u32(in.y) & 0xFFF) << 26) | (u64(u32(in.z) & 0x3FFFFFF));
+        emit();
+        const u64 key = (u64(u32(x) & 0x3FFFFFF) << 38) | (u64(u32(y) & 0xFFF) << 26) | (u64(u32(z) & 0x3FFFFFF));
         PrevDyn& pd = prevDyn_[key];
         bool match = pd.frame + 1 == buildFrame_;
         for (int p = 0; p < 3; ++p) match = match && pd.counts[p] == u32(dyn_[p].size()) - before[p];
@@ -420,9 +422,10 @@ void BlockEntityRenderer::build(const PassContext& ctx) {
         std::shared_lock lock(world_.mutex());
         applyNetwork();
         int ticks = 0;
-        while (tickClock_ >= 0.05 && ticks < 10) tickClock_ -= 0.05, ++ticks, tick();
-        if (tickClock_ >= 0.05) tickClock_ = 0;
-        partial_ = float(std::clamp(tickClock_ / 0.05, 0.0, 1.0));
+        const double tickLength = 1.0 / std::max(double(tickRate_), 1.0);  // the server's tick rate (/tick rate)
+        while (tickClock_ >= tickLength && ticks < 10) tickClock_ -= tickLength, ++ticks, tick();
+        if (tickClock_ >= tickLength) tickClock_ = 0;
+        partial_ = float(std::clamp(tickClock_ / tickLength, 0.0, 1.0));
         updateTracking(ctx.camX, ctx.camY, ctx.camZ);
         refreshLight();
         Timer build;
@@ -442,9 +445,12 @@ void BlockEntityRenderer::build(const PassContext& ctx) {
                 const float v = std::max({lo[a], -hi[a], 0.0f});
                 d2 += v * v;
             }
-            if (d2 > kViewDistance * kViewDistance) continue;
-            bool inside = true;
+            // Beacon and gateway beams show from anywhere the section is tracked, on screen or not.
+            const bool inRange = d2 <= kViewDistance * kViewDistance;
+            if (!inRange && !s.beams) continue;
+            bool inside = inRange;
             for (const auto& pl : planes) {
+                if (!inside) break;
                 const float px = pl[0] >= 0 ? hi[0] : lo[0], py = pl[1] >= 0 ? hi[1] : lo[1], pz = pl[2] >= 0 ? hi[2] : lo[2];
                 if (pl[0] * px + pl[1] * py + pl[2] * pz + pl[3] < 0) {
                     inside = false;
@@ -453,12 +459,12 @@ void BlockEntityRenderer::build(const PassContext& ctx) {
             }
             // Shadow casters: sections inside each cascade drawn this frame (cutout and translucent quads).
             u32 inCascades = 0;
-            if (shadowMask && !ctx.pack) {
+            if (shadowMask && !ctx.pack && inRange) {
                 const float centre[3] = {(lo[0] + hi[0]) * 0.5f, (lo[1] + hi[1]) * 0.5f, (lo[2] + hi[2]) * 0.5f};
                 for (u32 c = 0; c < 4; ++c)
                     if ((shadowMask >> c) & 1 && inCascade(ctx.shadowMats[c], centre, 16.3f)) inCascades |= 1u << c;
             }
-            if (!inside && !inCascades) continue;
+            if (!inside && !inCascades && !s.beams) continue;
             if (inside) ++stats_.visibleSections;
             if (ctx.pack) {  // shader pack: all instances as vertices (no GPU section batches)
                 for (const Instance& in : s.list) {
@@ -492,12 +498,30 @@ void BlockEntityRenderer::build(const PassContext& ctx) {
             for (u32 i : s.dynamic) {
                 if (i >= s.list.size()) continue;
                 const Instance& in = s.list[i];
+                const Kind kind = def(in.block).kind;
+                const bool beam = kind == Kind::Beacon || kind == Kind::EndGateway;
                 const double dx = in.x + 0.5 - ctx.camX, dy = in.y + 0.5 - ctx.camY, dz = in.z + 0.5 - ctx.camZ;
-                if (dx * dx + dy * dy + dz * dz > double(kViewDistance) * kViewDistance) continue;
+                if (!beam && (!(inside || inCascades) || dx * dx + dy * dy + dz * dz > double(kViewDistance) * kViewDistance))
+                    continue;
                 if (dyn_[0].size() + dyn_[1].size() + dyn_[2].size() > kMaxDyn - 4096) break;
-                emitTracked(in, in.data >= 0 ? &s.data[size_t(in.data)] : nullptr);
+                const Data* data = in.data >= 0 ? &s.data[size_t(in.data)] : nullptr;
+                emitTracked(in.x, in.y, in.z, [&] { emitInstance(dyn, in, data, partial_); });
                 ++stats_.dynamic;
             }
+        }
+        // Blocks moved by pistons (their moving_piston cells draw nothing).
+        for (const Moving& m : moving_) {
+            const double dx = m.x + 0.5 - ctx.camX, dy = m.y + 0.5 - ctx.camY, dz = m.z + 0.5 - ctx.camZ;
+            if (dx * dx + dy * dy + dz * dz > 68.0 * 68.0) continue;  // PistonHeadRenderer.getViewDistance
+            if (ctx.pack) {
+                Emit e = dyn;
+                for (int p = 0; p < 3; ++p) packQuads_[p].clear(), e.out[p] = &packQuads_[p];
+                emitMoving(e, m, now);
+                packFlush(*ctx.pack, m.moved);
+                continue;
+            }
+            if (dyn_[0].size() + dyn_[1].size() + dyn_[2].size() > kMaxDyn - 4096) break;
+            emitTracked(m.x, m.y, m.z, [&] { emitMoving(dyn, m, now); });
         }
     }
     if (buildFrame_ % 256 == 0)  // forget instances that stopped animating
@@ -530,8 +554,9 @@ void BlockEntityRenderer::build(const PassContext& ctx) {
         float lightmap[3][4];
         float prevViewProj[16];
         float motion[4];
-        float misc[4];  // x = 1: shader pipeline (pipeline-aware output); y = last frame's banner wave time
+        float misc[4];  // x = 1: shader pipeline (pipeline-aware output); y = last frame's banner wave time; z = GameTime
         float shadowMat[4][16];
+        float endSky[4], endPortal[4];  // atlas rects
     } k{};
     static_assert(sizeof(Constants) <= kConstBytes);
     std::memcpy(k.lightmap, ctx.lightmap, sizeof(k.lightmap));
@@ -548,7 +573,15 @@ void BlockEntityRenderer::build(const PassContext& ctx) {
     k.misc[0] = ctx.shading ? 1.0f : 0.0f;
     k.misc[1] = waveTimeValid_ ? waveTime_ : wave;
     waveTime_ = wave, waveTimeValid_ = true;
+    k.misc[2] = (float(gameTicks_ % 24000) + partial_) / 24000.0f;  // GlobalSettingsUniform GameTime
     if (ctx.shadowMats) std::memcpy(k.shadowMat, ctx.shadowMats, sizeof(k.shadowMat));
+    for (int i = 0; i < 2; ++i) {
+        const int tex = i ? t_.endPortal : t_.endSky;
+        if (tex < 0) continue;
+        const ent::TexRect& r = assets_.rect(tex);
+        float* out = i ? k.endPortal : k.endSky;
+        out[0] = r.u0, out[1] = r.v0, out[2] = r.du, out[3] = r.dv;
+    }
     std::memcpy(frameBase, &k, sizeof(k));
 
     stats_.cpuMs = timer.ms();
@@ -633,11 +666,17 @@ void BlockEntityRenderer::packInstance(PackSink& pack, const Emit& base, const I
     Emit e = base;  // camera-relative quads
     for (int p = 0; p < 3; ++p) packQuads_[p].clear(), e.out[p] = &packQuads_[p];
     emitInstance(e, in, data, pt);
-    const int id = pack.blockId(in.block);
+    packFlush(pack, in.block);
+}
+
+void BlockEntityRenderer::packFlush(PackSink& pack, u16 block) {
+    const int id = pack.blockId(block);
     // [pass][texture]: textures 0 entity atlas, 1 font, 2 solid (white), 3 block texture (block atlas)
     static thread_local std::vector<PackVertex> verts[3][4];
     for (int p = 0; p < 3; ++p) {
         for (const BeQuad& q : packQuads_[p]) {
+            // Repeating textures (beams) and the end portal effect have no pack equivalent here.
+            if (q.tex == kTexAtlasRepeat || q.tex == kTexEndPortal || q.tex == kTexEndGateway) continue;
             const int t = q.tex == kTexAtlas ? 0 : q.tex == kTexFont ? 1 : q.tex == kTexSolid ? 2 : 3;
             const bool bright = (q.light & (256 | 1024)) != 0;
             const u32 sky = bright ? 15 : (q.light >> 4) & 15, block = bright ? 15 : q.light & 15;

@@ -279,7 +279,7 @@ void Session::setBlock(int x, int y, int z, u16 id, std::unordered_set<u64>& dir
         lighting_.blockChanged(x, y, z, dirty);
 }
 
-void Session::applyBlocks(const std::vector<BlockChange>& changes) {
+void Session::applyBlocks(const std::vector<BlockChange>& changes, bool server) {
     std::unordered_set<u64> dirty;
     {
         std::unique_lock lock(world_.mutex());
@@ -293,7 +293,7 @@ void Session::applyBlocks(const std::vector<BlockChange>& changes) {
                 continue;
             }
             setBlock(c.x, c.y, c.z, c.id, dirty);
-            ++serverChanges_;
+            serverChanges_ += server;
             if (verbose_)
                 LOG("net: server block %d %d %d = %s (world now %s)", c.x, c.y, c.z, registry_.name(c.id).c_str(),
                     registry_.name(world_.block(c.x, c.y, c.z)).c_str());

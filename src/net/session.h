@@ -36,6 +36,9 @@ public:
     // The held item's use (food, bows, buckets...) and, unpredicted, a use on a block with the off hand.
     void useItem(int hand);
     void useItemOn(int hand, const RayHit& hit);
+    // Block changes the game's client makes itself (piston moves, blockentity/block_entities.h); the server's updates
+    // follow. Main thread, outside the world lock.
+    void applyClientBlocks(const std::vector<BlockChange>& changes) { applyBlocks(changes, false); }
     int gameMode() const { return gameMode_; }                  // main thread
     const Dimension& dimension() const { return dimension_; }  // main thread
 
@@ -45,7 +48,7 @@ private:
     void forget(int cx, int cz, bool drop = false);  // drop: remove even when forgotten chunks are kept
     void clearWorld();                                // every chunk, also ones not from the server
     void setBlock(int x, int y, int z, u16 id, std::unordered_set<u64>& dirty);  // holds the world lock
-    void applyBlocks(const std::vector<BlockChange>& changes);
+    void applyBlocks(const std::vector<BlockChange>& changes, bool server = true);
     void applyLight(const LightEvent& e);
     void applyBiomes(const BiomesEvent& e);
     void acknowledge(int sequence);

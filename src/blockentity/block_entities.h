@@ -2,7 +2,10 @@
 // Block entities the game draws with its block entity renderers: chests (all materials, double halves, lid
 // animation), sign and hanging sign text, banners with their pattern layers, mob heads and player heads (default
 // skins), shulker boxes, bells, decorated pots with sherds, conduits, enchanting table and lectern books,
-// campfire and shelf items and copper golem statues.
+// campfire and shelf items, copper golem statues, beacon beams, End portal and End gateway surfaces (and the
+// gateway beam), the mob spinning in spawners and trial spawners, the vault's display item, the item in suspicious
+// sand / gravel while it is brushed, and blocks moved by pistons (PistonMovingBlockEntity, simulated from the
+// pistons' block events like the game's client does).
 //
 // Which blocks have one follows from the block states in World (like the game's client, which creates block
 // entities from block states); their extra data (sign text, banner patterns, ...) comes from
@@ -20,6 +23,8 @@
 #include "render/renderer.h"
 #include "ui/font.h"
 
+#include <atomic>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
@@ -28,8 +33,10 @@
 class World;
 class BlockRegistry;
 class GameReports;
+class ItemRules;
 namespace net {
 class Client;
+struct BlockChange;
 }
 namespace ent {
 class EntityRenderer;
@@ -37,23 +44,30 @@ class EntityRenderer;
 
 namespace be {
 
+struct M34;  // row-major 3x4 transform (block_entities.cpp)
+
 // One quad as the shader reads it (shaders/blockentity.hlsl).
 struct BeQuad {
     float pos[4][3];  // static: relative to the section origin; dynamic: camera-relative
     float uv[4][2];
     u32 normal;       // snorm8 x, y, z
     u32 color;        // 0xAABBGGRR tint
-    u32 light;        // sky << 4 | block; 256: full bright; 512: no diffuse shading; 1024: only within 16 blocks
-    u32 tex;          // texture: kTexAtlas, kTexFont, kTexSolid or a block texture array layer
-    float pivot[3];   // banner flag wave: rotation pivot (same space as pos)
+    u32 light;        // sky << 4 | block; 256: full bright; 512: no diffuse shading; 1024: only within 16 blocks;
+                      // 2048: casts no shadow
+    u32 tex;          // texture: kTexAtlas, kTexFont, kTexSolid, kTexAtlasRepeat, kTexEndPortal, kTexEndGateway or a
+                      // block texture array layer
+    float pivot[3];   // banner flag wave: rotation pivot (same space as pos); kTexAtlasRepeat: the texture's atlas
+                      // rect u0, v0, du (dv in `normal`, as float bits)
     u32 wave;         // 0, or 1 << 31 | phase offset (0..99) << 16 | axis angle (u16 of a full turn)
 };
 static_assert(sizeof(BeQuad) == 112);
 constexpr u32 kTexAtlas = 0xFFFFFFFF, kTexFont = 0xFFFFFFFE, kTexSolid = 0xFFFFFFFD;
+// An entity atlas texture repeating over uv (beacon beams), and the end portal / gateway effect (screen space).
+constexpr u32 kTexAtlasRepeat = 0xFFFFFFFC, kTexEndPortal = 0xFFFFFFFB, kTexEndGateway = 0xFFFFFFFA;
 
 enum class Kind : u8 {
     None, Chest, Sign, HangingSign, Banner, Skull, Shulker, Bell, Pot, Conduit, Enchanting, Lectern, Campfire, Shelf,
-    Statue
+    Statue, Beacon, EndPortal, EndGateway, Spawner, TrialSpawner, Vault, Brushable
 };
 
 class BlockEntityRenderer : public RenderPass {
@@ -65,6 +79,15 @@ public:
     bool load(const fs::path& jar, const fs::path& minecraftDir);
     // Network: block entity data, chunk block entity lists and block events (before Client::start).
     void attach(net::Client& client);
+    // Block events received so far, and the end of piston moves (main thread, before the session applies the block
+    // updates that follow them: pistons read the blocks they move as they were when the event happened).
+    void applyBlockEvents();
+    // Piston push rules (push reactions, hardness); pistons do not animate without them.
+    void setRules(const ItemRules* rules) { rules_ = rules; }
+    // Client-side block changes (the moving_piston blocks and cleared cells a piston event makes on the game's
+    // client too; the server sends the final blocks later). Called from applyBlockEvents.
+    using BlockSink = std::function<void(const std::vector<net::BlockChange>&)>;
+    void setBlockSink(BlockSink sink) { blockSink_ = std::move(sink); }
 
     bool create(Renderer& renderer) override;
     void draw(const PassContext& ctx) override;
@@ -91,8 +114,13 @@ public:
         std::vector<std::pair<int, u8>> patterns;  // banner layers: (atlas texture, dye id)
         int skin = -1;                              // player head texture
         int sherds[4] = {-1, -1, -1, -1};           // decorated pot sides: back, left, right, front
-        std::string items[4];                       // campfire / shelf items by slot (item names)
+        std::string items[4];                       // campfire / shelf items by slot (item names); vault display
+                                                    // item, brushable block item (slot 0)
         bool alignBottom = false;                   // shelf
+        int entity = -1;                            // spawner / trial spawner display entity (protocol id)
+        int delay = 20;                             // spawner Delay
+        i8 hitDir = -1;                             // brushable block hit_direction (3D data value)
+        i64 age = -1;                               // end gateway Age (-1: unknown)
     };
     // The UI (sign editor): the last renderer created, and the data of the block entity at a position (main thread;
     // nullptr when none is known).
@@ -120,6 +148,7 @@ private:
         std::vector<Instance> list;
         std::vector<Data> data;
         std::vector<u32> dynamic;  // instances drawn per frame (animating)
+        bool beams = false;        // has beacons / end gateways: their beams are drawn wherever the section is
         bool dirty = true;
         // GPU: [cutout][text][translucent] quads at `offset` in the arena
         u64 offset = 0, allocated = 0;
@@ -140,7 +169,28 @@ private:
         float activeRot = 0;
         int tickCount = 0;
         int skullTicks = 0;
+        // beacon: beam sections (colour 0xRRGGBB, height) and pyramid levels
+        std::vector<std::pair<u32, int>> beam;
+        int levels = 0;
+        // end gateway
+        i64 age = -1;
+        int cooldown = 0;
+        // spawner / trial spawner mob and vault item spin (degrees)
+        float spin = 0, oSpin = 0;
+        int delay = -1;
         bool dynamic = false;  // drawn per frame at the last section build
+    };
+    // PistonMovingBlockEntity on the client: a block moved by a piston, at its destination (a moving_piston block,
+    // set on the client like the game's client does: the server does not send those). Created from the piston's
+    // block event (PistonBaseBlock.triggerEvent / moveBlocks); it moves over two ticks and stays until the server's
+    // final block replaces the moving_piston, or places the moved block itself five ticks later.
+    struct Moving {
+        i32 x, y, z;
+        u16 moved;     // the moved block state
+        u8 dir;        // the piston's facing
+        bool extending, source;
+        double start;  // when the block event arrived (seconds)
+        double gone;   // when the moving_piston was replaced (seconds; < 0: not yet)
     };
     struct Emit {  // quad output
         std::vector<BeQuad>* out[3];  // cutout, text, translucent
@@ -152,12 +202,21 @@ private:
     void initAssets();
     const BlockDef& def(u16 block);
     BlockDef classify(u16 block) const;
+    static bool ticking(const BlockDef& d);  // animates on its own tick (kept in anims_ while tracked)
     void updateTracking(double camX, double camY, double camZ);
     void scanColumn(int cx, int cz);
     void dropColumn(int cx, int cz);
     void decode(const std::string& nbt, const BlockDef& d, Data& out) const;
     void tick();
     void handleEvent(int x, int y, int z, int type, int param);
+    void pistonEvent(int x, int y, int z, int type, int param);
+    float movingProgress(const Moving& m, double now) const;
+    void emitMoving(Emit& e, const Moving& m, double now) const;
+    void beaconTick(int x, int y, int z, Anim& a);
+    void emitBeam(Emit& e, const M34& base, int tex, float scale, float animTime, int start, int height, u32 color,
+                  float solidRadius, float glowRadius) const;
+    void emitItem(Emit& e, const std::string& item, const M34& m, u32 light, int context) const;
+    void emitDisplayEntity(Emit& e, int type, const M34& m, u32 light, float age) const;
     bool isDynamic(const Instance& in, const BlockDef& d) const;
     void refreshLight();
     void emitInstance(Emit& e, const Instance& in, const Data* data, float pt) const;
@@ -198,7 +257,13 @@ private:
     std::vector<u64> sectionOrder_;  // for the round-robin light refresh
 
     std::unordered_map<u64, Anim> anims_;  // by block position
+    std::vector<Moving> moving_;
+    bool shading_ = false;  // the last build drew for the shader pipeline
+    const ItemRules* rules_ = nullptr;
+    BlockSink blockSink_;
     double tickClock_ = 0, lastTime_ = 0;
+    std::atomic<float> tickRate_{20.0f};  // ticking_state: the server's tick rate and freeze
+    std::atomic<bool> frozen_{false};
     i64 gameTicks_ = 0;
     float partial_ = 0;
     u32 random_ = 0x9E3779B9u;
@@ -240,6 +305,7 @@ private:
         int skull[7] = {-1, -1, -1, -1, -1, -1, -1};
         int playerSkins[18];
         int statue[4] = {-1, -1, -1, -1};
+        int beaconBeam = -1, gatewayBeam = -1, endSky = -1, endPortal = -1;
     } t_;
     mutable std::unordered_map<std::string, int> itemBlocks_;  // item name -> block id (0: not a block)
 
@@ -279,6 +345,7 @@ private:
     // Shader packs (PassContext::pack): every visible instance as vanilla-style vertices, per instance (blockEntityId).
     std::vector<BeQuad> packQuads_[3];
     void packInstance(class PackSink& pack, const Emit& e, const Instance& in, const Data* data, float pt);
+    void packFlush(class PackSink& pack, u16 block);  // packQuads_ as the block's pack draws
 
     Stats stats_;
     double cpuTotal_ = 0;

@@ -332,6 +332,19 @@ void EntityRenderer::buildDefs() {
 
 // Layers depend on a few synched values only: resolve each combination once (texture names are built from
 // strings) and reuse it, so steady-state frames do not allocate. Tints (wool, collar) are applied per frame.
+int EntityRenderer::displayLayers(int type, Layer* out, int max, Anim& anim, float& scale) const {
+    if (type < 0 || size_t(type) >= defs_.size() || defs_[size_t(type)].kind != Kind::Mob) return 0;
+    const TypeDef& d = defs_[size_t(type)];
+    Entity e;
+    e.type = type;
+    e.info = assets_.type(type);
+    Layer layers[16];
+    const int n = std::min(resolveUncached(e, d, layers), max);
+    std::copy(layers, layers + n, out);
+    anim = d.anim, scale = d.scale;
+    return n;
+}
+
 int EntityRenderer::resolve(const Entity& e, const TypeDef& d, Layer* out) {
     const u64 v1 = u64(d.special == SpPlayer ? e.skin : e.variant) & 0xFFF;
     const u64 key = (u64(u32(e.type)) << 48) | (v1 << 36) | ((u64(e.variant2) & 0xFFF) << 24) |

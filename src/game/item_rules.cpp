@@ -8,7 +8,7 @@
 
 namespace {
 
-constexpr int kFormat = 2;  // bump when the dump's layout changes
+constexpr int kFormat = 3;  // bump when the dump's layout changes
 
 // Run with the game's code on the class path (`java GameplayDump.java <out> <format>`). Block tags in tool rules
 // are resolved from the jar's data files (tags are not bound without a server).
@@ -30,6 +30,7 @@ import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.Property;
+import net.minecraft.world.level.material.PushReaction;
 
 public class GameplayDump {
     static <T extends Comparable<T>> String value(BlockState s, Property<T> p) { return p.getName(s.getValue(p)); }
@@ -65,10 +66,16 @@ public class GameplayDump {
         Bootstrap.bootStrap();
         JsonObject root = new JsonObject();
         root.addProperty("format", Integer.parseInt(args[1]));
-        JsonObject blocks = new JsonObject(), states = new JsonObject();
+        JsonObject blocks = new JsonObject(), states = new JsonObject(), push = new JsonObject();
         for (Block block : BuiltInRegistries.BLOCK) {
             String name = BuiltInRegistries.BLOCK.getKey(block).toString();
             BlockState d = block.defaultBlockState();
+            if (d.getPistonPushReaction() != PushReaction.PUSH_PULL || d.hasBlockEntity()) {
+                JsonArray p = new JsonArray();
+                p.add(d.getPistonPushReaction().ordinal());
+                p.add(d.hasBlockEntity() ? 1 : 0);
+                push.add(name, p);
+            }
             float h = d.getDestroySpeed(EmptyBlockGetter.INSTANCE, BlockPos.ZERO);
             boolean req = d.requiresCorrectToolForDrops();
             JsonArray a = new JsonArray();
@@ -86,6 +93,7 @@ public class GameplayDump {
         }
         root.add("blocks", blocks);
         root.add("states", states);
+        root.add("push", push);
         // Every block tag of the game, resolved to block names.
         File jarFile = new File(Block.class.getProtectionDomain().getCodeSource().getLocation().toURI());
         JsonObject tags = new JsonObject();
@@ -190,6 +198,7 @@ bool ItemRules::loadImpl(const fs::path& minecraftDir, const std::string& versio
         blocks_[k] = {v[0].get<float>(), v[1].get<int>() != 0};
     }
     for (const auto& [k, v] : j["states"].items()) states_[k] = {v[0].get<float>(), v[1].get<int>() != 0};
+    for (const auto& [k, v] : j["push"].items()) push_[k] = {u8(v[0].get<int>()), v[1].get<int>() != 0};
     for (const auto& [k, v] : j["tags"].items()) {
         std::vector<u32>& set = tags_[k];
         for (const auto& b : v)
@@ -210,6 +219,11 @@ bool ItemRules::loadImpl(const fs::path& minecraftDir, const std::string& versio
 const ItemRules::EntityDims* ItemRules::entity(std::string_view typeName) const {
     auto it = entities_.find(std::string(typeName));
     return it == entities_.end() ? nullptr : &it->second;
+}
+
+ItemRules::Push ItemRules::push(std::string_view blockName) const {
+    auto it = push_.find(std::string(blockName));
+    return it == push_.end() ? Push{} : it->second;
 }
 
 ItemRules::Hardness ItemRules::hardness(std::string_view stateKey) const {

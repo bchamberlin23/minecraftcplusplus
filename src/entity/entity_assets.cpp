@@ -310,13 +310,14 @@ bool EntityAssets::loadTextures(const fs::path& jar) {
         std::string_view n = file;
         constexpr std::string_view prefix = "assets/minecraft/textures/";
         n.remove_prefix(prefix.size());
-        // misc/enchanted_glint_*: the armour glint (entity_render.cpp).
-        if (!n.starts_with("entity/") && !n.starts_with("item/") && !n.starts_with("misc/enchanted_glint")) continue;
-        // Large decorative sets the entity renderer does not use here (the plain shield is kept for held shields).
-        // (Banner patterns and pot sherds are kept: the block entity renderer layers them.)
-        if ((n.starts_with("entity/shield/") && !n.starts_with("entity/shield/shield_base")) ||
-            n.starts_with("entity/end_portal/") || n.starts_with("entity/beacon/"))
+        // misc/enchanted_glint_*: the armour glint (entity_render.cpp); environment/end_sky: the end portal effect
+        // (block entities).
+        if (!n.starts_with("entity/") && !n.starts_with("item/") && !n.starts_with("misc/enchanted_glint") &&
+            n != "environment/end_sky.png")
             continue;
+        // Large decorative sets the entity renderer does not use here (the plain shield is kept for held shields).
+        // (Banner patterns, pot sherds, beacon beams and the end portal are kept: the block entity renderer uses them.)
+        if (n.starts_with("entity/shield/") && !n.starts_with("entity/shield/shield_base")) continue;
         texs.push_back({file, std::string(n.substr(0, n.size() - 4))});
     }
     Jobs::parallelFor(texs.size(), [&](size_t i) {
