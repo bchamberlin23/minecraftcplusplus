@@ -14,6 +14,7 @@ struct PlayerStart {
     double x = 0.5, y = 100, z = 0.5;
     float yaw = 0, pitch = 0;
     bool found = false;
+    std::string dimension = "minecraft:overworld";  // where the player is (the viewer shows that dimension)
 };
 
 struct LoadStats {
@@ -87,9 +88,10 @@ public:
     // World seed: data/minecraft/world_gen_settings.dat (26.x) or level.dat WorldGenSettings (older).
     static bool readSeed(const fs::path& saveDir, i64& seed);
 
-    // Loads every fully generated chunk within `radius` chunks of the centre (radius <= 0: all).
+    // Loads every fully generated chunk within `radius` chunks of the centre (radius <= 0: all), of one dimension
+    // (its region folder: world/region_codec.h).
     bool load(const fs::path& saveDir, BlockRegistry& registry, int centerCx, int centerCz, int radius,
-              LoadStats& stats);
+              LoadStats& stats, const std::string& dimension = "minecraft:overworld");
 
     std::shared_mutex& mutex() const { return mutex_; }
 

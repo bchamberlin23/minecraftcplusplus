@@ -409,6 +409,10 @@ int wmain(int argc, wchar_t** argv) {
         player.x = opt.cam[0], player.y = opt.cam[1] - 1.62, player.z = opt.cam[2];
         player.yaw = float(opt.cam[3]), player.pitch = float(opt.cam[4]);
     }
+    // The save's dimension to show: --dimension, else where the player is (Nether / End / a data pack's own).
+    const std::string viewDim = !opt.sky.dimension.empty() ? opt.sky.dimension : menu ? "minecraft:overworld" : player.dimension;
+    const bool viewOverworld = viewDim == "minecraft:overworld";
+    if (!opt.play && opt.connect.empty() && opt.sky.dimension.empty()) opt.sky.dimension = viewDim;  // its sky / fog
     t = Timer();
     World world;
     LoadStats ls;
@@ -418,7 +422,7 @@ int wmain(int argc, wchar_t** argv) {
     if (opt.connect.empty() && (!menu || titleChunks))
         worldTask = std::async(std::launch::async, [&] {
             return world.load(worldDir, registry, int(std::floor(player.x)) >> 4, int(std::floor(player.z)) >> 4,
-                              opt.radius, ls);
+                              opt.radius, ls, viewDim);
         });
     const bool haveBiomeColors = biomeTask.get();
     if (!haveBiomeColors) LOG("warning: biome colours unavailable; using the default tints");
@@ -479,10 +483,11 @@ int wmain(int argc, wchar_t** argv) {
     if (worldTask.valid() && !worldTask.get()) return 1;
     if (!session) LOG("world   %8.1f ms  %zu regions, %zu chunks, %zu sections, %.0f MB read, %zu block states%s", t.ms(),
         ls.regions, ls.chunks, ls.sections, double(ls.compressedBytes) / (1 << 20), registry.blockCount(),
-        ls.unsupportedChunks ? " (some LZ4 chunks skipped)" : "");
+        ls.unsupportedChunks ? " (some chunks in an unreadable format skipped)" : "");
+    if (!session && !viewOverworld) LOG("world   showing %s", viewDim.c_str());
 
     // Benchmarks and the self-test never write to a world unless --save is given.
-    WorldSaver saver(world, registry, worldDir);
+    WorldSaver saver(world, registry, worldDir, viewDim);
     const bool wantSave = !session && !localServer && (opt.forceSave || (!opt.readonly && !opt.bench && !opt.selftest));
     const bool canSave = wantSave && saver.lock();
     if (wantSave && !canSave) LOG("note: the world is open in another program (session.lock); running read-only");
@@ -853,6 +858,7 @@ int wmain(int argc, wchar_t** argv) {
             renderer.resetTemporal();
         }
         if (session) terrain.setFarActive(session->dimension().name == "minecraft:overworld");
+        else if (!viewOverworld) terrain.setFarActive(false);  // the generator makes overworld terrain only
         if (haveEntities) entities.frame(dt);
         if (haveEntities) entities.viewEntity = game.cameraMode == 0 ? game.cameraEntity : -1;  // set_camera
         ui.beginFrame(dt);  // UI input first: an open screen takes the game's input
@@ -884,7 +890,7 @@ int wmain(int argc, wchar_t** argv) {
         const double preMs = frameTop.ms();
         Timer phase;
         double genMs = 0, terrainMs = 0;
-        if (genService && (!session || session->dimension().name == "minecraft:overworld") && !(menu && ui.switching())) {
+        if (genService && (session ? session->dimension().name == "minecraft:overworld" : viewOverworld) && !(menu && ui.switching())) {
             // Play mode: chunks far behind the player leave memory (the server owns the world; chunks it no longer
             // sends and locally generated ones come back when needed). Kept, they grew ~150 MB/s while travelling.
             if (session && now - evictScan > 2.0) {

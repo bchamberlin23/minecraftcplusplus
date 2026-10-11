@@ -6,6 +6,7 @@
 #include "core/jobs.h"
 #include "world/nbt.h"
 #include "world/nbt_dom.h"
+#include "world/region_codec.h"
 
 #include <libdeflate.h>
 
@@ -699,9 +700,8 @@ World::LightView World::light(int cx, int sy, int cz) const {
 }
 
 bool World::load(const fs::path& saveDir, BlockRegistry& registry, int centerCx, int centerCz, int radius,
-                 LoadStats& stats) {
-    fs::path dir = saveDir / "region";
-    if (!fs::exists(dir)) dir = saveDir / "dimensions" / "minecraft" / "overworld" / "region";
+                 LoadStats& stats, const std::string& dimension) {
+    const fs::path dir = region::regionDir(saveDir, dimension);
 
     struct File {
         fs::path path;
@@ -732,6 +732,7 @@ bool World::load(const fs::path& saveDir, BlockRegistry& registry, int centerCx,
     Jobs::parallelFor(files.size(), [&](size_t i) {
         thread_local std::vector<u8> file;
         thread_local Decompressor dec;
+        thread_local std::vector<u8> external, decoded;
         const File& f = files[i];
         if (!readFile(f.path, file) || file.size() < 8192) return;
         bytes += file.size();
@@ -752,23 +753,34 @@ bool World::load(const fs::path& saveDir, BlockRegistry& registry, int centerCx,
             size_t pos = size_t(sector) * 4096;
             if (pos + 5 > file.size()) continue;
             u32 len = be32(&file[pos]);
-            u8 type = file[pos + 4];
+            int type = file[pos + 4];
             if (len < 1 || pos + 4 + len > file.size()) continue;
             const u8* payload = &file[pos + 5];
             size_t payloadLen = len - 1, size;
+            if (type & region::kExternalFlag) {  // an oversized chunk: its stream is in c.<x>.<z>.mcc
+                if (!readFile(region::externalChunk(dir, cx, cz), external)) {
+                    ++localUnsupported;
+                    continue;
+                }
+                type &= ~region::kExternalFlag;
+                payload = external.data(), payloadLen = external.size();
+            }
             const u8* data;
-            if (type == 1 || type == 2) {
+            if (type == region::kGzip || type == region::kDeflate) {
                 size = dec.run(type, payload, payloadLen);
                 if (size == SIZE_MAX) {
                     ++localUnsupported;
                     continue;
                 }
                 data = dec.out.data();
-            } else if (type == 3) {
+            } else if (type == region::kNone) {
                 data = payload;
                 size = payloadLen;
+            } else if (region::decode(type, payload, payloadLen, decoded)) {  // LZ4
+                data = decoded.data();
+                size = decoded.size();
             } else {
-                ++localUnsupported;  // LZ4 / external chunk files: not yet supported
+                ++localUnsupported;  // custom (127) / unknown compression: the game cannot read these either
                 continue;
             }
             if (parser.parse(data, size, region->columns[idx], &region->biomes[size_t(idx) * 16])) {
@@ -889,6 +901,11 @@ PlayerStart World::readPlayer(const fs::path& saveDir) {
                         } else {
                             for (i32 i = 0; i < count && r.ok; ++i) r.skip(et);
                         }
+                    } else if (t == TagString && n == "Dimension") {
+                        ps.dimension = std::string(r.str());
+                    } else if (t == TagInt && n == "Dimension") {  // before 1.16: 0, -1, 1
+                        const i32 d = r.i32v();
+                        ps.dimension = d == -1 ? "minecraft:the_nether" : d == 1 ? "minecraft:the_end" : "minecraft:overworld";
                     } else if (t == TagList && n == "Rotation") {
                         u8 et = r.u8v();
                         i32 count = r.i32v();
@@ -925,8 +942,8 @@ PlayerStart World::readPlayer(const fs::path& saveDir) {
             }
         }
     }
-    // Where the owner left off, so the world shows there before the server places the player (only in the
-    // overworld: the view starts there).
+    // Where the owner left off, so the world shows there before the server places the player (in that player's
+    // dimension: the viewer loads its region folder).
     if (!ps.found && owner.size() == 4) {
         char id[40];
         std::snprintf(id, sizeof(id), "%08x-%04x-%04x-%04x-%04x%08x", u32(owner[0]), u32(owner[1]) >> 16,
@@ -937,9 +954,10 @@ PlayerStart World::readPlayer(const fs::path& saveDir) {
             const NbtValue* pos = player.find("Pos");
             const NbtValue* rot = player.find("Rotation");
             const NbtValue* dim = player.find("Dimension");
-            if (pos && pos->items.size() == 3 && (!dim || dim->s == "minecraft:overworld")) {
+            if (pos && pos->items.size() == 3) {
                 ps.x = pos->items[0].d, ps.y = pos->items[1].d, ps.z = pos->items[2].d;
                 if (rot && rot->items.size() == 2) ps.yaw = float(rot->items[0].d), ps.pitch = float(rot->items[1].d);
+                if (dim && dim->type == TagString && !dim->s.empty()) ps.dimension = dim->s;
                 ps.found = true;
             }
         }

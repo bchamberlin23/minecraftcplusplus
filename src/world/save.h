@@ -23,10 +23,12 @@ struct SavedPlayer {
 
 // Writes edits back into the save in the game's own format. Only changed chunks are
 // re-encoded; everything else in them (biomes, entities, block entities...) is preserved.
-// Each region file is backed up once before it is first overwritten.
+// Each region file is backed up once before it is first overwritten. Chunks keep their compression (zlib, gzip,
+// none, LZ4); oversized ones go to external .mcc files like the game (world/region_codec.h).
 class WorldSaver {
 public:
-    WorldSaver(World& world, const BlockRegistry& registry, const fs::path& saveDir);
+    WorldSaver(World& world, const BlockRegistry& registry, const fs::path& saveDir,
+               const std::string& dimension = "minecraft:overworld");
     ~WorldSaver();
 
     // Takes the world's session.lock like the game does, so both can never write at once.

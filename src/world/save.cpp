@@ -2,6 +2,7 @@
 
 #include "assets/assets.h"
 #include "world/nbt_dom.h"
+#include "world/region_codec.h"
 #include "world/world.h"
 
 #include <libdeflate.h>
@@ -132,11 +133,16 @@ std::vector<u8> inflate(const u8* in, size_t size, int type) {
 
 }  // namespace
 
-WorldSaver::WorldSaver(World& world, const BlockRegistry& registry, const fs::path& saveDir)
+WorldSaver::WorldSaver(World& world, const BlockRegistry& registry, const fs::path& saveDir, const std::string& dimension)
     : world_(world), registry_(registry), dir_(saveDir) {
-    regionDir_ = dir_ / "region";
-    if (!fs::exists(regionDir_)) regionDir_ = dir_ / "dimensions" / "minecraft" / "overworld" / "region";
+    regionDir_ = region::regionDir(dir_, dimension);
     backupDir_ = dir_ / "minecraftCplusplus-backup";
+    if (dimension != "minecraft:overworld") {  // region file names repeat in every dimension
+        std::string sub = dimension;
+        for (char& c : sub)
+            if (c == ':' || c == '/') c = '_';
+        backupDir_ /= sub;
+    }
 }
 
 WorldSaver::~WorldSaver() {
@@ -178,8 +184,9 @@ bool WorldSaver::saveRegion(int rx, int rz, const std::vector<int>& chunks) {
         }
     }
 
-    // Raw stored payloads ([length][compression][data]) for every chunk present.
+    // Raw stored payloads ([length][compression][data]) for every chunk present (an external chunk: its stub).
     std::vector<std::vector<u8>> payload(1024);
+    int typeCount[128] = {};
     for (int idx = 0; idx < 1024; ++idx) {
         const u32 sector = be32(&old[size_t(idx) * 4]) >> 8;
         if (!sector) continue;
@@ -188,27 +195,41 @@ bool WorldSaver::saveRegion(int rx, int rz, const std::vector<int>& chunks) {
         const u32 len = be32(&old[pos]);
         if (len < 1 || pos + 4 + len > old.size()) continue;
         payload[idx].assign(old.begin() + pos, old.begin() + pos + 4 + len);
+        ++typeCount[old[pos + 4] & 127];
     }
+    // New chunks use the compression this region is stored with (region-file-compression), else the default.
+    int regionType = region::kDeflate;
+    for (int type : {region::kGzip, region::kNone, region::kLz4})
+        if (typeCount[type] > typeCount[regionType]) regionType = type;
 
-    libdeflate_compressor* comp = libdeflate_alloc_compressor(6);
     bool ok = true;
+    std::vector<int> nowInline;  // chunks that were external and fit the region again (their .mcc goes)
     for (int idx : chunks) {
         std::vector<u8>& p = payload[idx];
         const int cx = rx * 32 + (idx & 31), cz = rz * 32 + (idx >> 5);
         NbtValue root;
         std::string rootName;
+        int type = regionType;
         if (p.size() < 5) {
             // Generated this session: write a chunk at the "terrain" status, which the game
             // finishes (features, light) when it loads it, keeping our edits.
             if (!biomeName_) continue;
             root = newChunk(cx, cz);
         } else {
-            if (p[4] & 0x80) continue;  // external storage: left alone
-            const int type = p[4];
-            std::vector<u8> raw =
-                type == 3 ? std::vector<u8>(p.begin() + 5, p.end()) : inflate(&p[5], p.size() - 5, type);
-            if (raw.empty() || !nbtRead(raw.data(), raw.size(), root, &rootName)) {
-                ok = false;
+            type = p[4] & 127;
+            std::vector<u8> stream;
+            if (p[4] & region::kExternalFlag) {  // an oversized chunk: c.<x>.<z>.mcc
+                if (!readFile(region::externalChunk(regionDir_, cx, cz), stream)) {
+                    ok = false;
+                    continue;
+                }
+                nowInline.push_back(idx);
+            } else {
+                stream.assign(p.begin() + 5, p.end());
+            }
+            std::vector<u8> raw;
+            if (!region::decode(type, stream.data(), stream.size(), raw) || !nbtRead(raw.data(), raw.size(), root, &rootName)) {
+                ok = false;  // custom compression or damaged: left as it is
                 continue;
             }
         }
@@ -263,20 +284,31 @@ bool WorldSaver::saveRegion(int rx, int rz, const std::vector<int>& chunks) {
         }
         root.erase("Heightmaps");  // the game rebuilds missing heightmaps on load
 
-        std::vector<u8> encoded;
+        std::vector<u8> encoded, packed;
         nbtWrite(root, encoded, rootName);
-        std::vector<u8> packed(libdeflate_zlib_compress_bound(comp, encoded.size()));
-        const size_t n = libdeflate_zlib_compress(comp, encoded.data(), encoded.size(), packed.data(), packed.size());
-        if (!n) {
+        if (!region::encode(type, encoded.data(), encoded.size(), packed)) {
             ok = false;
             continue;
         }
         p.assign(5, 0);
-        putBe32(p.data(), u32(n + 1));
-        p[4] = 2;  // zlib
-        p.insert(p.end(), packed.begin(), packed.begin() + n);
+        putBe32(p.data(), u32(packed.size() + 1));
+        p[4] = u8(type);
+        p.insert(p.end(), packed.begin(), packed.end());
+        if ((p.size() + 4095) / 4096 >= 256) {
+            // RegionFile.write: 256 sectors or more go to an external file, the region keeps a stub.
+            const fs::path ext = region::externalChunk(regionDir_, cx, cz);
+            if (!writeFileAtomically(ext, packed)) {
+                LOG("error: could not write the oversized chunk %s", ext.string().c_str());
+                ok = false;
+                p.clear();
+                continue;
+            }
+            p.assign(5, 0);
+            putBe32(p.data(), 1);
+            p[4] = u8(type | region::kExternalFlag);
+            std::erase(nowInline, idx);
+        }
     }
-    libdeflate_free_compressor(comp);
 
     // Re-pack every chunk into fresh sectors behind the two header sectors.
     std::vector<u8> out(8192, 0);
@@ -286,17 +318,15 @@ bool WorldSaver::saveRegion(int rx, int rz, const std::vector<int>& chunks) {
         const std::vector<u8>& p = payload[idx];
         if (p.empty()) continue;
         const size_t sectors = (p.size() + 4095) / 4096;
-        if (sectors > 255) {  // would need the game's external .mcc storage
-            LOG("error: chunk too large to store in region file");
-            return false;
-        }
         const u32 start = u32(out.size() / 4096);
         out.insert(out.end(), p.begin(), p.end());
         out.resize(out.size() + (sectors * 4096 - p.size()), 0);
         putBe32(&out[size_t(idx) * 4], (start << 8) | u32(sectors));
     }
     for (int idx : chunks) putBe32(&out[4096 + size_t(idx) * 4], now);
-    return writeFileAtomically(file, out) && ok;
+    if (!writeFileAtomically(file, out)) return false;
+    for (int idx : nowInline) fs::remove(region::externalChunk(regionDir_, rx * 32 + (idx & 31), rz * 32 + (idx >> 5)), ec);
+    return ok;
 }
 
 bool WorldSaver::savePlayer(const SavedPlayer& pl) {
