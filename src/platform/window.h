@@ -15,6 +15,9 @@ public:
     // placement: open there instead of the default position and size. cloaked: the window exists (and is sized,
     // so it can be rendered to) but stays invisible until reveal().
     bool create(const wchar_t* title, int width, int height, const Placement* placement = nullptr, bool cloaked = false);
+    // Automated runs (before create): the window opens off-screen without ever taking focus, and capturing the mouse
+    // only changes the game's state (the real cursor is never confined, hidden or moved).
+    void setHeadless(bool headless) { headless_ = headless; }
     void reveal();  // uncloaks, raises and focuses the window
     Placement placement() const;
     bool pump();  // processes messages; false once the window is closed
@@ -81,7 +84,7 @@ private:
 
     HWND hwnd_ = nullptr;
     u32 width_ = 0, height_ = 0;
-    bool resized_ = false, closed_ = false, captured_ = false;
+    bool resized_ = false, closed_ = false, captured_ = false, headless_ = false;
     float dx_ = 0, dy_ = 0;
     MouseEvents events_;
     std::vector<InputEvent> input_;

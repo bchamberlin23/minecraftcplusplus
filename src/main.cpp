@@ -380,8 +380,10 @@ int wmain(int argc, wchar_t** argv) {
     const bool haveReports = reports.load(mc, version, fs::path(local ? local : L".") / "minecraftCplusplus" / "reports");
     if (!haveReports) LOG("warning: block definitions unavailable; generated terrain may miss some block states");
     audio::AudioSystem audio;  // loads in the background
+    // Automated runs (a script, or MCPP_HEADLESS=1) stay out of the owner's way: no focus, no cursor, no sound.
+    const bool headless = !opt.script.empty() || _wgetenv(L"MCPP_HEADLESS");
     audio.init({mc, version, fs::path(local ? local : L".") / "minecraftCplusplus", haveReports ? &reports : nullptr,
-                opt.audioCapture});
+                opt.audioCapture, headless});
     if (!opt.audioCapture.empty()) audio.waitReady(60.0);
     BlockShapes blockShapes;  // exact selection / collision shapes from the game's code (cached), parsed meanwhile
     auto shapesTask = std::async(std::launch::async, [&] {
@@ -533,6 +535,7 @@ int wmain(int argc, wchar_t** argv) {
 
     Window window;
     // An instance started by another (platform/launch.h) opens where that window was, invisible until its first frames.
+    window.setHeadless(headless);
     if (!window.create(L"minecraftCplusplus", opt.width, opt.height, launch::placement(), launch::handoffChild())) {
         LOG("error: cannot create window");
         return 1;
@@ -831,6 +834,9 @@ int wmain(int argc, wchar_t** argv) {
     };
     bool escWas = false;
     const double loopStart = nowSeconds();
+    const bool smoothReveal = !opt.bench && !opt.selftest && !menu;
+    if (smoothReveal) renderer.beginWorldReveal(cam.x, cam.z);
+    double previousStreamX = cam.x, previousStreamZ = cam.z;
     Timer frameEnd;  // window.pump() + anything between frames
     for (int frame = 0; window.pump(); ++frame) {
         const double pumpMs = frameEnd.ms();
@@ -875,6 +881,10 @@ int wmain(int argc, wchar_t** argv) {
             netMs = t.ms();
         }
         if (session && session->dimension().name != lastDimension) {
+            if (smoothReveal && (!lastDimension.empty() || session->dimension().name != "minecraft:overworld")) {
+                renderer.beginWorldReveal(game.player().pos[0], game.player().pos[2]);
+                previousStreamX = game.player().pos[0], previousStreamZ = game.player().pos[2];
+            }
             lastDimension = session->dimension().name;
             renderer.resetTemporal();
         }
@@ -908,6 +918,10 @@ int wmain(int argc, wchar_t** argv) {
                                session ? std::string_view(session->dimension().name) : "minecraft:overworld"});
 
         const double preMs = frameTop.ms();
+        // Only a discontinuous move restarts the entrance wave; walking does not.
+        const double stepX = cam.x - previousStreamX, stepZ = cam.z - previousStreamZ;
+        if (smoothReveal && stepX * stepX + stepZ * stepZ > 128.0 * 128.0) renderer.beginWorldReveal(cam.x, cam.z);
+        previousStreamX = cam.x, previousStreamZ = cam.z;
         Timer phase;
         double genMs = 0, terrainMs = 0;
         if (genService && (!session || session->dimension().name == "minecraft:overworld") && !(menu && ui.switching())) {

@@ -11,6 +11,7 @@ cbuffer Frame : register(b0) {
     uint4 gSegCap;       // command capacity of each pass
     uint4 gMisc;         // x = active slot count, y = texture LOD bias (float bits)
     float4 gLightmap[3]; // the game's lightmap inputs (lightmap.hlsli)
+    float4 gFade;        // x = fade clock (seconds), y = 1 / fade duration, z = frame index, w = temporal AA on
 };
 #include "lightmap.hlsli"
 
@@ -23,9 +24,31 @@ ConstantBuffer<DrawConstants> gDraw : register(b1);
 struct GpuSection {
     int4 origin;         // xyz = block coordinates of the min corner, w = LOD level (cell = 2^w blocks)
     uint2 ranges[19];    // (first quad, quad count) per draw range
+    float fade;          // fade clock time a cross-fade started: > 0 fading in, < 0 fading out, 0 none
+    float pad;
 };
 StructuredBuffer<GpuSection> gSections : register(t1);
 StructuredBuffer<uint> gActive : register(t3);  // slots selected by the CPU LOD cut
+
+// Cross-fade of a section entering or leaving the LOD cut: fading in it shows the pixels whose dither value is
+// below its progress, fading out the others, so the old and new section together cover each pixel once.
+float fadeProgress(float fade) { return fade == 0 ? 1.0 : saturate((gFade.x - abs(fade)) * gFade.y); }
+bool fadedOut(float2 pixel) {
+    float fade = gSections[gDraw.sectionIndex].fade;
+    if (fade == 0) return false;
+    float t = fadeProgress(fade);
+    float d;
+    if (gFade.w > 0) {  // white noise, new each frame: an even dissolve the temporal accumulation smooths
+        uint h = uint(pixel.x) * 1973u + uint(pixel.y) * 9277u + uint(gFade.z) * 26699u;
+        h = (h ^ 61u) ^ (h >> 16), h *= 9u, h ^= h >> 4, h *= 0x27d4eb2du, h ^= h >> 15;  // Wang hash
+        d = float(h & 0xFFFFFFu) / 16777216.0;
+    } else {  // no temporal accumulation: an even 4x4 ordered screen door
+        static const float kBayer[16] = {0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5};
+        uint2 q = uint2(pixel) & 3;
+        d = (kBayer[q.y * 4 + q.x] + 0.5) / 16.0;
+    }
+    return fade > 0 ? d >= t : d < t;
+}
 
 Texture2DArray<float4> gTextures : register(t2);
 StructuredBuffer<uint> gColors : register(t4);  // tint colour table (0xRRGGBB), see ColorTable in mesher.h

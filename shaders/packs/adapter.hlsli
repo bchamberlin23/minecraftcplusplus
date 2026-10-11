@@ -65,6 +65,7 @@ float4 mcppTile(uint layer) {
 struct McppSection {
     int4 origin;  // xyz = block coordinates of the min corner, w = LOD level
     uint2 ranges[19];
+    float fade, pad;  // the renderer's cross-fade (not used by packs)
 };
 StructuredBuffer<McppSection> mcppSections : register(t1, space1);
 StructuredBuffer<uint> mcppColors : register(t2, space1);

@@ -86,12 +86,14 @@ float4 TerrainPSOpaque(VSOut i) : SV_Target {
 }
 
 float4 TerrainPSCutout(VSOut i) : SV_Target {
+    if (fadedOut(i.pos.xy)) discard;
     float4 c = shadePixel(i);
     clip(c.a - 0.5);
     return float4(c.rgb, 1);
 }
 
 float4 TerrainPSTranslucent(VSOut i) : SV_Target {
+    if (fadedOut(i.pos.xy)) discard;
     return shadePixel(i);
 }
 
@@ -151,6 +153,7 @@ GbufTargets TerrainGbufPS(GbufVSOut i) {
 }
 
 GbufTargets TerrainGbufPSCutout(GbufVSOut i) {
+    if (fadedOut(i.pos.xy)) discard;
     float4 c = sampleTerrain(i.uvl);
     clip(c.a - 0.5);
     return gbufWrite(c.rgb * i.tint, kNormal[i.info & 7], i.light, i.info >> 4);
@@ -263,6 +266,7 @@ float4 traceReflection(float3 rel, float3 r, float2 pixel) {
 }
 
 float4 TerrainFwdPS(FwdVSOut i) : SV_Target {
+    if (fadedOut(i.pos.xy)) discard;
     uint face = i.info & 7, mat = i.info >> 4;
     float2 pixel = i.pos.xy;
     float3 v = -normalize(i.rel);
