@@ -261,7 +261,8 @@ FrameGenKind Upscalers::effectiveFrameGen() const {
 // ---- settings ----------------------------------------------------------------------------------------------
 
 VideoSettings Upscalers::apply(VideoSettings s) {
-    s.shaders = std::min<u8>(s.shaders, 4);
+    s.shaders = std::min<u8>(s.shaders, u8(ShaderPreset::PathTraced));
+    if (s.shaders == u8(ShaderPreset::PathTraced) && !r.pathTracingSupported()) s.shaders = u8(ShaderPreset::Ultra);
     if (!caps_.upscaler[int(s.upscaler)]) s.upscaler = UpscalerKind::Taa;
     {  // quality the vendor offers (nearest otherwise)
         const auto modes = qualityModes(s.upscaler);

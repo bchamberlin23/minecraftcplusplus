@@ -1,5 +1,6 @@
 #include "render/renderer.h"
 #include "render/shading.h"
+#include "render/pathtrace.h"
 #include "render/packs/pack_pipeline.h"
 #include "render/upscalers/upscalers.h"
 
@@ -362,7 +363,13 @@ bool Renderer::createPipelines() {
         uavRanges[i].OffsetInDescriptorsFromTableStart = offset;
     }
 
-    D3D12_ROOT_PARAMETER params[14]{};
+    // Path tracer tables: t0..15 space4 (SRVs), u0..15 space4 (UAVs). See pathtrace.hlsl.
+    D3D12_DESCRIPTOR_RANGE ptRanges[2]{};
+    ptRanges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    ptRanges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    for (auto& pr : ptRanges) pr.NumDescriptors = PathTracer::kTableSize, pr.RegisterSpace = 4;
+
+    D3D12_ROOT_PARAMETER params[19]{};
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;  // b1: quadOffset, sectionIndex
     params[0].Constants.ShaderRegister = 1;
     params[0].Constants.Num32BitValues = 2;
@@ -375,7 +382,7 @@ bool Renderer::createPipelines() {
     params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;  // t2: texture array
     params[4].DescriptorTable.NumDescriptorRanges = 1;
     params[4].DescriptorTable.pDescriptorRanges = &range;
-    params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;  // the path tracer's compute passes sample it too
     params[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;  // u0: counts
     params[5].Descriptor.ShaderRegister = 0;
     params[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;  // u1: indirect args
@@ -397,6 +404,18 @@ bool Renderer::createPipelines() {
     params[12].Constants.Num32BitValues = 8;
     params[13].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;  // t5: texture animation remap
     params[13].Descriptor.ShaderRegister = 5;
+    params[14].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;  // t6: path tracer acceleration structure (TLAS)
+    params[14].Descriptor.ShaderRegister = 6;
+    params[15].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;  // t7: model quads next to the cube quads in t0
+    params[15].Descriptor.ShaderRegister = 7;
+    params[16].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;  // path tracer SRVs
+    params[16].DescriptorTable.NumDescriptorRanges = 1;
+    params[16].DescriptorTable.pDescriptorRanges = &ptRanges[0];
+    params[17].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;  // path tracer UAVs
+    params[17].DescriptorTable.NumDescriptorRanges = 1;
+    params[17].DescriptorTable.pDescriptorRanges = &ptRanges[1];
+    params[18].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;  // b4: path tracer constants
+    params[18].Descriptor.ShaderRegister = 4;
 
     D3D12_STATIC_SAMPLER_DESC samplers[4]{};
     D3D12_STATIC_SAMPLER_DESC& samp = samplers[0];
@@ -405,7 +424,7 @@ bool Renderer::createPipelines() {
     samp.MaxLOD = D3D12_FLOAT32_MAX;
     samp.MaxAnisotropy = 1;
     samp.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
-    samp.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    samp.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     for (u32 i = 1; i < 4; ++i) {  // s1 shadow comparison, s2 linear clamp, s3 point clamp
         D3D12_STATIC_SAMPLER_DESC& s = samplers[i];
         s.Filter = i == 1   ? D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT
@@ -420,7 +439,7 @@ bool Renderer::createPipelines() {
     }
 
     D3D12_ROOT_SIGNATURE_DESC rd{};
-    rd.NumParameters = 14;
+    rd.NumParameters = 19;
     rd.pParameters = params;
     rd.NumStaticSamplers = 4;
     rd.pStaticSamplers = samplers;
@@ -709,6 +728,8 @@ u32 Renderer::addMesh(const SectionMesh& m, int level, i32 x, i32 y, i32 z) {
         return kNoSlot;
     }
     slots_[slot] = {co, nc, mo, nm, {x, y, z, level}, 0};
+    for (int r = 0; r < 6; ++r) slots_[slot].opaque += m.counts[r];
+    for (int r = 6; r < 2 * 6; ++r) slots_[slot].cutout += m.counts[r];
     for (int r = 2 * 6; r < 3 * 6; ++r) slots_[slot].translucent += m.counts[r];
 
     GpuSection g{};
@@ -724,12 +745,14 @@ u32 Renderer::addMesh(const SectionMesh& m, int level, i32 x, i32 y, i32 z) {
     if (nc) stage(cubeQuads_.Get(), co * kCubeQuadBytes, m.cubeQuads.data(), nc * kCubeQuadBytes);
     if (nm) stage(modelQuads_.Get(), mo * kModelQuadWords * 4, m.modelQuads.data(), nm * kModelQuadWords * 4);
     stage(sections_.Get(), u64(slot) * sizeof(GpuSection), &g, sizeof(g));
+    if (pt_) pt_->meshAdded(slot);
     return slot;
 }
 
 void Renderer::removeMesh(u32 slot) {
     if (slot >= slotCapacity_) return;
     Slot& s = slots_[slot];
+    if (pt_) pt_->meshRemoved(slot);
     if (s.cubeCount) cubeAlloc_.free(s.cubeOffset, s.cubeCount);
     if (s.modelCount) modelAlloc_.free(s.modelOffset, s.modelCount);
     s = {};
