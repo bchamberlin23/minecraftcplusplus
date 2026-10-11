@@ -162,7 +162,7 @@ void VolumetricCS(uint2 px : SV_DispatchThreadID) {
     uint steps = gOpts.w;
     float jitter = ign(float2(px), gFlags.y);
     float mu = dot(dir, gLightDir.xyz);
-    float phase = lerp(1.0 / (4 * kPi), phaseHG(mu, 0.7), 0.6) * 4 * kPi;
+    float phase = lerp(1.0 / (4 * kPi), phaseHG(mu, 0.72), 0.85) * 4 * kPi;
     float3 light = gLightColor.rgb;
     float sigma = under ? gWaterScatter.w : gFog.x * gFog.w * (1.0 + gTime.y * 3.0);
     float3 scatter = 0;
@@ -248,6 +248,7 @@ void CompositeCS(uint2 px : SV_DispatchThreadID) {
         }
         float4 v = sum / wsum;
         c.rgb = c.rgb * v.a + v.rgb;
+        if (debugView() == 6) c.rgb = v.rgb * 4.0;  // in-scatter
     }
     // Late layer (clouds, rain / snow): premultiplied over, converted from the vanilla LDR colours.
     float4 o = gTex[kTexLdrSky].Load(int3(px, 0));

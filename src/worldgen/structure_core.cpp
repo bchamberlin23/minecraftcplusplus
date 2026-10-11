@@ -671,6 +671,13 @@ std::vector<bool> StructureEnv::biomeSet(const json& j) const {
     return out;
 }
 
+bool StructureEnv::biomeInTag(u16 biome, std::string_view tag) const {
+    std::lock_guard lock(tagMutex_);
+    auto it = biomeTags_.find(std::string(tag));
+    if (it == biomeTags_.end()) it = biomeTags_.emplace(std::string(tag), biomeSet(json("#" + std::string(tag)))).first;
+    return biome < it->second.size() && it->second[biome];
+}
+
 namespace {
 // The base column's states: default block, fluids or air (NoiseBasedChunkGenerator.iterateNoiseColumn).
 struct ColumnCache {

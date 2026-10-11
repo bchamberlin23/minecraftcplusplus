@@ -269,8 +269,8 @@ struct PlaceCtx {
     const StructureEnv& env;
     const SB& b;
     int chunkX, chunkZ;
-    u16 get(const BlockPos& p) const { return level.block(p); }
-    u16 get(int x, int y, int z) const { return level.block(x, y, z); }
+    St get(const BlockPos& p) const { return {level.block(p)}; }
+    St get(int x, int y, int z) const { return {level.block(x, y, z)}; }
     void set(const BlockPos& p, u16 s) const { level.setBlock(p, s); }
     int height(Heightmap t, int x, int z) const { return level.height(t, x, z); }
     int minY() const { return level.minY(); }
@@ -315,6 +315,11 @@ protected:
     int worldY(int y) const { return orientation_ ? y + box.minY : y; }
     int worldZ(int x, int z) const;
     BlockPos worldPos(int x, int y, int z) const { return {worldX(x, z), worldY(y), worldZ(x, z)}; }
+    // The game's names, for the transliterated piece code.
+    BlockPos getWorldPos(int x, int y, int z) const { return worldPos(x, y, z); }
+    int getWorldX(int x, int z) const { return worldX(x, z); }
+    int getWorldY(int y) const { return worldY(y); }
+    int getWorldZ(int x, int z) const { return worldZ(x, z); }
 
     void placeBlock(PlaceCtx& c, u16 state, int x, int y, int z, const BBox& chunkBB);
     virtual bool canBeReplaced(PlaceCtx& c, int x, int y, int z, const BBox& chunkBB) {
@@ -329,11 +334,14 @@ protected:
     void generateBox(PlaceCtx& c, const BBox& chunkBB, const BBox& b, u16 edge, u16 fill, bool skipAir) {
         generateBox(c, chunkBB, b.minX, b.minY, b.minZ, b.maxX, b.maxY, b.maxZ, edge, fill, skipAir);
     }
+public:
     struct BlockSelector {
         u16 next = 0;
         virtual ~BlockSelector() = default;
         virtual void select(RandomSource& r, int x, int y, int z, bool edge) = 0;
     };
+
+protected:
     void generateBox(PlaceCtx& c, const BBox& chunkBB, int x0, int y0, int z0, int x1, int y1, int z1, bool skipAir,
                      RandomSource& r, BlockSelector& sel);
     void generateBox(PlaceCtx& c, const BBox& chunkBB, const BBox& b, bool skipAir, RandomSource& r, BlockSelector& sel) {
@@ -462,6 +470,7 @@ public:
     int seaLevel() const { return gen.seaLevel(); }
     BiomeTable& biomes() const { return const_cast<ChunkGenerator&>(gen).biomes(); }
     std::vector<bool> biomeSet(const json& holderSet) const;  // "#minecraft:tag", "minecraft:x", [..]
+    bool biomeInTag(u16 biome, std::string_view tag) const;   // "minecraft:mineshaft_blocking" (cached)
     float temperature(u16 biome, const BlockPos& p) const;   // Biome.getTemperature
     // Cached base terrain heights (ChunkGenerator.getBaseHeight). Thread-safe.
     int baseHeight(DensityContext& ctx, int x, int z, HType t) const;
@@ -472,6 +481,8 @@ public:
 private:
     struct HeightCache;
     std::unique_ptr<HeightCache> heights_;
+    mutable std::mutex tagMutex_;
+    mutable std::unordered_map<std::string, std::vector<bool>> biomeTags_;
 };
 
 }  // namespace wg::st

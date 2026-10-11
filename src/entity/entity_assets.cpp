@@ -310,10 +310,12 @@ bool EntityAssets::loadTextures(const fs::path& jar) {
         std::string_view n = file;
         constexpr std::string_view prefix = "assets/minecraft/textures/";
         n.remove_prefix(prefix.size());
-        if (!n.starts_with("entity/") && !n.starts_with("item/")) continue;
-        // Large decorative sets the entity renderer does not use here.
+        // misc/enchanted_glint_*: the armour glint (entity_render.cpp).
+        if (!n.starts_with("entity/") && !n.starts_with("item/") && !n.starts_with("misc/enchanted_glint")) continue;
+        // Large decorative sets the entity renderer does not use here (the plain shield is kept for held shields).
         // (Banner patterns and pot sherds are kept: the block entity renderer layers them.)
-        if (n.starts_with("entity/shield/") || n.starts_with("entity/end_portal/") || n.starts_with("entity/beacon/"))
+        if ((n.starts_with("entity/shield/") && !n.starts_with("entity/shield/shield_base")) ||
+            n.starts_with("entity/end_portal/") || n.starts_with("entity/beacon/"))
             continue;
         texs.push_back({file, std::string(n.substr(0, n.size() - 4))});
     }
@@ -430,7 +432,7 @@ bool EntityAssets::loadImpl(const fs::path& minecraftDir, const std::string& ver
     // (The game's data with the world's data packs.)
     if (const AssetSource& data = AssetSource::data(jar); !data.empty()) {
         for (const char* r : {"cow_variant", "pig_variant", "chicken_variant", "wolf_variant", "cat_variant",
-                              "frog_variant", "zombie_nautilus_variant"}) {
+                              "frog_variant", "zombie_nautilus_variant", "painting_variant"}) {
             const std::string prefix = std::string("data/minecraft/") + r + "/";
             std::vector<Variant>& list = variants_[r];
             for (const std::string& file : data.list(prefix, ".json")) {

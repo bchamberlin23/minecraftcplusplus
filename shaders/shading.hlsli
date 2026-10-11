@@ -29,7 +29,8 @@ cbuffer Shade : register(b2) {
     uint4 gOpts;                 // x = cascades, y = shadow taps, z = ssr steps, w = volumetric steps
     uint4 gFlags;                // x = flags (kFlag*), y = frame index, z = previous history slot, w = this history slot
 };
-// Debug views (MCPP_SHADERS_DEBUG): 1 raw HDR (exposure 1, no tonemap), 2 albedo, 3 normal, 4 shadow, 5 lighting only.
+// Debug views (MCPP_SHADERS_DEBUG): 1 raw HDR (exposure 1, no tonemap), 2 albedo, 3 normal, 4 shadow, 5 lighting only,
+// 6 volumetric in-scatter x4.
 uint debugView() { return (gFlags.x >> 8) & 15; }
 uint tonemapMode() { return (gFlags.x >> 12) & 3; }
 static const uint kFlagWaving = 1, kFlagPcss = 2, kFlagSsao = 4, kFlagVolumetric = 8, kFlagSsr = 16, kFlagTaa = 32;

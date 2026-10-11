@@ -209,6 +209,10 @@ bool Upscalers::createSwapChain(HWND hwnd, const DXGI_SWAP_CHAIN_DESC1& desc, Co
     if (Backend* b = backend(want)) {
         if (b->createSwapChain(hwnd, desc, true, out)) {
             fg_ = swapOwner_ = b;
+            menuPaused_ = false;
+            // FSR's swap chain gets Streamline's proxy on top (presentCommon: Reflex / PCL / SL garbage collection).
+            // Not XeSS-FG: its destroy requires every external reference gone, and SL's proxy keeps one.
+            if (b == fsr_.get()) dlss_->wrapSwapChain(out);
             b->setFrameGen(true, settings_.frameGenMultiplier);
             LOG("frame generation: %s %ux on", frameGenName(want), settings_.frameGenMultiplier);
             return true;
@@ -286,7 +290,7 @@ VideoSettings Upscalers::apply(VideoSettings s) {
     const FrameGenKind newFg = effectiveFrameGen();
     if (newFg != oldFg && r.swapchain_) {
         r.recreateSwapChain();
-    } else if (fg_ && s.frameGenMultiplier != old.frameGenMultiplier) {
+    } else if (fg_ && !menuPaused_ && s.frameGenMultiplier != old.frameGenMultiplier) {
         fg_->setFrameGen(true, s.frameGenMultiplier);
     }
     r.setVsync(s.vsync);
@@ -403,6 +407,12 @@ u32 Upscalers::jitterPhases(u32 renderW, u32 outputW) const {
     // FSR / XeSS / DLSS guidance: a Halton(2,3) sequence of about 8 * (output / render)^2 samples per cycle.
     const float ratio = float(outputW) / float(std::max(renderW, 1u));
     return std::max(8u, u32(std::ceil(8.0f * ratio * ratio)));
+}
+
+void Upscalers::setMenuActive(bool menu) {
+    if (!fg_ || menu == menuPaused_) return;
+    menuPaused_ = menu;
+    fg_->setFrameGen(!menu, settings_.frameGenMultiplier);
 }
 
 bool Upscalers::uiComposedBySwapChain() const { return fg_ && fg_->composesUi(); }
@@ -536,6 +546,6 @@ void Upscalers::resizeSwapChain(IDXGISwapChain3* swapchain, u32 width, u32 heigh
     // DLSS-G: frame generation must be off while the swap chain changes (deadlock avoidance, SL guide 12.0).
     if (fg_) fg_->setFrameGen(false, 1);
     swapchain->ResizeBuffers(Renderer::kFrames, width, height, format, flags);
-    if (fg_) fg_->setFrameGen(true, settings_.frameGenMultiplier);
+    if (fg_ && !menuPaused_) fg_->setFrameGen(true, settings_.frameGenMultiplier);
     havePrev_ = false;
 }

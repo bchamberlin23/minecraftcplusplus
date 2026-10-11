@@ -10,6 +10,7 @@
 
 #include "EntityCutoutPS.h"
 #include "EntityFreeVS.h"
+#include "EntityGlintPS.h"
 #include "EntityModelVS.h"
 #include "EntityTranslucentPS.h"
 
@@ -28,7 +29,7 @@ constexpr u64 kRefOffset = kInstOffset + u64(kMaxInstances) * 32;
 constexpr u64 kFreeOffset = kRefOffset + u64(kMaxRefs) * 8;
 constexpr u64 kFrameBytes = (kFreeOffset + u64(kMaxFree) * 112 + 65535) & ~u64(65535);
 
-enum LayerFlags : u8 { Emissive = 1, Translucent = 2, TintWool = 8, TintCollar = 16, Armor = 32, Elytra = 64 };
+enum LayerFlags : u8 { Emissive = 1, Translucent = 2, TintWool = 8, TintCollar = 16, Armor = 32, Elytra = 64, Glint = 128 };
 enum Special : u8 {
     SpNone, SpCow, SpPig, SpChicken, SpSheep, SpWolf, SpCat, SpHorse, SpLlama, SpRabbit, SpParrot, SpFox, SpAxolotl,
     SpPanda, SpMooshroom, SpVillager, SpZombieVillager, SpSlime, SpPlayer, SpFrog, SpArmorStand, SpCreeper, SpBoat,
@@ -119,6 +120,7 @@ EntityRenderer::EntityRenderer(EntityWorld& world) : world_(world), assets_(worl
     poses_.reserve(256);
     hidden_.reserve(256);
     translucent_.reserve(1 << 14);
+    glint_.reserve(1 << 12);
 }
 
 EntityRenderer::~EntityRenderer() {
@@ -545,7 +547,12 @@ bool EntityRenderer::create(Renderer& r) {
         d.PS = {ps, psSize};
         auto& rt = d.BlendState.RenderTarget[0];
         rt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
-        if (blend) {
+        if (ps == g_EntityGlintPS) {  // GLINT_TRANSPARENCY: src colour * src colour + dst, alpha kept
+            rt.BlendEnable = TRUE;
+            rt.SrcBlend = D3D12_BLEND_SRC_COLOR, rt.DestBlend = D3D12_BLEND_ONE, rt.BlendOp = D3D12_BLEND_OP_ADD;
+            rt.SrcBlendAlpha = D3D12_BLEND_ZERO, rt.DestBlendAlpha = D3D12_BLEND_ONE, rt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+            rt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_RED | D3D12_COLOR_WRITE_ENABLE_GREEN | D3D12_COLOR_WRITE_ENABLE_BLUE;
+        } else if (blend) {
             rt.BlendEnable = TRUE;
             rt.SrcBlend = D3D12_BLEND_SRC_ALPHA;
             rt.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
@@ -574,7 +581,9 @@ bool EntityRenderer::create(Renderer& r) {
         !pso(g_EntityModelVS, sizeof(g_EntityModelVS), g_EntityTranslucentPS, sizeof(g_EntityTranslucentPS), true,
              D3D12_CULL_MODE_BACK, psoTranslucent_) ||
         !pso(g_EntityFreeVS, sizeof(g_EntityFreeVS), g_EntityCutoutPS, sizeof(g_EntityCutoutPS), false,
-             D3D12_CULL_MODE_NONE, psoFree_))
+             D3D12_CULL_MODE_NONE, psoFree_) ||
+        !pso(g_EntityModelVS, sizeof(g_EntityModelVS), g_EntityGlintPS, sizeof(g_EntityGlintPS), true,
+             D3D12_CULL_MODE_NONE, psoGlint_))
         return false;
 
     auto buffer = [&](u64 size, D3D12_HEAP_TYPE heap, D3D12_RESOURCE_STATES state, ComPtr<ID3D12Resource>& out) {
@@ -643,8 +652,9 @@ int EntityRenderer::equipmentLayers(const Entity& e, const TypeDef& d, Layer* ou
         const int piece = 5 - slot;
         const int model = smallModel ? d.armorBaby[piece] : (d.special == SpPlayer && e.slim) ? d.armorSlim[piece] : d.armor[piece];
         if (model < 0) continue;
-        const char* type = smallModel && d.special != SpArmorStand ? "humanoid_baby" : slot == 3 ? "humanoid_leggings" : "humanoid";
-        for (const EquipmentLayer& l : items_->equipmentLayers(eq.asset, type)) {
+        const int type = smallModel && d.special != SpArmorStand ? 2 : slot == 3 ? 1 : 0;  // humanoid(_leggings/_baby)
+        bool glint = (e.equipFoil >> slot) & 1;  // EquipmentLayerRenderer: the first drawn layer carries the glint
+        for (const EquipmentLayer& l : items_->itemLayers(item, type)) {
             if (l.tex < 0 || n >= max) continue;
             u32 color = kWhite;
             if (l.dyeable) {
@@ -652,17 +662,16 @@ int EntityRenderer::equipmentLayers(const Entity& e, const TypeDef& d, Layer* ou
                 if (dye < 0) continue;  // getColorForLayer: 0 = not drawn
                 color = abgr(u32(dye));
             }
-            out[n++] = {model, l.tex, color, Armor};
+            out[n++] = {model, l.tex, color, u8(Armor | (glint ? Glint : 0))};
+            glint = false;
         }
     }
     const int chest = e.equipment[4];
     const int elytra = smallModel ? elytraBabyModel_ : elytraModel_;
     if (chest >= 0 && elytra >= 0 &&
         (d.anim == Anim::Humanoid || d.anim == Anim::Zombie || d.anim == Anim::Skeleton || d.anim == Anim::ArmorStand)) {
-        const ItemModels::Equippable& eq = items_->equippable(chest);
-        if (!eq.asset.empty())
-            for (const EquipmentLayer& l : items_->equipmentLayers(eq.asset, "wings"))
-                if (l.tex >= 0 && n < max) out[n++] = {elytra, l.tex, kWhite, Elytra};
+        for (const EquipmentLayer& l : items_->itemLayers(chest, 3))
+                if (l.tex >= 0 && n < max) out[n++] = {elytra, l.tex, kWhite, u8(Elytra | ((e.equipFoil & 16) ? Glint : 0))};
     }
     return n;
 }
@@ -762,6 +771,8 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         root = mul(root, translate(0, -1.501f, 0));
     }
 
+    PartPose rolePose[RoleCount];
+    u64 roleSet = 0, baseHidden = 0;
     for (int li = 0; li < layerCount; ++li) {
         const Layer& L = layers[li];
         const Model& m = assets_.modelAt(L.model);
@@ -781,10 +792,21 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
                 if (lw >= 0) poses_[size_t(lw)].y = 3, poses_[size_t(lw)].xRot = 0.6981317f, poses_[size_t(lw)].zRot = -kPi / 4;
                 if (rw >= 0) poses_[size_t(rw)].y = 3, poses_[size_t(rw)].xRot = 0.6981317f, poses_[size_t(rw)].zRot = kPi / 4;
             }
+        } else if ((L.flags & Armor) && roleSet) {  // HumanoidModel.copyPropertiesTo: the parent's pose by part
+            for (size_t i = 0; i < parts; ++i) {
+                const Role r = m.parts[i].role;
+                if (r != RoleNone && ((roleSet >> r) & 1)) poses_[i] = rolePose[r];
+            }
+            hiddenRoles = baseHidden & ((1ull << LeftArm) | (1ull << RightArm));
         } else if (living) {
             AnimState sl = s;
             if (L.flags & Armor) sl.skinParts = 0x7F;
             hiddenRoles = animate(d.anim, sl, m, poses_.data());
+            if (li == 0) {
+                baseHidden = hiddenRoles;
+                for (size_t i = 0; i < parts; ++i)
+                    if (const Role r = m.parts[i].role; r != RoleNone) rolePose[r] = poses_[i], roleSet |= 1ull << r;
+            }
         }
         for (size_t i = 0; i < parts; ++i) {
             const ModelPart& part = m.parts[i];
@@ -832,6 +854,7 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
             if (hidden_[i]) continue;
             const ModelPart& part = m.parts[i];
             for (u32 q = part.quadFirst; q < part.quadFirst + part.quadCount; ++q) {
+                if (L.flags & Glint) glint_.push_back(q), glint_.push_back(instId);
                 if (translucent) {
                     translucent_.push_back(q);
                     translucent_.push_back(instId);
@@ -1014,6 +1037,7 @@ void EntityRenderer::draw(const PassContext& ctx) {
     frameBase_ = mapped_ + u64(ctx.frame) * kFrameBytes;
     matCount_ = instCount_ = refCount_ = freeCount_ = 0;
     translucent_.clear();
+    glint_.clear();
 
     // Frustum planes from the camera-relative view-projection (column-major memory, like the renderer's).
     auto vp = [&](int r, int c) { return ctx.viewProj[c * 4 + r]; };
@@ -1105,6 +1129,10 @@ void EntityRenderer::draw(const PassContext& ctx) {
     const u32 extra = std::min<u32>(u32(translucent_.size() / 2), kMaxRefs - refCount_);
     std::memcpy(refs + u64(refCount_) * 2, translucent_.data(), u64(extra) * 8);
     refCount_ += extra;
+    const u32 glintRefs = refCount_;
+    const u32 glints = std::min<u32>(u32(glint_.size() / 2), kMaxRefs - refCount_);
+    std::memcpy(refs + u64(refCount_) * 2, glint_.data(), u64(glints) * 8);
+    refCount_ += glints;
 
     // Frame constants.
     struct Constants {
@@ -1112,6 +1140,7 @@ void EntityRenderer::draw(const PassContext& ctx) {
         float fogColor[4];
         float fogParams[4];
         float light0[4], light1[4];
+        float glintRect[4], glint[4];
     } k{};
     std::memcpy(k.viewProj, ctx.viewProj, sizeof(k.viewProj));
     std::memcpy(k.fogColor, ctx.fogColor, sizeof(k.fogColor));
@@ -1120,6 +1149,14 @@ void EntityRenderer::draw(const PassContext& ctx) {
     const float l0[3] = {0.2f, 1.0f, -0.7f}, l1[3] = {-0.2f, 1.0f, 0.7f};
     const float n0 = 1.0f / std::sqrt(0.04f + 1.0f + 0.49f);
     for (int a = 0; a < 3; ++a) k.light0[a] = l0[a] * n0, k.light1[a] = l1[a] * n0;
+    static const int glintTex = assets_.texture("misc/enchanted_glint_armor");
+    if (glintTex >= 0) {  // TextureTransform.setupGlintTexturing (glint speed 0.5)
+        const TexRect& g = assets_.rect(glintTex);
+        k.glintRect[0] = g.u0, k.glintRect[1] = g.v0, k.glintRect[2] = g.du, k.glintRect[3] = g.dv;
+        const double ms = nowSeconds() * 1000.0 * 8.0 * 0.5;
+        k.glint[0] = -float(std::fmod(ms, 110000.0) / 110000.0), k.glint[1] = float(std::fmod(ms, 30000.0) / 30000.0);
+        k.glint[2] = 0.75f;
+    }
     std::memcpy(frameBase_, &k, sizeof(k));
 
     stats_.instances = instCount_;
@@ -1162,7 +1199,8 @@ void EntityRenderer::draw(const PassContext& ctx) {
     };
     drawRange(psoCutout_.Get(), 0, cutoutRefs);
     drawRange(psoFree_.Get(), 0, freeCount_);
-    drawRange(psoTranslucent_.Get(), cutoutRefs, refCount_ - cutoutRefs);
+    drawRange(psoTranslucent_.Get(), cutoutRefs, glintRefs - cutoutRefs);
+    if (glintTex >= 0) drawRange(psoGlint_.Get(), glintRefs, refCount_ - glintRefs);
 }
 
 }  // namespace ent

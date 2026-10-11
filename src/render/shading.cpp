@@ -150,7 +150,7 @@ ShaderSettings ShaderSettings::preset(ShaderPreset p) {
         case ShaderPreset::Ultra:
             s.cascades = 4, s.shadowRes = 2048, s.shadowTaps = 16, s.pcss = true;
             s.shadowSplits[0] = 14, s.shadowSplits[1] = 44, s.shadowSplits[2] = 128, s.shadowSplits[3] = 320;
-            s.volumetricSteps = 20, s.ssrSteps = 40, s.ssao = true;
+            s.volumetricSteps = 20, s.volumetricShift = 1, s.ssrSteps = 40, s.ssao = true;
             break;
     }
     return s;
@@ -584,7 +584,7 @@ void Renderer::Shading::prepare(const FrameInput& in) {
     k.fog[0] = (1.0f / 7000.0f) * (1 + rain * 7.0f + thunder * 4.0f);
     k.fog[1] = 1.0f / 110.0f;
     k.fog[2] = 63.0f;
-    k.fog[3] = 0.6f * (1.0f + 2.5f * (1 - smoothstep(0.0f, 0.5f, sun[1]))) * (set.volumetricSteps ? 1.0f : 0.0f);
+    k.fog[3] = 0.5f * (1.0f + 1.2f * (1 - smoothstep(0.0f, 0.5f, sun[1]))) * (set.volumetricSteps ? 1.0f : 0.0f);
     const float waterAbsorb[3] = {0.32f, 0.075f, 0.05f};
     for (int c = 0; c < 3; ++c) {
         k.water[c] = waterAbsorb[c];

@@ -5,6 +5,7 @@
 // Per frame: beginFrame() before Game::frame (routes input: while a screen is open the game gets none),
 // endFrame() after it (builds the canvas the UI render pass draws over the frame).
 #include "core/common.h"
+#include "render/upscalers/video_settings.h"
 
 #include <functional>
 #include <memory>
@@ -30,6 +31,8 @@ struct Settings {
     int renderDistance = 32;  // full-detail radius in chunks
     int guiScale = 0;         // 0 = auto
     float sensitivity = 0.5f;  // 0..1 like the game's option
+    VideoSettings video;       // Video Settings screen (shaders, upscaler, frame generation, latency, VSync, FPS limit)
+    bool videoSaved = false;   // options.txt had video settings
     bool loaded = false;
 
     static fs::path path();
@@ -66,6 +69,7 @@ public:
     void endFrame();
 
     bool quitRequested() const;
+    bool menuOpen() const;  // a full-screen menu / inventory is open (frame generation pauses, vendor guidance)
     const fs::path* screenshotRequest();  // scripted screenshots: pass to Renderer::render
     bool loadScript(const fs::path& file);
     float fovRadians() const;

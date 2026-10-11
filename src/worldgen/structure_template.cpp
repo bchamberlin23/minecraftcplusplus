@@ -121,9 +121,11 @@ const Template* TemplateManager::get(std::string_view rawId) const {
     for (NbtValue* pal : palettes) {
         std::vector<u16> states;
         for (NbtValue& e : pal->items) {
-            std::string name = str(&e, "Name", "minecraft:air");
+            std::string name = str(&e, "Name", str(&e, "id", "minecraft:air"));  // 26.x templates: "id" / "properties"
             std::vector<std::pair<std::string, std::string>> kv;
-            if (NbtValue* props = e.find("Properties"))
+            NbtValue* props = e.find("Properties");
+            if (!props) props = e.find("properties");
+            if (props)
                 for (size_t k = 0; k < props->names.size(); ++k) kv.push_back({props->names[k], props->items[k].s});
             std::sort(kv.begin(), kv.end());
             std::string key = withNamespace(name);
@@ -183,6 +185,14 @@ const Template* TemplateManager::get(std::string_view rawId) const {
             p.jigsaws.push_back(std::move(j));
         }
         t->palettes.push_back(std::move(p));
+    }
+    static const bool debug = std::getenv("MCPP_STRUCT_DEBUG") != nullptr;
+    if (debug && !t->palettes.empty()) {
+        LOG("template %s: size %d %d %d, %zu palettes, %zu blocks, %zu jigsaws", id.c_str(), t->size.x, t->size.y, t->size.z,
+            t->palettes.size(), t->palettes[0].blocks.size(), t->palettes[0].jigsaws.size());
+        for (const JigsawInfo& j : t->palettes[0].jigsaws)
+            LOG("  jigsaw at %d %d %d front %d top %d name %s pool %s target %s", j.pos.x, j.pos.y, j.pos.z, int(j.front), int(j.top),
+                j.name.c_str(), j.pool.c_str(), j.target.c_str());
     }
     return (cache_[id] = std::move(t)).get();
 }

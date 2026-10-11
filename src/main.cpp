@@ -16,6 +16,7 @@
 #include "platform/ownership.h"
 #include "platform/window.h"
 #include "render/renderer.h"
+#include "render/upscalers/upscalers.h"
 #include "sky/sky.h"
 #include "ui/ui.h"
 #include "world/biome_colors.h"
@@ -67,6 +68,11 @@ struct Options {
     sky::DebugOptions sky;                 // --time / --weather / --dimension / --biome
     std::string shaders = "high";          // --shaders off|low|medium|high|ultra (built-in shader pipeline)
     float renderScale = 1.0f;              // --render-scale: shader pipeline internal resolution (0.33..1, TAA upscaled)
+    // Video settings for this run (override options.txt, not saved; render/upscalers/video_settings.h).
+    bool shadersGiven = false;
+    std::string upscaler, upscaleQuality, frameGen, lowLatency;  // --upscaler / --upscale-quality / --framegen / --low-latency
+    float sharpness = -1;                  // --sharpness 0..1
+    int fpsLimit = -1;                     // --fps-limit (0 = unlimited)
 };
 
 void usage() {
@@ -77,6 +83,9 @@ void usage() {
         "                          [--no-gen] [--gen-radius <chunks>] [--far <blocks>] [--lod-quality <x, default 2>] [--gentest <region dir> <seed>]\n"
         "                          [--connect <host[:port]> [--name <player>]] [--play [--lan]] [--seconds <n>] [--mods-dir <dir>]\n"
         "                          [--shaders off|low|medium|high|ultra (default high)] [--render-scale <0.33..1>]\n"
+        "                          [--upscaler taa|dlss|fsr|xess] [--upscale-quality native|ultraqualityplus|ultraquality|quality|\n"
+        "                           balanced|performance|ultraperformance] [--sharpness 0..1]\n"
+        "                          [--framegen off|dlss|dlss2x|dlss3x|dlss4x|fsr|xess] [--low-latency off|on|boost] [--fps-limit <n>]\n"
         "controls: click to capture the mouse, WASD move, Space jump (double-tap: fly), Shift sneak / descend,\n"
         "          Ctrl sprint, left click break, right click place, middle click pick, 1-9 / wheel hotbar, Esc release");
 }
@@ -189,8 +198,14 @@ int wmain(int argc, wchar_t** argv) {
         else if (a == L"--debug") opt.debug = true;
         else if (sky::isOption(a)) sky::parseOption(opt.sky, a, next());
         else if (ShaderPreset p; a == L"--shaders" && Renderer::parseShaderPreset(fs::path(next()).string(), p))
-            opt.shaders = Renderer::shaderPresetName(p);
+            opt.shaders = Renderer::shaderPresetName(p), opt.shadersGiven = true;
         else if (a == L"--render-scale") opt.renderScale = float(_wtof(next().c_str()));
+        else if (a == L"--upscaler") opt.upscaler = fs::path(next()).string();
+        else if (a == L"--upscale-quality") opt.upscaleQuality = fs::path(next()).string();
+        else if (a == L"--framegen") opt.frameGen = fs::path(next()).string();
+        else if (a == L"--low-latency") opt.lowLatency = fs::path(next()).string();
+        else if (a == L"--sharpness") opt.sharpness = float(_wtof(next().c_str()));
+        else if (a == L"--fps-limit") opt.fpsLimit = _wtoi(next().c_str());
         else {
             usage();
             return 1;
@@ -467,6 +482,27 @@ int wmain(int argc, wchar_t** argv) {
     if (!ui.init({&registry, &renderer, &window, &game, &world, &terrain, opt.detail})) return 1;
     if (session) ui.attachSession(netClient.get(), session.get());
     if (!opt.script.empty()) ui.loadScript(opt.script);
+    {  // Video settings: options.txt, then this run's command line (not saved). Applies shaders, upscaler, frame gen.
+        VideoSettings v = ui.settings().video;
+        if (!ui.settings().videoSaved || opt.shadersGiven) {
+            ShaderPreset p = ShaderPreset::High;
+            Renderer::parseShaderPreset(opt.shaders, p);
+            v.shaders = u8(p);
+        }
+        if (!opt.upscaler.empty() && !VideoSettings::parseUpscaler(opt.upscaler, v.upscaler))
+            LOG("warning: unknown --upscaler %s", opt.upscaler.c_str());
+        if (!opt.upscaleQuality.empty() && !VideoSettings::parseQuality(opt.upscaleQuality, v.quality))
+            LOG("warning: unknown --upscale-quality %s", opt.upscaleQuality.c_str());
+        if (!opt.frameGen.empty() && !v.parseFrameGen(opt.frameGen)) LOG("warning: unknown --framegen %s", opt.frameGen.c_str());
+        if (!opt.lowLatency.empty() && !VideoSettings::parseLowLatency(opt.lowLatency, v.lowLatency))
+            LOG("warning: unknown --low-latency %s", opt.lowLatency.c_str());
+        if (opt.sharpness >= 0) v.sharpness = opt.sharpness;
+        if (opt.fpsLimit >= 0) v.fpsLimit = u32(opt.fpsLimit);
+        if (opt.vsync) v.vsync = true;
+        if (opt.renderScale != 1.0f) v.renderScaleOverride = opt.renderScale;
+        renderer.upscalers().apply(v);
+    }
+    std::string lastDimension;  // temporal history (TAA / upscalers / frame generation) resets on dimension change
     audio.attachGame(game, world, registry);
     if (haveEntities) visuals.setPlayer(game, ui, opt.name, [&] { return session ? session->gameMode() : 1; });
     game.onEntityClick = [&](bool attack, bool use, double blockDistance) {  // attack / use entities first
@@ -522,6 +558,7 @@ int wmain(int argc, wchar_t** argv) {
     for (int frame = 0; window.pump(); ++frame) {
         u32 w, h;
         if (window.takeResize(w, h)) renderer.resize(w, h);
+        renderer.beginFrame();  // low-latency sleep (Reflex / XeLL / Anti-Lag 2), frame limiter, simulation markers
         double now = nowSeconds();
         float dt = float(now - last);
         last = now;
@@ -554,6 +591,10 @@ int wmain(int argc, wchar_t** argv) {
             }
         }
         if (session) session->frame(dt);  // multiplayer: apply what the server sent, send movement
+        if (session && session->dimension().name != lastDimension) {
+            lastDimension = session->dimension().name;
+            renderer.resetTemporal();
+        }
         if (session) terrain.setFarActive(session->dimension().name == "minecraft:overworld");
         if (haveEntities) entities.frame(dt);
         ui.beginFrame(dt);  // UI input first: an open screen takes the game's input
@@ -643,6 +684,7 @@ int wmain(int argc, wchar_t** argv) {
         if (opt.seconds > 0) shot = timeUp && !opt.screenshot.empty();
         sky.update(cam, dt);
         ui.endFrame();
+        renderer.upscalers().setMenuActive(ui.menuOpen());  // frame generation pauses in menus
         if (!opt.bench) cam.fovY = ui.fovRadians();
         const fs::path* uiShot = ui.screenshotRequest();
         // Animated block textures advance with the game's 20 ticks per second.
@@ -671,8 +713,11 @@ int wmain(int argc, wchar_t** argv) {
         if (now - titleTime > 0.25) {
             titleTime = now;
             char title[256];
-            std::snprintf(title, sizeof(title), "minecraftCplusplus | %.0f fps | gpu %.2f ms | %u draws | %s",
-                          dt > 0 ? 1.0f / dt : 0.0f, rs.gpuMs, commands, game.status().c_str());
+            const u32 shown = renderer.upscalers().lastFramesPresented();  // frame generation: frames per rendered frame
+            std::snprintf(title, sizeof(title), "minecraftCplusplus | %.0f fps%s | gpu %.2f ms | %u draws | %s",
+                          dt > 0 ? 1.0f / dt : 0.0f,
+                          shown > 1 ? (" (" + std::to_string(int(float(shown) / std::max(dt, 1e-4f))) + " shown)").c_str() : "",
+                          rs.gpuMs, commands, game.status().c_str());
             window.setTitle(title);
         }
         if (shot) LOG("screenshot written to %s", opt.screenshot.string().c_str());

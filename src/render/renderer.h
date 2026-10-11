@@ -72,8 +72,8 @@ struct ShaderSettings {
     float shadowSplits[4] = {16, 56, 160, 0};  // far distance of each cascade (blocks)
     u32 shadowTaps = 8;            // PCF taps (4, 8, 16)
     bool pcss = false;             // contact-hardening soft shadows
-    u32 volumetricSteps = 12;      // 0 = no volumetric light
-    u32 volumetricShift = 1;       // 1 = half, 2 = quarter resolution
+    u32 volumetricSteps = 16;      // 0 = no volumetric light
+    u32 volumetricShift = 2;       // 1 = half, 2 = quarter resolution (bilateral upsample + TAA)
     u32 ssrSteps = 24;             // water screen-space reflection steps (0 = sky only)
     bool waving = true;            // waving leaves and plants
     bool ssao = false;             // screen-space ambient occlusion on top of the baked AO

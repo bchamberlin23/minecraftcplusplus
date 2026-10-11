@@ -28,9 +28,12 @@ std::string stateName(const NbtValue& entry) {
     NbtValue& e = const_cast<NbtValue&>(entry);
     if (e.type == TagString) return e.s;
     std::string n;
-    if (NbtValue* v = e.find("Name")) n = v->s;
+    for (const char* k : {"Name", "id", ""})
+        if (NbtValue* v = e.find(k)) n = v->s;
     std::vector<std::pair<std::string, std::string>> props;
-    if (NbtValue* p = e.find("Properties"))
+    NbtValue* p = e.find("Properties");
+    if (!p) p = e.find("properties");
+    if (p)
         for (size_t k = 0; k < p->names.size(); ++k) props.push_back({p->names[k], p->items[k].s});
     std::sort(props.begin(), props.end());
     if (props.empty()) return n;
@@ -209,8 +212,17 @@ int runStructureTest(BlockRegistry& registry, const fs::path& jar, const fs::pat
             size_t same = 0;
             const size_t n = std::min(s.pieces.size(), it->pieces.size());
             size_t firstDiff = n;
+            // Scattered and template pieces find their height when first placed: their saved box is moved since.
+            auto placedHeight = [](const std::string& t) {
+                return t == "minecraft:tedp" || t == "minecraft:tejp" || t == "minecraft:tesh" || t == "minecraft:iglu" ||
+                       t == "minecraft:btp" || t == "minecraft:orp" || t == "minecraft:shipwreck";
+            };
             for (size_t i = 0; i < n; ++i) {
-                const bool eq = std::equal(s.pieces[i].bb, s.pieces[i].bb + 6, it->pieces[i].box);
+                const int* a = s.pieces[i].bb;
+                const int* b = it->pieces[i].box;
+                const bool eq = placedHeight(s.pieces[i].id)
+                                    ? a[0] == b[0] && a[2] == b[2] && a[3] == b[3] && a[5] == b[5] && a[4] - a[1] == b[4] - b[1]
+                                    : std::equal(a, a + 6, b);
                 if (eq) ++same;
                 else if (firstDiff == n) firstDiff = i;
             }

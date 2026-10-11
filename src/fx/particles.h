@@ -87,7 +87,7 @@ private:
     Particle* add(int type, double x, double y, double z, double xa, double ya, double za, const Options* opt = nullptr);
     void tickOne(Particle& p);
     void move(Particle& p, double xa, double ya, double za);
-    u16 blockAt(int x, int y, int z) const;
+    u16 blockAt(int x, int y, int z);  // through a small per-frame cache (collisions repeat lookups)
     u8 lightAt(double x, double y, double z) const;
     int typeId(std::string_view name) const;
     u16 localBlock(int networkState);
@@ -107,7 +107,13 @@ private:
     std::vector<i32> blockSprites_;            // registry id -> rect + 1 (0 unresolved, -1 none)
     std::vector<u32> blockTints_;
     std::vector<u8> blockKinds_;               // registry id -> ambient kind + 1 (0 unresolved)
+    struct CachedBlock {
+        i32 x = 0, y = INT32_MIN, z = 0;
+        u16 id = 0;
+    };
+    CachedBlock blockCache2_[1024];
     std::vector<Particle> live_;
+    std::vector<GpuParticle> scratch_;         // build(): CPU copy, written to the upload heap in one pass
     std::vector<Particle> spawnQueue_;         // spawned while ticking
     std::mt19937 rng_{0x51A7E5u};
     double tickClock_ = 0, cam_[3] = {};
@@ -129,8 +135,8 @@ private:
         int x, y, z, state;
     };
     std::mutex netMutex_;
-    std::vector<NetSpawn> netSpawns_;
-    std::vector<NetBreak> netBreaks_;
+    std::vector<NetSpawn> netSpawns_, spawnsLocal_;  // network thread / main thread (swapped, capacity kept)
+    std::vector<NetBreak> netBreaks_, breaksLocal_;
     std::vector<std::pair<int, float>> netWeather_;
     std::vector<std::pair<int, float>> weatherQueue_;  // main thread
     const ui::Resources* res_ = nullptr;

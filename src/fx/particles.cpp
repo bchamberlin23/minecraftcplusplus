@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <shared_mutex>
 
 namespace fx {
@@ -90,8 +91,11 @@ u32 Particles::count() const { return u32(live_.size()); }
 bool Particles::init(const ui::Resources& res) {
     res_ = &res;
     const auto& reg = reports_.registries();
-    if (reg.is_object() && reg.contains("minecraft:particle_type"))
-        for (const auto& [k, e] : reg["minecraft:particle_type"].value("entries", nlohmann::json::object()).items()) {
+    const nlohmann::json entries = reg.is_object() && reg.contains("minecraft:particle_type")
+                                       ? reg["minecraft:particle_type"].value("entries", nlohmann::json::object())
+                                       : nlohmann::json::object();  // keep alive for the loop
+    if (entries.is_object())
+        for (const auto& [k, e] : entries.items()) {
             const int pid = e.value("protocol_id", -1);
             if (pid < 0) continue;
             if (size_t(pid) >= types_.size()) types_.resize(size_t(pid) + 1);
@@ -188,7 +192,11 @@ void Particles::attach(net::Client& client) {
 // ---------------------------------------------------------------------------------------------------------
 // World queries (caller holds the world lock shared)
 
-u16 Particles::blockAt(int x, int y, int z) const { return world_.block(x, y, z); }
+u16 Particles::blockAt(int x, int y, int z) {
+    CachedBlock& c = blockCache2_[(u32(x) * 73856093u ^ u32(y) * 19349663u ^ u32(z) * 83492791u) & 1023];
+    if (c.y != y || c.x != x || c.z != z) c.x = x, c.y = y, c.z = z, c.id = world_.block(x, y, z);
+    return c.id;
+}
 
 u8 Particles::lightAt(double x, double y, double z) const {
     const int bx = int(std::floor(x)), by = int(std::floor(y)), bz = int(std::floor(z));
@@ -996,14 +1004,20 @@ void Particles::tick() {
     if (rain_ < rainTarget_) rain_ = std::min(rainTarget_, rain_ + 0.01f);
     if (rain_ > rainTarget_) rain_ = std::max(rainTarget_, rain_ - 0.01f);
 
+    Timer tSim;
     for (Particle& p : live_) {
         tickOne(p);
         if (!(p.flags & Removed) && (ticks_ + u64(&p - live_.data())) % 4 == 0) p.light = lightAt(p.x, p.y, p.z);
     }
     live_.erase(std::remove_if(live_.begin(), live_.end(), [](const Particle& p) { return (p.flags & Removed) != 0; }),
                 live_.end());
+    const double simMs = tSim.ms();
+    Timer tAmb;
     ambient(cam_);
+    const double ambMs = tAmb.ms();
     weather(cam_);
+    static const bool dbg = std::getenv("MCPP_VISUALS_DEBUG") != nullptr;
+    if (dbg && ticks_ % 40 == 0) LOG("particles: tick sim %.3f ms ambient %.3f ms, %zu live", simMs, ambMs, live_.size());
     // CampfireBlockEntity.particleTick for campfires the sampler found (forgotten when broken or far away).
     static int cosy = -2, signal = -2;
     if (cosy == -2) cosy = typeId("campfire_cosy_smoke"), signal = typeId("campfire_signal_smoke");
@@ -1031,8 +1045,9 @@ void Particles::tick() {
 void Particles::frame(double dt, const double cam[3]) {
     Timer t;
     std::copy(cam, cam + 3, cam_);
-    std::vector<NetSpawn> spawns;
-    std::vector<NetBreak> breaks;
+    std::vector<NetSpawn>& spawns = spawnsLocal_;
+    std::vector<NetBreak>& breaks = breaksLocal_;
+    spawns.clear(), breaks.clear();
     {
         std::lock_guard lock(netMutex_);
         spawns.swap(netSpawns_);
@@ -1040,7 +1055,12 @@ void Particles::frame(double dt, const double cam[3]) {
         weatherQueue_.insert(weatherQueue_.end(), netWeather_.begin(), netWeather_.end());
         netWeather_.clear();
     }
+    Timer tLock;
     std::shared_lock lock(world_.mutex());
+    const double lockMs = tLock.ms();
+    static const bool dbg = std::getenv("MCPP_VISUALS_DEBUG") != nullptr;
+    if (dbg && lockMs > 0.5) LOG("particles: world lock wait %.3f ms", lockMs);
+    for (CachedBlock& c : blockCache2_) c.y = INT32_MIN;  // the world may have changed since the last frame
     for (const NetBreak& b : breaks) blockDestroyed(b.x, b.y, b.z, localBlock(b.state));
     for (const NetSpawn& s : spawns) {
         const double dx = s.x - cam[0], dy = s.y - cam[1], dz = s.z - cam[2];
@@ -1081,12 +1101,16 @@ void Particles::frame(double dt, const double cam[3]) {
 u32 Particles::build(GpuParticle* out, u32 max, const double cam[3], u32& opaque) {
     Timer t;
     const float pt = partial_;
-    u32 n = 0, back = max;  // opaque from the front, translucent from the back (then moved after the opaque ones)
+    // Opaque from the front, translucent from the back of a CPU scratch buffer (the destination is write-combined
+    // upload memory: never read back), then copied in order.
+    if (scratch_.size() < max) scratch_.resize(max);
+    GpuParticle* buf = scratch_.data();
+    u32 n = 0, back = max;
     for (const Particle& p : live_) {
         if (p.flags & (NoRender | Removed)) continue;
         if (p.sprite < 0 || n >= back) continue;
         const bool tr = (p.flags & Translucent) != 0;
-        GpuParticle& g = tr ? out[--back] : out[n++];
+        GpuParticle& g = tr ? buf[--back] : buf[n++];
         g.pos[0] = float(p.xo + (p.x - p.xo) * pt - cam[0]);
         g.pos[1] = float(p.yo + (p.y - p.yo) * pt - cam[1]);
         g.pos[2] = float(p.zo + (p.z - p.zo) * pt - cam[2]);
@@ -1121,9 +1145,9 @@ u32 Particles::build(GpuParticle* out, u32 max, const double cam[3], u32& opaque
         g.roll = p.oRoll + (p.roll - p.oRoll) * pt;
     }
     opaque = n;
-    // Move the translucent block next to the opaque one.
     const u32 tcount = max - back;
-    if (tcount && back != n) std::memmove(out + n, out + back, size_t(tcount) * sizeof(GpuParticle));
+    std::memcpy(out, buf, size_t(n) * sizeof(GpuParticle));
+    std::memcpy(out + n, buf + back, size_t(tcount) * sizeof(GpuParticle));
     stats_.buildMs = t.ms();
     return n + tcount;
 }

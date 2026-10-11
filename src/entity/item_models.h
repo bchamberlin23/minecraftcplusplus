@@ -124,6 +124,9 @@ public:
     const Equippable& equippable(int item);
     // Layers of an equipment asset for a layer type ("humanoid", "humanoid_leggings", "humanoid_baby", "wings").
     const std::vector<EquipmentLayer>& equipmentLayers(const std::string& asset, const char* layerType);
+    // Same for an item's own equipment asset, cached by item (per frame use): type 0 humanoid, 1 humanoid_leggings,
+    // 2 humanoid_baby, 3 wings.
+    const std::vector<EquipmentLayer>& itemLayers(int item, int type);
 
     // Particle texture of a block model (blockstates -> model -> "particle"), e.g. "block/dirt"; "" if unknown.
     std::string blockParticleTexture(const std::string& blockName);

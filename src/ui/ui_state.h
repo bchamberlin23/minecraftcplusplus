@@ -74,7 +74,7 @@ struct Button {
     std::function<Text()> labelFn;
 };
 
-enum class Screen { None, Chat, Inventory, Container, Creative, Pause, Options, Death, Mods };
+enum class Screen { None, Chat, Inventory, Container, Creative, Pause, Options, Death, Mods, Video };
 
 struct Ui::State {
     Init init;
@@ -259,6 +259,12 @@ struct Ui::State {
     void dropSelected(bool all);
     void swapHands();
     int menuSlotForInventory(const Menu& m, int inventoryIndex) const;  // Inventory index (0-8 hotbar, 40 offhand)
+
+    // --- video_screen.cpp: Video Settings (shaders, DLSS / FSR / XeSS, frame generation, latency, VSync, FPS cap) ---
+    void buildVideoButtons();
+    void drawVideoScreen(Canvas& c);
+    void videoInput(const Window::InputEvent& e);
+    void applyVideo(VideoSettings v);
 
     // --- mods_screen.cpp: Mods & Packs screen (mods/mod_manager.h), native mods' HUD ---
     int modsScroll = 0;  // first list row shown

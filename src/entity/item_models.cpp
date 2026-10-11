@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <array>
 #include <fstream>
 
 namespace ent {
@@ -20,6 +21,13 @@ std::string strip(std::string s) {
     return c == std::string::npos ? s : s.substr(c + 1);
 }
 float num(const json& v, float d) { return v.is_number() ? v.get<float>() : d; }
+// Member of an object, or null (never throws on other types).
+const json& at(const json& j, const char* key) {
+    static const json kNull;
+    if (!j.is_object()) return kNull;
+    auto it = j.find(key);
+    return it == j.end() ? kNull : *it;
+}
 bool vec3(const json& v, float out[3]) {
     if (!v.is_array() || v.size() != 3) return false;
     for (int i = 0; i < 3; ++i) out[i] = num(v[size_t(i)], 0);
@@ -181,6 +189,7 @@ struct ItemModels::Impl {
     std::unordered_map<std::string, std::vector<EquipmentLayer>> equipLayers;
     std::unordered_map<std::string, std::string> particleTextures;
     std::unordered_map<int, HandInfo> handInfos;
+    std::vector<std::array<const std::vector<EquipmentLayer>*, 4>> itemLayers;  // by item id
     ui::Image grass, foliage;
     ItemMesh emptyMesh;
     bool storeFull = false;
@@ -530,7 +539,7 @@ struct ItemModels::Impl {
                     else if (when.is_array())
                         for (const json& w : when) hit |= w.is_string() && match(w.get<std::string>());
                     if (hit) {
-                        pick = &c["model"];
+                        pick = &at(c, "model");
                         break;
                     }
                 }
@@ -552,7 +561,8 @@ struct ItemModels::Impl {
             Part p;
             p.model = n.value("base", "");
             p.local = here;
-            const json& sm = n.value("model", json());
+            const json& sm = at(n, "model");
+            if (!sm.is_object()) return;
             p.special = strip(sm.value("type", ""));
             p.specialTex = strip(sm.value("texture", ""));
             p.specialKind = sm.value("kind", "");
@@ -692,9 +702,15 @@ const ItemMesh& ItemModels::mesh(int item, i32 dye, bool flat) {
     if (it != impl_->meshes.end()) return it->second;
     const std::string name = strip(impl_->itemNames[size_t(item)]);
     std::vector<Impl::Part> parts;
-    const json& def = impl_->jsonAt("assets/minecraft/items/" + name + ".json");
-    if (def.is_object()) impl_->evaluate(def.value("model", json()), dye, flat, Xf{}, parts, 0);
-    return impl_->meshes.emplace(key, impl_->build(parts)).first->second;
+    ItemMesh mesh;
+    try {
+        const json& def = impl_->jsonAt("assets/minecraft/items/" + name + ".json");
+        if (def.is_object()) impl_->evaluate(def.value("model", json()), dye, flat, Xf{}, parts, 0);
+        mesh = impl_->build(parts);
+    } catch (const std::exception& ex) {
+        LOG("visuals: item model of %s: %s", name.c_str(), ex.what());
+    }
+    return impl_->meshes.emplace(key, mesh).first->second;
 }
 
 const ItemMesh& ItemModels::blockModelMesh(const std::string& model) {
@@ -751,7 +767,7 @@ const ItemModels::HandInfo& ItemModels::handInfo(int item) {
         std::ifstream f(impl_->componentReports / (name + ".json"));
         if (f) {
             json j = json::parse(f, nullptr, false);
-            const json& mods = j.is_object() ? j.value("components", json()).value("minecraft:attribute_modifiers", json()) : json();
+            const json& mods = at(at(j, "components"), "minecraft:attribute_modifiers");
             if (mods.is_array())
                 for (const json& m : mods)
                     if (m.is_object() && strip(m.value("type", "")) == "attack_speed" && m.value("operation", "") == "add_value")
@@ -845,7 +861,7 @@ const ItemModels::Equippable& ItemModels::equippable(int item) {
         std::ifstream f(impl_->componentReports / (name + ".json"));
         if (f) {
             json j = json::parse(f, nullptr, false);
-            const json& eq = j.is_object() ? j.value("components", json()).value("minecraft:equippable", json()) : json();
+            const json& eq = at(at(j, "components"), "minecraft:equippable");
             if (eq.is_object()) {
                 static const char* kSlots[8] = {"mainhand", "offhand", "feet", "legs", "chest", "head", "body", "saddle"};
                 const std::string slot = eq.value("slot", "");
@@ -890,10 +906,24 @@ const std::vector<EquipmentLayer>& ItemModels::equipmentLayers(const std::string
     return impl_->equipLayers.emplace(key, std::move(layers)).first->second;
 }
 
+const std::vector<EquipmentLayer>& ItemModels::itemLayers(int item, int type) {
+    static const std::vector<EquipmentLayer> kNone;
+    if (item < 0 || size_t(item) >= impl_->itemNames.size() || type < 0 || type > 3) return kNone;
+    if (impl_->itemLayers.empty()) impl_->itemLayers.assign(impl_->itemNames.size(), {nullptr, nullptr, nullptr, nullptr});
+    auto& slot = impl_->itemLayers[size_t(item)][size_t(type)];
+    if (!slot) {
+        static const char* kTypes[4] = {"humanoid", "humanoid_leggings", "humanoid_baby", "wings"};
+        const Equippable& eq = equippable(item);
+        slot = eq.asset.empty() ? &kNone : &equipmentLayers(eq.asset, kTypes[type]);
+    }
+    return *slot;
+}
+
 std::string ItemModels::blockParticleTexture(const std::string& blockName) {
     auto it = impl_->particleTextures.find(blockName);
     if (it != impl_->particleTextures.end()) return it->second;
     std::string result;
+    try {
     const json& bs = impl_->jsonAt("assets/minecraft/blockstates/" + strip(blockName) + ".json");
     std::string modelName;
     if (bs.is_object()) {
@@ -908,6 +938,9 @@ std::string ItemModels::blockParticleTexture(const std::string& blockName) {
             modelName = first(bs["multipart"][0].value("apply", json()));
     }
     if (!modelName.empty()) result = strip(impl_->model(modelName)->particle);
+    } catch (const std::exception& ex) {
+        LOG("visuals: block particle texture of %s: %s", blockName.c_str(), ex.what());
+    }
     return impl_->particleTextures.emplace(blockName, result).first->second;
 }
 

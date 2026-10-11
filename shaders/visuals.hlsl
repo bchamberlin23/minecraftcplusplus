@@ -179,6 +179,7 @@ float4 shade(VSOut i, float minAlpha, bool translucent) {
     }
     c.rgb *= i.light;
     c.rgb = lerp(c.rgb, gFogColor.rgb, i.fog);
+    if (gGlint.w > 0.5 && !translucent) c.a = 1;  // HUD stage: the pipeline's UI layer is premultiplied
     return c;
 }
 

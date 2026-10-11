@@ -486,7 +486,9 @@ public:
         const int centerY = bottomY + localAnchor.y;
         GenCtx* ctx = &c;
         const JigsawStructure* self = this;
-        return Stub{{centerX, centerY, centerZ}, [self, ctx, centerPiece, aliases, centerX, centerY, centerZ, box](PiecesBuilder& builder) {
+        // The game's `box` is the centre piece's own BoundingBox object: the free space excludes it where it was moved to.
+        const BBox movedBox = (*centerPiece)->box;
+        return Stub{{centerX, centerY, centerZ}, [self, ctx, centerPiece, aliases, centerX, centerY, centerZ, box = movedBox](PiecesBuilder& builder) {
                         std::vector<std::unique_ptr<PoolPiece>> pieces;
                         PoolPiece* center = centerPiece->get();
                         pieces.push_back(std::move(*centerPiece));

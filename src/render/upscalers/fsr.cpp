@@ -194,7 +194,7 @@ public:
             swapCtx_ = nullptr;
             return false;
         }
-        swap_ = sc;
+        swap_ = rawSwap_ = sc;
         out.Attach(sc);  // the context's reference is ours; released by Renderer before releaseSwapChain
 
         auto be = desc<ffxCreateBackendDX12Desc>(FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12);
@@ -220,6 +220,16 @@ public:
         return true;
     }
     void beforeReleaseSwapChain() override { destroyFrameGen(); }
+    void releaseSwapChain() override {
+        // The app's references are gone. Streamline's proxy (wrapped on top for presentCommon) leaves one reference
+        // on the proxy swap chain behind; drop it so the real swap chain is destroyed and the window is free again.
+        if (!rawSwap_) return;
+        rawSwap_->AddRef();
+        ULONG left = rawSwap_->Release();
+        if (left) LOG("fsr: releasing %lu leftover swap chain reference(s)", left);
+        while (left) left = rawSwap_->Release();
+        rawSwap_ = nullptr;
+    }
 
     void setFrameGen(bool on, u32) override { fgOn_ = on; }
     bool composesUi() const override { return swapCtx_ != nullptr; }
@@ -359,6 +369,7 @@ private:
     HMODULE module_ = nullptr;
     ffxContext upscaler_ = nullptr, fgCtx_ = nullptr, swapCtx_ = nullptr;
     IDXGISwapChain4* swap_ = nullptr;
+    IDXGISwapChain4* rawSwap_ = nullptr;  // not owned
     std::mutex mutex_;
     u32 upW_ = 0, upH_ = 0;
     u64 frameId_ = 0;

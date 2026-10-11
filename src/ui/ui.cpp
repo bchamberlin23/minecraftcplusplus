@@ -72,6 +72,17 @@ bool Settings::load() {
         else if (k == "renderDistance") renderDistance = std::clamp(std::atoi(v.c_str()), 2, 64);
         else if (k == "guiScale") guiScale = std::clamp(std::atoi(v.c_str()), 0, 8);
         else if (k == "mouseSensitivity") sensitivity = std::clamp(float(std::atof(v.c_str())), 0.f, 1.f);
+        else if (k == "shaders") {
+            static const char* presets[] = {"off", "low", "medium", "high", "ultra"};
+            for (u8 i = 0; i < 5; ++i)
+                if (v == presets[i]) video.shaders = i, videoSaved = true;
+        } else if (k == "upscaler") VideoSettings::parseUpscaler(v, video.upscaler);
+        else if (k == "upscaleQuality") VideoSettings::parseQuality(v, video.quality);
+        else if (k == "sharpness") video.sharpness = std::clamp(float(std::atof(v.c_str())), 0.f, 1.f);
+        else if (k == "frameGeneration") video.parseFrameGen(v);
+        else if (k == "lowLatency") VideoSettings::parseLowLatency(v, video.lowLatency);
+        else if (k == "vsync") video.vsync = v == "true";
+        else if (k == "maxFps") video.fpsLimit = u32(std::clamp(std::atoi(v.c_str()), 0, 1000));
     }
     loaded = true;
     return true;
@@ -83,6 +94,11 @@ void Settings::save() const {
     std::ofstream f(path());
     f << "fov:" << fov << "\nrenderDistance:" << renderDistance << "\nguiScale:" << guiScale
       << "\nmouseSensitivity:" << sensitivity << "\n";
+    static const char* presets[] = {"off", "low", "medium", "high", "ultra"};
+    f << "shaders:" << presets[std::min<int>(video.shaders, 4)] << "\nupscaler:" << VideoSettings::upscalerKey(video.upscaler)
+      << "\nupscaleQuality:" << VideoSettings::qualityKey(video.quality) << "\nsharpness:" << video.sharpness
+      << "\nframeGeneration:" << video.frameGenKey() << "\nlowLatency:" << VideoSettings::lowLatencyKey(video.lowLatency)
+      << "\nvsync:" << (video.vsync ? "true" : "false") << "\nmaxFps:" << video.fpsLimit << "\n";
 }
 
 float Settings::radiansPerPixel() const {
@@ -281,6 +297,8 @@ Ui::~Ui() = default;
 
 Settings& Ui::settings() { return s_->settings; }
 bool Ui::quitRequested() const { return s_->quit; }
+bool Ui::menuOpen() const { return s_->screen != Screen::None && s_->screen != Screen::Chat; }
+
 float Ui::fovRadians() const { return s_->settings.fov * kPi / 180.0f; }
 void Ui::setBiomeLookup(std::function<std::string(int, int, int)> fn) { s_->biomeLookup = std::move(fn); }
 

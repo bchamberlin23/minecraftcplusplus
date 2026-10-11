@@ -136,7 +136,7 @@ public:
         e.pColorTexture = in.color;
         e.pVelocityTexture = in.motion;
         e.pDepthTexture = in.depth;
-        e.pExposureScaleTexture = in.exposure;
+        e.pExposureScaleTexture = (initFlags() & XESS_INIT_FLAG_EXPOSURE_SCALE_TEXTURE) ? in.exposure : nullptr;
         e.pResponsivePixelMaskTexture = reactive;
         e.pOutputTexture = in.output;
         e.jitterOffsetX = in.jitter[0];
@@ -273,7 +273,11 @@ private:
         }
     }
     static u32 initFlags() {
-        return XESS_INIT_FLAG_INVERTED_DEPTH | XESS_INIT_FLAG_EXPOSURE_SCALE_TEXTURE | XESS_INIT_FLAG_RESPONSIVE_PIXEL_MASK;
+        // The exposure texture path returned images scaled by the exposure (verified: ~0.6x darker after the
+        // pipeline's own exposure), so XeSS gets the unexposed HDR colour with scale 1 unless MCPP_XESS_EXPOSURE=1.
+        static const bool noExposure = std::getenv("MCPP_XESS_EXPOSURE") == nullptr;
+        return XESS_INIT_FLAG_INVERTED_DEPTH | (noExposure ? 0u : XESS_INIT_FLAG_EXPOSURE_SCALE_TEXTURE) |
+               XESS_INIT_FLAG_RESPONSIVE_PIXEL_MASK;
     }
     bool createFgContext() {
         if (!xell_) return false;

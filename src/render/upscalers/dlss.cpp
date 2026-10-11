@@ -232,6 +232,23 @@ public:
         frameGenSwapChain_ = frameGen;
         return true;
     }
+    void wrapSwapChain(ComPtr<IDXGISwapChain3>& sc) override {
+        if (!active_ || !sc) return;
+        if (dlssgOk_ && dlssgLoaded_) {
+            g_sl.setFeatureLoaded(sl::kFeatureDLSS_G, false);
+            dlssgLoaded_ = false;
+        }
+        IDXGISwapChain* p = sc.Get();
+        p->AddRef();  // the proxy takes this reference
+        if (g_sl.upgradeInterface(reinterpret_cast<void**>(&p)) != sl::Result::eOk) {
+            p->Release();
+            return;
+        }
+        ComPtr<IDXGISwapChain> proxy;
+        proxy.Attach(p);
+        ComPtr<IDXGISwapChain3> proxy3;
+        if (SUCCEEDED(proxy.As(&proxy3))) sc = proxy3;
+    }
     void releaseSwapChain() override {
         if (frameGenSwapChain_) {
             g_sl.freeResources(sl::kFeatureDLSS_G, kViewport);
@@ -270,6 +287,7 @@ public:
             {&motion, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent, &renderExt},
             {&hudless, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, &outExt},
             {&ui, sl::kBufferTypeUIColorAndAlpha, sl::ResourceLifecycle::eValidUntilPresent, &outExt},
+            {nullptr, sl::kBufferTypeBackbuffer, sl::ResourceLifecycle::eValidUntilPresent, &outExt},  // full extent
         };
         if (g_sl.setTagForFrame(*token_, kViewport, tags, u32(std::size(tags)), in.list) != sl::Result::eOk)
             warnOnce("slSetTagForFrame (frame generation) failed");

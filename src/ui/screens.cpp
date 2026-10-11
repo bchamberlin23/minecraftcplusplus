@@ -412,6 +412,7 @@ void Ui::State::buildButtons() {
     const Lang* l = lang();
     auto tr = [&](const char* key) { return Text(res.translate(key)); };
     if (screen == Screen::Mods) return buildModsButtons();  // mods_screen.cpp
+    if (screen == Screen::Video) return buildVideoButtons();  // video_screen.cpp
     if (screen == Screen::Pause) {
         const int gridW = 212, gridH = 50 + 20 + 4 * 24;
         const int left = (W - gridW) / 2, top = int(float(H - gridH) * 0.25f);
@@ -509,6 +510,13 @@ void Ui::State::buildButtons() {
             };
             buttons.push_back(std::move(b));
         }
+        y += 24;
+        {  // video_screen.cpp
+            Button b;
+            b.x = float(x0), b.y = float(y), b.w = 310, b.label = Text("Video Settings...");
+            b.onPress = [this] { openScreen(Screen::Video); };
+            buttons.push_back(std::move(b));
+        }
         Button done;
         done.x = float(W / 2 - 100), done.y = float(H / 6 + 168), done.w = 200, done.label = tr("gui.done");
         done.onPress = [this] {
@@ -579,6 +587,7 @@ void Ui::State::drawScreen(Canvas& c) {
             return;
         }
         case Screen::Mods: drawModsScreen(c); return;  // mods_screen.cpp
+        case Screen::Video: drawVideoScreen(c); return;  // video_screen.cpp
         case Screen::Death: {
             c.gradient(0, 0, float(W), float(H), 0x60500000, 0xA0803030);
             c.push();
@@ -781,6 +790,7 @@ void Ui::State::screenInput(const Window::InputEvent& e) {
         return;
     }
     if (screen == Screen::Mods) return modsInput(e);  // mods_screen.cpp
+    if (screen == Screen::Video) return videoInput(e);  // video_screen.cpp
     if (screen == Screen::Pause || screen == Screen::Options) {
         if (e.type == E::Key && e.down && e.code == VK_ESCAPE) {
             if (screen == Screen::Options) {

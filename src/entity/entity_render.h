@@ -87,7 +87,7 @@ private:
     std::vector<TypeDef> defs_;  // by entity type id
 
     ComPtr<ID3D12RootSignature> rootSig_;
-    ComPtr<ID3D12PipelineState> psoCutout_, psoTranslucent_, psoFree_;
+    ComPtr<ID3D12PipelineState> psoCutout_, psoTranslucent_, psoFree_, psoGlint_;
     ComPtr<ID3D12Resource> quads_, atlas_, upload_;
     u8* mapped_ = nullptr;
     u32 atlasDescriptor_ = 0;
@@ -99,6 +99,7 @@ private:
     std::vector<PartPose> poses_;
     std::vector<u8> hidden_;
     std::vector<u32> translucent_;      // instance ids drawn after the cutout pass
+    std::vector<u32> glint_;            // (quad, instance) of enchanted armour, drawn last with the glint
     std::vector<i32> itemBlocks_;      // item id -> block id (0: not a block), -1 unresolved
     struct CachedLayers {
         Layer layers[6];

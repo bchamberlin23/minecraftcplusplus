@@ -240,6 +240,7 @@ bool StructureSystem::Impl::isStructureChunk(const Set& s, int x, int z) const {
 
 std::shared_ptr<Start> StructureSystem::Impl::tryGenerate(const Structure& s, int cx, int cz) const {
     thread_local DensityContext ctx;
+    setThreadSB(&env->b);
     GenCtx c(*env, ctx, env->seed, cx, cz, &s.biomes);
     std::optional<Stub> stub = s.findGenerationPoint(c);
     if (!stub || !c.isValidBiomeAt(stub->position)) return nullptr;
@@ -637,6 +638,7 @@ void StructureSystem::placeStep(int step, GenRegion& level, int cx, int cz, Worl
     // ChunkGenerator.getWritableArea
     const BBox chunkBB(cx * 16, env.minY() + 1, cz * 16, cx * 16 + 15, env.minY() + env.height() - 1, cz * 16 + 15);
     PlaceCtx c{level, env, env.b, cx, cz};
+    setThreadSB(&env.b);
     int index = 0;
     for (const Structure* s : im.byStep[size_t(step)]) {
         random.setFeatureSeed(decorationSeed, index++, step);

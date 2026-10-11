@@ -111,6 +111,7 @@ public:
     u32 jitterPhases(u32 renderW, u32 outputW) const;
     float mipBias() const { return mipBias_; }
     bool frameGenActive() const { return fg_ != nullptr; }
+    void setMenuActive(bool menu);  // full-screen menus: frame generation off meanwhile (resources kept)
     bool uiComposedBySwapChain() const;  // FSR FG: the swap chain blends the UI layer over real + generated frames
     // Before the UI composite: copies the hudless back buffer (frame generation only). Back buffer in RENDER_TARGET.
     void beforeUiComposite(ID3D12GraphicsCommandList* list, ID3D12Resource* backbuffer);
@@ -150,7 +151,7 @@ private:
     bool havePrev_ = false;
     float mipBias_ = 0;
     u32 frameId_ = 1;
-    bool frameBegun_ = false;
+    bool frameBegun_ = false, menuPaused_ = false;
     double nextFrameTime_ = 0;
     ComPtr<ID3D12Resource> hudless_;
     u32 hudlessW_ = 0, hudlessH_ = 0;
@@ -187,6 +188,8 @@ public:
     virtual bool createSwapChain(HWND, const DXGI_SWAP_CHAIN_DESC1&, bool /*frameGen*/, ComPtr<IDXGISwapChain3>&) {
         return false;
     }
+    // Streamline only: put its proxy over another SDK's swap chain so Reflex / PCL / garbage collection see Present.
+    virtual void wrapSwapChain(ComPtr<IDXGISwapChain3>&) {}
     virtual void beforeReleaseSwapChain() {}  // the app still holds the swap chain (FSR: destroy contexts first)
     virtual void releaseSwapChain() {}        // all app references released
     virtual void setFrameGen(bool /*on*/, u32 /*multiplier*/) {}

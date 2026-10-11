@@ -169,6 +169,10 @@ struct Visuals::Impl {
     Entity avatar;
     bool avatarReady = false;
     std::vector<i8> skullCache;  // item id -> 1 skull, 0 not, -1 unknown
+    std::vector<const ItemMesh*> skullMeshes;  // item id -> worn skull model
+    std::vector<i8> mapItem;                   // item id -> 1 filled map, 0 not, -1 unknown
+    const ItemMesh* frameMeshes[4] = {};       // item / glow frame, without / with a map
+    std::vector<Xf> armMats;                   // scratch: arm part matrices
 
     // Name tags: text quads per name in the static store.
     struct Tag {
@@ -182,10 +186,20 @@ struct Visuals::Impl {
         std::string asset;
         int w = 1, h = 1;
         bool known = false;
+        const ItemMesh* mesh = nullptr;
     };
     std::vector<PaintingInfo> paintings;
 
+    // Timing history (exit report): CPU per frame over all stages, particles alive.
+    static constexpr u32 kHistory = 512;
+    float historyMs[kHistory] = {}, historyParticleMs[kHistory] = {};
+    u32 historyParticles[kHistory] = {}, historyItems[kHistory] = {}, historyTags[kHistory] = {};
+    u64 historyFrames = 0;
+    double frameMs = 0, frameParticleMs = 0;
+    void report() const;
+
     Impl(Visuals& v, EntityWorld& w, EntityRenderer& r) : self(v), world(w), er(r), assets(w.assets()) {}
+    ~Impl() { report(); }
     Stats& stats() { return self.stats_; }
 
     // --- GPU ---------------------------------------------------------------------------------------------
@@ -283,8 +297,13 @@ bool StagePass::create(Renderer& r) { return impl->createGpu(r); }
 void StagePass::draw(const PassContext& ctx) {
     Visuals::Impl& m = *impl;
     if (!m.gpuOk) return;
-    Timer t;
     m.beginFrame(ctx);
+    Timer t;
+    struct Acc {
+        Visuals::Impl& m;
+        Timer& t;
+        ~Acc() { m.frameMs += t.ms(); }
+    } acc{m, t};
     switch (stage) {
         case 0:
             m.update();
@@ -312,6 +331,7 @@ void StagePass::draw(const PassContext& ctx) {
             if (m.particles) {
                 auto* out = reinterpret_cast<fx::GpuParticle*>(m.frameBase + kParticleOffset);
                 total = m.particles->build(out, kMaxParticles, cam, opaque);
+                m.frameParticleMs += m.particles->stats().buildMs;
             }
             m.uploadPending(ctx);
             m.writeCb(1, ctx, ctx.viewProj, false, false);
@@ -514,8 +534,28 @@ bool Visuals::Impl::createGpu(Renderer& r) {
     return true;
 }
 
+void Visuals::Impl::report() const {
+    const u32 n = u32(std::min<u64>(historyFrames, kHistory));
+    if (!n) return;
+    std::vector<float> v(historyMs, historyMs + n);
+    std::sort(v.begin(), v.end());
+    double sum = 0, psum = 0, parts = 0, items = 0, tagsN = 0;
+    for (u32 i = 0; i < n; ++i)
+        sum += historyMs[i], psum += historyParticleMs[i], parts += historyParticles[i], items += historyItems[i], tagsN += historyTags[i];
+    LOG("visuals: last %u frames: CPU %.3f ms avg, p99 %.3f, max %.3f (particles sim+build %.3f ms) | %.0f particles, %.0f "
+        "items, %.0f name tags per frame",
+        n, sum / n, v[std::min<size_t>(n - 1, size_t(0.99 * (n - 1) + 0.5))], v[n - 1], psum / n, parts / n, items / n, tagsN / n);
+}
+
 void Visuals::Impl::beginFrame(const PassContext& ctx) {
     if (frameIndex == ctx.frame && frameBase) return;
+    if (frameBase && frameCounter > 2) {  // close the previous frame's timing
+        const u32 h = u32(historyFrames % kHistory);
+        historyMs[h] = float(frameMs), historyParticleMs[h] = float(frameParticleMs);
+        historyParticles[h] = self.stats_.particles, historyItems[h] = self.stats_.items, historyTags[h] = self.stats_.tags;
+        ++historyFrames;
+    }
+    frameMs = 0, frameParticleMs = 0;
     frameIndex = ctx.frame;
     frameBase = mapped + u64(ctx.frame) * kFrameBytes;
     stageUsed = 0, instUsed = 0, dynUsed = 0;
@@ -892,6 +932,7 @@ void Visuals::Impl::update() {
         const CameraState c = game ? game->viewCamera() : CameraState{};
         const double cam[3] = {c.x, c.y, c.z};
         particles->frame(dt, cam);
+        frameParticleMs += particles->stats().tickMs;
     }
 }
 
@@ -931,10 +972,14 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
                 Xf m;
                 std::memcpy(m.m, a.head, sizeof(m.m));
                 if (isSkull(head)) {  // wornHeadType: the skull model, scaled 1.1875
-                    std::string layer, tex;
-                    ItemModels::skullLayer(models.itemName(head), layer, tex);
+                    if (skullMeshes.size() <= size_t(head)) skullMeshes.resize(size_t(head) + 1, nullptr);
+                    if (!skullMeshes[size_t(head)]) {
+                        std::string layer, tex;
+                        ItemModels::skullLayer(models.itemName(head), layer, tex);
+                        skullMeshes[size_t(head)] = &models.entityLayerMesh(layer, tex);
+                    }
                     m = xfMul(m, xfScale(1.1875f, 1.1875f, 1.1875f));
-                    pushRaw(worldLists, models.entityLayerMesh(layer, tex), m, a.light);
+                    pushRaw(worldLists, *skullMeshes[size_t(head)], m, a.light);
                 } else {  // translateToHead
                     m = xfMul(m, xfTranslate(0, -0.25f, 0));
                     m = xfMul(m, xfRotY(180.0f * kDeg));
@@ -986,13 +1031,19 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
             m = xfMul(m, xfRotY(yRot * kDeg));
             const bool glow = e.type == glowFrameType;
             const bool invisible = (e.sharedFlags & 0x20) != 0;
-            const std::string itemName = e.itemId >= 0 ? models.itemName(e.itemId) : std::string();
-            const bool map = itemName == "filled_map";
+            bool map = false;
+            if (e.itemId >= 0) {
+                if (mapItem.size() <= size_t(e.itemId)) mapItem.resize(size_t(e.itemId) + 1, -1);
+                i8& mi = mapItem[size_t(e.itemId)];
+                if (mi < 0) mi = models.itemName(e.itemId) == "filled_map" ? 1 : 0;
+                map = mi == 1;
+            }
             u32 frameLight = light;
             if (glow) frameLight = (light & 0xF0) | std::max<u32>(light & 15, 5);
             if (!invisible) {
-                const ItemMesh& fm = models.blockModelMesh(std::string("block/") + (glow ? "glow_item_frame" : "item_frame") + (map ? "_map" : ""));
-                pushRaw(worldLists, fm, xfMul(m, xfTranslate(-0.5f, -0.5f, -0.5f)), frameLight);
+                const ItemMesh*& fm = frameMeshes[(glow ? 2 : 0) + (map ? 1 : 0)];
+                if (!fm) fm = &models.blockModelMesh(std::string("block/") + (glow ? "glow_item_frame" : "item_frame") + (map ? "_map" : ""));
+                pushRaw(worldLists, *fm, xfMul(m, xfTranslate(-0.5f, -0.5f, -0.5f)), frameLight);
             }
             if (e.itemId >= 0) {
                 Xf im = xfMul(m, xfTranslate(0, 0, invisible ? 0.5f : 0.4375f));
@@ -1003,12 +1054,13 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
             continue;
         }
         if (e.type == paintingType) {  // PaintingRenderer
-            const PaintingInfo* info = painting(e.painting);
+            PaintingInfo* info = const_cast<PaintingInfo*>(painting(e.painting));
             if (!info) continue;
+            if (!info->mesh) info->mesh = &models.paintingMesh(info->asset, info->w, info->h);
             static const int k2d[6] = {0, 0, 2, 0, 1, 3};  // 3D data value -> 2D data value (S W N E)
             const int d2 = k2d[std::clamp(e.direction, 0, 5)];
             Xf m = xfMul(xfTranslate(rx, ry, rz), xfRotY(float(180 - d2 * 90) * kDeg));
-            pushRaw(worldLists, models.paintingMesh(info->asset, info->w, info->h), m, light);
+            pushRaw(worldLists, *info->mesh, m, light);
             continue;
         }
         // ItemEntityRenderer: bob, spin and several copies for larger stacks (GROUND display).
@@ -1180,7 +1232,8 @@ void Visuals::Impl::buildHand(const PassContext& ctx, float viewProj[16]) {
         const i16 arm = model.role(rightArm ? RightArm : LeftArm);
         if (arm < 0) return;
         const TexRect& tr = assets.rect(avatar.skin);
-        std::vector<Xf> mats(model.parts.size());
+        std::vector<Xf>& mats = armMats;
+        if (mats.size() < model.parts.size()) mats.resize(model.parts.size());
         const u32 first = u32(dyn.size());
         for (size_t i = size_t(arm); i < model.parts.size(); ++i) {
             const ModelPart& part = model.parts[i];

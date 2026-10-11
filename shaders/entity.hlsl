@@ -8,6 +8,8 @@ cbuffer Frame : register(b0) {
     float4 gFogParams;   // x = fog start, y = fog end, z = daylight, w = 1: shader pipeline on (see below)
     float4 gLight0;      // world-space diffuse light directions (the game's Lighting.setupLevel)
     float4 gLight1;
+    float4 gGlintRect;   // atlas rect of misc/enchanted_glint_armor (u0 v0 du dv)
+    float4 gGlint;       // x, y: scroll offset; z: strength
 };
 cbuffer Draw : register(b1) {
     uint gRefBase;
@@ -61,6 +63,7 @@ struct VSOut {
     float fog : FOG;
     float shade : SHADE;       // directional shading alone (shader pipeline)
     nointerpolation uint lightBits : LIGHTBITS;
+    float2 rawUv : TEXCOORD1;  // texture coordinates within the entity texture (glint)
 };
 
 static const uint kCorner[6] = {0, 1, 2, 0, 2, 3};
@@ -102,6 +105,7 @@ VSOut finish(float3 rel, float3 n, float2 uv, uint layer, uint color, uint light
     float red = float(overlay & 255) / 255.0, white = float((overlay >> 8) & 255) / 255.0;
     o.overlay = white > 0 ? float4(1, 1, 1, white) : float4(1, 0, 0, red);
     o.fog = saturate((length(rel) - gFogParams.x) / max(gFogParams.y - gFogParams.x, 1e-3));
+    o.rawUv = 0;
     return o;
 }
 
@@ -115,7 +119,9 @@ VSOut EntityModelVS(uint vid : SV_VertexID) {
     float3 rel = float3(dot(m.r0, p), dot(m.r1, p), dot(m.r2, p));
     float3 n = normalize(float3(dot(m.r0.xyz, q.normal), dot(m.r1.xyz, q.normal), dot(m.r2.xyz, q.normal)) + 1e-6);
     float2 uv = inst.uvRect.xy + q.uv[corner] * inst.uvRect.zw;
-    return finish(rel, n, uv, 0xFFFFFFFF, inst.color, inst.light, inst.overlay);
+    VSOut o = finish(rel, n, uv, 0xFFFFFFFF, inst.color, inst.light, inst.overlay);
+    o.rawUv = q.uv[corner];
+    return o;
 }
 
 VSOut EntityFreeVS(uint vid : SV_VertexID) {
@@ -155,4 +161,16 @@ float4 shadePipeline(VSOut i, float minAlpha, bool translucent) {
 float4 EntityCutoutPS(VSOut i) : SV_Target { return gFogParams.w > 0.5 ? shadePipeline(i, 0.1, false) : shade(i, 0.1); }
 float4 EntityTranslucentPS(VSOut i) : SV_Target {
     return gFogParams.w > 0.5 ? shadePipeline(i, 0.004, true) : shade(i, 0.004);
+}
+
+// Armour enchantment glint (RenderTypes.armorCutoutNoCullGlint): misc/enchanted_glint_armor scrolled over the
+// piece's texture coordinates (TextureTransform.setupGlintTexturing, scale 0.16), added as src * src + dst.
+float4 EntityGlintPS(VSOut i) : SV_Target {
+    float4 base = gAtlas.SampleLevel(gPoint, i.uv, 0);
+    clip(base.a * i.tint.a - 0.1);
+    const float c = 0.98480775, s = 0.17364818;
+    float2 g = i.rawUv * 0.16;
+    g = float2(g.x * c - g.y * s, g.x * s + g.y * c) + gGlint.xy;
+    float3 glint = gAtlas.SampleLevel(gPoint, gGlintRect.xy + frac(g) * gGlintRect.zw, 0).rgb * gGlint.z;
+    return float4(glint * (1.0 - i.fog), 1);
 }
