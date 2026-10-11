@@ -5,6 +5,7 @@
 #include "assets/assets.h"
 #include "assets/game_reports.h"
 #include "entity/entity_render.h"
+#include "game/item_rules.h"
 #include "net/client.h"
 #include "world/nbt.h"
 #include "world/world.h"
@@ -12,9 +13,16 @@
 #include <algorithm>
 #include <cmath>
 #include <ctime>
+#include <functional>
 #include <shared_mutex>
 
 namespace be {
+
+struct M34 {
+    float m[12];
+    static M34 identity() { return {{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0}}; }
+};
+
 namespace {
 
 constexpr float kPi = 3.14159265f;
@@ -37,10 +45,6 @@ int dyeId(std::string_view n) {
 }
 u32 abgr(u32 rgb, u32 a = 255) { return (a << 24) | ((rgb & 255) << 16) | (rgb & 0xFF00) | ((rgb >> 16) & 255); }
 
-struct M34 {
-    float m[12];
-    static M34 identity() { return {{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0}}; }
-};
 M34 mul(const M34& a, const M34& b) {
     M34 r;
     for (int i = 0; i < 3; ++i) {
@@ -117,6 +121,8 @@ int from2d(int v) {
 int clockwise(int dir) { return dir == 2 ? 5 : dir == 5 ? 3 : dir == 3 ? 4 : dir == 4 ? 2 : dir; }
 int stepX(int dir) { return dir == 4 ? -1 : dir == 5 ? 1 : 0; }
 int stepZ(int dir) { return dir == 2 ? -1 : dir == 3 ? 1 : 0; }
+int stepY(int dir) { return dir == 1 ? 1 : dir == 0 ? -1 : 0; }
+constexpr const char* kDirNames[6] = {"down", "up", "north", "south", "west", "east"};
 // Direction.getRotation (JOML rotationXYZ(a, b, c) = Rx(a) * Ry(b) * Rz(c)).
 M34 dirRotation(int dir) {
     switch (dir) {
@@ -268,6 +274,8 @@ void BlockEntityRenderer::initAssets() {
     const char* oxidation[4] = {"copper_golem/copper_golem", "copper_golem/copper_golem_exposed",
                                 "copper_golem/copper_golem_weathered", "copper_golem/copper_golem_oxidized"};
     for (int i = 0; i < 4; ++i) t_.statue[i] = T(oxidation[i]);
+    t_.beaconBeam = T("beacon/beacon_beam"), t_.gatewayBeam = T("end_portal/end_gateway_beam");
+    t_.endPortal = T("end_portal/end_portal"), t_.endSky = assets_.texture("environment/end_sky");
     int missing = 0;
     for (int v : {m_.chest, m_.shulker, m_.bell, m_.book, m_.potBase, m_.bannerStanding, m_.skull[0], m_.statue[0]})
         missing += v < 0;
@@ -357,8 +365,38 @@ BlockEntityRenderer::BlockDef BlockEntityRenderer::classify(u16 block) const {
                                                                     : 0;
         const std::string_view pose = prop("copper_golem_pose");
         d.part = pose == "running" ? 1 : pose == "sitting" ? 2 : pose == "star" ? 3 : 0;
+    } else if (n == "beacon") {
+        d.kind = Kind::Beacon;
+    } else if (n == "end_portal") {
+        d.kind = Kind::EndPortal;
+    } else if (n == "end_gateway") {
+        d.kind = Kind::EndGateway;
+    } else if (n == "spawner") {
+        d.kind = Kind::Spawner;
+    } else if (n == "trial_spawner") {  // TrialSpawnerState.spinningMobSpeed: waiting_for_players, active
+        const std::string_view st = prop("trial_spawner_state");
+        d.kind = Kind::TrialSpawner, d.variant = st == "waiting_for_players" ? 1 : st == "active" ? 2 : 0;
+    } else if (n == "vault") {
+        d.kind = Kind::Vault, d.facing = facing();
+    } else if (n == "suspicious_sand" || n == "suspicious_gravel") {
+        const std::string_view dusted = prop("dusted");
+        d.kind = Kind::Brushable, d.variant = u8(dusted.empty() ? 0 : std::clamp(dusted[0] - '0', 0, 3));
     }
     return d;
+}
+
+bool BlockEntityRenderer::ticking(const BlockDef& d) {
+    switch (d.kind) {
+        case Kind::Enchanting:
+        case Kind::Conduit:
+        case Kind::Beacon:
+        case Kind::EndGateway:
+        case Kind::Spawner:
+        case Kind::TrialSpawner:
+        case Kind::Vault: return true;
+        case Kind::Skull: return d.flag;
+        default: return false;
+    }
 }
 
 const BlockEntityRenderer::BlockDef& BlockEntityRenderer::def(u16 block) {
@@ -518,6 +556,33 @@ void BlockEntityRenderer::decode(const std::string& nbt, const BlockDef& d, Data
             items(et, r.i32v());
         } else if (d.kind == Kind::Shelf && t == TagByte && n == "align_items_to_bottom") {
             out.alignBottom = r.u8v() != 0;
+        } else if (((d.kind == Kind::Spawner && n == "SpawnData") || (d.kind == Kind::TrialSpawner && n == "spawn_data")) &&
+                   t == TagCompound) {  // SpawnData {entity: {id}}
+            u8 t2;
+            std::string_view n2;
+            while (r.field(t2, n2)) {
+                if (n2 == "entity" && t2 == TagCompound) {
+                    const std::string id = readId(r, t2);
+                    if (!id.empty()) out.entity = assets_.typeId(id);
+                } else {
+                    r.skip(t2);
+                }
+            }
+        } else if (d.kind == Kind::Spawner && n == "Delay" && t == TagShort) {
+            out.delay = r.i16v();
+        } else if (d.kind == Kind::Vault && n == "shared_data" && t == TagCompound) {  // VaultSharedData.display_item
+            u8 t2;
+            std::string_view n2;
+            while (r.field(t2, n2)) {
+                if (n2 == "display_item") out.items[0] = std::string(stripNs(readId(r, t2)));
+                else r.skip(t2);
+            }
+        } else if (d.kind == Kind::Brushable && n == "item") {
+            out.items[0] = std::string(stripNs(readId(r, t)));
+        } else if (d.kind == Kind::Brushable && n == "hit_direction" && (t == TagByte || t == TagInt)) {  // Direction.LEGACY_ID_CODEC
+            out.hitDir = i8(std::clamp(t == TagByte ? int(i8(r.u8v())) : r.i32v(), -1, 5));
+        } else if (d.kind == Kind::EndGateway && n == "Age" && t == TagLong) {
+            out.age = r.i64v();
         } else {
             r.skip(t);
         }
@@ -572,7 +637,9 @@ void BlockEntityRenderer::scanColumn(int cx, int cz) {
             }
             const bool wantsData = d.kind == Kind::Sign || d.kind == Kind::HangingSign || d.kind == Kind::Banner ||
                                    (d.kind == Kind::Skull && d.variant == 6) || d.kind == Kind::Pot ||
-                                   d.kind == Kind::Campfire || d.kind == Kind::Shelf;
+                                   d.kind == Kind::Campfire || d.kind == Kind::Shelf || d.kind == Kind::Spawner ||
+                                   d.kind == Kind::TrialSpawner || d.kind == Kind::Vault || d.kind == Kind::Brushable ||
+                                   d.kind == Kind::EndGateway;
             if (wantsData) {
                 Data data;
                 if (auto it = nbt.find(posKey(in.x, in.y, in.z)); it != nbt.end()) decode(*it->second, d, data);
@@ -580,8 +647,12 @@ void BlockEntityRenderer::scanColumn(int cx, int cz) {
                 sec.data.push_back(std::move(data));
             }
             // Block entities that animate on their own tick.
-            if (d.kind == Kind::Enchanting || d.kind == Kind::Conduit || (d.kind == Kind::Skull && d.flag))
-                anims_.try_emplace(posKey(in.x, in.y, in.z));
+            if (ticking(d)) {
+                Anim& a = anims_.try_emplace(posKey(in.x, in.y, in.z)).first->second;
+                if (d.kind == Kind::EndGateway && a.age < 0 && in.data >= 0) a.age = sec.data[size_t(in.data)].age;
+                if (d.kind == Kind::Spawner && a.delay < 0 && in.data >= 0) a.delay = sec.data[size_t(in.data)].delay;
+            }
+            sec.beams |= d.kind == Kind::Beacon || d.kind == Kind::EndGateway;
             sec.list.push_back(std::move(in));
         }
         if (sec.list.empty()) continue;
@@ -715,6 +786,11 @@ void BlockEntityRenderer::attach(net::Client& client) {
         std::lock_guard lock(netMutex_);
         netData_.push_back(std::move(e));
     });
+    client.onPlayPeek("ticking_state", [this](net::Reader& r) {
+        const float rate = r.f32();
+        const bool frozen = r.boolean();
+        if (r.ok) tickRate_ = rate, frozen_ = frozen;
+    });
     client.onPlayPeek("block_event", [this](net::Reader& r) {
         NetEvent e;
         r.blockPos(e.x, e.y, e.z);
@@ -749,6 +825,12 @@ void BlockEntityRenderer::handleEvent(int x, int y, int z, int type, int param) 
     if (type != 1) return;
     Anim* a = nullptr;
     switch (d.kind) {
+        case Kind::EndGateway:  // TheEndGatewayBlockEntity.triggerEvent: teleport cooldown
+            anims_[posKey(x, y, z)].cooldown = 40;
+            return;
+        case Kind::Spawner:  // BaseSpawner.onEventTriggered: spawnDelay = minSpawnDelay
+            anims_[posKey(x, y, z)].delay = 200;
+            return;
         case Kind::Chest:  // ChestLidController.shouldBeOpen
         case Kind::Shulker:
             a = &anims_[posKey(x, y, z)];
@@ -785,6 +867,11 @@ bool BlockEntityRenderer::isDynamic(const Instance& in, const BlockDef& d) const
         case Kind::Pot: return a && gameTicks_ - a->wobbleStart <= 11;
         case Kind::Conduit: return a && a->active;
         case Kind::Skull: return d.flag && (d.variant == 4 || d.variant == 5);
+        case Kind::Beacon: return a && a->levels > 0 && !a->beam.empty();
+        case Kind::EndGateway: return a && ((a->age >= 0 && a->age < 200) || a->cooldown > 0);
+        case Kind::Spawner:
+        case Kind::Vault: return true;  // spinning (nothing is drawn without a mob / item)
+        case Kind::TrialSpawner: return d.variant != 0;
         default: return false;
     }
 }
@@ -882,6 +969,30 @@ void BlockEntityRenderer::tick() {
             case Kind::Skull:
                 if (d.flag) ++a.skullTicks;
                 break;
+            case Kind::Beacon: beaconTick(x, y, z, a); break;
+            case Kind::EndGateway:  // TheEndGatewayBlockEntity.beamAnimationTick
+                if (a.age >= 0) ++a.age;
+                if (a.cooldown > 0) --a.cooldown;
+                break;
+            case Kind::Spawner: {  // BaseSpawner.clientTick (requiredPlayerRange 16; the camera stands in for the player)
+                ++a.tickCount;  // display entity age
+                a.oSpin = a.spin;
+                const double dx = cam_[0] - (x + 0.5), dy = cam_[1] - 1.62 - (y + 0.5), dz = cam_[2] - (z + 0.5);
+                if (dx * dx + dy * dy + dz * dz < 16.0 * 16.0) {
+                    if (a.delay > 0) --a.delay;
+                    a.spin = std::fmod(a.spin + 1000.0f / (float(std::max(a.delay, 0)) + 200.0f), 360.0f);
+                }
+                break;
+            }
+            case Kind::TrialSpawner:  // TrialSpawner.tickClient (the spawn delay is not known here: 0)
+                ++a.tickCount;
+                a.oSpin = a.spin;
+                if (d.variant) a.spin = std::fmod(a.spin + (d.variant == 2 ? 1000.0f : 200.0f) / 200.0f, 360.0f);
+                break;
+            case Kind::Vault:  // VaultClientData.updateDisplayItemSpin
+                a.oSpin = a.spin;
+                a.spin = std::remainder(a.spin + 10.0f, 360.0f);
+                break;
             default: keep = false; break;
         }
         // Static <-> per-frame transitions rebuild the section batch.
@@ -891,10 +1002,322 @@ void BlockEntityRenderer::tick() {
             a.dynamic = dyn;
             if (auto s = sections_.find(sectionKey(x >> 4, y >> 4, z >> 4)); s != sections_.end()) s->second.dirty = true;
         }
-        const bool persistent = d.kind == Kind::Enchanting || d.kind == Kind::Conduit || (d.kind == Kind::Skull && d.flag);
-        if (!keep && !persistent && !a.dynamic) it = anims_.erase(it);
+        if (!keep && !ticking(d) && !a.dynamic) it = anims_.erase(it);
         else ++it;
     }
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Beacons (BeaconBlockEntity.tick: beam sections and pyramid levels; the whole column each tick)
+
+void BlockEntityRenderer::beaconTick(int x, int y, int z, Anim& a) {
+    auto baseName = [&](u16 b) {
+        std::string_view n = registry_.name(b);
+        return n.substr(0, n.find('['));
+    };
+    std::vector<std::pair<u32, int>> sections;
+    const int top = (world_.maxSectionY() + 1) * 16 - 1;
+    for (int cy = y; cy <= top; ++cy) {
+        const u16 b = world_.block(x, cy, z);
+        const std::string_view n = stripNs(baseName(b));
+        int dye = n == "beacon" ? 0 : -1;  // BeaconBeamBlock: the beacon (white), stained glass and panes
+        if (n.ends_with("_stained_glass")) dye = dyeId(n.substr(0, n.size() - 14));
+        else if (n.ends_with("_stained_glass_pane")) dye = dyeId(n.substr(0, n.size() - 19));
+        if (dye >= 0) {
+            const u32 color = kDyeDiffuse[dye];
+            if (sections.size() <= 1) {
+                sections.push_back({color, 1});
+            } else if (color == sections.back().first) {
+                ++sections.back().second;
+            } else {  // ARGB.average
+                const u32 c = sections.back().first;
+                u32 avg = 0;
+                for (int sh = 0; sh < 24; sh += 8) avg |= ((((c >> sh) & 255) + ((color >> sh) & 255)) / 2) << sh;
+                sections.push_back({avg, 1});
+            }
+        } else {
+            if (sections.empty() || (registry_.infos()[b].opacity >= 15 && n != "bedrock")) {
+                sections.clear();
+                break;
+            }
+            ++sections.back().second;
+        }
+    }
+    a.beam = std::move(sections);
+    // updateBase every 80 ticks (and when first seen) while there is a beam.
+    if ((gameTicks_ % 80 == 0 || a.tickCount++ == 0) && !a.beam.empty()) {
+        static const char* kBase[5] = {"minecraft:iron_block", "minecraft:gold_block", "minecraft:emerald_block",
+                                       "minecraft:diamond_block", "minecraft:netherite_block"};
+        auto isBase = [&](u16 b) {
+            const std::string_view n = baseName(b);
+            if (rules_ && rules_->loaded()) return rules_->inTag("minecraft:beacon_base_blocks", n);
+            return std::find(std::begin(kBase), std::end(kBase), n) != std::end(kBase);
+        };
+        int levels = 0;
+        for (int step = 1; step <= 4; levels = step++) {
+            const int ly = y - step;
+            if (ly < world_.minSectionY() * 16) break;
+            bool ok = true;
+            for (int lx = x - step; lx <= x + step && ok; ++lx)
+                for (int lz = z - step; lz <= z + step && ok; ++lz) ok = isBase(world_.block(lx, ly, lz));
+            if (!ok) break;
+        }
+        a.levels = levels;
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Pistons: the client half of PistonBaseBlock.triggerEvent / moveBlocks and PistonStructureResolver, against the
+// blocks as they were when the event arrived. The moved blocks wait for the server's moving_piston blocks.
+
+void BlockEntityRenderer::applyBlockEvents() {
+    std::vector<NetEvent> events;
+    {
+        std::lock_guard lock(netMutex_);
+        events.swap(netEvents_);
+    }
+    for (const NetEvent& e : events) {
+        pistonEvent(e.x, e.y, e.z, e.type, e.param);
+        handleEvent(e.x, e.y, e.z, e.type, e.param);
+    }
+    // PistonMovingBlockEntity.tick: two ticks moving, five more on the client, then the moved block is placed (unless
+    // the server's own block arrived first and replaced the moving_piston; drawn a little longer then, while the
+    // terrain remeshes).
+    const double now = nowSeconds(), tickSeconds = 1.0 / std::max(double(tickRate_), 1.0);
+    std::vector<net::BlockChange> edits;
+    std::erase_if(moving_, [&](Moving& m) {
+        if (!registry_.name(world_.block(m.x, m.y, m.z)).starts_with("minecraft:moving_piston")) {
+            if (m.gone < 0) m.gone = now;
+            return now - m.gone > 0.05;
+        }
+        if (now - m.start < 7 * tickSeconds) return false;
+        edits.push_back({m.x, m.y, m.z, m.moved});
+        return true;
+    });
+    if (!edits.empty() && blockSink_) blockSink_(edits);
+}
+
+void BlockEntityRenderer::pistonEvent(int px, int py, int pz, int type, int param) {
+    const u16 pistonState = world_.block(px, py, pz);
+    static const bool debug = std::getenv("MCPP_BE_DEBUG") != nullptr;
+    if (debug)
+        LOG("be: block event %d %d %d type %d param %d on %s (rules %d)", px, py, pz, type, param,
+            registry_.name(pistonState).c_str(), rules_ && rules_->loaded() ? 1 : 0);
+    if (type < 0 || type > 2 || !rules_ || !rules_->loaded() || !blockSink_) return;
+    auto baseName = [&](u16 b) {
+        std::string_view n = registry_.name(b);
+        return n.substr(0, n.find('['));
+    };
+    const std::string_view pistonName = baseName(pistonState);
+    const bool sticky = pistonName == "minecraft:sticky_piston";
+    if (!sticky && pistonName != "minecraft:piston") return;
+    const int dir = dirFromName(registry_.property(pistonState, "facing"));
+
+    struct P {
+        int x, y, z;
+        bool operator==(const P&) const = default;
+    };
+    auto rel = [](P p, int d, int n = 1) { return P{p.x + stepX(d) * n, p.y + stepY(d) * n, p.z + stepZ(d) * n}; };
+    const P piston{px, py, pz};
+    // The client's level changes as the game's client makes them (applied together at the end; reads see them).
+    std::vector<net::BlockChange> edits;
+    auto get = [&](P p) -> u16 {
+        for (size_t i = edits.size(); i-- > 0;)
+            if (edits[i].x == p.x && edits[i].y == p.y && edits[i].z == p.z) return edits[i].id;
+        return world_.block(p.x, p.y, p.z);
+    };
+    auto set = [&](P p, u16 id) { edits.push_back({p.x, p.y, p.z, id}); };
+    const u16 air = registry_.idFor("minecraft:air");
+    auto movingPiston = [&](bool stickyType) {
+        return registry_.idFor(std::string("minecraft:moving_piston[facing=") + kDirNames[dir] + ",type=" +
+                               (stickyType ? "sticky" : "normal") + "]");
+    };
+    auto isMovingPiston = [&](u16 b) { return baseName(b) == "minecraft:moving_piston"; };
+    auto isAir = [&](u16 b) {
+        const std::string_view n = baseName(b);
+        return b == 0 || n == "minecraft:air" || n == "minecraft:cave_air" || n == "minecraft:void_air";
+    };
+    auto isPistonBlock = [&](u16 b) {
+        const std::string_view n = baseName(b);
+        return n == "minecraft:piston" || n == "minecraft:sticky_piston";
+    };
+    auto reaction = [&](u16 b) { return ItemRules::PushReaction(rules_->push(baseName(b)).reaction); };
+    const int minY = world_.minSectionY() * 16, maxY = (world_.maxSectionY() + 1) * 16 - 1;
+    auto pushable = [&](u16 s, P p, int direction, bool allowDestroyable, int connection) {  // PistonBaseBlock.isPushable
+        if (p.y < minY || p.y > maxY) return false;
+        if (isAir(s)) return true;
+        if ((direction == 0 && p.y == minY) || (direction == 1 && p.y == maxY)) return false;
+        if (!isPistonBlock(s)) {
+            if (rules_->hardness(registry_.name(s)).destroyTime == -1.0f) return false;
+            switch (reaction(s)) {
+                case ItemRules::PushReaction::Immoveable: return false;
+                case ItemRules::PushReaction::Popped: return allowDestroyable;
+                case ItemRules::PushReaction::Push: return direction == connection;
+                default: break;
+            }
+        } else if (registry_.property(s, "extended") == "true") {
+            return false;
+        }
+        return !rules_->push(baseName(s)).blockEntity;
+    };
+    auto isSticky = [&](u16 b) {
+        const std::string_view n = baseName(b);
+        return n == "minecraft:slime_block" || n == "minecraft:honey_block";
+    };
+    auto canStick = [&](u16 a, u16 b) {
+        const std::string_view na = baseName(a), nb = baseName(b);
+        if ((na == "minecraft:honey_block" && nb == "minecraft:slime_block") ||
+            (na == "minecraft:slime_block" && nb == "minecraft:honey_block"))
+            return false;
+        return isSticky(a) || isSticky(b);
+    };
+    const double now = nowSeconds();
+    auto add = [&](P at, u16 moved, bool extending, bool source) {  // MovingPistonBlock.newMovingBlockEntity
+        std::erase_if(moving_, [&](const Moving& m) { return m.x == at.x && m.y == at.y && m.z == at.z; });
+        moving_.push_back({at.x, at.y, at.z, moved, u8(dir), extending, source, now, -1.0});
+        if (debug)
+            LOG("be: piston %d %d %d event %d: %s moves to %d %d %d%s", px, py, pz, type, registry_.name(moved).c_str(), at.x,
+                at.y, at.z, source ? " (source)" : "");
+    };
+    // PistonMovingBlockEntity.finalTick: the moved block in place now (a piston's own head: air).
+    auto finalTick = [&](P at, bool requireExtending) {
+        for (auto it = moving_.begin(); it != moving_.end(); ++it) {
+            if (it->x != at.x || it->y != at.y || it->z != at.z) continue;
+            if (requireExtending && (it->dir != dir || !it->extending)) return false;
+            if (isMovingPiston(get(at))) set(at, it->source ? air : it->moved);
+            moving_.erase(it);
+            return true;
+        }
+        return false;
+    };
+
+    auto moveBlocks = [&](bool extending) {
+        const P arm = rel(piston, dir);
+        if (!extending && baseName(get(arm)) == "minecraft:piston_head") set(arm, air);
+        // PistonStructureResolver
+        const int pushDir = extending ? dir : opposite(dir);
+        const P start = extending ? arm : rel(piston, dir, 2);
+        std::vector<P> toPush, toDestroy;
+        auto indexOf = [&](P p) {
+            for (size_t i = 0; i < toPush.size(); ++i)
+                if (toPush[i] == p) return int(i);
+            return -1;
+        };
+        std::function<bool(P)> addBranching;
+        std::function<bool(P, int)> addLine = [&](P from, int direction) {
+            u16 next = get(from);
+            if (isAir(next) || !pushable(next, from, pushDir, false, direction) || from == piston || indexOf(from) >= 0)
+                return true;
+            int count = 1;
+            if (count + toPush.size() > 12) return false;
+            while (isSticky(next)) {
+                const P p = rel(from, opposite(pushDir), count);
+                const u16 previous = next;
+                next = get(p);
+                if (isAir(next) || !canStick(previous, next) || !pushable(next, p, pushDir, false, opposite(pushDir)) ||
+                    p == piston)
+                    break;
+                if (++count + toPush.size() > 12) return false;
+            }
+            int added = 0;
+            for (int i = count - 1; i >= 0; --i) toPush.push_back(rel(from, opposite(pushDir), i)), ++added;
+            for (int i = 1;; ++i) {
+                const P p = rel(from, pushDir, i);
+                const int collision = indexOf(p);
+                if (collision > -1) {  // reorderListAtCollision
+                    std::vector<P> order(toPush.begin(), toPush.begin() + collision);
+                    order.insert(order.end(), toPush.end() - added, toPush.end());
+                    order.insert(order.end(), toPush.begin() + collision, toPush.end() - added);
+                    toPush = std::move(order);
+                    for (int j = 0; j <= collision + added; ++j)
+                        if (isSticky(get(toPush[size_t(j)])) && !addBranching(toPush[size_t(j)])) return false;
+                    return true;
+                }
+                next = get(p);
+                if (isAir(next)) return true;
+                if (!pushable(next, p, pushDir, true, pushDir) || p == piston) return false;
+                if (reaction(next) == ItemRules::PushReaction::Popped) {
+                    toDestroy.push_back(p);
+                    return true;
+                }
+                if (toPush.size() >= 12) return false;
+                toPush.push_back(p);
+                ++added;
+            }
+        };
+        addBranching = [&](P from) {
+            const u16 state = get(from);
+            for (int d = 0; d < 6; ++d) {
+                if (d >> 1 == pushDir >> 1) continue;
+                const P n = rel(from, d);
+                if (canStick(get(n), state) && !addLine(n, d)) return false;
+            }
+            return true;
+        };
+        const u16 first = get(start);
+        if (!pushable(first, start, pushDir, false, dir)) {
+            if (!extending || reaction(first) != ItemRules::PushReaction::Popped) return false;
+            toDestroy.push_back(start);
+        } else {
+            if (!addLine(start, pushDir)) return false;
+            for (size_t i = 0; i < toPush.size(); ++i)
+                if (isSticky(get(toPush[i])) && !addBranching(toPush[i])) return false;
+        }
+        // moveBlocks: destroyed blocks go, the pushed ones become moving_piston blocks at their destinations, then the
+        // extending head; the cells left behind are cleared.
+        std::vector<u16> states;
+        for (const P& p : toPush) states.push_back(get(p));
+        std::vector<P> left = toPush;
+        for (size_t i = toDestroy.size(); i-- > 0;) set(toDestroy[i], air);
+        for (size_t i = toPush.size(); i-- > 0;) {
+            const P dest = rel(toPush[i], pushDir);
+            std::erase(left, dest);
+            set(dest, movingPiston(false));
+            add(dest, states[i], extending, false);
+        }
+        if (extending) {
+            std::erase(left, arm);
+            set(arm, movingPiston(sticky));
+            add(arm,
+                registry_.idFor(std::string("minecraft:piston_head[facing=") + kDirNames[dir] +
+                                ",short=false,type=" + (sticky ? "sticky" : "normal") + "]"),
+                true, true);
+        }
+        for (const P& p : left) set(p, air);
+        return true;
+    };
+
+    if (type == 0) {
+        if (moveBlocks(true)) set(piston, registry_.withProperty(pistonState, "extended", "true"));
+    } else {
+        // Retracting: the base becomes a moving piston carrying the retracted piston (the head is drawn from it).
+        finalTick(rel(piston, dir), false);
+        set(piston, movingPiston(sticky));
+        add(piston,
+            registry_.withProperty(registry_.withProperty(pistonState, "extended", "false"), "facing",
+                                   kDirNames[std::clamp(param & 7, 0, 5)]),
+            false, true);
+        const P arm = rel(piston, dir);
+        if (sticky) {
+            const P two = rel(piston, dir, 2);
+            const u16 at = get(two);
+            const bool piece = isMovingPiston(at) && finalTick(two, true);
+            if (!piece) {
+                if (type != 1 || isAir(at) || !pushable(at, two, opposite(dir), false, dir) ||
+                    (reaction(at) != ItemRules::PushReaction::PushPull && !isPistonBlock(at)))
+                    set(arm, air);
+                else
+                    moveBlocks(false);
+            }
+        } else {
+            set(arm, air);
+        }
+    }
+    if (!edits.empty()) blockSink_(edits);
+}
+
+float BlockEntityRenderer::movingProgress(const Moving& m, double now) const {
+    return float(std::clamp((now - m.start) * tickRate_ / 2.0, 0.0, 1.0));  // 0.5 per tick
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -1036,7 +1459,197 @@ void emitBlockGeometry(const BlockRegistry& reg, u16 block, const M34& m, u32 li
     }
 }
 
+// Block faces drawn like the terrain draws them: the per-direction shade (top 1, bottom 0.5, z 0.8, x 0.6) in the
+// colour instead of the entity lights.
+void shadeBlockFaces(std::vector<BeQuad>& quads, size_t first) {
+    for (size_t i = first; i < quads.size(); ++i) {
+        BeQuad& q = quads[i];
+        const float nx = float(i8(q.normal & 255)) / 127.0f, ny = float(i8((q.normal >> 8) & 255)) / 127.0f,
+                    nz = float(i8((q.normal >> 16) & 255)) / 127.0f;
+        const float shade = std::min(1.0f, nx * nx * 0.6f + ny * ny * ((3.0f + ny) / 4.0f) + nz * nz * 0.8f);
+        u32 c = q.color & 0xFF000000u;
+        for (int sh = 0; sh < 24; sh += 8) c |= u32(float((q.color >> sh) & 255) * shade + 0.5f) << sh;
+        q.color = c;
+        q.light |= 512;
+    }
+}
+
+// Appends a quad textured with a repeating entity atlas texture (kTexAtlasRepeat).
+void pushRepeat(std::vector<BeQuad>& out, const float pos[4][3], const float uv[4][2], const ent::TexRect& r, u32 color,
+                u32 light) {
+    BeQuad q{};
+    for (int c = 0; c < 4; ++c) {
+        std::copy(pos[c], pos[c] + 3, q.pos[c]);
+        q.uv[c][0] = uv[c][0], q.uv[c][1] = uv[c][1];
+    }
+    q.pivot[0] = r.u0, q.pivot[1] = r.v0, q.pivot[2] = r.du;
+    std::memcpy(&q.normal, &r.dv, 4);
+    q.color = color, q.light = light, q.tex = kTexAtlasRepeat;
+    out.push_back(q);
+}
+
 }  // namespace
+
+// A block moved by a piston (PistonHeadRenderer): the moved state (a short head while it is mostly retracted) at its
+// offset; a retracting piston draws its head moving in and the extended base in place.
+void BlockEntityRenderer::emitMoving(Emit& e, const Moving& m, double now) const {
+    const float progress = movingProgress(m, now);
+    const float ext = m.extending ? progress - 1.0f : 1.0f - progress;  // getExtendedProgress
+    u16 block = m.moved, base = 0;
+    const std::string_view name = registry_.name(m.moved);
+    if (name.starts_with("minecraft:piston_head")) {
+        block = registry_.withProperty(m.moved, "short", progress <= 0.5f ? "true" : "false");
+    } else if (m.source && !m.extending) {
+        const std::string head = std::string("minecraft:piston_head[facing=") + std::string(registry_.property(m.moved, "facing")) +
+                                 ",short=" + (progress >= 0.5f ? "true" : "false") +
+                                 ",type=" + (name.starts_with("minecraft:sticky_piston") ? "sticky" : "normal") + "]";
+        block = registry_.idFor(head);
+        base = registry_.withProperty(m.moved, "extended", "true");
+    }
+    // Light per face from the cell it faces (like flat block lighting; the moving cell itself is dark once the
+    // final block is in place), at least the moving cell's own.
+    const u8 center = sampleLight(m.x, m.y, m.z);
+    u8 faceLight[6];
+    for (int d = 0; d < 6; ++d) {
+        const u8 l = sampleLight(m.x + stepX(d), m.y + stepY(d), m.z + stepZ(d));
+        faceLight[d] = u8(std::max(l & 0xF0, center & 0xF0) | std::max(l & 15, center & 15));
+    }
+    const float o[3] = {float(m.x - e.origin[0]), float(m.y - e.origin[1]), float(m.z - e.origin[2])};
+    thread_local std::vector<BeQuad> quads;
+    for (int k = 0; k < 2; ++k) {
+        const u16 b = k ? base : block;
+        if (!b) continue;
+        quads.clear();
+        const M34 t = k ? translate(o[0], o[1], o[2])
+                        : translate(o[0] + stepX(m.dir) * ext, o[1] + stepY(m.dir) * ext, o[2] + stepZ(m.dir) * ext);
+        emitBlockGeometry(registry_, b, t, center, quads);
+        for (BeQuad& q : quads) {
+            const int n[3] = {i8(q.normal & 255), i8((q.normal >> 8) & 255), i8((q.normal >> 16) & 255)};
+            const int axis = std::abs(n[0]) >= std::abs(n[1]) && std::abs(n[0]) >= std::abs(n[2]) ? 0 : std::abs(n[1]) >= std::abs(n[2]) ? 1 : 2;
+            const int d = axis == 0 ? (n[0] < 0 ? 4 : 5) : axis == 1 ? (n[1] < 0 ? 0 : 1) : (n[2] < 0 ? 2 : 3);
+            q.light = faceLight[d];
+        }
+        shadeBlockFaces(quads, 0);
+        // Translucent blocks (slime, honey, stained glass) blend in the translucent pass; the shader pipeline's forward
+        // layer keeps one translucent layer per pixel, so there they draw as cutout.
+        std::vector<BeQuad>& out = *e.out[registry_.infos()[b].layer == LayerTranslucent && !shading_ ? 2 : 0];
+        out.insert(out.end(), quads.begin(), quads.end());
+    }
+}
+
+// BeaconRenderer.submitBeaconBeam: the solid beam turning inside a translucent glow, both scrolling.
+void BlockEntityRenderer::emitBeam(Emit& e, const M34& base, int tex, float scale, float animTime, int start, int height,
+                                   u32 color, float solidRadius, float glowRadius) const {
+    if (tex < 0) return;
+    const ent::TexRect& r = assets_.rect(tex);
+    const float y0 = float(start), y1 = float(start + height);
+    const float scroll = height < 0 ? animTime : -animTime;
+    const float vOff = scroll * 0.2f - std::floor(scroll * 0.1f);
+    const float v2 = -1.0f + (vOff - std::floor(vOff));
+    const u32 light = 256 | 512 | 2048;  // full bright, unshaded, no shadow
+    // renderPart: four quads around the axis from the corners (wn, en, ws, es); u 0..1, v1 at the top, v2 at the bottom.
+    auto part = [&](const M34& m, std::vector<BeQuad>& out, u32 c, const float (&k)[8], float v1) {
+        const int sides[4][2] = {{0, 1}, {3, 2}, {1, 3}, {2, 0}};  // (wn, en), (es, ws), (en, es), (ws, wn)
+        for (const auto& sd : sides) {
+            const float ax = k[sd[0] * 2], az = k[sd[0] * 2 + 1], bx = k[sd[1] * 2], bz = k[sd[1] * 2 + 1];
+            const float p[4][3] = {{ax, y1, az}, {ax, y0, az}, {bx, y0, bz}, {bx, y1, bz}};
+            const float uv[4][2] = {{1, v1}, {1, v2}, {0, v2}, {0, v1}};
+            float pos[4][3];
+            for (int i = 0; i < 4; ++i) xform(m, p[i], pos[i]);
+            pushRepeat(out, pos, uv, r, c, light);
+        }
+    };
+    const M34 m = mul(base, translate(0.5f, 0, 0.5f));
+    const float sr = solidRadius, gr = glowRadius;
+    const float solid[8] = {0, sr, sr, 0, -sr, 0, 0, -sr};
+    part(mul(m, rotY((animTime * 2.25f - 45.0f) * kDeg)), *e.out[0], abgr(color), solid,
+         float(height) * scale * (0.5f / sr) + v2);
+    const float glow[8] = {-gr, -gr, gr, -gr, -gr, gr, gr, gr};
+    part(m, *e.out[2], abgr(color, 32), glow, float(height) * scale + v2);
+}
+
+// An item as the item renderer shows it in a display context: block items as their block, others as a flat sprite.
+// context: 0 fixed, 1 on_shelf, 2 ground.
+void BlockEntityRenderer::emitItem(Emit& e, const std::string& item, const M34& m, u32 light, int context) const {
+    auto ib = itemBlocks_.try_emplace(item, -1).first;
+    if (ib->second < 0) {
+        const std::string key = "minecraft:" + item;
+        ib->second = reports_.hasBlock(key) ? registry_.idFor(reports_.complete(key)) : 0;
+    }
+    const u16 block = u16(ib->second);
+    const BlockInfo* bi = block ? &registry_.infos()[block] : nullptr;
+    const bool asBlock = bi && (bi->kind == KindCube || (bi->kind == KindModel && bi->layer != LayerCutout && bi->quadCount));
+    if (asBlock) {
+        // block/block.json display: fixed = 0.5 scale, on_shelf = 180 degrees about Y, ground = 3 px up, 0.25 scale.
+        const M34 disp = context == 0 ? scale(0.5f) : context == 1 ? rotY(kPi) : mul(translate(0, 3.0f / 16, 0), scale(0.25f));
+        emitBlockGeometry(registry_, block, mul(m, mul(disp, translate(-0.5f, -0.5f, -0.5f))), light, *e.out[0]);
+        return;
+    }
+    int tex = assets_.itemTexture(item);
+    u32 layer = kTexAtlas;
+    float u0 = 0, v0 = 0, u1 = 1, v1 = 1;
+    if (tex >= 0) {
+        const ent::TexRect& r = assets_.rect(tex);
+        u0 = r.u0, v0 = r.v0, u1 = r.u0 + r.du, v1 = r.v0 + r.dv;
+    } else if (bi && bi->icon) {
+        layer = bi->icon;
+    } else {
+        return;
+    }
+    // item/generated display: fixed = 180 degrees about Y, ground = 2 px up, 0.5 scale; a 1/16 thick sprite, both faces.
+    const M34 im = context == 0 ? mul(m, rotY(kPi)) : context == 1 ? m : mul(m, mul(translate(0, 2.0f / 16, 0), scale(0.5f)));
+    for (int face = 0; face < 2; ++face) {
+        const float z = face ? -1.0f / 32 : 1.0f / 32;
+        float pos[4][3] = {{-0.5f, -0.5f, z}, {0.5f, -0.5f, z}, {0.5f, 0.5f, z}, {-0.5f, 0.5f, z}};
+        float uv[4][2] = {{u0, v1}, {u1, v1}, {u1, v0}, {u0, v0}};
+        if (face) {
+            std::swap(pos[0], pos[1]), std::swap(pos[2], pos[3]);
+            std::swap(uv[0], uv[1]), std::swap(uv[2], uv[3]);
+        }
+        BeQuad q{};
+        for (int c = 0; c < 4; ++c) {
+            xform(im, pos[c], q.pos[c]);
+            q.uv[c][0] = uv[c][0], q.uv[c][1] = uv[c][1];
+        }
+        const float n[3] = {0, 0, face ? -1.0f : 1.0f};
+        q.normal = packNormal(im, n);
+        q.color = 0xFFFFFFFF, q.light = light, q.tex = layer;
+        e.out[0]->push_back(q);
+    }
+}
+
+// A mob as the entity renderer would draw it standing still (spawner display entities): its model layers in the
+// entity's own transform (LivingEntityRenderer: turned 180 degrees, flipped, the renderer's scale, 1.501 down).
+void BlockEntityRenderer::emitDisplayEntity(Emit& e, int type, const M34& m, u32 light, float age) const {
+    ent::EntityRenderer::Layer layers[8];
+    ent::Anim anim = ent::Anim::None;
+    float rendererScale = 1.0f;
+    const int count = entityRenderer_.displayLayers(type, layers, 8, anim, rendererScale);
+    if (!count) return;
+    const M34 root = mul(m, mul(mul(rotY(kPi), scale(-1, -1, 1)), mul(scale(rendererScale), translate(0, -1.501f, 0))));
+    ent::AnimState st;
+    st.age = age;
+    thread_local std::vector<ent::PartPose> poses;
+    for (int i = 0; i < count; ++i) {
+        const ent::EntityRenderer::Layer& L = layers[i];
+        if (L.model < 0 || L.tex < 0) continue;
+        const ent::Model& model = assets_.modelAt(L.model);
+        poses.resize(model.parts.size());
+        for (size_t p = 0; p < model.parts.size(); ++p) poses[p] = model.parts[p].pose;
+        const u64 hiddenRoles = ent::animate(anim, st, model, poses.data());
+        u64 skip = 0;
+        for (size_t p = 0; p < model.parts.size() && p < 64; ++p)
+            if (model.parts[p].role != ent::RoleNone && ((hiddenRoles >> model.parts[p].role) & 1)) skip |= 1ull << p;
+        // entity_render.cpp LayerFlags: 1 emissive, 2 translucent
+        ModelEmit me{assets_, *e.out[(L.flags & 2) ? 2 : 0], L.model, root, L.tex};
+        me.color = L.color;
+        me.light = (L.flags & 1) ? (light | 256u) : light;
+        me.poses = poses.data();
+        me.skip = skip;
+        me.run();
+    }
+}
+
 
 void BlockEntityRenderer::emitInstance(Emit& e, const Instance& in, const Data* data, float pt) const {
     const BlockDef& d = defs_[in.block];
@@ -1360,15 +1973,6 @@ void BlockEntityRenderer::emitInstance(Emit& e, const Instance& in, const Data* 
             for (int slot = 0; slot < slots; ++slot) {
                 const std::string& item = data->items[slot];
                 if (item.empty()) continue;
-                // Block items: the block's geometry; others: the item texture.
-                auto ib = itemBlocks_.try_emplace(item, -1).first;
-                if (ib->second < 0) {
-                    const std::string key = "minecraft:" + item;
-                    ib->second = reports_.hasBlock(key) ? registry_.idFor(reports_.complete(key)) : 0;
-                }
-                const u16 block = u16(ib->second);
-                const BlockInfo* bi = block ? &registry_.infos()[block] : nullptr;
-                const bool asBlock = bi && (bi->kind == KindCube || (bi->kind == KindModel && bi->layer != LayerCutout && bi->quadCount));
                 M34 m;
                 if (d.kind == Kind::Campfire) {
                     const int dir = from2d((slot + data2d(d.facing)) % 4);
@@ -1381,44 +1985,106 @@ void BlockEntityRenderer::emitInstance(Emit& e, const Instance& in, const Data* 
                     // Model bounds after the display transform are [-0.5, 0.5]: centre or bottom-align the item.
                     m = mul(m, translate(0, data->alignBottom ? 0.5f : 0.0f, 0));
                 }
-                if (asBlock) {
-                    // block/block.json display: fixed = 0.5 scale, on_shelf = 180 degrees about Y.
-                    const M34 disp = d.kind == Kind::Campfire ? scale(0.5f) : rotY(kPi);
-                    emitBlockGeometry(registry_, block, mul(m, mul(disp, translate(-0.5f, -0.5f, -0.5f))), light, *e.out[0]);
-                    continue;
-                }
-                int tex = assets_.itemTexture(item);
-                u32 layer = kTexAtlas;
-                float u0 = 0, v0 = 0, u1 = 1, v1 = 1;
-                if (tex >= 0) {
-                    const ent::TexRect& r = assets_.rect(tex);
-                    u0 = r.u0, v0 = r.v0, u1 = r.u0 + r.du, v1 = r.v0 + r.dv;
-                } else if (bi && bi->icon) {
-                    layer = bi->icon;
-                } else {
-                    continue;
-                }
-                // item/generated display: fixed = 180 degrees about Y; a 1/16 thick sprite, both faces.
-                const M34 im = d.kind == Kind::Campfire ? mul(m, rotY(kPi)) : m;
-                for (int face = 0; face < 2; ++face) {
-                    const float z = face ? -1.0f / 32 : 1.0f / 32;
-                    float pos[4][3] = {{-0.5f, -0.5f, z}, {0.5f, -0.5f, z}, {0.5f, 0.5f, z}, {-0.5f, 0.5f, z}};
-                    float uv[4][2] = {{u0, v1}, {u1, v1}, {u1, v0}, {u0, v0}};
-                    if (face) {
-                        std::swap(pos[0], pos[1]), std::swap(pos[2], pos[3]);
-                        std::swap(uv[0], uv[1]), std::swap(uv[2], uv[3]);
-                    }
-                    BeQuad q{};
-                    for (int c = 0; c < 4; ++c) {
-                        xform(im, pos[c], q.pos[c]);
-                        q.uv[c][0] = uv[c][0], q.uv[c][1] = uv[c][1];
-                    }
-                    const float n[3] = {0, 0, face ? -1.0f : 1.0f};
-                    q.normal = packNormal(im, n);
-                    q.color = 0xFFFFFFFF, q.light = light, q.tex = layer;
-                    e.out[0]->push_back(q);
-                }
+                emitItem(e, item, m, light, d.kind == Kind::Campfire ? 0 : 1);
             }
+            break;
+        }
+        case Kind::Beacon: {  // BeaconRenderer: the beam sections, the last one 2048 high
+            if (!a || a->levels <= 0 || a->beam.empty()) return;
+            const float animTime = float(gameTicks_ % 40) + pt;
+            const double dx = cam_[0] - (in.x + 0.5), dz = cam_[2] - (in.z + 0.5);
+            const float radius = std::max(1.0f, float(std::sqrt(dx * dx + dz * dz)) / 96.0f);  // beamRadiusScale
+            int start = 0;
+            for (size_t i = 0; i < a->beam.size(); ++i) {
+                const auto& [color, height] = a->beam[i];
+                emitBeam(e, base, t_.beaconBeam, 1.0f, animTime, start, i + 1 == a->beam.size() ? 2048 : height, color,
+                         0.2f * radius, 0.25f * radius);
+                start += height;
+            }
+            break;
+        }
+        case Kind::EndPortal:
+        case Kind::EndGateway: {  // TheEndPortalRenderer / TheEndGatewayRenderer (AbstractEndPortalRenderer.submitCube)
+            const bool portal = d.kind == Kind::EndPortal;
+            static const float kN[6][3] = {{0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}};
+            for (int f = 0; f < 6; ++f) {
+                // shouldRenderFace: the portal shows its top and bottom; the gateway every face its neighbour does
+                // not hide.
+                if (portal ? f > 1 : registry_.infos()[world_.block(in.x + stepX(f), in.y + stepY(f), in.z + stepZ(f))].occludes)
+                    continue;
+                const float* n = kN[f];
+                const int ax = f < 2 ? 0 : f < 4 ? 0 : 2, ay = f < 2 ? 2 : 1;  // the face's two in-plane axes
+                float c[4][3];
+                const float corners[4][2] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+                for (int k = 0; k < 4; ++k) {
+                    float p[3];
+                    for (int i = 0; i < 3; ++i) p[i] = n[i] > 0 ? 1.0f : 0.0f;
+                    p[ax] = corners[k][0], p[ay] = corners[k][1];
+                    if (portal) p[1] = 0.375f + p[1] * 0.375f;  // TRANSFORMATION: y 0.375 .. 0.75
+                    xform(base, p, c[k]);
+                }
+                // Counter-clockwise seen from outside.
+                const float e1[3] = {c[1][0] - c[0][0], c[1][1] - c[0][1], c[1][2] - c[0][2]};
+                const float e2[3] = {c[2][0] - c[0][0], c[2][1] - c[0][1], c[2][2] - c[0][2]};
+                const float cr[3] = {e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]};
+                if (cr[0] * n[0] + cr[1] * n[1] + cr[2] * n[2] < 0) std::swap(c[1], c[3]);
+                BeQuad q{};
+                std::memcpy(q.pos, c, sizeof(c));
+                q.color = 0xFFFFFFFF, q.light = 256 | 512 | 2048, q.tex = portal ? kTexEndPortal : kTexEndGateway;
+                e.out[0]->push_back(q);
+            }
+            if (portal || !a) break;
+            // The gateway beam while it is spawning (Age < 200) or cooling down after a teleport.
+            const bool spawning = a->age >= 0 && a->age < 200, cooling = a->cooldown > 0;
+            if (!spawning && !cooling) break;
+            float s = spawning ? std::clamp((float(a->age) + pt) / 200.0f, 0.0f, 1.0f)
+                               : 1.0f - std::clamp((float(a->cooldown) - pt) / 40.0f, 0.0f, 1.0f);
+            const float beamDistance = spawning ? float((world_.maxSectionY() + 1) * 16 - 1) : 50.0f;
+            s = std::sin(s * kPi);
+            const int height = int(std::floor(s * beamDistance));
+            if (height > 0)
+                emitBeam(e, base, t_.gatewayBeam, s, float(gameTicks_ % 40) + pt, -height, height * 2,
+                         kDyeDiffuse[spawning ? 2 : 10], 0.15f, 0.175f);
+            break;
+        }
+        case Kind::Spawner:
+        case Kind::TrialSpawner: {  // SpawnerRenderer.submitEntityInSpawner
+            if (!data || data->entity < 0 || (d.kind == Kind::TrialSpawner && !d.variant)) return;
+            const ent::TypeInfo* info = assets_.type(data->entity);
+            float s = 0.53125f;
+            if (info) s /= std::max(1.0f, std::max(info->width, info->height));
+            const float spin = a ? (a->oSpin + (a->spin - a->oSpin) * pt) * 10.0f : 0.0f;
+            const M34 m = mul(base, mul(mul(translate(0.5f, 0.4f, 0.5f), rotY(spin * kDeg)),
+                                        mul(mul(translate(0, -0.2f, 0), rotX(-30.0f * kDeg)), scale(s))));
+            emitDisplayEntity(e, data->entity, m, light, a ? float(a->tickCount) + pt : 0.0f);
+            break;
+        }
+        case Kind::Vault: {  // VaultRenderer: the display item turning in the middle
+            if (!data || data->items[0].empty()) return;
+            float spin = 0;
+            if (a) {  // Mth.rotLerp
+                spin = a->oSpin + std::remainder(a->spin - a->oSpin, 360.0f) * pt;
+            }
+            emitItem(e, data->items[0], mul(base, mul(translate(0.5f, 0.4f, 0.5f), rotY(spin * kDeg))), light, 2);
+            break;
+        }
+        case Kind::Brushable: {  // BrushableBlockRenderer: the item coming out of the brushed face
+            if (!data || d.variant == 0 || data->hitDir < 0 || data->items[0].empty()) return;
+            const int hit = data->hitDir;
+            float t[3] = {0.5f, 0.0f, 0.5f};
+            const float off = float(d.variant) / 10.0f * 0.75f;
+            switch (hit) {
+                case 5: t[0] = 0.73f + off; break;
+                case 4: t[0] = 0.25f - off; break;
+                case 1: t[1] = 0.25f + off; break;
+                case 0: t[1] = -0.23f - off; break;
+                case 2: t[2] = 0.25f - off; break;
+                default: t[2] = 0.73f + off; break;
+            }
+            const bool eastWest = hit == 4 || hit == 5;
+            const M34 m = mul(base, mul(mul(translate(t[0], 0.5f + t[1], t[2]), rotY(75.0f * kDeg)),
+                                        mul(rotY(float((eastWest ? 90 : 0) + 11) * kDeg), scale(0.5f))));
+            emitItem(e, data->items[0], m, sampleLight(in.x + stepX(hit), in.y + stepY(hit), in.z + stepZ(hit)), 0);
             break;
         }
         case Kind::Statue: {  // CopperGolemStatueBlockRenderer / CopperGolemStatueModel

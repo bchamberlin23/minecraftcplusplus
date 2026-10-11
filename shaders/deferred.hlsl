@@ -89,6 +89,11 @@ void DeferredCS(uint2 px : SV_DispatchThreadID) {
     if (d <= 0) {
         c = sky;
         z = 1e6;
+        float4 e = gTex[kTexLdrFwd].Load(int3(px, 0));
+        if (e.a > 0 && e.a < 0.499) {  // translucent entity layer against the sky (beacon beam glow, moving slime)
+            float cover = saturate(e.a / 0.49);
+            c = lerp(c, srgbToLinear(saturate(e.rgb / max(e.a, 1e-3))) * vanillaToHdrScale(), cover);
+        }
     } else {
         float3 rel = relPosition(pixel, d);
         z = viewDepth(d);

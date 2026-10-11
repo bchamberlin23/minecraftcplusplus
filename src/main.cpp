@@ -695,7 +695,13 @@ int wmain(int argc, wchar_t** argv) {
     audio.attachGame(game, world, registry);
     if (haveEntities) visuals.setPlayer(game, ui, opt.name, [&] { return session ? session->gameMode() : 1; });
     gameplayTask.get();
-    if (haveEntities) gameplay.setEntities(&entities);
+    if (haveEntities) {
+        gameplay.setEntities(&entities);
+        blockEntityRenderer.setRules(&gameplay.rules());
+        blockEntityRenderer.setBlockSink([&](const std::vector<net::BlockChange>& c) {
+            if (session) session->applyClientBlocks(c);
+        });
+    }
     gameplay.setPlayer(game, ui);
     if (haveEntities) ui.setEntities(&entities);  // inventory / mount previews, player list heads
     game.onEntityClick = [&](bool attack, bool use, double blockDistance) {  // attack / use entities first
@@ -805,6 +811,7 @@ int wmain(int argc, wchar_t** argv) {
         }
         if (session) {
             const Timer t;
+            if (haveEntities) blockEntityRenderer.applyBlockEvents();  // before the block updates that follow them
             session->frame(dt);  // multiplayer: apply what the server sent, send movement
             gameplay.frame();
             netMs = t.ms();

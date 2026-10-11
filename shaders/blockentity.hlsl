@@ -11,8 +11,11 @@ cbuffer Frame : register(b0) {
     float4 gLightmap[3]; // the game's lightmap inputs (lightmap.hlsli)
     float4x4 gPrevViewProj;  // shader pipeline: camera-relative position (this frame) -> previous clip, unjittered
     float4 gMotion;          // curUv = SV_Position.xy * gMotion.xy + gMotion.zw (PassContext::motionScale)
-    float4 gMisc;            // x = 1: shader pipeline (pipeline-aware output, see entity.hlsl); y = last frame's wave time
+    float4 gMisc;            // x = 1: shader pipeline (pipeline-aware output, see entity.hlsl); y = last frame's wave time;
+                             // z = the game's GameTime uniform (day time fraction, end portal layers)
     float4x4 gShadowMat[4];  // shadow cascades (camera-relative -> light clip)
+    float4 gEndSky;          // atlas rects (u0, v0, du, dv) of environment/end_sky and entity/end_portal/end_portal
+    float4 gEndPortal;
 };
 #include "lightmap.hlsli"
 cbuffer Draw : register(b1) {
@@ -27,9 +30,11 @@ struct Quad {
     float2 uv[4];
     uint normal;  // snorm8 xyz
     uint color;   // 0xAABBGGRR
-    uint light;   // sky << 4 | block; 256 full bright, 512 no diffuse shading, 1024 only within 16 blocks
-    uint tex;     // 0xFFFFFFFF entity atlas, 0xFFFFFFFE font, 0xFFFFFFFD solid, else block texture layer
-    float3 pivot; // banner flag wave pivot
+    uint light;   // sky << 4 | block; 256 full bright, 512 no diffuse shading, 1024 only within 16 blocks,
+                  // 2048 casts no shadow
+    uint tex;     // 0xFFFFFFFF entity atlas, 0xFFFFFFFE font, 0xFFFFFFFD solid, 0xFFFFFFFC entity atlas repeating
+                  // (rect in pivot + normal), 0xFFFFFFFB / 0xFFFFFFFA end portal / gateway, else block texture layer
+    float3 pivot; // banner flag wave pivot; repeating atlas texture: u0, v0, du (dv: asfloat(normal))
     uint wave;    // 1 << 31 | phase offset << 16 | axis angle (u16 of a turn)
 };
 struct Batch {
@@ -62,6 +67,8 @@ struct VSOut {
     float shade : SHADE;                        // directional shading alone (shader pipeline)
     nointerpolation uint lightBits : LIGHTBITS;
     float4 prevClip : PREVCLIP;                 // previous frame's clip position (motion vectors)
+    nointerpolation float4 rect : RECT;         // repeating atlas texture: its rect
+    float4 clip : CLIP;                         // end portal: the clip position (texProj0)
 };
 
 static const uint kCorner[6] = {0, 1, 2, 0, 2, 3};
@@ -132,6 +139,8 @@ VSOut BlockEntityVS(uint vid : SV_VertexID) {
     }
     o.uv = q.uv[corner];
     o.tex = q.tex;
+    o.rect = float4(q.pivot, asfloat(q.normal));
+    o.clip = o.pos;
     o.tint = unpackColor(q.color);
     float3 l = 1.0;
     o.shade = 1.0;
@@ -148,15 +157,49 @@ VSOut BlockEntityVS(uint vid : SV_VertexID) {
     return o;
 }
 
-float4 sampleTex(float2 uv, uint tex) {
+// An entity atlas texture repeating like a texture of its own (beacon beams, the end portal layers).
+float4 sampleRepeat(float2 uv, float4 rect) {
+    return gAtlas.SampleLevel(gPoint, rect.xy + float2(frac(uv.x), frac(uv.y)) * rect.zw, 0);
+}
+float4 sampleTex(float2 uv, uint tex, float4 rect) {
     if (tex == 0xFFFFFFFF) return gAtlas.SampleLevel(gPoint, uv, 0);
     if (tex == 0xFFFFFFFE) return gFont.SampleLevel(gPoint, uv, 0);
     if (tex == 0xFFFFFFFD) return 1;
+    if (tex == 0xFFFFFFFC) return sampleRepeat(float2(min(uv.x, 0.9999), uv.y), rect);
     return gBlocks.Sample(gBlockSampler, float3(uv, float(tex & 0xFFFF)));
 }
 
+// rendertype_end_portal.fsh: the end sky plus 15 (end portal) or 16 (end gateway) layers of end_portal.png in
+// screen space, each scaled, rotated and scrolling with GameTime.
+static const float3 kEndColors[16] = {
+    float3(0.022087, 0.098399, 0.110818), float3(0.011892, 0.095924, 0.089485), float3(0.027636, 0.101689, 0.100326),
+    float3(0.046564, 0.109883, 0.114838), float3(0.064901, 0.117696, 0.097189), float3(0.063761, 0.086895, 0.123646),
+    float3(0.084817, 0.111994, 0.166380), float3(0.097489, 0.154120, 0.091064), float3(0.106152, 0.131144, 0.195191),
+    float3(0.097721, 0.110188, 0.187229), float3(0.133516, 0.138278, 0.148582), float3(0.070006, 0.243332, 0.235792),
+    float3(0.196766, 0.142899, 0.214696), float3(0.047281, 0.315338, 0.321970), float3(0.204675, 0.390010, 0.302066),
+    float3(0.080955, 0.314821, 0.661491)};
+float3 endPortal(float4 clip, uint layers) {
+    float2 s = clip.xy / clip.w * 0.5 + 0.5;  // projection_from_position, divided
+    float3 color = sampleRepeat(s, gEndSky).rgb * kEndColors[0];
+    for (uint i = 0; i < layers; ++i) {
+        float layer = float(i + 1);
+        // texProj0 * (scale * rotate) * translate * SCALE_TRANSLATE (GLSL row vector times matrices)
+        float a = radians((layer * layer * 4321.0 + layer * 9.0) * 2.0), c = cos(a), sn = sin(a);
+        float k = (4.5 - layer / 4.0) * 2.0;
+        float2 p = k * float2(s.x * c - s.y * sn, s.x * sn + s.y * c);
+        p += float2(17.0 / layer, (2.0 + layer / 1.5) * (gMisc.z * 1.5));
+        color += sampleRepeat(p * 0.5 + 0.25, gEndPortal).rgb * kEndColors[i];
+    }
+    return color;
+}
+
 float4 shade(VSOut i, float minAlpha, bool translucent) {
-    float4 c = sampleTex(i.uv, i.tex) * i.tint;
+    if (i.tex == 0xFFFFFFFB || i.tex == 0xFFFFFFFA) {  // end portal / gateway: unlit, opaque
+        float3 e = endPortal(i.clip, i.tex == 0xFFFFFFFB ? 15 : 16);
+        if (gMisc.x > 0.5) return float4(e, 1);  // code 127: a final (vanilla) colour, scaled like vanilla-lit ones
+        return float4(lerp(e, gFogColor.rgb, i.fog), 1);
+    }
+    float4 c = sampleTex(i.uv, i.tex, i.rect) * i.tint;
     clip(c.a - minAlpha);
     if (gMisc.x > 0.5) {  // shader pipeline: the World stage layer it relights (encoding of entity.hlsl)
         bool bright = (i.lightBits & 256) != 0;
@@ -193,6 +236,7 @@ struct ShadowOut {
     float2 uv : TEXCOORD0;
     nointerpolation uint tex : TEX;
     float alpha : ALPHA;
+    nointerpolation float4 rect : RECT;
 };
 ShadowOut BlockEntityShadowVS(uint vid : SV_VertexID) {
     uint qi = vid / 6;
@@ -203,11 +247,13 @@ ShadowOut BlockEntityShadowVS(uint vid : SV_VertexID) {
     float3 n = 0;
     ShadowOut o;
     o.pos = mul(gShadowMat[gCascade], float4(wave(q, q.pos[corner], gFogParams.w, n) + origin, 1));
+    if (q.light & 2048) o.pos = float4(0, 0, 0, 1);  // casts no shadow: degenerate
     o.uv = q.uv[corner];
     o.tex = q.tex;
     o.alpha = unpackColor(q.color).a;
+    o.rect = float4(q.pivot, asfloat(q.normal));
     return o;
 }
 void BlockEntityShadowPS(ShadowOut i) {
-    clip(sampleTex(i.uv, i.tex).a * i.alpha - 0.5);
+    clip(sampleTex(i.uv, i.tex, i.rect).a * i.alpha - 0.5);
 }
