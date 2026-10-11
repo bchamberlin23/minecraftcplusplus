@@ -205,6 +205,7 @@ EntityWorld::EntityWorld(EntityAssets& assets, World& world, BlockRegistry& regi
         d.paddleRight = id({"DATA_ID_PADDLE_RIGHT"});
         d.chest = id({"DATA_ID_CHEST"});
         d.fireworksItem = id({"DATA_ID_FIREWORKS_ITEM"});
+        d.staysStill = id({"STAYS_STILL"});
         categories_[i] = categoryFor(t.name);
         // Synched data only carries values that differ from the default: start registry variants at the
         // default each entity defines (VariantUtils.getDefaultOrAny(..., DEFAULT)).
@@ -854,6 +855,7 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
         const int idx = v.index;
         if (idx == d.flags) e.sharedFlags = u8(v.i);
         else if (idx == d.silent && v.serializer == 8) e.silent = v.i != 0;
+        else if (idx == d.staysStill && v.serializer == 8) e.staysStill = v.i != 0;
         else if (idx == d.fireworksItem && v.serializer == 7) e.fireworks = v.str >= 0 ? q.strings[size_t(v.str)] : std::string();
         else if (idx == d.mobFlags) e.mobFlags = u8(v.i);
         else if (idx == d.noGravity) e.noGravity = v.i != 0;
@@ -882,7 +884,9 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
         else if (idx == d.mainHand) e.mainArm = int(v.i);
         else if (idx == d.skinParts) e.skinParts = int(v.i);
         else if (idx == d.villagerData) e.villagerType = int(v.i), e.variant2 = int(v.f[0]);
-        else if (idx == d.tameFlags && (name == "minecraft:wolf" || name == "minecraft:cat")) e.tame = (v.i & 4) != 0;
+        else if (idx == d.tameFlags && (name == "minecraft:wolf" || name == "minecraft:cat" || name == "minecraft:nautilus" ||
+                                        name == "minecraft:zombie_nautilus"))
+            e.tame = (v.i & 4) != 0;  // TamableAnimal.DATA_FLAGS_ID
         else if (idx == d.collar) e.collar = int(v.i);
         else if (idx == d.anger) e.angry = v.i > 0;
         else if (idx == d.standFlags) e.standFlags = int(v.i);

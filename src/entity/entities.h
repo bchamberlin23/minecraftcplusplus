@@ -146,6 +146,7 @@ struct Entity {
     int attachedTo = -1;     // firework rocket: the entity it is attached to (DATA_ATTACHED_TO_TARGET), -1 none
     std::string fireworks;   // firework rocket: its item's "fireworks" component (encoded), "" without one
     bool silent = false;     // DATA_SILENT
+    bool staysStill = false; // happy ghast: STAYS_STILL (holding still: its rider does not steer)
     int unloadedTicks = 0;  // ticks spent outside the loaded world
     // Pose animation (ticked by tickPoseAnimation): LivingEntity swimAmount / fallFlyTicks, ElytraAnimationState,
     // the delta movement of this and the previous tick (fall-flying body turn), the bed (SLEEPING_POS_ID).
@@ -244,7 +245,7 @@ public:
            tameFlags = -1, collar = -1, anger = -1, standFlags = -1, standPose = -1, hurt = -1, hurtDir = -1,
            damage = -1, mainGene = -1, hiddenGene = -1, mobFlags = -1, noGravity = 5, inGround = -1, rotation = -1,
            painting = -1, nameVisible = 3, livingFlags = -1, attachedTo = -1, sleepPos = -1, ticksFrozen = -1,
-           paddleLeft = -1, paddleRight = -1, chest = -1, fireworksItem = -1, silent = 4;
+           paddleLeft = -1, paddleRight = -1, chest = -1, fireworksItem = -1, silent = 4, staysStill = -1;
     };
 
 private:
