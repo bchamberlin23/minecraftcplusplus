@@ -6,6 +6,7 @@
 // Time and weather come from the save (local mode) or from set_time / game_event packets (connected);
 // --time / --weather / --dimension / --biome force them for screenshots.
 #include "core/common.h"
+#include "render/renderer.h"
 #include "sky/environment.h"
 
 #include <functional>
@@ -56,6 +57,8 @@ public:
     // the world darkening ramps in (GameRenderer.bossOverlayWorldDarkening) and darkens the lightmap and fog colour;
     // the world fog closes the fog in to 10..96 blocks and hides the sky.
     void setBossOverlay(bool darkenScreen, bool worldFog) { bossDarken_ = darkenScreen, bossFog_ = worldFog; }
+    // The camera's mob effects (blindness, darkness, night vision, water vision), before update().
+    void setViewEffects(const ViewEffects& fx) { fx_ = fx; }
 
     // Shared with the render passes.
     struct Frame;
@@ -97,6 +100,8 @@ private:
     std::vector<Bolt> bolts_;
     int flashTime_ = 0;  // ClientLevel.skyFlashTime
     bool bossDarken_ = false, bossFog_ = false;
+    ViewEffects fx_;
+    float cloudFogLimit_ = 1e30f;  // the fog environment's cloud end (FogData.cloudEnd) when it is not the atmosphere
     float darken_ = 0, darkenO_ = 0;  // GameRenderer.bossOverlayWorldDarkening (per tick)
     double tickAccumulator_ = 0;
 

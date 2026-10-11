@@ -4,6 +4,7 @@
 #include "assets/game_reports.h"
 #include "ui/frontend.h"
 #include "ui/signs_books.h"
+#include "ui/gameplay_hud.h"
 #include "ui/ui_state.h"
 #include "world/terrain.h"
 
@@ -327,7 +328,14 @@ bool Ui::menuOpen() const { return s_->screen != Screen::None && s_->screen != S
 
 float Ui::fovRadians() const {  // Camera.getFov: the option scaled by the dynamic FOV modifier
     const float m = s_->oldFovModifier + (s_->fovModifier - s_->oldFovModifier) * s_->partialTick;
-    return s_->settings.fov * m * kPi / 180.0f;
+    // modifyFovBasedOnDeathOrFluid: x 6/7 with the eyes in water or lava.
+    float fluid = 1.0f;
+    if (s_->game && s_->world && s_->registry) {
+        const CameraState cam = s_->game->camera();
+        const u16 eye = s_->world->block(int(std::floor(cam.x)), int(std::floor(cam.y)), int(std::floor(cam.z)));
+        if (s_->eyeInWater || s_->registry->name(eye).starts_with("minecraft:lava")) fluid = 0.85714287f;
+    }
+    return s_->settings.fov * m * fluid * kPi / 180.0f;
 }
 bool Ui::hudHidden() const { return s_->hudHidden; }
 bool Ui::inBed() const { return s_->screen == Screen::InBed; }
@@ -502,15 +510,17 @@ void Ui::registerHandlers(net::Client& client) {
         const int level = r.varInt(), total = r.varInt();
         s->post([s, progress, level, total] { s->xpProgress = progress, s->xpLevel = level, s->xpTotal = total; });
     });
-    client.onPlayPeek("set_entity_data", [s](net::Reader& r) {  // our air supply (index 1) and ticks frozen (7)
+    client.onPlayPeek("set_entity_data", [s](net::Reader& r) {  // our shared flags (0), air supply (1), ticks frozen (7)
         const int entity = r.varInt();
-        int air = -1, frozen = -1;
+        int air = -1, frozen = -1, flags = -1;
         for (int guard = 0; guard < 8 && r.ok; ++guard) {
             const int index = r.u8v();
             if (index == 0xFF) break;
             const int type = r.varInt();
-            if (type == 0) r.u8v();  // byte (shared flags)
-            else if (type == 1) {
+            if (type == 0) {  // byte
+                const int v = r.u8v();
+                if (index == 0) flags = v;
+            } else if (type == 1) {
                 const int v = r.varInt();
                 if (index == 1) air = v;
                 if (index == 7) frozen = v;
@@ -519,10 +529,11 @@ void Ui::registerHandlers(net::Client& client) {
             else if (type == 20) r.varInt();  // pose
             else break;
         }
-        if (air >= 0 || frozen >= 0) s->post([s, entity, air, frozen] {
+        if (air >= 0 || frozen >= 0 || flags >= 0) s->post([s, entity, air, frozen, flags] {
             if (!s->session || entity != s->session->entityId()) return;
             if (air >= 0) s->air = air, s->serverAir = true;
             if (frozen >= 0) s->ticksFrozen = frozen;
+            if (flags >= 0) s->onFire = (flags & 1) != 0;
         });
     });
     // Registry ids resolved once (the handlers run for every entity on the network thread).
@@ -572,6 +583,7 @@ void Ui::registerHandlers(net::Client& client) {
     client.onPlayPeek("respawn", [s](net::Reader&) {  // a new player entity: no effects, no open screens
         s->post([s] {
             s->effects.clear();
+            s->onFire = false;
             s->air = s->maxAir;
             if (s->screen == Screen::Death || s->screen == Screen::Container || s->screen == Screen::Inventory)
                 s->closeScreen(false);
@@ -582,7 +594,10 @@ void Ui::registerHandlers(net::Client& client) {
         const std::string name = id >= 0 && size_t(id) < mobEffects.size() ? mobEffects[size_t(id)] : std::string();
         s->post([s, entity, id, amp, dur, flags, name] {
             if (!s->session || entity != s->session->entityId()) return;
-            s->effects[id] = State::Effect{name, amp, dur, (flags & 1) != 0, (flags & 4) != 0};
+            State::Effect e{name, amp, dur, (flags & 1) != 0, (flags & 4) != 0};
+            if (auto it = s->effects.find(id); it != s->effects.end()) e.blend = it->second.blend, e.blendO = it->second.blendO;
+            if (!(flags & 8)) e.blend = e.blendO = -1;  // no FLAG_BLEND: skipBlending (set on the next tick)
+            s->effects[id] = e;
         });
     });
     client.onPlayPeek("remove_mob_effect", [s](net::Reader& r) {
@@ -1084,6 +1099,8 @@ void Ui::endFrame() {
         s.pass->glint[4] = -float(std::fmod(ms, 110000.0) / 110000.0), s.pass->glint[5] = float(std::fmod(ms, 30000.0) / 30000.0);
         s.pass->glint[6] = float(16 * scale) * 2.0f;
     }
+    s.sprites.tick(u64(s.guiTicks));  // animated GUI sprites and textures
+    if (!s.fe->cfg.menu) drawScreenEffects(s, c);  // view_effects.cpp: in the 3D view, with or without the HUD
     const bool hud = !s.hudHidden && !s.fe->cfg.menu;  // the title screen has no HUD
     if (hud) s.drawHud(c);
     if (hud) s.drawModHud(c);  // native mods

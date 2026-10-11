@@ -26,6 +26,9 @@ class EntityWorld;
 class ItemModels;
 }
 
+struct CameraState;
+struct ViewEffects;
+
 namespace ui {
 
 struct ItemStack;
@@ -124,6 +127,10 @@ public:
     // Player inventory menu slot (5-8 armour, 36-44 hotbar, 45 offhand); nullptr when empty.
     const ItemStack* playerSlot(int slot) const;
     int ticksFrozen() const;  // our DATA_TICKS_FROZEN (the third-person avatar shakes when fully frozen)
+    // The local player's mob effects as the view shows them (fog, lightmap: view_effects.cpp), and the nausea / nether
+    // portal warp of the world camera (GameRenderer.renderLevel).
+    ViewEffects viewEffects() const;
+    void warpCamera(CameraState& cam) const;
 
     struct State;  // ui_state.h
 

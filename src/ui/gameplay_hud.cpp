@@ -19,8 +19,11 @@ static void textureOverlay(Canvas& c, const Sprite* tex, float alpha) {
 
 void drawCameraOverlays(Ui::State& s, Canvas& c) {
     drawSpyglass(s, c);
+    const Game::ItemUse& use = s.game->use;
+    drawEffectOverlays(s, c, use.active && ItemRules::Anim(use.anim) == ItemRules::Anim::Spyglass);  // view_effects.cpp
     // Hud.extractCameraOverlays, after the scope: the powder snow frost by Entity.getPercentFrozen.
     if (s.ticksFrozen > 0) textureOverlay(c, s.sprites.texture("misc/powder_snow_outline"), float(std::min(s.ticksFrozen, 140)) / 140.0f);
+    drawPortalOverlay(s, c);
 }
 
 static void drawSpyglass(Ui::State& s, Canvas& c) {

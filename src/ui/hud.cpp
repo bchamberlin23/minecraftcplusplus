@@ -76,6 +76,7 @@ void Ui::State::tickHud() {
     const bool eyeInWater = (bi.fluid && eye == registry->waterId()) || bi.waterlogged ||
                             registry->name(eye).starts_with("minecraft:water") || registry->name(eye).starts_with("minecraft:bubble_column");
     (void)p;
+    tickViewEffects(eyeInWater);  // view_effects.cpp
     if (!serverAir) {
         if (eyeInWater && survivalLike()) air = std::max(-20, air - 1);
         else air = std::min(maxAir, air + 4);

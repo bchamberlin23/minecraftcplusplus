@@ -562,7 +562,7 @@ void Renderer::Shading::prepare(const FrameInput& in) {
 
     std::copy(lightDir, lightDir + 3, k.lightDir);
     std::copy(light, light + 3, k.lightColor);
-    k.lightColor[3] = sunIsLight ? 1.0f : 0.0f;
+    k.lightColor[3] = sunIsLight && !sky.skyHidden ? 1.0f : 0.0f;  // the sun's glow in the sky (none behind fog)
     std::copy(sun, sun + 3, k.sunDir);
     k.sunDir[3] = lights ? 6.0f * (1 - rain) : 0.0f;
     std::copy(moon, moon + 3, k.moonDir);
@@ -584,7 +584,7 @@ void Renderer::Shading::prepare(const FrameInput& in) {
         for (int c = 0; c < 3; ++c) k.ambient[c] = (l + (k.ambient[c] - l) * 0.5f) * 1.2f;
     }
     k.ambient[3] = skyScale;
-    k.skyHorizon[3] = in.viewDistance * 0.6f;
+    k.skyHorizon[3] = std::min(in.viewDistance * 0.6f, r.fogLimit_[0]);  // vanilla fog start / end (fog environments)
     const float blockColor[3] = {1.0f, 0.56f, 0.26f};
     for (int c = 0; c < 3; ++c) k.blockColor[c] = blockColor[c];
     {  // Minimum (cave) light: the game's lightmap at light level 0 (the dimension's ambient light colour with the
@@ -601,11 +601,13 @@ void Renderer::Shading::prepare(const FrameInput& in) {
         }
     }
     k.blockColor[3] = 0.2126f * k.cave[0] + 0.7152f * k.cave[1] + 0.0722f * k.cave[2];
+    for (int c = 0; c < 3; ++c)  // the darkness effect's pulse dims every light like the lightmap's subtraction
+        k.lightColor[c] *= sky.dim, k.ambient[c] *= sky.dim, k.blockColor[c] *= sky.dim, k.cave[c] *= sky.dim;
 
     k.fog[0] = (1.0f / 7000.0f) * (1 + rain * 7.0f + thunder * 4.0f);
     k.fog[1] = 1.0f / 110.0f;
     k.fog[2] = 63.0f;
-    k.fog[3] = 0.5f * (1.0f + 1.2f * (1 - smoothstep(0.0f, 0.5f, sun[1]))) * (set.volumetricSteps ? 1.0f : 0.0f);
+    k.fog[3] = 0.5f * (1.0f + 1.2f * (1 - smoothstep(0.0f, 0.5f, sun[1]))) * (set.volumetricSteps && !sky.skyHidden ? 1.0f : 0.0f);
     const float waterAbsorb[3] = {0.32f, 0.075f, 0.05f};
     for (int c = 0; c < 3; ++c) {
         k.water[c] = waterAbsorb[c];
@@ -626,14 +628,14 @@ void Renderer::Shading::prepare(const FrameInput& in) {
     k.misc[0] = set.exposure;
     k.misc[1] = set.bloom;
     k.misc[2] = 1.6f;  // emissive strength
-    k.misc[3] = in.viewDistance;
+    k.misc[3] = std::min(in.viewDistance, r.fogLimit_[1]);
 
     // View rays: camera-relative position = viewZ * (rayZ + ndc.x * rayX + ndc.y * rayY) for the jittered ndc.
     const float tanY = std::tan(cam.fovY * 0.5f), tanX = tanY * w / std::max(h, 1.0f);
     for (int c = 0; c < 3; ++c) {
-        const float rx = (&in.right.x)[c] * tanX, ry = (&in.up.x)[c] * tanY;
+        const float rx = (&in.rayRight.x)[c] * tanX, ry = (&in.rayUp.x)[c] * tanY;
         k.rayX[c] = rx, k.rayY[c] = ry;
-        k.rayZ[c] = (&in.fwd.x)[c] - in.jitter[0] * rx - in.jitter[1] * ry;
+        k.rayZ[c] = (&in.rayFwd.x)[c] - in.jitter[0] * rx - in.jitter[1] * ry;
     }
     std::memcpy(k.viewProjNoJitter, in.vpNoJitter.m, 64);
     // Previous frame: this frame's camera-relative position + (camera - previous camera) -> previous clip.

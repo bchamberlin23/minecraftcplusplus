@@ -20,32 +20,109 @@ bool Sprites::load(const Resources& res, Atlas& atlas) {
     return count > 0;
 }
 
-bool Sprites::add(const std::string& key, const Image& img0, const nlohmann::json& meta) {
-    Image img = img0;
-    if (meta.is_object() && meta.contains("animation") && img.h > img.w) {  // animated strip: first frame
-        const nlohmann::json& a = meta["animation"];
-        const int fw = a.value("width", img.w), fh = a.value("height", fw);
-        Image f;
-        f.w = std::min(fw, img.w), f.h = std::min(fh, img.h);
-        f.rgba.resize(size_t(f.w) * f.h * 4);
-        for (int y = 0; y < f.h; ++y) std::memcpy(&f.rgba[size_t(y) * f.w * 4], img.at(0, y), size_t(f.w) * 4);
-        img = std::move(f);
+bool Sprites::parseAnimation(const Image& img, const nlohmann::json& meta, Animation& out) {
+    if (!meta.is_object() || !meta.contains("animation") || !meta["animation"].is_object()) return false;
+    const nlohmann::json& a = meta["animation"];
+    // Frame size: "width" / "height", else square frames of the strip's smaller side.
+    int fw = a.value("width", -1), fh = a.value("height", -1);
+    if (fw <= 0 && fh <= 0) fw = fh = std::min(img.w, img.h);
+    else if (fw <= 0) fw = fh;
+    else if (fh <= 0) fh = fw;
+    fw = std::min(fw, img.w), fh = std::min(fh, img.h);
+    if (fw <= 0 || fh <= 0) return false;
+    out.fw = fw, out.fh = fh, out.cols = std::max(1, img.w / fw);
+    const int count = out.cols * std::max(1, img.h / fh);
+    const int frametime = std::max(1, a.value("frametime", 1));
+    out.interpolate = a.value("interpolate", false);
+    out.sequence.clear();
+    if (a.contains("frames") && a["frames"].is_array() && !a["frames"].empty()) {
+        for (const nlohmann::json& f : a["frames"]) {
+            const int index = f.is_object() ? f.value("index", 0) : f.is_number() ? f.get<int>() : 0;
+            const int time = f.is_object() ? std::max(1, f.value("time", frametime)) : frametime;
+            out.sequence.push_back({std::clamp(index, 0, count - 1), time});
+        }
+    } else {
+        for (int k = 0; k < count; ++k) out.sequence.push_back({k, frametime});
     }
+    out.totalTicks = 0;
+    for (const auto& [f, t] : out.sequence) out.totalTicks += t;
+    return out.sequence.size() > 1;
+}
+
+u64 Sprites::Animation::stateAt(u64 tick) const {
+    u64 t = tick % u64(std::max(1, totalTicks));
+    for (size_t i = 0; i < sequence.size(); ++i) {
+        const u64 time = u64(sequence[i].second);
+        if (t < time) return interpolate ? (u64(i) << 32 | t) : u64(sequence[i].first);
+        t -= time;
+    }
+    return 0;
+}
+
+void Sprites::Animation::frameAt(const Image& strip, u64 tick, std::vector<u8>& out) const {
+    u64 t = tick % u64(std::max(1, totalTicks));
+    size_t i = 0;
+    for (; i + 1 < sequence.size() && t >= u64(sequence[i].second); ++i) t -= u64(sequence[i].second);
+    out.resize(size_t(fw) * fh * 4);
+    auto row = [&](int frame, int y) { return strip.at((frame % cols) * fw, (frame / cols) * fh + y); };
+    const int cur = sequence[i].first;
+    if (!interpolate) {
+        for (int y = 0; y < fh; ++y) std::memcpy(&out[size_t(y) * fw * 4], row(cur, y), size_t(fw) * 4);
+        return;
+    }
+    // animate_sprite_interpolate.fsh: mix(current, next, subFrame / time).
+    const int next = sequence[(i + 1) % sequence.size()].first;
+    const float p = float(t) / float(sequence[i].second);
+    for (int y = 0; y < fh; ++y) {
+        const u8 *a = row(cur, y), *b = row(next, y);
+        u8* o = &out[size_t(y) * fw * 4];
+        for (int k = 0; k < fw * 4; ++k) o[k] = u8(float(a[k]) + (float(b[k]) - float(a[k])) * p + 0.5f);
+    }
+}
+
+bool Sprites::place(const Image& img, const nlohmann::json& meta, Sprite& s) {
+    Animation anim;
+    const bool animated = parseAnimation(img, meta, anim);
+    const int w = animated ? anim.fw : img.w, h = animated ? anim.fh : img.h;
     int x, y;
-    if (!atlas_->alloc(img.w, img.h, x, y)) {
+    if (!atlas_->alloc(w, h, x, y)) return false;
+    if (animated) {
+        Animated a{std::move(anim), img, x, y};
+        std::vector<u8> first;
+        a.anim.frameAt(a.strip, 0, first);
+        atlas_->blit(x, y, w, h, first.data(), w * 4);
+        a.shown = a.anim.stateAt(0);
+        animated_.push_back(std::move(a));
+    } else {
+        atlas_->blit(x, y, w, h, img.rgba.data(), w * 4);
+    }
+    s.w = s.sw = w, s.h = s.sh = h;
+    const float W = float(atlas_->width()), H = float(atlas_->height());
+    s.u0 = float(x) / W, s.v0 = float(y) / H, s.u1 = float(x + w) / W, s.v1 = float(y + h) / H;
+    return true;
+}
+
+void Sprites::tick(u64 tick) {
+    std::vector<u8> pixels;
+    for (Animated& a : animated_) {
+        const u64 state = a.anim.stateAt(tick);
+        if (state == a.shown) continue;
+        a.shown = state;
+        a.anim.frameAt(a.strip, tick, pixels);
+        atlas_->blit(a.x, a.y, a.anim.fw, a.anim.fh, pixels.data(), a.anim.fw * 4);
+    }
+}
+
+bool Sprites::add(const std::string& key, const Image& img, const nlohmann::json& meta) {
+    Sprite s;
+    if (!place(img, meta, s)) {
         LOG("ui: GUI atlas full at %s", key.c_str());
         return false;
     }
-    atlas_->blit(x, y, img.w, img.h, img.rgba.data(), img.w * 4);
-    Sprite s;
-    s.w = img.w, s.h = img.h;
-    s.sw = img.w, s.sh = img.h;
-    const float W = float(atlas_->width()), H = float(atlas_->height());
-    s.u0 = float(x) / W, s.v0 = float(y) / H, s.u1 = float(x + img.w) / W, s.v1 = float(y + img.h) / H;
     if (meta.is_object() && meta.contains("gui") && meta["gui"].contains("scaling")) {
         const nlohmann::json& sc = meta["gui"]["scaling"];
         const std::string type = sc.value("type", "stretch");
-        s.sw = sc.value("width", img.w), s.sh = sc.value("height", img.h);
+        s.sw = sc.value("width", s.w), s.sh = sc.value("height", s.h);
         if (type == "tile") s.scaling = Sprite::Tile;
         if (type == "nine_slice") {
             s.scaling = Sprite::NineSlice;
@@ -72,15 +149,12 @@ const Sprite* Sprites::texture(const std::string& name) {
     if (auto it = textures_.find(name); it != textures_.end()) return it->second.w ? &it->second : nullptr;
     Sprite& s = textures_[name];
     Image img;
-    int x, y;
-    if (!res_->image("assets/minecraft/textures/" + name + ".png", img) || !atlas_->alloc(img.w, img.h, x, y)) {
+    const std::string path = "assets/minecraft/textures/" + name + ".png";
+    const nlohmann::json meta = res_->exists(path + ".mcmeta") ? res_->json(path + ".mcmeta") : nlohmann::json();
+    if (!res_->image(path, img) || !place(img, meta, s)) {
         LOG("ui: texture %s unavailable", name.c_str());
         return nullptr;
     }
-    atlas_->blit(x, y, img.w, img.h, img.rgba.data(), img.w * 4);
-    s.w = s.sw = img.w, s.h = s.sh = img.h;
-    const float W = float(atlas_->width()), H = float(atlas_->height());
-    s.u0 = float(x) / W, s.v0 = float(y) / H, s.u1 = float(x + img.w) / W, s.v1 = float(y + img.h) / H;
     return &s;
 }
 

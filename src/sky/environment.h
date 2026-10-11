@@ -31,6 +31,10 @@ enum class Attr : u8 {
     BlockLightTint,
     SkyFogEnd,
     CloudFogEnd,
+    WaterFogColor,
+    WaterFogStart,
+    WaterFogEnd,
+    NightVisionColor,
     Count
 };
 constexpr int kAttrCount = int(Attr::Count);

@@ -24,12 +24,38 @@ public:
     const Sprite* sprite(std::string_view name) const;
     // Any texture by resource path below textures/: "gui/container/inventory", loaded on first use.
     const Sprite* texture(const std::string& name);
+    // Animated sprites and textures (.mcmeta "animation", SpriteContents.AnimatedTexture) show their frame for this
+    // client tick (blended with the next one when interpolated); call once per frame.
+    void tick(u64 tick);
+
+    // A .mcmeta animation: frames of fw x fh in the strip, the (frame, ticks) sequence.
+    struct Animation {
+        int fw = 0, fh = 0, cols = 1;
+        std::vector<std::pair<int, int>> sequence;
+        int totalTicks = 0;
+        bool interpolate = false;
+        // The pixels shown at `tick` (fw x fh RGBA).
+        void frameAt(const Image& strip, u64 tick, std::vector<u8>& out) const;
+        // Identifies what is shown at `tick`: changes whenever the pixels do.
+        u64 stateAt(u64 tick) const;
+    };
+    // False when the image is not animated (no "animation" section or a single frame).
+    static bool parseAnimation(const Image& img, const nlohmann::json& meta, Animation& out);
 
 private:
     bool add(const std::string& key, const Image& img, const nlohmann::json& meta);
+    // Atlas space for img (its first frame when animated, registering the animation). False when the atlas is full.
+    bool place(const Image& img, const nlohmann::json& meta, Sprite& s);
     const Resources* res_ = nullptr;
     Atlas* atlas_ = nullptr;
     std::unordered_map<std::string, Sprite> sprites_, textures_;
+    struct Animated {
+        Animation anim;
+        Image strip;
+        int x = 0, y = 0;
+        u64 shown = ~u64(0);
+    };
+    std::vector<Animated> animated_;
 };
 
 // GuiGraphics.blitSprite: the whole sprite scaled into the rectangle per its GUI scaling.

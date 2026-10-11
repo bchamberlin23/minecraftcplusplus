@@ -804,7 +804,14 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
         up = normalize(Vec3{cam.up[0], cam.up[1], cam.up[2]});
     }
     Mat4 proj = perspectiveReverseZ(cam.fovY, float(width_) / float(std::max(height_, 1u)), 0.05f);
-    const Mat4 view = viewFromBasis(right, up, fwd);
+    Mat4 view = viewFromBasis(right, up, fwd);
+    if (cam.warpSet) {  // nausea / portal warp: view space skewed before the projection
+        Mat4 w;
+        for (int r = 0; r < 3; ++r)
+            for (int c = 0; c < 3; ++c) w(r, c) = cam.warp[r * 3 + c];
+        w(3, 3) = 1.0f;
+        view = w * view;
+    }
     const Mat4 vpNoJitter = proj * view;
     float jitter[2] = {0, 0};
     if (shaded) {  // TAA / upscalers: sub-pixel Halton (2, 3) jitter, 8 * (output / render)^2 phases (vendor guidance)
@@ -859,7 +866,22 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
         overlayCb = constants_->GetGPUVirtualAddress() + u64(kFrames + fi) * kConstantSlotBytes;
         std::memcpy(fc.viewProj, vp.m, sizeof(fc.viewProj));
     }
-    Shading::FrameInput shadeIn{&cam, viewDistance, vp, vpNoJitter, fwd, right, up, {jitter[0], jitter[1]}, fi};
+    Shading::FrameInput shadeIn{&cam, viewDistance, vp, vpNoJitter, fwd, right, up, {jitter[0], jitter[1]}, fi, right, up, fwd};
+    if (cam.warpSet) {  // the pipeline's view rays: columns of the inverse of the (skewed) view rotation
+        float a[3][3], inv[3][3];
+        for (int r = 0; r < 3; ++r)
+            for (int c = 0; c < 3; ++c) a[r][c] = view(r, c);
+        const float det = a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1]) - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0]) +
+                          a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]);
+        for (int r = 0; r < 3; ++r)
+            for (int c = 0; c < 3; ++c) {
+                const int r1 = (c + 1) % 3, r2 = (c + 2) % 3, c1 = (r + 1) % 3, c2 = (r + 2) % 3;
+                inv[r][c] = (a[r1][c1] * a[r2][c2] - a[r1][c2] * a[r2][c1]) / det;
+            }
+        shadeIn.rayRight = {inv[0][0], inv[1][0], inv[2][0]};
+        shadeIn.rayUp = {inv[0][1], inv[1][1], inv[2][1]};
+        shadeIn.rayFwd = {inv[0][2], inv[1][2], inv[2][2]};
+    }
     if (shaded) {  // camera for the vendor SDKs (DLSS / FSR / XeSS constants, frame generation)
         upscale::CameraFrame c;
         c.pos[0] = cam.x, c.pos[1] = cam.y, c.pos[2] = cam.z;
