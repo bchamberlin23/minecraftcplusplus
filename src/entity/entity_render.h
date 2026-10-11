@@ -5,6 +5,7 @@
 #include "entity/entities.h"
 #include "entity/entity_anim.h"
 #include "entity/item_models.h"
+#include "render/pack_sink.h"
 #include "render/renderer.h"
 
 namespace ent {
@@ -23,6 +24,7 @@ public:
     const Stats& stats() const { return stats_; }
     // Shader-visible descriptor of the entity texture atlas (after create(); UINT32_MAX before).
     u32 atlasDescriptor() const { return atlas_ ? atlasDescriptor_ : UINT32_MAX; }
+    ID3D12Resource* atlasTexture() const { return atlas_.Get(); }  // shader packs
 
     // Equipment (armor, elytra) from the item models' equipment data; dropped items are left to the visuals pass.
     void setItemModels(ItemModels* items) { items_ = items; }
@@ -113,6 +115,15 @@ private:
     const Entity* localPlayer_ = nullptr;
     std::vector<Attachment> attachments_;
     int elytraModel_ = -1, elytraBabyModel_ = -1;
+
+    // Shader packs (PassContext::pack): vanilla-style vertices per entity for the pack's gbuffers_entities programs.
+    PackSink* pack_ = nullptr;
+    std::vector<PackVertex> packVerts_[3];  // model cutout, model translucent, free quads (entity atlas)
+    std::vector<PackVertex> packBlock_;     // free quads with block textures (block atlas)
+    u32 packOverlay_ = 0;
+    void packQuad(int bucket, const float pos[4][3], const float uv[4][2], const float n[3], u32 color, u32 light,
+                  u32 overlay);
+    void packFlush(const Entity& e);
 
     Stats stats_;
     double cpuTotal_ = 0;

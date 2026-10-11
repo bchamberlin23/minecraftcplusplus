@@ -37,6 +37,8 @@ private:
 
     void drawSky(const PassContext& ctx);
     void drawLate(const PassContext& ctx);
+    // A shader pack is active (ctx.pack): vanilla geometry for its gbuffers_skybasic / skytextured / clouds / weather.
+    void drawPack(const PassContext& ctx, bool late);
     void writeConstants(const PassContext& ctx);
     u32 putVertices(const std::vector<Sky::Frame::Vertex>& v);  // into this frame's slot; returns first index
     void bindCommon(ID3D12GraphicsCommandList* list);
@@ -48,6 +50,8 @@ private:
     ComPtr<ID3D12RootSignature> root_;
     ComPtr<ID3D12PipelineState> psoSky_, psoDarkDisc_, psoBlend_, psoAdd_, psoClouds_, psoWeather_;
     ComPtr<ID3D12Resource> celestial_, endSky_, rain_, snow_, stars_, ring_, cloudFaces_, cloudStaging_;
+    ComPtr<ID3D12Resource> celestial2d_[9];        // shader packs: sun / moon phases as single textures
+    std::vector<Sky::Frame::Vertex> starsCpu_;
     ComPtr<ID3D12QueryHeap> queries_;
     ComPtr<ID3D12Resource> queryReadback_;
     u8* ringMapped_ = nullptr;

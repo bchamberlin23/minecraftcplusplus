@@ -2,6 +2,7 @@
 // Intel XeSS) with the vendor's quality modes, sharpness, frame generation (DLSS FG / Multi Frame Generation, FSR FG,
 // XeSS-FG), low-latency mode (Reflex / Anti-Lag 2 / XeLL), VSync and the frame rate cap. Only what this GPU and
 // driver support is offered (render/upscalers/upscalers.h). Every change applies immediately; options.txt keeps it.
+#include "render/packs/pack_api.h"
 #include "render/renderer.h"
 #include "render/upscalers/upscalers.h"
 #include "ui/ui_state.h"
@@ -157,6 +158,23 @@ void Ui::State::buildVideoButtons() {
                    }
                });
     }
+    y += 24;
+    {  // shader packs (render/packs): the built-in pipeline or an OptiFine / Iris pack, switched without a restart
+        const auto packList = packs::listPacks();
+        std::string shown = settings.shaderPack.empty() ? "Built-in" : settings.shaderPack;
+        if (shown.size() > 22) shown = shown.substr(0, 20) + "..";
+        button(x0, y, "Shader Pack: " + shown, [this, packList] {
+            size_t i = 0;  // 0 = built-in, i = packList[i - 1]
+            for (size_t k = 0; k < packList.size(); ++k)
+                if (packList[k].name == settings.shaderPack) i = k + 1;
+            i = (i + 1) % (packList.size() + 1);
+            settings.shaderPack = i ? packList[i - 1].name : std::string();
+            packs::selectPack(*init.renderer, settings.shaderPack);
+            settings.save();
+            buildButtons();
+        });
+        button(x1, y, "Shader Options...", [this] { openPackOptions(); }, !settings.shaderPack.empty());
+    }
     Button done;
     done.x = float(W / 2 - 100), done.y = float(H - 30), done.w = 200, done.label = Text(res.translate("gui.done"));
     done.onPress = [this] {
@@ -174,11 +192,19 @@ void Ui::State::drawVideoScreen(Canvas& c) {
     drawButtons(c);
     Upscalers& up = init.renderer->upscalers();
     const upscale::Caps& caps = up.caps();
-    float y = 32 + 4 * 24 + 6;
+    float y = 32 + 5 * 24 + 6;
     auto line = [&](const std::string& s, u32 color) {
         drawCentered(c, Text(s), float(W / 2), y, color, false);
         y += 10;
     };
+    {  // shader pack state
+        const auto st = packs::packStatus(*init.renderer);
+        if (!st.loading.empty()) line("Shader pack: loading " + st.loading + "...", 0xFFFFD060);
+        else if (!st.error.empty()) line("Shader pack error (built-in pipeline in use): " + st.error, 0xFFFF6060);
+        else if (!st.active.empty()) line("Shader pack: " + st.active + " (upscalers and frame generation off)", 0xFFA0FFA0);
+        if (!packMessage.empty()) line(packMessage, 0xFFFF6060);
+        if (!st.active.empty()) return;  // the upscaler lines below do not apply to a pack
+    }
     {  // the status line, wrapped at its " | " separators
         const std::string st = up.status();
         std::string cur;

@@ -32,6 +32,8 @@ public:
     const std::vector<std::string>& files() const { return files_; }
 
     static std::string normalize(std::string_view path);  // resolves . / .. / backslashes; no leading slash
+    // A file that is not in the pack (built-in fallback programs); the pack's own files win.
+    void addVirtual(std::string_view rel, std::string text);
 
 private:
     const std::string* find(std::string_view rel) const;  // canonical stored name
@@ -44,6 +46,7 @@ private:
     std::unordered_map<std::string, size_t> index_;       // exact relative path -> files_ index
     std::unordered_map<std::string, size_t> lowerIndex_;  // lower-case relative path -> files_ index
     std::unordered_map<std::string, size_t> zipEntry_;    // relative path -> zip entry index
+    std::unordered_map<std::string, std::string> virtual_;  // relative path -> text (addVirtual)
 };
 
 }  // namespace packs

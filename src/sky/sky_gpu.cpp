@@ -1,5 +1,7 @@
 #include "sky/sky_gpu.h"
 
+#include "render/pack_sink.h"
+
 #include "SkyCloudPS.h"
 #include "SkyCloudVS.h"
 #include "SkyDarkDiscPS.h"
@@ -99,6 +101,10 @@ bool SkyGpu::init(Renderer& renderer, SkyImages images, std::vector<Sky::Frame::
     ID3D12Device* device = renderer.device();
     descriptors_ = renderer.allocDescriptors(4);
     if (descriptors_ == UINT32_MAX) return ok(E_OUTOFMEMORY, "descriptor allocation");
+    for (u32 i = 0; i < 9; ++i) {  // shader packs bind single textures (the srv slot is overwritten below)
+        if (!createTexture(&images.celestial[i], 1, descriptors_, celestial2d_[i])) return false;
+    }
+    starsCpu_ = stars;
     if (!createTexture(images.celestial, 9, descriptors_, celestial_) ||
         !createTexture(&images.endSky, 1, descriptors_ + 1, endSky_) ||
         !createTexture(&images.rain, 1, descriptors_ + 2, rain_) || !createTexture(&images.snow, 1, descriptors_ + 3, snow_))
@@ -251,6 +257,7 @@ void SkyGpu::writeConstants(const PassContext& ctx) {
 }
 
 void SkyGpu::drawSky(const PassContext& ctx) {
+    if (ctx.pack) return drawPack(ctx, false);
     frameIndex_ = ctx.frame;
     ringVertices_ = 0;
     if (queried_[ctx.frame]) {  // this slot's previous frame has completed
@@ -304,6 +311,7 @@ void SkyGpu::drawSky(const PassContext& ctx) {
 }
 
 void SkyGpu::drawLate(const PassContext& ctx) {
+    if (ctx.pack) return drawPack(ctx, true);
     ID3D12GraphicsCommandList* list = ctx.list;
     list->EndQuery(queries_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, ctx.frame * 4 + 2);
     const Sky::Frame& f = frame_;
@@ -339,6 +347,104 @@ void SkyGpu::drawLate(const PassContext& ctx) {
     list->ResolveQueryData(queries_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, ctx.frame * 4, 4, queryReadback_.Get(),
                            u64(ctx.frame) * 32);
     queried_[ctx.frame] = true;
+}
+
+
+// ---- shader packs: the vanilla sky geometry handed to the pack's programs (PackSink) ----
+
+void SkyGpu::drawPack(const PassContext& ctx, bool late) {
+    PackSink& sink = *ctx.pack;
+    const Sky::Frame& f = frame_;
+    std::vector<PackVertex> v;
+    auto convert = [&](const Sky::Frame::Vertex& s, u32 color) {
+        PackVertex p{};
+        std::copy(s.pos, s.pos + 3, p.pos);
+        p.color = color;
+        p.uv[0] = s.uv[0], p.uv[1] = s.uv[1];
+        p.light = 240u << 16;
+        p.overlay = 10u << 16;
+        p.normal = packNormal(0, 1, 0);
+        p.entity = -1;
+        p.midUv[0] = p.midUv[1] = 0.5f;
+        return p;
+    };
+    auto submit = [&](PackRole role, PackBlend blend, u8 stage, ID3D12Resource* tex, bool depth) {
+        if (v.empty()) return;
+        PackDraw d;
+        d.role = role, d.blend = blend, d.renderStage = stage, d.texture = tex;
+        d.depthTest = depth, d.depthWrite = false, d.cull = false, d.quads = false;
+        d.vertices = v.data(), d.vertexCount = u32(v.size());
+        sink.draw(d);
+        v.clear();
+    };
+    if (!late) {
+        if (f.skybox != Skybox::Overworld) return;
+        for (const auto& s : f.fan) v.push_back(convert(s, s.color));
+        submit(PackRole::SkyBasic, PackBlend::Translucent, 2 /* SUNSET */, nullptr, false);
+        if (f.starBrightness > 0.0f) {  // the static star field, rotated with the sky
+            const u8 b = u8(std::clamp(f.starBrightness, 0.0f, 1.0f) * 255.0f);
+            const u32 color = u32(b) | u32(b) << 8 | u32(b) << 16 | u32(b) << 24;
+            for (const auto& s : starsCpu_) {
+                PackVertex p = convert(s, color);
+                for (int r = 0; r < 3; ++r)
+                    p.pos[r] = f.starRot[r * 3] * s.pos[0] + f.starRot[r * 3 + 1] * s.pos[1] + f.starRot[r * 3 + 2] * s.pos[2];
+                v.push_back(p);
+            }
+            submit(PackRole::SkyBasic, PackBlend::AdditiveAlpha, 6 /* STARS */, nullptr, false);
+        }
+        // Sun and moon: one draw per texture (layer 0 sun, 1..8 moon phases).
+        for (u32 layer = 0; layer < 9; ++layer) {
+            for (const auto& s : f.additive)
+                if (s.layer == layer) v.push_back(convert(s, s.color));
+            submit(PackRole::SkyTextured, PackBlend::AdditiveAlpha, layer == 0 ? 4 /* SUN */ : 5 /* MOON */,
+                   celestial2d_[layer].Get(), false);
+        }
+        return;
+    }
+    if (f.clouds && f.cloudFaces && sink.vanillaClouds()) {
+        const u32 n = u32(std::min<size_t>(f.cloudFaces->size(), kMaxCloudFaces));
+        static const float kShade[6] = {0.7f, 1.0f, 0.8f, 0.8f, 0.9f, 0.9f};
+        static const u32 kCorner[6] = {0, 1, 2, 2, 3, 0};
+        static const float kNormal[6][3] = {{0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}};
+        v.reserve(size_t(n) * 6);
+        const u32 alpha = u32(std::clamp(f.cloudColor[3], 0.0f, 1.0f) * 255.0f) << 24;
+        for (u32 i = 0; i < n; ++i) {
+            const u32 face = (*f.cloudFaces)[i];
+            const int cx = int(face << 20) >> 20, cz = int(face << 8) >> 20;
+            const u32 flags = face >> 24, dir = std::min(flags & 7, 5u);
+            const bool inside = (flags & 16) != 0;
+            const float shade = kShade[dir];
+            auto chan = [&](float c) { return u32(std::clamp(c * shade, 0.0f, 1.0f) * 255.0f); };
+            const u32 color = alpha | chan(f.cloudColor[0]) | chan(f.cloudColor[1]) << 8 | chan(f.cloudColor[2]) << 16;
+            for (u32 c : kCorner) {
+                const u32 index = dir * 4 + (inside ? 3 - c : c);
+                PackVertex p{};
+                p.pos[0] = float((0xF03CC3u >> index) & 1) * 12.0f + float(cx) * 12.0f + f.cloudOffset[0];
+                p.pos[1] = float((0x6666F0u >> index) & 1) * 4.0f + f.cloudOffset[1];
+                p.pos[2] = float((0xC3F066u >> index) & 1) * 12.0f + float(cz) * 12.0f + f.cloudOffset[2];
+                p.color = color;
+                p.light = 240u << 16;
+                p.overlay = 10u << 16;
+                p.normal = packNormal(kNormal[dir][0], kNormal[dir][1], kNormal[dir][2]);
+                p.entity = -1;
+                v.push_back(p);
+            }
+        }
+        PackDraw d;
+        d.role = PackRole::Clouds, d.blend = PackBlend::Translucent, d.renderStage = 20 /* CLOUDS */;
+        d.depthTest = true, d.depthWrite = true, d.cull = false, d.quads = false;
+        d.vertices = v.data(), d.vertexCount = u32(v.size());
+        sink.draw(d);
+        v.clear();
+    }
+    if (!f.weather.empty()) {
+        for (size_t i = 0; i < f.weather.size(); ++i) {
+            if (i == f.rainVertices) submit(PackRole::Weather, PackBlend::Translucent, 21 /* RAIN_SNOW */, rain_.Get(), true);
+            v.push_back(convert(f.weather[i], f.weather[i].color));
+        }
+        submit(PackRole::Weather, PackBlend::Translucent, 21, f.rainVertices >= f.weather.size() ? rain_.Get() : snow_.Get(),
+               true);
+    }
 }
 
 }  // namespace sky

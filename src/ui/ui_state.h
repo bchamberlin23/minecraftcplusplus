@@ -27,6 +27,10 @@ class BlockRegistry;
 class Terrain;
 class GameReports;
 
+namespace packs {
+class PackOptionsModel;  // render/packs/pack_options.h
+}
+
 namespace ui {
 
 struct FrontEndState;  // frontend.h
@@ -77,7 +81,7 @@ struct Button {
 };
 
 enum class Screen {
-    None, Chat, Inventory, Container, Creative, Pause, Options, Death, Mods, Video,
+    None, Chat, Inventory, Container, Creative, Pause, Options, Death, Mods, Video, PackOptions,
     // Front end (frontend.h)
     Title, Worlds, CreateWorld, EditWorld, Confirm, Servers, EditServer, DirectConnect, Loading, Message, OpenToLan
 };
@@ -271,6 +275,16 @@ struct Ui::State {
     void drawVideoScreen(Canvas& c);
     void videoInput(const Window::InputEvent& e);
     void applyVideo(VideoSettings v);
+    // --- render/packs/pack_screen.cpp: a shader pack's option screens ---
+    std::shared_ptr<packs::PackOptionsModel> packOptions;
+    std::vector<std::string> packScreens;  // screen stack ("" = the pack's main screen)
+    int packPage = 0;
+    std::string packMessage;               // why the options could not be opened
+    void openPackOptions();
+    void closePackOptions();
+    void buildPackButtons();
+    void drawPackScreen(Canvas& c);
+    void packInput(const Window::InputEvent& e);
 
     // --- mods_screen.cpp: Mods & Packs screen (mods/mod_manager.h), native mods' HUD ---
     int modsScroll = 0;  // first list row shown

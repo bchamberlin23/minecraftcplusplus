@@ -859,6 +859,26 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         const u32 instId = instCount_++;
         std::memcpy(frameBase_ + kInstOffset + u64(instId) * 32, &inst, 32);
         const bool translucent = (L.flags & Translucent) != 0;
+        if (pack_) {  // shader pack: the posed quads as vertices (entity atlas coordinates)
+            const auto& quads = assets_.quads();
+            for (size_t i = 0; i < parts; ++i) {
+                if (hidden_[i]) continue;
+                const ModelPart& part = m.parts[i];
+                const float* pm = mats_[i].m;
+                for (u32 q = part.quadFirst; q < part.quadFirst + part.quadCount && q < quads.size(); ++q) {
+                    const GpuQuad& gq = quads[q];
+                    float pos[4][3], uv[4][2], n[3];
+                    for (int c = 0; c < 4; ++c) {
+                        const float lp[3] = {gq.pos[c][0] / 16.0f, gq.pos[c][1] / 16.0f, gq.pos[c][2] / 16.0f};
+                        for (int r = 0; r < 3; ++r) pos[c][r] = pm[r * 4] * lp[0] + pm[r * 4 + 1] * lp[1] + pm[r * 4 + 2] * lp[2] + pm[r * 4 + 3];
+                        uv[c][0] = tr.u0 + gq.uv[c][0] * tr.du, uv[c][1] = tr.v0 + gq.uv[c][1] * tr.dv;
+                    }
+                    for (int r = 0; r < 3; ++r) n[r] = pm[r * 4] * gq.normal[0] + pm[r * 4 + 1] * gq.normal[1] + pm[r * 4 + 2] * gq.normal[2];
+                    packQuad(translucent ? 1 : 0, pos, uv, n, L.color, inst.light, overlay);
+                }
+            }
+            continue;
+        }
         u32* refs = reinterpret_cast<u32*>(frameBase_ + kRefOffset);
         for (size_t i = 0; i < parts; ++i) {
             if (hidden_[i]) continue;
@@ -881,6 +901,12 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
 
 void EntityRenderer::emitFree(const float pos[4][3], const float uv[4][2], const float n[3], u32 tex, u32 color,
                               u32 light, u32 overlay) {
+    if (pack_) {
+        if (tex == 0xFFFFFFFF) return packQuad(2, pos, uv, n, color, light, overlay);
+        float auv[4][2];  // block texture layer -> block atlas
+        for (int c = 0; c < 4; ++c) pack_->atlasUv(tex, uv[c][0], uv[c][1], auv[c]);
+        return packQuad(3, pos, auv, n, color, light, overlay);
+    }
     if (freeCount_ >= kMaxFree) return;
     FreeQuad q;
     std::memcpy(q.pos, pos, sizeof(q.pos));
@@ -1046,6 +1072,7 @@ void EntityRenderer::draw(const PassContext& ctx) {
     if ((entities.empty() && !localPlayer_) || !mapped_) return;
     frameBase_ = mapped_ + u64(ctx.frame) * kFrameBytes;
     matCount_ = instCount_ = refCount_ = freeCount_ = 0;
+    pack_ = ctx.pack;
     translucent_.clear();
     glint_.clear();
 
@@ -1130,6 +1157,7 @@ void EntityRenderer::draw(const PassContext& ctx) {
             drawn = true;
         }
         stats_.drawn += drawn;
+        if (pack_) packFlush(e);
     };
     for (const auto& [id, e] : entities) drawEntity(e);
     if (localPlayer_) drawEntity(*localPlayer_);
@@ -1185,6 +1213,10 @@ void EntityRenderer::draw(const PassContext& ctx) {
     }
     entityFrames_ += stats_.drawn;
     ++frames_;
+    if (pack_) {  // drawn by the shader pack (packFlush)
+        pack_ = nullptr;
+        return;
+    }
     if (!refCount_ && !freeCount_) return;
 
     // Record.
@@ -1213,6 +1245,56 @@ void EntityRenderer::draw(const PassContext& ctx) {
     drawRange(psoFree_.Get(), 0, freeCount_);
     drawRange(psoTranslucent_.Get(), cutoutRefs, glintRefs - cutoutRefs);
     if (glintTex >= 0) drawRange(psoGlint_.Get(), glintRefs, refCount_ - glintRefs);
+}
+
+// ---- shader packs ----
+
+void EntityRenderer::packQuad(int bucket, const float pos[4][3], const float uv[4][2], const float n[3], u32 color,
+                              u32 light, u32 overlay) {
+    // Vanilla UV2 (light * 16; emissive layers full bright) and UV1 overlay (white flash u, hurt v = 3 else 10).
+    const bool bright = (light & 256) != 0;
+    const u32 sky = bright ? 15 : (light >> 4) & 15, block = bright ? 15 : light & 15;
+    const u32 white = (overlay >> 8) & 255, red = overlay & 255;
+    packOverlay_ |= overlay;
+    PackVertex v{};
+    v.color = color;
+    v.light = (block << 4) | ((sky << 4) << 16);
+    v.overlay = (white * 15 / 255) | ((red ? 3u : 10u) << 16);
+    v.normal = packNormal(n[0], n[1], n[2]);
+    v.entity = -1;
+    const float mid[2] = {(uv[0][0] + uv[2][0]) * 0.5f, (uv[0][1] + uv[2][1]) * 0.5f};
+    std::vector<PackVertex>& out = bucket == 3 ? packBlock_ : packVerts_[bucket];
+    for (int c = 0; c < 4; ++c) {
+        std::copy(pos[c], pos[c] + 3, v.pos);
+        v.uv[0] = uv[c][0], v.uv[1] = uv[c][1];
+        v.midUv[0] = mid[0], v.midUv[1] = mid[1];
+        out.push_back(v);
+    }
+}
+
+void EntityRenderer::packFlush(const Entity& e) {
+    const int id = pack_->entityId(e.info ? e.info->name : std::string_view());
+    float color[4] = {0, 0, 0, 0};  // entityColor: hurt red / creeper white flash
+    if ((packOverlay_ >> 8) & 255) color[0] = color[1] = color[2] = 1, color[3] = float((packOverlay_ >> 8) & 255) / 255.0f;
+    else if (packOverlay_ & 255) color[0] = 1, color[3] = float(packOverlay_ & 255) / 255.0f;
+    auto submit = [&](std::vector<PackVertex>& v, PackRole role, PackBlend blend, bool blockAtlas) {
+        if (v.empty()) return;
+        PackDraw d;
+        d.role = role, d.blend = blend;
+        d.blockAtlas = blockAtlas;
+        d.texture = blockAtlas ? nullptr : atlas_.Get();
+        d.vertices = v.data(), d.vertexCount = u32(v.size());
+        d.entityId = id;
+        std::copy(color, color + 4, d.entityColor);
+        d.cull = role != PackRole::EntitiesTranslucent;
+        pack_->draw(d);
+        v.clear();
+    };
+    submit(packVerts_[0], PackRole::Entities, PackBlend::Opaque, false);
+    submit(packVerts_[2], PackRole::Entities, PackBlend::Opaque, false);
+    submit(packBlock_, PackRole::Entities, PackBlend::Opaque, true);
+    submit(packVerts_[1], PackRole::EntitiesTranslucent, PackBlend::Translucent, false);
+    packOverlay_ = 0;
 }
 
 }  // namespace ent

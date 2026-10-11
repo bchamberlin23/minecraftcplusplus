@@ -28,6 +28,7 @@
 #include "worldgen/feature_api.h"
 #include "worldgen/gen_service.h"
 #include "worldgen/gentest.h"
+#include "render/packs/pack_api.h"
 #include "worldgen/structures.h"
 #include "world/world.h"
 
@@ -168,8 +169,13 @@ void selfTest(Game& game, World& world, BlockRegistry& registry, int frame) {
 
 }  // namespace
 
+namespace packs {
+int runPackTest(int argc, wchar_t** argv);  // render/packs/pack_test.cpp
+}
+
 int wmain(int argc, wchar_t** argv) {
     launch::initProcess(argc, argv);  // log file without a console, handoff from the previous instance
+    if (argc >= 3 && std::wstring_view(argv[1]) == L"--pack-test") return packs::runPackTest(argc, argv);
     Options opt;
     for (int i = 1; i < argc; ++i) {
         std::wstring a = argv[i];
@@ -226,6 +232,7 @@ int wmain(int argc, wchar_t** argv) {
         else if (a == L"--menu") opt.menu = fs::path(next()).string();
         else if (a == L"--child-script") opt.childScript = next();
         else if (a == L"--handoff" || a == L"--window") next();  // platform/launch.h
+        else if (a == L"--shaderpack" || a == L"--pack-option") packs::commandLine(a, next());  // render/packs/pack_api.h
         else if (a.starts_with(L"--create-")) {
             if (!opt.create) opt.create.emplace();
             const std::wstring v = next();
@@ -436,6 +443,7 @@ int wmain(int argc, wchar_t** argv) {
     if (!renderer.init(window.hwnd(), window.width(), window.height(), opt.debug, opt.vsync)) return 1;
     if (!renderer.uploadTextures(registry.texturePixels(), registry.textureCount())) return 1;
     renderer.setTextureNames(registry.textureNames());
+    packs::applyCommandLine(renderer, &registry);  // shader packs: block ids, --shaderpack (render/packs/pack_api.h)
     if (ShaderPreset p; Renderer::parseShaderPreset(opt.shaders, p)) renderer.setShaderPreset(p);
     if (opt.renderScale != 1.0f && renderer.shaderPreset() != ShaderPreset::Off) {
         ShaderSettings s = renderer.shaderSettings();
@@ -624,6 +632,8 @@ int wmain(int argc, wchar_t** argv) {
     if (!ui.init({&registry, &renderer, &window, &game, &world, &terrain, opt.detail})) return 1;
     if (session) ui.attachSession(netClient.get(), session.get());
     if (!opt.script.empty()) ui.loadScript(opt.script);
+    if (!packs::commandLinePack() && !ui.settings().shaderPack.empty())  // the saved shader pack (render/packs)
+        packs::selectPack(renderer, ui.settings().shaderPack);
     {  // Video settings: options.txt, then this run's command line (not saved). Applies shaders, upscaler, frame gen.
         VideoSettings v = ui.settings().video;
         if (!ui.settings().videoSaved || opt.shadersGiven) {
@@ -698,10 +708,15 @@ int wmain(int argc, wchar_t** argv) {
     };
     bool escWas = false;
     const double loopStart = nowSeconds();
+    Timer frameEnd;  // window.pump() + anything between frames
     for (int frame = 0; window.pump(); ++frame) {
+        const double pumpMs = frameEnd.ms();
         u32 w, h;
         if (window.takeResize(w, h)) renderer.resize(w, h);
+        const Timer frameTop;
         renderer.beginFrame();  // low-latency sleep (Reflex / XeLL / Anti-Lag 2), frame limiter, simulation markers
+        const double beginMs = frameTop.ms();
+        double netMs = 0;
         double now = nowSeconds();
         float dt = float(now - last);
         last = now;
@@ -733,7 +748,11 @@ int wmain(int argc, wchar_t** argv) {
                 }
             }
         }
-        if (session) session->frame(dt);  // multiplayer: apply what the server sent, send movement
+        if (session) {
+            const Timer t;
+            session->frame(dt);  // multiplayer: apply what the server sent, send movement
+            netMs = t.ms();
+        }
         if (session && session->dimension().name != lastDimension) {
             lastDimension = session->dimension().name;
             renderer.resetTemporal();
@@ -766,6 +785,7 @@ int wmain(int argc, wchar_t** argv) {
         audio.update(dt, cam, {session ? session->gameMode() : 1,
                                session ? std::string_view(session->dimension().name) : "minecraft:overworld"});
 
+        const double preMs = frameTop.ms();
         Timer phase;
         double genMs = 0, terrainMs = 0;
         if (genService && (!session || session->dimension().name == "minecraft:overworld") && !(menu && ui.switching())) {
@@ -781,14 +801,19 @@ int wmain(int argc, wchar_t** argv) {
                     return (a.first - ccx) * (a.first - ccx) + (a.second - ccz) * (a.second - ccz) <
                            (b.first - ccx) * (b.first - ccx) + (b.second - ccz) * (b.second - ccz);
                 });
+                const Timer tw;
                 genService->setWanted(wanted);
+                if (opt.profile && tw.ms() > 5.0) LOG("gen: setWanted %.1f ms (%zu wanted)", tw.ms(), wanted.size());
                 if (opt.profile && int(now) != int(now - 0.25))
                     LOG("gen: %zu wanted, %zu waiting to apply, %.1f ms per chunk | %s", wanted.size(), genBacklog.size(),
                         genService->averageMs(), genService->debugCounts().c_str());
             }
             // Apply generated chunks within a time budget (each costs ~2 ms of insert + lighting).
-            if (genBacklog.size() < 16)
+            if (genBacklog.size() < 16) {
+                const Timer tt;
                 for (auto& c : genService->take(32)) genBacklog.push_back(std::move(c));
+                if (opt.profile && tt.ms() > 5.0) LOG("gen: take %.1f ms", tt.ms());
+            }
             Timer budget;
             while (!genBacklog.empty() && budget.ms() < 3.0) {
                 std::unique_ptr<wg::GenChunk> c = std::move(genBacklog.front());
@@ -845,9 +870,10 @@ int wmain(int argc, wchar_t** argv) {
         renderer.render(cam, opt.fog, shot ? &opt.screenshot : uiShot);
         if (uiShot && !shot) LOG("screenshot written to %s", uiShot->string().c_str());
 
-        if (opt.profile && dt > 0.02f && frame > 5)
-            LOG("slow frame %d: %.1f ms | gen apply %.1f, terrain %.1f, render %.1f", frame, dt * 1000.0f, genMs,
-                terrainMs, phase.ms());
+        if (const double frameMs = pumpMs + frameTop.ms(); opt.profile && frameMs > 20.0 && frame > 5)
+            LOG("slow frame %d: %.1f ms | pump %.1f, begin (latency sleep) %.1f, net %.1f, other input/game %.1f, "
+                "gen apply %.1f, terrain %.1f, render %.1f", frame, frameMs, pumpMs, beginMs, netMs,
+                preMs - beginMs - netMs, genMs, terrainMs, phase.ms());
         const RenderStats& rs = renderer.stats();
         u32 commands = rs.commands[0] + rs.commands[1] + rs.commands[2] + rs.commands[3];
         if (frame >= 5) {
@@ -879,6 +905,7 @@ int wmain(int argc, wchar_t** argv) {
             Sleep(15);
         }
         if ((opt.bench && frame + 1 >= kBenchFrames) || (shot && !opt.bench) || timeUp || ui.quitRequested()) break;
+        frameEnd = Timer();
     }
     // "Save and Quit to Title" / "Disconnect" / "Back to Title Screen": save, stop the local server, then hand the
     // window over to a title instance (platform/launch.h), showing progress meanwhile.

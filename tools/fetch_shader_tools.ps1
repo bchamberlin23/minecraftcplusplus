@@ -73,7 +73,7 @@ $sc = Join-Path $cache "SPIRV-Cross-$tag.zip"
 Get-Verified "https://github.com/KhronosGroup/SPIRV-Cross/archive/refs/tags/$tag.zip" `
     "e10c3c1651953ed3fc363fc7c2c330e1243f1bf9071118750c1c5a51b1ab29ab" $sc
 Expand-Matching $sc "SPIRV-Cross-$tag" @(
-    '^LICENSE$', '^GLSL\.std\.450\.h$', '^spirv\.hpp$', '^spirv\.h$',
+    '^LICENSE$', '^GLSL\.std\.450\.h$', '^spirv\.hpp$', '^spirv\.h$', '^NonSemanticShaderDebugInfo100\.h$',
     '^spirv_(common|cross|cross_containers|cross_error_handling|cross_parsed_ir|parser|cfg|glsl|hlsl)\.(hpp|cpp)$'
 ) (Join-Path $tp "spirv-cross")
 

@@ -4,6 +4,7 @@
 #include "assets/game_reports.h"
 #include "assets/asset_source.h"
 #include "net/client.h"
+#include "render/packs/pack_api.h"
 #include "render/renderer.h"
 #include "sky/sky_gpu.h"
 #include "world/nbt_dom.h"
@@ -623,6 +624,32 @@ void Sky::update(const CameraState& cam, double dt) {
         const u16 eye = world_->block(int(std::floor(cam.x)), int(std::floor(cam.y)), int(std::floor(cam.z)));
         sl.cameraInWater = registry_->infos()[eye].waterlogged || registry_->name(eye).rfind("minecraft:water", 0) == 0;
         renderer_->setSkyLighting(sl);
+
+        // Shader packs (render/packs): the game state behind their uniforms.
+        packs::PackGameState g;
+        g.valid = true;
+        g.dimension = dimension_->name;
+        auto clock = clocks_.find(dimension_->clock.empty() ? std::string("minecraft:overworld") : dimension_->clock);
+        if (clock != clocks_.end()) g.worldTime = i64(std::floor(clock->second));
+        g.moonPhase = std::clamp(int(a[int(Attr::MoonPhase)][0]), 0, 7);
+        const int ex = int(std::floor(cam.x)), ey = int(std::floor(cam.y)), ez = int(std::floor(cam.z));
+        const World::LightView lv = world_->light(ex >> 4, ey >> 4, ez >> 4);
+        g.eyeBrightness[0] = lv.block4(ex & 15, ey & 15, ez & 15) * 16;
+        g.eyeBrightness[1] = dimension_->hasSkylight ? lv.sky4(ex & 15, ey & 15, ez & 15) * 16 : 0;
+        const std::string& eyeName = registry_->name(eye);
+        g.isEyeInWater = sl.cameraInWater ? 1 : eyeName.rfind("minecraft:lava", 0) == 0 ? 2
+                                              : eyeName.rfind("minecraft:powder_snow", 0) == 0 ? 3 : 0;
+        int dominant = -1;
+        double best = 0;
+        for (const auto& [b, w] : biomeWeights_)
+            if (w > best) best = w, dominant = b;
+        if (dominant >= 0) {
+            const BiomeInfo& bi = env_.biomeInfo(dominant);
+            g.biome = bi.name;
+            g.temperature = temperature(dominant, ex, ey, ez);
+            g.precipitation = !bi.precipitation ? 0 : g.temperature < 0.15f ? 2 : 1;
+        }
+        packs::setGameState(*renderer_, g);
     }
 
     buildCelestial(a, rain, f.darkDisc);

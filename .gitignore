@@ -4,3 +4,6 @@ build/
 third_party/streamline/bin/
 third_party/fidelityfx/bin/
 third_party/xess/bin/
+# Shader-pack translators (~8 MB of sources): fetched by tools/fetch_shader_tools.ps1, built by third_party/shader_tools.cmake
+third_party/glslang/
+third_party/spirv-cross/

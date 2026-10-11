@@ -95,6 +95,19 @@ add_shader(post.hlsl TonemapVS vs_6_0)
 add_shader(post.hlsl TonemapPS ps_6_0)
 # Vendor upscaler inputs (src/render/upscalers).
 add_shader(upscale_prep.hlsl ReactiveCS cs_6_0)
+# OptiFine / Iris shader packs (src/render/packs): utility passes, and the vertex adapters embedded as text (compiled
+# at run time together with each pack's translated programs).
+add_shader(packs/pack_util.hlsl PackDepthToGlCS cs_6_0)
+add_shader(packs/pack_util.hlsl PackMipCS cs_6_0)
+add_shader(packs/pack_util.hlsl PackShadowCullCS cs_6_0)
+add_shader(packs/pack_util.hlsl PackMergeVS vs_6_0)
+add_shader(packs/pack_util.hlsl PackMergePS ps_6_0)
+add_shader(packs/pack_util.hlsl PackDepthFlipPS ps_6_0)
+add_custom_command(OUTPUT ${SHADER_OUT}/pack_adapter_hlsli.h
+  COMMAND ${CMAKE_COMMAND} -DIN=${CMAKE_SOURCE_DIR}/shaders/packs/adapter.hlsli -DOUT=${SHADER_OUT}/pack_adapter_hlsli.h
+          -DNAME=g_packAdapterHlsli -P ${CMAKE_SOURCE_DIR}/tools/embed_text.cmake
+  DEPENDS ${CMAKE_SOURCE_DIR}/shaders/packs/adapter.hlsli ${CMAKE_SOURCE_DIR}/tools/embed_text.cmake VERBATIM)
+list(APPEND SHADER_HEADERS ${SHADER_OUT}/pack_adapter_hlsli.h)
 
 # --- executable ---------------------------------------------------------------
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS src/*.cpp src/*.h)
@@ -137,6 +150,26 @@ foreach(lic streamline/license.txt streamline/nvngx_dlss.license.txt streamline/
     add_custom_command(TARGET minecraftCplusplus POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/third_party/${lic}
         $<TARGET_FILE_DIR:minecraftCplusplus>/licenses/${licName} VERBATIM)
+  endif()
+endforeach()
+
+# --- OptiFine / Iris shader packs (src/render/packs): glslang + SPIRV-Cross from tools/fetch_shader_tools.ps1,
+# DXC (dxcompiler.dll + dxil.dll from the Windows SDK) at run time. Without the sources packs are unavailable.
+include(third_party/shader_tools.cmake)
+if(MCPP_SHADER_TOOLS)
+  target_link_libraries(minecraftCplusplus PRIVATE mcpp_glslang mcpp_spirv_cross)
+  target_compile_definitions(minecraftCplusplus PRIVATE MCPP_HAVE_SHADER_TOOLS=1)
+  add_custom_command(TARGET minecraftCplusplus POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/third_party/glslang/LICENSE.txt
+      $<TARGET_FILE_DIR:minecraftCplusplus>/licenses/glslang_LICENSE.txt
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/third_party/spirv-cross/LICENSE
+      $<TARGET_FILE_DIR:minecraftCplusplus>/licenses/spirv-cross_LICENSE.txt VERBATIM)
+endif()
+get_filename_component(DXC_DIR ${DXC} DIRECTORY)
+foreach(dll dxcompiler.dll dxil.dll)
+  if(EXISTS ${DXC_DIR}/${dll})
+    add_custom_command(TARGET minecraftCplusplus POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different ${DXC_DIR}/${dll} $<TARGET_FILE_DIR:minecraftCplusplus>/${dll} VERBATIM)
   endif()
 endforeach()
 

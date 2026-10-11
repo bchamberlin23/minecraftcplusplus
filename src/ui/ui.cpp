@@ -84,6 +84,7 @@ bool Settings::load() {
         else if (k == "lowLatency") VideoSettings::parseLowLatency(v, video.lowLatency);
         else if (k == "vsync") video.vsync = v == "true";
         else if (k == "maxFps") video.fpsLimit = u32(std::clamp(std::atoi(v.c_str()), 0, 1000));
+        else if (k == "shaderPack") shaderPack = v;
     }
     loaded = true;
     return true;
@@ -100,6 +101,7 @@ void Settings::save() const {
       << "\nupscaleQuality:" << VideoSettings::qualityKey(video.quality) << "\nsharpness:" << video.sharpness
       << "\nframeGeneration:" << video.frameGenKey() << "\nlowLatency:" << VideoSettings::lowLatencyKey(video.lowLatency)
       << "\nvsync:" << (video.vsync ? "true" : "false") << "\nmaxFps:" << video.fpsLimit << "\n";
+    f << "shaderPack:" << shaderPack << "\n";
 }
 
 float Settings::radiansPerPixel() const {

@@ -115,11 +115,18 @@ const std::string* PackSource::find(std::string_view rel) const {
     return nullptr;
 }
 
-bool PackSource::exists(std::string_view rel) const { return find(rel) != nullptr; }
+bool PackSource::exists(std::string_view rel) const { return find(rel) != nullptr || virtual_.count(normalize(rel)); }
+
+void PackSource::addVirtual(std::string_view rel, std::string text) { virtual_[normalize(rel)] = std::move(text); }
 
 bool PackSource::readBytes(std::string_view rel, std::vector<u8>& out) const {
     const std::string* name = find(rel);
-    if (!name) return false;
+    if (!name) {
+        auto v = virtual_.find(normalize(rel));
+        if (v == virtual_.end()) return false;
+        out.assign(v->second.begin(), v->second.end());
+        return true;
+    }
     if (zip_) {
         auto it = zipEntry_.find(*name);
         return it != zipEntry_.end() && zip_->read(zip_->entries()[it->second], out);

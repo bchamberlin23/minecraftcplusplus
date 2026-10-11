@@ -8,6 +8,7 @@
 #include "entity/entity_render.h"
 #include "game/game.h"
 #include "net/client.h"
+#include "render/pack_sink.h"
 #include "ui/font.h"
 #include "ui/items.h"
 #include "ui/resources.h"
@@ -225,6 +226,13 @@ struct Visuals::Impl {
     const Tag& tag(const std::string& name);
     const PaintingInfo* painting(int id);
     void heldStack(int slot, int& item, i32& dye, bool& foil) const;
+
+    // --- shader packs (PassContext::pack): lists and particles as vanilla-style vertices -----------------
+    std::vector<MeshQuad> cpuStore;  // CPU copy of the static quad store (packs pull quads on the CPU)
+    std::vector<fx::GpuParticle> packParticleBuf;
+    u64 packHandFrame = ~u64(0);     // frame whose first-person hand went to the pack (the Hud pass skips it)
+    void packList(PackSink& pack, const List& l, PackRole role, PackBlend blend);
+    void packParticles(PackSink& pack, const PassContext& ctx, const fx::GpuParticle* pts, u32 count, bool translucent);
 };
 
 // ---------------------------------------------------------------------------------------------------------
@@ -314,6 +322,19 @@ void StagePass::draw(const PassContext& ctx) {
             m.worldLists.clear();
             m.buildWorld(ctx);
             m.uploadPending(ctx);
+            if (ctx.pack) {  // shader pack: items through gbuffers_entities, the first-person hand through gbuffers_hand
+                m.packList(*ctx.pack, m.worldLists.cut, PackRole::Entities, PackBlend::Opaque);
+                m.packList(*ctx.pack, m.worldLists.tr, PackRole::EntitiesTranslucent, PackBlend::Translucent);
+                m.hudLists.clear();
+                float vp[16];
+                m.buildHand(ctx, vp);
+                m.uploadPending(ctx);
+                m.packList(*ctx.pack, m.hudLists.cut, PackRole::Hand, PackBlend::Opaque);
+                m.packList(*ctx.pack, m.hudLists.tr, PackRole::HandTranslucent, PackBlend::Translucent);
+                m.packHandFrame = m.frameCounter;
+                m.stats().worldMs = t.ms();
+                break;
+            }
             m.writeCb(0, ctx, ctx.viewProj, ctx.shading, false);
             const bool a = m.flush(m.worldLists.cut), b = m.flush(m.worldLists.tr), c = m.flush(m.worldLists.glint);
             m.bindCommon(ctx);
@@ -329,7 +350,14 @@ void StagePass::draw(const PassContext& ctx) {
             // Particles.
             const double cam[3] = {ctx.camX, ctx.camY, ctx.camZ};
             u32 opaque = 0, total = 0;
-            if (m.particles) {
+            if (m.particles && ctx.pack) {  // shader pack: particles through gbuffers_particles / textured
+                m.packParticleBuf.resize(kMaxParticles);
+                total = m.particles->build(m.packParticleBuf.data(), kMaxParticles, cam, opaque);
+                m.frameParticleMs += m.particles->stats().buildMs;
+                m.packParticles(*ctx.pack, ctx, m.packParticleBuf.data(), opaque, false);
+                m.packParticles(*ctx.pack, ctx, m.packParticleBuf.data() + opaque, total - opaque, true);
+                opaque = total = 0;  // nothing left for the GPU path below
+            } else if (m.particles) {
                 auto* out = reinterpret_cast<fx::GpuParticle*>(m.frameBase + kParticleOffset);
                 total = m.particles->build(out, kMaxParticles, cam, opaque);
                 m.frameParticleMs += m.particles->stats().buildMs;
@@ -357,6 +385,10 @@ void StagePass::draw(const PassContext& ctx) {
             break;
         }
         case 3: {
+            if (m.packHandFrame == m.frameCounter) {  // drawn by the shader pack (World stage)
+                m.stats().hudMs = t.ms();
+                break;
+            }
             m.hudLists.clear();
             float vp[16];
             m.buildHand(ctx, vp);
@@ -588,6 +620,8 @@ void Visuals::Impl::uploadPending(const PassContext& ctx) {
             list->CopyBufferRegion(store.Get(), u64(first) * sizeof(MeshQuad), upload.Get(), stageVa + stageUsed, bytes);
             barrier(store.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             stageUsed = (stageUsed + bytes + 511) & ~u64(511);
+            if (cpuStore.size() < size_t(first) + count) cpuStore.resize(size_t(first) + count);
+            std::memcpy(cpuStore.data() + first, data, bytes);
             models.releasePending();
         }
     }
@@ -1295,6 +1329,122 @@ void Visuals::Impl::buildHand(const PassContext& ctx, float viewProj[16]) {
     if (mainHand.item < 0) renderArm(pose, mainInv, attack, true);
     else renderItem(pose, mainHand, mainInv, attack, true, true);
     if (offHand.item >= 0) renderItem(pose, offHand, offInv, 0.0f, false, false);
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Shader packs
+
+void Visuals::Impl::packList(PackSink& pack, const List& l, PackRole role, PackBlend blend) {
+    // [texture]: 0 items atlas, 1 font, 2 solid (white), 3 entity atlas, 4 block texture (block atlas)
+    static thread_local std::vector<PackVertex> verts[5];
+    auto unpack = [](u32 v, int shift) { return float(i8((v >> shift) & 255)) / 127.0f; };
+    for (const GpuInst& g : l.v) {
+        const bool dynamic = (g.flags & 1) != 0;
+        const bool bright = (g.light & 256) != 0;
+        const u32 sky = bright ? 15 : (g.light >> 4) & 15, block = bright ? 15 : g.light & 15;
+        for (u32 i = 0; i < g.count; ++i) {
+            const u32 index = g.first + i;
+            const MeshQuad* q = dynamic ? (index < dyn.size() ? &dyn[index] : nullptr)
+                                        : (index < cpuStore.size() ? &cpuStore[index] : nullptr);
+            if (!q) break;
+            const int t = q->tex == kTexItems ? 0 : q->tex == kTexFont ? 1 : q->tex == kTexSolid ? 2 : q->tex == kTexEntity ? 3 : 4;
+            PackVertex v{};
+            u32 color = 0;
+            for (int c = 0; c < 4; ++c)
+                color |= (((q->color >> (c * 8)) & 255) * ((g.color >> (c * 8)) & 255) / 255) << (c * 8);
+            v.color = color;
+            v.light = (block << 4) | ((sky << 4) << 16);
+            v.overlay = (g.overlay & 255) ? 3u << 16 : 10u << 16;
+            const float nl[3] = {unpack(q->normal, 0), unpack(q->normal, 8), unpack(q->normal, 16)};
+            float n[3];
+            for (int r = 0; r < 3; ++r) n[r] = g.m[r * 4] * nl[0] + g.m[r * 4 + 1] * nl[1] + g.m[r * 4 + 2] * nl[2];
+            const float len = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]) + 1e-6f;
+            v.normal = packNormal(n[0] / len, n[1] / len, n[2] / len);
+            v.entity = -1;
+            float uv[4][2];
+            for (int c = 0; c < 4; ++c) {
+                uv[c][0] = q->uv[c][0], uv[c][1] = q->uv[c][1];
+                if (t == 4 && !pack.atlasUv(q->tex & 0xFFFF, q->uv[c][0], q->uv[c][1], uv[c])) uv[c][0] = uv[c][1] = 0;
+            }
+            v.midUv[0] = (uv[0][0] + uv[2][0]) * 0.5f, v.midUv[1] = (uv[0][1] + uv[2][1]) * 0.5f;
+            for (int c = 0; c < 4; ++c) {
+                for (int r = 0; r < 3; ++r)
+                    v.pos[r] = g.m[r * 4] * q->pos[c][0] + g.m[r * 4 + 1] * q->pos[c][1] + g.m[r * 4 + 2] * q->pos[c][2] + g.m[r * 4 + 3];
+                v.uv[0] = uv[c][0], v.uv[1] = uv[c][1];
+                verts[t].push_back(v);
+            }
+        }
+    }
+    for (int t = 0; t < 5; ++t) {
+        std::vector<PackVertex>& v = verts[t];
+        if (v.empty()) continue;
+        PackDraw d;
+        d.role = role, d.blend = blend;
+        d.cull = blend == PackBlend::Opaque;
+        d.blockAtlas = t == 4;
+        d.texture = t == 0 ? itemTex.Get() : t == 1 ? fontTex.Get() : t == 3 ? er.atlasTexture() : nullptr;
+        d.vertices = v.data(), d.vertexCount = u32(v.size());
+        pack.draw(d);
+        v.clear();
+    }
+}
+
+void Visuals::Impl::packParticles(PackSink& pack, const PassContext& ctx, const fx::GpuParticle* pts, u32 count,
+                                  bool translucent) {
+    if (!count) return;
+    // Camera right / up (world space) from the view-projection rows.
+    auto vp = [&](int r, int c) { return ctx.viewProj[c * 4 + r]; };  // as BlockEntityRenderer::draw
+    float right[3], up[3];
+    for (int r = 0; r < 2; ++r) {
+        float* out = r == 0 ? right : up;
+        float l = 0;
+        for (int c = 0; c < 3; ++c) l += vp(r, c) * vp(r, c);
+        l = std::sqrt(std::max(l, 1e-12f));
+        for (int c = 0; c < 3; ++c) out[c] = vp(r, c) / l;
+    }
+    static thread_local std::vector<PackVertex> verts[2];  // 0 items atlas, 1 block atlas
+    static const float kXY[4][2] = {{1, -1}, {1, 1}, {-1, 1}, {-1, -1}};
+    for (u32 i = 0; i < count; ++i) {
+        const fx::GpuParticle& pt = pts[i];
+        const int t = pt.tex == kTexItems ? 0 : 1;
+        const bool bright = (pt.light & 256) != 0;
+        const u32 sky = bright ? 15 : (pt.light >> 4) & 15, block = bright ? 15 : pt.light & 15;
+        PackVertex v{};
+        v.color = pt.color;
+        v.light = (block << 4) | ((sky << 4) << 16);
+        v.overlay = 10u << 16;
+        v.normal = packNormal(0, 1, 0);
+        v.entity = -1;
+        const float cr = std::cos(pt.roll), sr = std::sin(pt.roll);
+        float uv[4][2];
+        for (int c = 0; c < 4; ++c) {
+            const float x = kXY[c][0], y = kXY[c][1];
+            uv[c][0] = x > 0 ? pt.uv[2] : pt.uv[0], uv[c][1] = y > 0 ? pt.uv[1] : pt.uv[3];
+            if (t == 1 && !pack.atlasUv(pt.tex & 0xFFFF, uv[c][0], uv[c][1], uv[c])) uv[c][0] = uv[c][1] = 0;
+        }
+        v.midUv[0] = (uv[0][0] + uv[2][0]) * 0.5f, v.midUv[1] = (uv[0][1] + uv[2][1]) * 0.5f;
+        for (int c = 0; c < 4; ++c) {
+            const float x = kXY[c][0], y = kXY[c][1];
+            const float rx = (x * cr - y * sr) * pt.size, ry = (x * sr + y * cr) * pt.size;
+            for (int a = 0; a < 3; ++a) v.pos[a] = pt.pos[a] + right[a] * rx + up[a] * ry;
+            v.uv[0] = uv[c][0], v.uv[1] = uv[c][1];
+            verts[t].push_back(v);
+        }
+    }
+    for (int t = 0; t < 2; ++t) {
+        std::vector<PackVertex>& v = verts[t];
+        if (v.empty()) continue;
+        PackDraw d;
+        d.role = translucent ? PackRole::ParticlesTranslucent : PackRole::Particles;
+        d.blend = translucent ? PackBlend::Translucent : PackBlend::Opaque;
+        d.depthWrite = !translucent;
+        d.cull = false;
+        d.blockAtlas = t == 1;
+        d.texture = t == 0 ? itemTex.Get() : nullptr;
+        d.vertices = v.data(), d.vertexCount = u32(v.size());
+        pack.draw(d);
+        v.clear();
+    }
 }
 
 }  // namespace ent

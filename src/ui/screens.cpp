@@ -415,6 +415,7 @@ void Ui::State::buildButtons() {
     auto tr = [&](const char* key) { return Text(res.translate(key)); };
     if (screen == Screen::Mods) return buildModsButtons();  // mods_screen.cpp
     if (screen == Screen::Video) return buildVideoButtons();  // video_screen.cpp
+    if (screen == Screen::PackOptions) return buildPackButtons();  // render/packs/pack_screen.cpp
     if (frontEndScreen()) return buildFrontEndButtons();     // title.cpp
     if (screen == Screen::Pause) {
         const int gridW = 212, gridH = 50 + 20 + 4 * 24;
@@ -604,6 +605,7 @@ void Ui::State::drawScreen(Canvas& c) {
         }
         case Screen::Mods: drawModsScreen(c); return;  // mods_screen.cpp
         case Screen::Video: drawVideoScreen(c); return;  // video_screen.cpp
+        case Screen::PackOptions: drawPackScreen(c); return;  // render/packs/pack_screen.cpp
         case Screen::Death: {
             c.gradient(0, 0, float(W), float(H), 0x60500000, 0xA0803030);
             c.push();
@@ -807,6 +809,7 @@ void Ui::State::screenInput(const Window::InputEvent& e) {
     }
     if (screen == Screen::Mods) return modsInput(e);  // mods_screen.cpp
     if (screen == Screen::Video) return videoInput(e);  // video_screen.cpp
+    if (screen == Screen::PackOptions) return packInput(e);  // render/packs/pack_screen.cpp
     if (frontEndScreen()) return frontEndInput(e);     // title.cpp
     if (screen == Screen::Pause || screen == Screen::Options) {
         if (e.type == E::Key && e.down && e.code == VK_ESCAPE) {

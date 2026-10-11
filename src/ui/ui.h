@@ -33,6 +33,7 @@ struct Settings {
     float sensitivity = 0.5f;  // 0..1 like the game's option
     VideoSettings video;       // Video Settings screen (shaders, upscaler, frame generation, latency, VSync, FPS limit)
     bool videoSaved = false;   // options.txt had video settings
+    std::string shaderPack;    // shader pack in use (render/packs; "" = the built-in pipeline)
     bool loaded = false;
 
     static fs::path path();

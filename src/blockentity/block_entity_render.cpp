@@ -5,6 +5,7 @@
 #include "blockentity/block_entities.h"
 
 #include "entity/entity_render.h"
+#include "render/pack_sink.h"
 #include "world/world.h"
 
 #include <algorithm>
@@ -361,6 +362,15 @@ void BlockEntityRenderer::draw(const PassContext& ctx) {
             }
             if (!inside) continue;
             ++stats_.visibleSections;
+            if (ctx.pack) {  // shader pack: all instances as vertices (no GPU section batches)
+                for (const Instance& in : s.list) {
+                    const double dx = in.x + 0.5 - ctx.camX, dy = in.y + 0.5 - ctx.camY, dz = in.z + 0.5 - ctx.camZ;
+                    if (dx * dx + dy * dy + dz * dz > double(kViewDistance) * kViewDistance) continue;
+                    packInstance(*ctx.pack, dyn, in, in.data >= 0 ? &s.data[size_t(in.data)] : nullptr,
+                                 isDynamic(in, def(in.block)) ? partial_ : 0.0f);
+                }
+                continue;
+            }
             u32 first = u32(s.offset);
             for (int p = 0; p < 3; ++p) {
                 if (s.counts[p] && visCount[p] < kMaxVis) {
@@ -382,6 +392,13 @@ void BlockEntityRenderer::draw(const PassContext& ctx) {
                 ++stats_.dynamic;
             }
         }
+    }
+    if (ctx.pack) {  // drawn by the shader pack (packInstance)
+        stats_.cpuMs = timer.ms();
+        cpuTotal_ += stats_.cpuMs;
+        historyMs_[frames_ % kHistory] = float(stats_.cpuMs);
+        ++frames_;
+        return;
     }
     // Dynamic quads: [cutout][text][translucent].
     u32 dynFirst[3], dynCount[3], at = 0;
@@ -442,6 +459,59 @@ void BlockEntityRenderer::draw(const PassContext& ctx) {
             const u32 c[4] = {dynFirst[p], 0, 1, 0};
             list->SetGraphicsRoot32BitConstants(1, 4, c, 0);
             list->DrawInstanced(dynCount[p] * 6, 1, 0, 0);
+        }
+    }
+}
+
+// ---- shader packs ----
+
+void BlockEntityRenderer::packInstance(PackSink& pack, const Emit& base, const Instance& in, const Data* data, float pt) {
+    Emit e = base;  // camera-relative quads
+    for (int p = 0; p < 3; ++p) packQuads_[p].clear(), e.out[p] = &packQuads_[p];
+    emitInstance(e, in, data, pt);
+    const int id = pack.blockId(in.block);
+    // [pass][texture]: textures 0 entity atlas, 1 font, 2 solid (white), 3 block texture (block atlas)
+    static thread_local std::vector<PackVertex> verts[3][4];
+    for (int p = 0; p < 3; ++p) {
+        for (const BeQuad& q : packQuads_[p]) {
+            const int t = q.tex == kTexAtlas ? 0 : q.tex == kTexFont ? 1 : q.tex == kTexSolid ? 2 : 3;
+            const bool bright = (q.light & (256 | 1024)) != 0;
+            const u32 sky = bright ? 15 : (q.light >> 4) & 15, block = bright ? 15 : q.light & 15;
+            PackVertex v{};
+            v.color = q.color;
+            v.light = (block << 4) | ((sky << 4) << 16);
+            v.overlay = 10u << 16;
+            const float n[3] = {float(i8(q.normal & 255)) / 127.0f, float(i8((q.normal >> 8) & 255)) / 127.0f,
+                                float(i8((q.normal >> 16) & 255)) / 127.0f};
+            v.normal = packNormal(n[0], n[1], n[2]);
+            v.entity = -1;
+            float uv[4][2];
+            for (int c = 0; c < 4; ++c) {
+                uv[c][0] = q.uv[c][0], uv[c][1] = q.uv[c][1];
+                if (t == 3 && !pack.atlasUv(q.tex, q.uv[c][0], q.uv[c][1], uv[c])) uv[c][0] = uv[c][1] = 0;
+            }
+            v.midUv[0] = (uv[0][0] + uv[2][0]) * 0.5f, v.midUv[1] = (uv[0][1] + uv[2][1]) * 0.5f;
+            for (int c = 0; c < 4; ++c) {
+                std::copy(q.pos[c], q.pos[c] + 3, v.pos);
+                v.uv[0] = uv[c][0], v.uv[1] = uv[c][1];
+                verts[p][t].push_back(v);
+            }
+        }
+    }
+    for (int p = 0; p < 3; ++p) {
+        for (int t = 0; t < 4; ++t) {
+            std::vector<PackVertex>& v = verts[p][t];
+            if (v.empty()) continue;
+            PackDraw d;
+            d.role = p == 2 ? PackRole::BlockTranslucent : PackRole::Block;
+            d.blend = p == 2 ? PackBlend::Translucent : PackBlend::Opaque;
+            d.cull = false;
+            d.blockAtlas = t == 3;
+            d.texture = t == 0 ? entityRenderer_.atlasTexture() : t == 1 ? fontTex_.Get() : nullptr;
+            d.vertices = v.data(), d.vertexCount = u32(v.size());
+            d.blockEntityId = id;
+            pack.draw(d);
+            v.clear();
         }
     }
 }

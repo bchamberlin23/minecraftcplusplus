@@ -248,6 +248,9 @@ private:
     bool arenaFull_ = false;
     std::vector<BeQuad> scratch_[3];
     std::vector<BeQuad> dyn_[3];
+    // Shader packs (PassContext::pack): every visible instance as vanilla-style vertices, per instance (blockEntityId).
+    std::vector<BeQuad> packQuads_[3];
+    void packInstance(class PackSink& pack, const Emit& e, const Instance& in, const Data* data, float pt);
 
     Stats stats_;
     double cpuTotal_ = 0;
