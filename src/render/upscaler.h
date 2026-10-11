@@ -37,6 +37,13 @@ struct UpscaleInputs {
     float nearZ = 0.05f, farZ = 1e30f;   // infinite projection: farZ is "infinity"
     float frameTimeMs = 16.6f;
     bool reset = false;                  // history invalid (first frame, teleport, resize, settings change)
+    // Ray reconstruction guides (path tracing, render resolution, all in `guideState`): `color` is then the noisy
+    // ray traced radiance. diffuseAlbedo / specularAlbedo: linear RGB; normalRoughness: world-space normal + linear
+    // roughness in alpha. worldToView: row-major, column vectors (camera-relative world -> view, rotation only).
+    ID3D12Resource* diffuseAlbedo = nullptr;
+    ID3D12Resource* specularAlbedo = nullptr;
+    ID3D12Resource* normalRoughness = nullptr;
+    D3D12_RESOURCE_STATES guideState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 };
 
 class Upscaler {

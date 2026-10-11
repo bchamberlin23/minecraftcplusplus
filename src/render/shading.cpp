@@ -1104,6 +1104,10 @@ void Renderer::Shading::record(ID3D12GraphicsCommandList* list, const FrameInput
         u.frameTimeMs = dt_ * 1000.0f;
         u.reset = !historyValid_;
         Upscaler* up = r.upscaler_ ? r.upscaler_ : &taa_;
+        if (r.pt_ && r.pt_->rayReconstruction()) {  // path tracing: DLSS-RR denoises and upscales
+            up = r.pt_->rayReconstruction();
+            r.pt_->fillGuides(u);
+        }
         up->evaluate(u);
         if (up != &taa_) {  // external: restore the pipeline's bindings
             list->SetDescriptorHeaps(1, heaps);

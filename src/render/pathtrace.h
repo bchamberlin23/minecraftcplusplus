@@ -42,6 +42,10 @@ struct Renderer::PathTracer {
     // Per frame, from Shading::record: BLAS builds + TLAS first, the lighting after the deferred pass.
     void build(ID3D12GraphicsCommandList* list, const Shading::FrameInput& in, D3D12_GPU_VIRTUAL_ADDRESS cb, u32 activeCount);
     void trace(ID3D12GraphicsCommandList* list, const Shading::FrameInput& in, D3D12_GPU_VIRTUAL_ADDRESS cb);
+    // DLSS Ray Reconstruction replaces the built-in denoiser and the upscaler (nullptr: not available / not selected).
+    Upscaler* rayReconstruction() const;
+    // Its guide buffers (render resolution, UNORDERED_ACCESS).
+    void fillGuides(UpscaleInputs& u) const;
     std::string status() const;
 
     // ---- acceleration structure memory ----
@@ -86,7 +90,8 @@ struct Renderer::PathTracer {
     void dropEntry(u32 e, bool recording);
 
     ComPtr<ID3D12Device5> dev5_;
-    ComPtr<ID3D12PipelineState> psoBlasGen_, psoTrace_, psoAccum_, psoClear_, psoGather_, psoCdf_;
+    ComPtr<ID3D12PipelineState> psoBlasGen_, psoTrace_, psoAccum_, psoClear_, psoGather_, psoCdf_, psoCompose_;
+    bool rrUsed_ = false;  // DLSS-RR denoised the last frame
     ComPtr<ID3D12Resource> targets_[TgtCount], reservoirs_[2];
     ComPtr<ID3D12Resource> lights_, lightCounts_, frameLights_, frameLightCount_, lightSections_, lightPower_, frameSecs_,
         frameSecCdf_, lightSlot_;

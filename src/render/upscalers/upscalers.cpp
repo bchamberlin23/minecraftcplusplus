@@ -101,6 +101,10 @@ Backend* Upscalers::backend(UpscalerKind k) const {
     }
 }
 
+::Upscaler* Upscalers::rayReconstruction() const {
+    return settings_.upscaler == UpscalerKind::Dlss && caps_.rayReconstruction ? dlss_->rayReconstruction() : nullptr;
+}
+
 Backend* Upscalers::backend(FrameGenKind k) const {
     switch (k) {
         case FrameGenKind::Dlss: return dlss_.get();

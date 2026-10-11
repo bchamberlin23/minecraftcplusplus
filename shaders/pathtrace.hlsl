@@ -634,7 +634,7 @@ void PtAccumCS(uint2 px : SV_DispatchThreadID) {
             if (wsum > 0.05) hist = sum / wsum;
         }
     }
-    float n = min(hist.a, gPtParams.w);
+    float n = gPtOpts.x == 6 ? 0.0 : min(hist.a, gPtParams.w);  // 6: no accumulation (raw samples)
     float3 acc = lerp(hist.rgb, noisy, 1.0 / (n + 1.0));
     gPtRw[kPtHist0 + cur][px] = float4(acc, n + 1.0);
     gPtRw[kPtGeom0 + cur][px] = packGeom(p.dist, p.n);
@@ -645,6 +645,63 @@ void PtAccumCS(uint2 px : SV_DispatchThreadID) {
     if (gPtOpts.x == 3) c = acc;  // lighting only
     float4 raster = gRW[kRwScene][px];
     c = lerp(raster.rgb, c, p.weight);
+    gRW[kRwScene][px] = float4(c, 1);
+    gRW[kRwSceneCopy][px] = float4(c, 1);
+}
+
+// ---- DLSS Ray Reconstruction: noisy radiance + guide buffers ------------------------------------------------------
+
+// Specular albedo for RR's guide (DLSS-RR integration guide 4.2.1, Ray Tracing Gems ch. 32).
+float3 envBrdfApprox2(float3 specularColor, float alpha, float NoV) {
+    NoV = abs(NoV);
+    float4 X = float4(1.0, NoV, NoV * NoV, NoV * NoV * NoV);
+    float4 Y = float4(1.0, alpha, alpha * alpha, alpha * alpha * alpha);
+    float2x2 M1 = float2x2(0.99044, -1.28514, 1.29678, -0.755907);
+    float3x3 M2 = float3x3(1.0, 2.92338, 59.4188, 20.3225, -27.0302, 222.592, 121.563, 626.13, 316.627);
+    float2x2 M3 = float2x2(0.0365463, 3.32707, 9.0632, -9.04756);
+    float3x3 M4 = float3x3(1.0, 3.59685, -1.36772, 9.04401, -16.3174, 9.22949, 5.56589, 19.7886, -20.2123);
+    float bias = dot(mul(M1, X.xy), Y.xy) * rcp(dot(mul(M2, X.xyw), Y.xyw));
+    float scale = dot(mul(M3, X.xy), Y.xy) * rcp(dot(mul(M4, X.xzw), Y.xyw));
+    bias *= saturate(specularColor.g * 50);
+    return mad(specularColor, max(0, scale), max(0, bias));
+}
+
+[numthreads(8, 8, 1)]
+void PtComposeCS(uint2 px : SV_DispatchThreadID) {
+    if (any(px >= uint2(gScreen.xy))) return;
+    uint cur = gPtSlots.y;
+    float2 pixel = float2(px) + 0.5;
+    float3 view = normalize(viewRay(pixelNdc(pixel)));
+    // Guides for every pixel: the G-buffer surface (blocks: rough dielectric), the forward layer's colour (entities),
+    // nothing for the sky.
+    float d = gTex[kTexDepth].Load(int3(px, 0)).r;
+    float3 albedo = 0, n = -view, spec = 0;
+    float rough = 1;
+    if (d > 0) {
+        float4 e = gTex[kTexLdrFwd].Load(int3(px, 0));
+        if (e.a >= 0.499) {
+            albedo = srgbToLinear(e.rgb);
+        } else {
+            albedo = srgbToLinear(gTex[kTexAlbedo].Load(int3(px, 0)).rgb);
+            n = octDecode(gTex[kTexNormal].Load(int3(px, 0)).xy);
+        }
+        spec = envBrdfApprox2(0.04, rough * rough, dot(n, -view));
+    }
+    gPtRw[kPtDiffAlbedo][px] = float4(albedo, 1);
+    gPtRw[kPtSpecAlbedo][px] = float4(spec, 1);
+    gPtRw[kPtNormalRough][px] = float4(n, rough);
+
+    PtPixel p = ptPixel(px);
+    if (!p.traced) {
+        gPtRw[kPtGeom0 + cur][px] = 0;
+        return;
+    }
+    gPtRw[kPtGeom0 + cur][px] = packGeom(p.dist, p.n);
+    float3 light = gPtRw[kPtLight][px].rgb;
+    float3 c = p.albedo * light + emission(p.albedo, p.mat);
+    if (gWater.w < 0.5) c = applyFog(c, p.rel, skyBehind(px, p.rel / max(p.dist, 1e-4)));
+    if (gPtOpts.x == 3) c = light;
+    c = lerp(gRW[kRwScene][px].rgb, c, p.weight);
     gRW[kRwScene][px] = float4(c, 1);
     gRW[kRwSceneCopy][px] = float4(c, 1);
 }

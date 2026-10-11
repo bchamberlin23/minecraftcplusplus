@@ -13,6 +13,7 @@
 #include <sl.h>
 #include <sl_consts.h>
 #include <sl_dlss.h>
+#include <sl_dlss_d.h>
 #include <sl_dlss_g.h>
 #include <sl_pcl.h>
 #include <sl_reflex.h>
@@ -108,7 +109,8 @@ std::string bootStreamline() {
 
     std::wstring dir = fs::path(path).parent_path().wstring();
     const wchar_t* paths[] = {dir.c_str()};
-    const sl::Feature features[] = {sl::kFeatureDLSS, sl::kFeatureDLSS_G, sl::kFeatureReflex, sl::kFeaturePCL};
+    const sl::Feature features[] = {sl::kFeatureDLSS, sl::kFeatureDLSS_RR, sl::kFeatureDLSS_G, sl::kFeatureReflex,
+                                    sl::kFeaturePCL};
     sl::Preferences pref{};
     pref.showConsole = false;
     pref.logLevel = std::getenv("MCPP_SL_VERBOSE") ? sl::LogLevel::eVerbose : sl::LogLevel::eDefault;
@@ -189,6 +191,7 @@ public:
             return res == sl::Result::eOk;
         };
         dlssOk_ = supported(sl::kFeatureDLSS, "DLSS");
+        rrOk_ = supported(sl::kFeatureDLSS_RR, "DLSS Ray Reconstruction");
         dlssgOk_ = supported(sl::kFeatureDLSS_G, "DLSS Frame Generation");
         reflexOk_ = supported(sl::kFeatureReflex, "Reflex");
         pclOk_ = supported(sl::kFeaturePCL, "PC Latency");
@@ -202,6 +205,14 @@ public:
             caps.version[int(UpscalerKind::Dlss)] = version_;
         } else {
             fail("DLSS not supported on this GPU / driver");
+        }
+        caps.rayReconstruction = rrOk_ && dlssOk_;
+        if (caps.rayReconstruction) {
+            caps.rrWhy.clear();
+            if (g_sl.getFeatureVersion(sl::kFeatureDLSS_RR, v) == sl::Result::eOk)
+                LOG("streamline: DLSS Ray Reconstruction %s", v.versionNGX.toStr().c_str());
+        } else {
+            caps.rrWhy = "DLSS Ray Reconstruction not supported on this GPU / driver (or sl.dlss_d.dll missing)";
         }
         if (dlssgOk_) {
             sl::DLSSGState st{};
@@ -352,6 +363,7 @@ public:
 
     // ---- super resolution ----
     ::Upscaler* upscaler() override { return dlssOk_ ? this : nullptr; }
+    ::Upscaler* rayReconstruction() override { return rrOk_ ? &rr_ : nullptr; }
     const char* name() const override { return "DLSS"; }
     float scale(UpscaleQuality q) const override {
         if (!dlssOk_) return 1.0f;
@@ -403,6 +415,61 @@ public:
         for (u32 i = 0; i < tagCount; ++i) inputs[i + 1] = &tags[i];
         if (g_sl.evaluateFeature(sl::kFeatureDLSS, *token_, inputs, tagCount + 1, in.list) != sl::Result::eOk)
             warnOnce("slEvaluateFeature(DLSS) failed");
+    }
+
+    // ---- ray reconstruction (path tracing): DLSS-RR denoises and upscales the noisy ray traced image ----
+    struct RayReconstruction : ::Upscaler {
+        Dlss& d;
+        explicit RayReconstruction(Dlss& dlss) : d(dlss) {}
+        const char* name() const override { return "DLSS Ray Reconstruction"; }
+        void evaluate(const UpscaleInputs& in) override { d.evaluateRr(in); }
+    };
+    RayReconstruction rr_{*this};
+
+    void evaluateRr(const UpscaleInputs& in) {
+        if (!token()) return;
+        const CameraFrame& c = hub.camera();
+        setConstants(c);
+        sl::DLSSDOptions o{};
+        o.mode = mode(quality_);
+        o.outputWidth = in.outputSize[0], o.outputHeight = in.outputSize[1];
+        o.colorBuffersHDR = sl::Boolean::eTrue;
+        o.preExposure = 1.0f;
+        o.normalRoughnessMode = sl::DLSSDNormalRoughnessMode::ePacked;
+        o.worldToCameraView = slMatrix(c.view);
+        Mat4 inv;  // the view is a rotation: its inverse is its transpose
+        for (int i = 0; i < 4; ++i)
+            for (int j = 0; j < 4; ++j) inv(i, j) = c.view(j, i);
+        o.cameraViewToWorld = slMatrix(inv);
+        if (o.mode != rrOptions_.mode || o.outputWidth != rrOptions_.outputWidth || o.outputHeight != rrOptions_.outputHeight ||
+            std::memcmp(&o.worldToCameraView, &rrOptions_.worldToCameraView, sizeof(o.worldToCameraView)) != 0) {
+            if (slDLSSDSetOptions(kViewport, o) != sl::Result::eOk) warnOnce("slDLSSDSetOptions failed");
+            rrOptions_ = o;
+        }
+        sl::Extent renderExt{0, 0, in.renderSize[0], in.renderSize[1]}, outExt{0, 0, in.outputSize[0], in.outputSize[1]};
+        const u32 srv = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, guide = u32(in.guideState);
+        sl::Resource color{sl::ResourceType::eTex2d, in.color, nullptr, nullptr, srv};
+        sl::Resource output{sl::ResourceType::eTex2d, in.output, nullptr, nullptr, u32(D3D12_RESOURCE_STATE_UNORDERED_ACCESS)};
+        sl::Resource depth{sl::ResourceType::eTex2d, in.depth, nullptr, nullptr,
+                           u32(D3D12_RESOURCE_STATE_DEPTH_READ | D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE)};
+        sl::Resource motion{sl::ResourceType::eTex2d, in.motion, nullptr, nullptr, srv};
+        sl::Resource diffuse{sl::ResourceType::eTex2d, in.diffuseAlbedo, nullptr, nullptr, guide};
+        sl::Resource specular{sl::ResourceType::eTex2d, in.specularAlbedo, nullptr, nullptr, guide};
+        sl::Resource normals{sl::ResourceType::eTex2d, in.normalRoughness, nullptr, nullptr, guide};
+        const sl::ResourceTag tags[] = {
+            {&color, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eValidUntilEvaluate, &renderExt},
+            {&output, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eValidUntilEvaluate, &outExt},
+            {&depth, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilEvaluate, &renderExt},
+            {&motion, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilEvaluate, &renderExt},
+            {&diffuse, sl::kBufferTypeAlbedo, sl::ResourceLifecycle::eValidUntilEvaluate, &renderExt},
+            {&specular, sl::kBufferTypeSpecularAlbedo, sl::ResourceLifecycle::eValidUntilEvaluate, &renderExt},
+            {&normals, sl::kBufferTypeNormalRoughness, sl::ResourceLifecycle::eValidUntilEvaluate, &renderExt},
+        };
+        sl::ViewportHandle vp(kViewport);
+        const sl::BaseStructure* inputs[std::size(tags) + 1] = {&vp};
+        for (size_t i = 0; i < std::size(tags); ++i) inputs[i + 1] = &tags[i];
+        if (g_sl.evaluateFeature(sl::kFeatureDLSS_RR, *token_, inputs, u32(std::size(inputs)), in.list) != sl::Result::eOk)
+            warnOnce("slEvaluateFeature(DLSS-RR) failed");
     }
 
     // ---- Reflex / PCL ----
@@ -520,12 +587,13 @@ private:
     }
 
     bool initialized_ = false, active_ = false;
-    bool dlssOk_ = false, dlssgOk_ = false, reflexOk_ = false, pclOk_ = false, lowLatencyAvailable_ = false;
+    bool dlssOk_ = false, rrOk_ = false, dlssgOk_ = false, reflexOk_ = false, pclOk_ = false, lowLatencyAvailable_ = false;
     bool dlssgLoaded_ = true, frameGenSwapChain_ = false, fgOn_ = false;
     u32 fgMultiplier_ = 2, fpsLimit_ = 0, pingMessage_ = 0;
     LowLatencyMode mode_ = LowLatencyMode::Off;
     UpscaleQuality quality_ = UpscaleQuality::Native;
     sl::DLSSOptions options_{};
+    sl::DLSSDOptions rrOptions_{};
     sl::DLSSGStatus lastStatus_ = sl::DLSSGStatus::eOk;
     sl::FrameToken* token_ = nullptr;
     u32 tokenFrame_ = ~0u, constantsFrame_ = ~0u;

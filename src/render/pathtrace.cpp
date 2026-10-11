@@ -7,6 +7,8 @@
 #include "BlasGenCS.h"
 #include "PathTraceCS.h"
 #include "PtAccumCS.h"
+#include "PtComposeCS.h"
+#include "render/upscalers/upscalers.h"
 #include "PtClearCS.h"
 #include "LightGatherCS.h"
 #include "LightCdfCS.h"
@@ -93,7 +95,7 @@ bool Renderer::PathTracer::create() {
         return check(r.device_->CreateComputePipelineState(&d, IID_PPV_ARGS(&out)), "compute pipeline");
     };
     if (!compute(g_BlasGenCS, sizeof(g_BlasGenCS), psoBlasGen_) || !compute(g_PathTraceCS, sizeof(g_PathTraceCS), psoTrace_) ||
-        !compute(g_PtAccumCS, sizeof(g_PtAccumCS), psoAccum_) || !compute(g_PtClearCS, sizeof(g_PtClearCS), psoClear_) ||
+        !compute(g_PtAccumCS, sizeof(g_PtAccumCS), psoAccum_) || !compute(g_PtComposeCS, sizeof(g_PtComposeCS), psoCompose_) || !compute(g_PtClearCS, sizeof(g_PtClearCS), psoClear_) ||
         !compute(g_LightGatherCS, sizeof(g_LightGatherCS), psoGather_) || !compute(g_LightCdfCS, sizeof(g_LightCdfCS), psoCdf_))
         return false;
 
@@ -676,15 +678,28 @@ void Renderer::PathTracer::trace(ID3D12GraphicsCommandList* list, const Shading:
     uav.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
     list->ResourceBarrier(1, &uav);
     if (debug_ == 1 || debug_ == 2) return;
-    list->SetPipelineState(psoAccum_.Get());
+    // DLSS Ray Reconstruction denoises the noisy radiance itself; else the built-in temporal accumulation.
+    const bool rr = rayReconstruction() != nullptr;
+    if (rr != rrUsed_) histValid_ = false, rrUsed_ = rr;
+    list->SetPipelineState(rr ? psoCompose_.Get() : psoAccum_.Get());
     list->Dispatch(gx, gy, 1);
     histSlot_ ^= 1;
     histValid_ = true;
 }
 
+Upscaler* Renderer::PathTracer::rayReconstruction() const { return r.upscalers_->rayReconstruction(); }
+
+void Renderer::PathTracer::fillGuides(UpscaleInputs& u) const {
+    u.diffuseAlbedo = targets_[TgtDiffAlbedo].Get();
+    u.specularAlbedo = targets_[TgtSpecAlbedo].Get();
+    u.normalRoughness = targets_[TgtNormalRough].Get();
+    u.guideState = kUav;
+}
+
 std::string Renderer::PathTracer::status() const {
     char b[256];
-    std::snprintf(b, sizeof(b), "%u sections traced (radius %.0f), %.0f MB acceleration structures, %u light sections%s",
-                  instanceCount_, radius_, double(asBytes_) / 1048576.0, lightSectionCount_, queued_ ? ", building..." : "");
+    std::snprintf(b, sizeof(b), "%s | %u sections traced (radius %.0f), %.0f MB acceleration structures, %u light sections%s",
+                  rrUsed_ ? "denoiser DLSS Ray Reconstruction" : "built-in denoiser", instanceCount_, radius_,
+                  double(asBytes_) / 1048576.0, lightSectionCount_, queued_ ? ", building..." : "");
     return b;
 }
