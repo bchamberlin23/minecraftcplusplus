@@ -1,0 +1,469 @@
+#include "net/local_server.h"
+
+#include "assets/game_reports.h"
+#include "assets/zip.h"
+#include "mods/fabric_server.h"
+#include "mods/mod_manager.h"
+#include "world/nbt_dom.h"
+
+#include <libdeflate.h>
+#include <json/json.hpp>
+
+#include <winsock2.h>
+#include <bcrypt.h>
+#include <urlmon.h>
+
+#include <chrono>
+#include <ctime>
+#include <fstream>
+
+#pragma comment(lib, "urlmon.lib")
+
+namespace {
+
+nlohmann::json readJson(const fs::path& p) {
+    std::vector<u8> bytes;
+    if (!readFile(p, bytes)) return nullptr;
+    return nlohmann::json::parse(bytes.begin(), bytes.end(), nullptr, false);
+}
+
+bool hash(const wchar_t* algorithm, const void* data, size_t size, std::vector<u8>& out) {
+    BCRYPT_ALG_HANDLE alg = nullptr;
+    if (BCryptOpenAlgorithmProvider(&alg, algorithm, nullptr, 0) != 0) return false;
+    DWORD len = 0, got = 0;
+    BCryptGetProperty(alg, BCRYPT_HASH_LENGTH, reinterpret_cast<PUCHAR>(&len), sizeof(len), &got, 0);
+    out.resize(len);
+    const bool ok = BCryptHash(alg, nullptr, 0, static_cast<PUCHAR>(const_cast<void*>(data)), ULONG(size), out.data(),
+                               len) == 0;
+    BCryptCloseAlgorithmProvider(alg, 0);
+    return ok;
+}
+
+std::string hex(const std::vector<u8>& bytes) {
+    static const char* digits = "0123456789abcdef";
+    std::string s;
+    for (u8 b : bytes) s += digits[b >> 4], s += digits[b & 15];
+    return s;
+}
+
+std::string sha1File(const fs::path& p) {
+    std::vector<u8> bytes, digest;
+    if (!readFile(p, bytes) || !hash(BCRYPT_SHA1_ALGORITHM, bytes.data(), bytes.size(), digest)) return {};
+    return hex(digest);
+}
+
+// UUID.nameUUIDFromBytes(("OfflinePlayer:" + name).getBytes(UTF_8)): the id an offline-mode server gives a name.
+std::vector<u8> offlineUuid(const std::string& name) {
+    const std::string s = "OfflinePlayer:" + name;
+    std::vector<u8> md5;
+    hash(BCRYPT_MD5_ALGORITHM, s.data(), s.size(), md5);
+    md5[6] = u8((md5[6] & 0x0F) | 0x30);
+    md5[8] = u8((md5[8] & 0x3F) | 0x80);
+    return md5;
+}
+
+std::string uuidString(const std::vector<u8>& b) {
+    const std::string h = hex(b);
+    return h.substr(0, 8) + "-" + h.substr(8, 4) + "-" + h.substr(12, 4) + "-" + h.substr(16, 4) + "-" + h.substr(20);
+}
+
+// NBT stores UUIDs as four big-endian ints.
+std::string uuidFromInts(const std::vector<i32>& v) {
+    if (v.size() != 4) return {};
+    std::vector<u8> b;
+    for (i32 i : v)
+        for (int k = 3; k >= 0; --k) b.push_back(u8(u32(i) >> (k * 8)));
+    return uuidString(b);
+}
+
+std::vector<i32> intsFromUuid(const std::string& s) {
+    std::string h;
+    for (char c : s)
+        if (c != '-') h += c;
+    std::vector<i32> v;
+    for (int i = 0; i < 4 && h.size() == 32; ++i) v.push_back(i32(u32(std::stoul(h.substr(size_t(i) * 8, 8), nullptr, 16))));
+    return v;
+}
+
+bool readNbtGz(const fs::path& p, NbtValue& root, std::string* rootName = nullptr) {
+    std::vector<u8> gz;
+    if (!readFile(p, gz) || gz.size() < 18) return false;
+    libdeflate_decompressor* d = libdeflate_alloc_decompressor();
+    std::vector<u8> raw(gz.size() * 8 + 4096);
+    size_t actual = 0;
+    libdeflate_result r;
+    while ((r = libdeflate_gzip_decompress(d, gz.data(), gz.size(), raw.data(), raw.size(), &actual)) ==
+               LIBDEFLATE_INSUFFICIENT_SPACE &&
+           raw.size() < (size_t(256) << 20))
+        raw.resize(raw.size() * 2);
+    libdeflate_free_decompressor(d);
+    return r == LIBDEFLATE_SUCCESS && nbtRead(raw.data(), actual, root, rootName);
+}
+
+bool writeNbtGz(const fs::path& p, const NbtValue& root, std::string_view rootName = "") {
+    std::vector<u8> encoded;
+    nbtWrite(root, encoded, rootName);
+    libdeflate_compressor* c = libdeflate_alloc_compressor(6);
+    std::vector<u8> packed(libdeflate_gzip_compress_bound(c, encoded.size()));
+    const size_t n = libdeflate_gzip_compress(c, encoded.data(), encoded.size(), packed.data(), packed.size());
+    libdeflate_free_compressor(c);
+    if (!n) return false;
+    std::error_code ec;
+    fs::create_directories(p.parent_path(), ec);
+    const fs::path tmp = p.string() + ".tmp";
+    {
+        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+        f.write(reinterpret_cast<const char*>(packed.data()), std::streamsize(n));
+        if (!f) return false;
+    }
+    fs::rename(tmp, p, ec);
+    return !ec;
+}
+
+u16 freePort() {
+    WSADATA wsa;
+    WSAStartup(MAKEWORD(2, 2), &wsa);
+    u16 port = 0;
+    SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    sockaddr_in a{};
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    int len = sizeof(a);
+    if (s != INVALID_SOCKET && bind(s, reinterpret_cast<sockaddr*>(&a), sizeof(a)) == 0 &&
+        getsockname(s, reinterpret_cast<sockaddr*>(&a), &len) == 0)
+        port = ntohs(a.sin_port);
+    if (s != INVALID_SOCKET) closesocket(s);
+    WSACleanup();
+    return port ? port : 25565;
+}
+
+// The world format version this game version writes ("world_version" in the jar's version.json).
+int gameWorldVersion(const fs::path& jar) {
+    ZipArchive zip;
+    if (!zip.open(jar)) return 0;
+    for (const auto& e : zip.entries())
+        if (e.name == "version.json") {
+            std::vector<u8> bytes;
+            if (!zip.read(e, bytes)) return 0;
+            const auto j = nlohmann::json::parse(bytes.begin(), bytes.end(), nullptr, false);
+            return j.is_object() ? j.value("world_version", 0) : 0;
+        }
+    return 0;
+}
+
+const char* gameModeName(i64 m) {
+    switch (m) {
+    case 1: return "creative";
+    case 2: return "adventure";
+    case 3: return "spectator";
+    default: return "survival";
+    }
+}
+
+const char* difficultyName(i64 d) {
+    switch (d) {
+    case 0: return "peaceful";
+    case 1: return "easy";
+    case 3: return "hard";
+    default: return "normal";
+    }
+}
+
+}  // namespace
+
+LocalServer::~LocalServer() { stop(); }
+
+bool LocalServer::running() const { return process_ && WaitForSingleObject(process_, 0) == WAIT_TIMEOUT; }
+
+bool LocalServer::ensureServerJar(fs::path& jar) {
+    const nlohmann::json v = readJson(config_.minecraftDir / "versions" / config_.version / (config_.version + ".json"));
+    if (!v.is_object() || !v.contains("downloads") || !v["downloads"].contains("server")) {
+        LOG("error: the installed version has no server download listed");
+        return false;
+    }
+    const std::string sha1 = v["downloads"]["server"].value("sha1", ""), url = v["downloads"]["server"].value("url", "");
+    jar = runDir_ / "server.jar";
+    std::error_code ec;
+    if (fs::exists(jar, ec) && sha1File(jar) == sha1) return true;
+    LOG("downloading the official server for %s (one time, %.0f MB)...", config_.version.c_str(),
+        double(v["downloads"]["server"].value("size", 0)) / (1 << 20));
+    const fs::path tmp = runDir_ / "server.jar.download";
+    if (URLDownloadToFileW(nullptr, std::wstring(url.begin(), url.end()).c_str(), tmp.c_str(), 0, nullptr) != S_OK) {
+        LOG("error: could not download %s", url.c_str());
+        return false;
+    }
+    if (sha1File(tmp) != sha1) {
+        LOG("error: the downloaded server does not match its published SHA-1");
+        fs::remove(tmp, ec);
+        return false;
+    }
+    fs::rename(tmp, jar, ec);
+    return !ec;
+}
+
+bool LocalServer::backupIfUpgrading() {
+    NbtValue root;
+    if (!readNbtGz(config_.world / "level.dat", root)) {
+        LOG("error: cannot read %s", (config_.world / "level.dat").string().c_str());
+        return false;
+    }
+    NbtValue* data = root.find("Data");
+    NbtValue* dv = data ? data->find("DataVersion") : nullptr;
+    const int worldVersion = dv ? int(dv->i) : 0;
+    const int gameVersion = gameWorldVersion(config_.minecraftDir / "versions" / config_.version / (config_.version + ".jar"));
+    if (gameVersion && worldVersion > gameVersion) {
+        LOG("error: this world was saved by a newer version of the game");
+        return false;
+    }
+    if (!gameVersion || worldVersion >= gameVersion) return true;
+    upgrading_ = true;
+    // Like the game's "Backup and load": keep a copy of the world as it was before the upgrade.
+    char stamp[32];
+    const std::time_t now = std::time(nullptr);
+    std::tm tm{};
+    localtime_s(&tm, &now);
+    std::strftime(stamp, sizeof(stamp), "%Y-%m-%d_%H-%M-%S", &tm);
+    const fs::path dst = config_.minecraftDir / "backups" /
+                         (config_.world.filename().string() + "_" + stamp + "_before_" + config_.version);
+    Timer t;
+    std::error_code ec;
+    fs::create_directories(dst, ec);
+    for (auto it = fs::recursive_directory_iterator(config_.world, ec); !ec && it != fs::recursive_directory_iterator();
+         it.increment(ec)) {
+        const fs::path rel = fs::relative(it->path(), config_.world, ec);
+        if (rel == "session.lock") continue;
+        if (it->is_directory(ec))
+            fs::create_directories(dst / rel, ec);
+        else
+            fs::copy_file(it->path(), dst / rel, fs::copy_options::overwrite_existing, ec);
+        if (ec) break;
+    }
+    if (ec) {
+        LOG("error: backing up the world before upgrading it failed (%s); not starting", ec.message().c_str());
+        return false;
+    }
+    LOG("backup  %8.1f ms  world (data version %d) copied to %s before the upgrade to %d", t.ms(), worldVersion,
+        dst.string().c_str(), gameVersion);
+    return true;
+}
+
+bool LocalServer::exportHostPlayer() {
+    NbtValue root;
+    if (!readNbtGz(config_.world / "level.dat", root)) return false;
+    NbtValue* data = root.find("Data");
+    if (!data) return false;
+    NbtValue player;
+    bool have = false;
+    if (NbtValue* id = data->find("singleplayer_uuid"); id && id->type == TagIntArray) {
+        hostUuid_ = uuidFromInts(id->ints);
+        have = readNbtGz(config_.world / "players" / "data" / (hostUuid_ + ".dat"), player);
+    } else if (NbtValue* p = data->find("Player")) {
+        player = *p;
+        if (NbtValue* id = p->find("UUID"); id && id->type == TagIntArray) hostUuid_ = uuidFromInts(id->ints);
+        have = true;
+    }
+    if (!have) return true;  // nobody played this world in singleplayer: the server spawns a new player
+    player.erase("UUID");    // the player keeps the offline id the server gives the name
+    const bool modern = fs::exists(config_.world / "players");
+    const fs::path file = modern ? config_.world / "players" / "data" / (offlineUuid_ + ".dat")
+                                 : config_.world / "playerdata" / (offlineUuid_ + ".dat");
+    if (!writeNbtGz(file, player)) {
+        LOG("warning: could not hand the singleplayer inventory to the local server");
+        return false;
+    }
+    return true;
+}
+
+void LocalServer::importHostPlayer() {
+    if (hostUuid_.empty()) return;
+    NbtValue player;
+    if (!readNbtGz(config_.world / "players" / "data" / (offlineUuid_ + ".dat"), player) &&
+        !readNbtGz(config_.world / "playerdata" / (offlineUuid_ + ".dat"), player))
+        return;
+    player.set("UUID", [&] {
+        NbtValue v = NbtValue::make(TagIntArray);
+        v.ints = intsFromUuid(hostUuid_);
+        return v;
+    }());
+    const fs::path file = config_.world / "players" / "data" / (hostUuid_ + ".dat");
+    std::error_code ec;
+    if (fs::exists(file, ec)) fs::copy_file(file, file.string() + "_old", fs::copy_options::overwrite_existing, ec);
+    if (!writeNbtGz(file, player)) {
+        LOG("warning: could not write the singleplayer player data back");
+        return;
+    }
+    // A dedicated server drops the singleplayer owner from level.dat; the game needs it to find the data.
+    NbtValue root;
+    std::string rootName;
+    if (!readNbtGz(config_.world / "level.dat", root, &rootName)) return;
+    if (NbtValue* data = root.find("Data")) {
+        NbtValue id = NbtValue::make(TagIntArray);
+        id.ints = intsFromUuid(hostUuid_);
+        data->set("singleplayer_uuid", std::move(id));
+        writeNbtGz(config_.world / "level.dat", root, rootName);
+    }
+}
+
+bool LocalServer::start(const Config& config) {
+    config_ = config;
+    const wchar_t* local = _wgetenv(L"LOCALAPPDATA");
+    runDir_ = fs::path(local ? local : L".") / "minecraftCplusplus" / "server" / config.version;
+    std::error_code ec;
+    fs::create_directories(runDir_, ec);
+    const fs::path java = findGameJava(config.minecraftDir, config.version);
+    fs::path jar;
+    if (java.empty()) {
+        LOG("error: the game's Java runtime was not found; launch the game once from the launcher");
+        return false;
+    }
+    if (!ensureServerJar(jar) || !backupIfUpgrading()) return false;
+    // Fabric mods in the mods folder: Fabric's server runs them on top of this server.jar (mods/fabric_server.h).
+    if (const auto fabric = mods::Manager::get().fabricMods(); !fabric.empty()) {
+        if (!mods::prepareFabricServer(runDir_.parent_path(), config.minecraftDir, config.version, jar, fabric, runDir_, jar))
+            return false;
+        if (mods::Manager::get().fabricContent())
+            LOG("warning: some Fabric mods add blocks / items; they are drawn from the mods' own models where possible "
+                "(see the Mods & Packs screen)");
+    }
+    offlineUuid_ = uuidString(offlineUuid(config.player));
+    exportHostPlayer();
+
+    NbtValue level;
+    readNbtGz(config.world / "level.dat", level);
+    NbtValue* data = level.find("Data");
+    auto num = [&](const char* key, i64 fallback) {
+        NbtValue* v = data ? data->find(key) : nullptr;
+        return v ? v->i : fallback;
+    };
+    port_ = config.port ? config.port : freePort();
+    {
+        std::ofstream eula(runDir_ / "eula.txt", std::ios::trunc);
+        eula << "# Accepted by the game's owner: https://aka.ms/MinecraftEULA\neula=true\n";
+        std::ofstream p(runDir_ / "server.properties", std::ios::trunc);
+        p << "# Written by minecraftCplusplus for singleplayer; rewritten on every launch.\n"
+          << "online-mode=false\n"
+          << "white-list=false\n"  // on by default since 26.1
+          << "enforce-whitelist=false\n"
+          << "enforce-secure-profile=false\n"
+          << "server-ip=" << (config.lan ? "" : "127.0.0.1") << "\n"
+          << "server-port=" << port_ << "\n"
+          << "view-distance=" << std::clamp(config.viewDistance, 2, 32) << "\n"
+          << "simulation-distance=" << std::clamp(config.viewDistance, 2, 10) << "\n"
+          << "network-compression-threshold=" << (config.lan ? 256 : -1) << "\n"
+          << "sync-chunk-writes=false\n"
+          << "spawn-protection=0\n"
+          << "allow-flight=true\n"
+          << "enable-command-block=true\n"
+          << "max-players=8\n"
+          << "gamemode=" << gameModeName(num("GameType", 0)) << "\n"
+          << "difficulty=" << difficultyName(num("Difficulty", 2)) << "\n"
+          << "hardcore=" << (num("hardcore", 0) ? "true" : "false") << "\n"
+          << "motd=" << config.world.filename().string() << " (minecraftCplusplus)\n";
+        // Cheats on in the save: the player may run commands, as in singleplayer.
+        std::ofstream ops(runDir_ / "ops.json", std::ios::trunc);
+        if (num("allowCommands", 0))
+            ops << "[{\"uuid\":\"" << offlineUuid_ << "\",\"name\":\"" << config.player
+                << "\",\"level\":4,\"bypassesPlayerLimit\":false}]\n";
+        else
+            ops << "[]\n";
+    }
+
+    // The server dies with this process (job object) even if we crash; normally stop() saves first.
+    SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
+    HANDLE stdinRead = nullptr, stdoutWrite = nullptr;
+    if (!CreatePipe(&stdinRead, &stdinWrite_, &sa, 0) || !CreatePipe(&stdoutRead_, &stdoutWrite, &sa, 0)) return false;
+    SetHandleInformation(stdinWrite_, HANDLE_FLAG_INHERIT, 0);
+    SetHandleInformation(stdoutRead_, HANDLE_FLAG_INHERIT, 0);
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = stdinRead;
+    si.hStdOutput = si.hStdError = stdoutWrite;
+    PROCESS_INFORMATION pi{};
+    std::wstring cmd = L"\"" + java.wstring() + L"\" -Xms1G -Xmx4G -jar \"" + jar.wstring() +
+                       L"\" --nogui --universe \"" + config.world.parent_path().wstring() + L"\" --world \"" +
+                       config.world.filename().wstring() + L"\" --port " + std::to_wstring(port_);
+    const BOOL ok = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | CREATE_SUSPENDED,
+                                   nullptr, runDir_.c_str(), &si, &pi);
+    CloseHandle(stdinRead);
+    CloseHandle(stdoutWrite);
+    if (!ok) {
+        LOG("error: could not start the local server");
+        return false;
+    }
+    job_ = CreateJobObjectW(nullptr, nullptr);
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    SetInformationJobObject(job_, JobObjectExtendedLimitInformation, &limits, sizeof(limits));
+    AssignProcessToJobObject(job_, pi.hProcess);
+    ResumeThread(pi.hThread);
+    CloseHandle(pi.hThread);
+    process_ = pi.hProcess;
+    reader_ = std::thread([this] { readOutput(); });
+    LOG("server  starting the local server for %s on port %u%s", config.world.filename().string().c_str(), port_,
+        config.lan ? " (open to the network)" : "");
+    return true;
+}
+
+void LocalServer::readOutput() {
+    std::string pending;
+    char buf[4096];
+    DWORD got = 0;
+    while (ReadFile(stdoutRead_, buf, sizeof(buf), &got, nullptr) && got) {
+        pending.append(buf, got);
+        size_t nl;
+        while ((nl = pending.find('\n')) != std::string::npos) {
+            std::string line = pending.substr(0, nl);
+            pending.erase(0, nl + 1);
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (line.find("Done (") != std::string::npos) {
+                ready_ = true;
+                LOG("server: %s", line.c_str());
+            } else if ((line.find("ERROR") != std::string::npos || line.find("Exception") != std::string::npos ||
+                        line.find("FAILED") != std::string::npos) &&
+                       line.find("OFFLINE") == std::string::npos) {
+                LOG("server: %s", line.c_str());
+                if (line.find("FAILED TO BIND") != std::string::npos) failed_ = true;
+            } else if (line.find("Preparing level") != std::string::npos || line.find("Upgrading") != std::string::npos ||
+                       line.find("Stopping server") != std::string::npos ||
+                       (line.find("Loading ") != std::string::npos && line.find(" mods:") != std::string::npos) ||
+                       line.starts_with("\t- ")) {  // Fabric's mod list
+                LOG("server: %s", line.c_str());
+            }
+        }
+    }
+}
+
+void LocalServer::command(const std::string& line) {
+    std::lock_guard lock(stdinMutex_);
+    if (!stdinWrite_) return;
+    const std::string s = line + "\n";
+    DWORD written = 0;
+    WriteFile(stdinWrite_, s.data(), DWORD(s.size()), &written, nullptr);
+}
+
+void LocalServer::stop(double timeoutSeconds) {
+    if (stopped_ || !process_) return;
+    stopped_ = true;
+    Timer t;
+    if (running()) {
+        command("stop");
+        if (WaitForSingleObject(process_, DWORD(timeoutSeconds * 1000)) != WAIT_OBJECT_0) {
+            LOG("warning: the local server did not stop in time; terminating it");
+            TerminateProcess(process_, 1);
+            WaitForSingleObject(process_, 5000);
+        }
+    }
+    {
+        std::lock_guard lock(stdinMutex_);
+        CloseHandle(stdinWrite_);
+        stdinWrite_ = nullptr;
+    }
+    if (reader_.joinable()) reader_.join();
+    CloseHandle(stdoutRead_);
+    CloseHandle(process_);
+    if (job_) CloseHandle(job_);
+    process_ = job_ = stdoutRead_ = nullptr;
+    importHostPlayer();
+    LOG("server  %8.1f ms  local server saved and stopped", t.ms());
+}

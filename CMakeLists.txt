@@ -1,0 +1,103 @@
+cmake_minimum_required(VERSION 3.28)
+project(minecraftCplusplus LANGUAGES C CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+
+# --- third party -------------------------------------------------------------
+set(LIBDEFLATE_BUILD_SHARED_LIB OFF CACHE BOOL "" FORCE)
+set(LIBDEFLATE_BUILD_GZIP OFF CACHE BOOL "" FORCE)
+set(LIBDEFLATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(LIBDEFLATE_COMPRESSION_SUPPORT ON CACHE BOOL "" FORCE)  # needed to write region files
+add_subdirectory(third_party/libdeflate EXCLUDE_FROM_ALL)
+
+# --- shaders: compiled by DXC at build time and embedded as byte arrays -------
+find_program(DXC dxc REQUIRED HINTS "C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64")
+set(SHADER_OUT ${CMAKE_BINARY_DIR}/shaders)
+file(MAKE_DIRECTORY ${SHADER_OUT})
+set(SHADER_HEADERS "")
+file(GLOB SHADER_INCLUDES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/shaders/*.hlsli)
+function(add_shader src entry profile)
+  set(out ${SHADER_OUT}/${entry}.h)
+  add_custom_command(OUTPUT ${out}
+    COMMAND ${DXC} -nologo -T ${profile} -E ${entry} -O3 -Qstrip_debug -Qstrip_reflect
+            -Fh ${out} -Vn g_${entry} ${CMAKE_SOURCE_DIR}/shaders/${src}
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/${src} ${SHADER_INCLUDES}
+    VERBATIM)
+  set(SHADER_HEADERS ${SHADER_HEADERS} ${out} PARENT_SCOPE)
+endfunction()
+add_shader(terrain.hlsl TerrainVS vs_6_0)
+add_shader(terrain.hlsl TerrainPSOpaque ps_6_0)
+add_shader(terrain.hlsl TerrainPSCutout ps_6_0)
+add_shader(terrain.hlsl TerrainPSTranslucent ps_6_0)
+add_shader(detail.hlsl DetailVS vs_6_0)
+add_shader(detail.hlsl DetailPS ps_6_0)
+add_shader(cull.hlsl CullCS cs_6_0)
+add_shader(overlay.hlsl LineVS vs_6_0)
+add_shader(overlay.hlsl LinePS ps_6_0)
+add_shader(sprite.hlsl SpriteVS vs_6_0)
+add_shader(sprite.hlsl SpritePS ps_6_0)
+add_shader(entity.hlsl EntityModelVS vs_6_0)
+add_shader(entity.hlsl EntityFreeVS vs_6_0)
+add_shader(entity.hlsl EntityCutoutPS ps_6_0)
+add_shader(entity.hlsl EntityTranslucentPS ps_6_0)
+add_shader(blockentity.hlsl BlockEntityVS vs_6_0)
+add_shader(blockentity.hlsl BlockEntityPS ps_6_0)
+add_shader(blockentity.hlsl BlockEntityTranslucentPS ps_6_0)
+add_shader(ui.hlsl UiVS vs_6_0)
+add_shader(ui.hlsl UiPS ps_6_0)
+add_shader(sky.hlsl SkyFullscreenVS vs_6_0)
+add_shader(sky.hlsl SkyDiscPS ps_6_0)
+add_shader(sky.hlsl SkyDarkDiscPS ps_6_0)
+add_shader(sky.hlsl SkyGeoVS vs_6_0)
+add_shader(sky.hlsl SkyGeoPS ps_6_0)
+add_shader(sky.hlsl SkyWeatherPS ps_6_0)
+add_shader(sky.hlsl SkyCloudVS vs_6_0)
+add_shader(sky.hlsl SkyCloudPS ps_6_0)
+# Built-in shader pipeline (src/render/shading.cpp).
+add_shader(terrain.hlsl TerrainGbufVS vs_6_0)
+add_shader(terrain.hlsl TerrainGbufPS ps_6_0)
+add_shader(terrain.hlsl TerrainGbufPSCutout ps_6_0)
+add_shader(terrain.hlsl TerrainShadowVS vs_6_0)
+add_shader(terrain.hlsl TerrainShadowPSCutout ps_6_0)
+add_shader(terrain.hlsl TerrainFwdVS vs_6_0)
+add_shader(terrain.hlsl TerrainFwdPS ps_6_0)
+add_shader(detail.hlsl DetailGbufVS vs_6_0)
+add_shader(detail.hlsl DetailGbufPS ps_6_0)
+add_shader(detail.hlsl DetailShadowVS vs_6_0)
+add_shader(detail.hlsl DetailShadowPS ps_6_0)
+add_shader(cull.hlsl ShadowCullCS cs_6_0)
+add_shader(deferred.hlsl DeferredCS cs_6_0)
+add_shader(deferred.hlsl VolumetricCS cs_6_0)
+add_shader(deferred.hlsl CompositeCS cs_6_0)
+add_shader(deferred.hlsl AoCS cs_6_0)
+add_shader(post.hlsl TaaCS cs_6_0)
+add_shader(post.hlsl BloomDownCS cs_6_0)
+add_shader(post.hlsl BloomUpCS cs_6_0)
+add_shader(post.hlsl ExposureCS cs_6_0)
+add_shader(post.hlsl TonemapVS vs_6_0)
+add_shader(post.hlsl TonemapPS ps_6_0)
+
+# --- executable ---------------------------------------------------------------
+file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS src/*.cpp src/*.h)
+# World generation must reproduce the game's Java float/double math exactly.
+file(GLOB WORLDGEN_SOURCES CONFIGURE_DEPENDS src/worldgen/*.cpp)
+set_source_files_properties(${WORLDGEN_SOURCES} PROPERTIES COMPILE_OPTIONS "/fp:precise")
+add_executable(minecraftCplusplus ${SOURCES} ${SHADER_HEADERS})
+target_include_directories(minecraftCplusplus PRIVATE src third_party ${SHADER_OUT}
+  third_party/libdeflate)
+target_link_libraries(minecraftCplusplus PRIVATE libdeflate_static d3d12 dxgi dxguid ws2_32 bcrypt)
+target_compile_definitions(minecraftCplusplus PRIVATE
+  WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE _CRT_SECURE_NO_WARNINGS)
+target_compile_options(minecraftCplusplus PRIVATE /W3 /permissive- /Zc:__cplusplus /utf-8 /EHsc
+  $<$<CONFIG:Release>:/O2 /Oi /GL /arch:AVX2 /fp:fast /Zi>)
+target_link_options(minecraftCplusplus PRIVATE $<$<CONFIG:Release>:/LTCG /OPT:REF /OPT:ICF /DEBUG /MAP>)
+
+# --- example native mod (src/mods/mcpp_mod.h): a DLL to drop into the mods folder ---------------------------
+add_library(hello_mod SHARED examples/hello_mod/hello_mod.c)
+target_include_directories(hello_mod PRIVATE src/mods)
+target_compile_definitions(hello_mod PRIVATE _CRT_SECURE_NO_WARNINGS)

@@ -1,0 +1,61 @@
+#pragma once
+// Singleplayer: the game's rules (mobs, redstone, survival...) come from the official dedicated
+// server, run locally on the player's world in the background while this engine renders it.
+//  - server.jar is the official one for the installed version (downloaded once, SHA-1 checked).
+//  - A world from an older version is backed up before the server upgrades it, like the game's
+//    "Backup and load".
+//  - The singleplayer host's player data (inventory, position...) is handed to the local offline
+//    player before the server starts and written back after it stops, so the world keeps working
+//    in the real game.
+#include "core/common.h"
+
+#include <atomic>
+#include <mutex>
+#include <thread>
+
+#include <windows.h>
+
+class LocalServer {
+public:
+    struct Config {
+        fs::path minecraftDir;  // .minecraft
+        std::string version;    // installed version id ("26.3")
+        fs::path world;         // the save to play
+        std::string player = "Player";
+        u16 port = 0;           // 0: any free port
+        bool lan = false;       // listen on all interfaces (friends can join) instead of loopback only
+        int viewDistance = 12;  // chunks the server sends; farther terrain is this engine's own LOD
+    };
+
+    ~LocalServer();
+    bool start(const Config& config);  // prepares files and launches; returns without waiting
+    bool ready() const { return ready_; }      // accepting connections
+    bool upgrading() const { return upgrading_; }  // the world is being converted to this version first
+    bool running() const;
+    u16 port() const { return port_; }
+    // Fabric server: the block table its helper mod wrote (Client::Config::serverRegistries), else empty.
+    fs::path stateTable() const {
+        std::error_code ec;
+        const fs::path p = runDir_ / "mcpp-registries.json";
+        return fs::exists(p, ec) ? p : fs::path();
+    }
+    void command(const std::string& line);     // server console
+    void stop(double timeoutSeconds = 60.0);   // saves, exits and syncs the player data back
+
+private:
+    bool ensureServerJar(fs::path& jar);
+    bool backupIfUpgrading();
+    bool exportHostPlayer();   // host -> offline player file
+    void importHostPlayer();   // offline player file -> host
+    void readOutput();
+
+    Config config_;
+    fs::path runDir_;
+    std::string offlineUuid_, hostUuid_;
+    HANDLE process_ = nullptr, job_ = nullptr, stdinWrite_ = nullptr, stdoutRead_ = nullptr;
+    std::thread reader_;
+    std::atomic<bool> ready_{false}, failed_{false};
+    std::mutex stdinMutex_;
+    u16 port_ = 0;
+    bool stopped_ = false, upgrading_ = false;
+};

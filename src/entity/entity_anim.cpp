@@ -1,0 +1,216 @@
+#include "entity/entity_anim.h"
+
+#include <algorithm>
+#include <cmath>
+
+namespace ent {
+namespace {
+
+constexpr float kPi = 3.14159265f;
+constexpr float kDeg = kPi / 180.0f;
+
+struct Parts {
+    const Model& m;
+    PartPose* p;
+    PartPose* operator[](Role r) const {
+        const i16 i = m.roles[r];
+        return i >= 0 ? &p[i] : nullptr;
+    }
+};
+
+void head(const Parts& P, const AnimState& s) {
+    if (PartPose* h = P[Head]) {
+        h->xRot += s.pitch * kDeg;
+        h->yRot += s.headYaw * kDeg;
+    }
+}
+
+float outQuart(float x) { return 1.0f - std::pow(1.0f - x, 4.0f); }
+
+void bob(PartPose* arm, float age, float scale) {
+    if (!arm) return;
+    arm->zRot += scale * (std::cos(age * 0.09f) * 0.05f + 0.05f);
+    arm->xRot += scale * (std::sin(age * 0.067f) * 0.05f);
+}
+
+// HumanoidModel.setupAnim (walking, riding, held items, attack swing, crouching, arm bob).
+void humanoid(const Parts& P, const AnimState& s) {
+    PartPose *h = P[Head], *body = P[Body], *ra = P[RightArm], *la = P[LeftArm], *rl = P[RightLeg], *ll = P[LeftLeg];
+    if (h) h->xRot = s.pitch * kDeg, h->yRot = s.headYaw * kDeg;
+    const float pos = s.walkPos, speed = s.walkSpeed;
+    if (ra) ra->xRot = std::cos(pos * 0.6662f + kPi) * 2.0f * speed * 0.5f, ra->zRot = 0;
+    if (la) la->xRot = std::cos(pos * 0.6662f) * 2.0f * speed * 0.5f, la->zRot = 0;
+    if (rl) rl->xRot = std::cos(pos * 0.6662f) * 1.4f * speed, rl->yRot = 0.005f, rl->zRot = 0.005f;
+    if (ll) ll->xRot = std::cos(pos * 0.6662f + kPi) * 1.4f * speed, ll->yRot = -0.005f, ll->zRot = -0.005f;
+    if (s.riding) {
+        if (ra) ra->xRot += -kPi / 5;
+        if (la) la->xRot += -kPi / 5;
+        if (rl) rl->xRot = -1.4137167f, rl->yRot = kPi / 10, rl->zRot = 0.07853982f;
+        if (ll) ll->xRot = -1.4137167f, ll->yRot = -kPi / 10, ll->zRot = -0.07853982f;
+    }
+    if (ra) ra->yRot = 0;
+    if (la) la->yRot = 0;
+    if (ra && s.rightItem) ra->xRot = ra->xRot * 0.5f - kPi / 10;
+    if (la && s.leftItem) la->xRot = la->xRot * 0.5f - kPi / 10;
+    // setupAttackAnimation (WHACK swing).
+    if (s.swing > 0 && body && ra && la) {
+        float by = std::sin(std::sqrt(s.swing) * kPi * 2.0f) * 0.2f;
+        if (s.swingLeft) by = -by;
+        body->yRot = by;
+        const float ageScale = s.baby ? 0.5f : 1.0f;
+        ra->z = std::sin(by) * 5.0f * ageScale, ra->x = -std::cos(by) * 5.0f * ageScale;
+        la->z = -std::sin(by) * 5.0f * ageScale, la->x = std::cos(by) * 5.0f * ageScale;
+        ra->yRot += by, la->yRot += by, la->xRot += by;
+        const float aa = std::sin(outQuart(s.swing) * kPi);
+        const float bb = std::sin(s.swing * kPi) * -((h ? h->xRot : 0) - 0.7f) * 0.75f;
+        PartPose* arm = s.swingLeft ? la : ra;
+        arm->xRot -= aa * 1.2f + bb;
+        arm->yRot += by * 2.0f;
+        arm->zRot += std::sin(s.swing * kPi) * -0.4f;
+    }
+    if (s.crouching) {
+        if (body) body->xRot = 0.5f, body->y += 3.2f;
+        if (ra) ra->xRot += 0.4f, ra->y += 3.2f;
+        if (la) la->xRot += 0.4f, la->y += 3.2f;
+        if (rl) rl->z += 4.0f;
+        if (ll) ll->z += 4.0f;
+        if (h) h->y += 4.2f;
+    }
+    bob(ra, s.age, 1.0f);
+    bob(la, s.age, -1.0f);
+}
+
+// AnimationUtils.animateZombieArms.
+void zombieArms(const Parts& P, const AnimState& s) {
+    PartPose *ra = P[RightArm], *la = P[LeftArm];
+    const bool raise = !s.baby || !s.rightItem;
+    const float drop = raise ? -kPi / (s.aggressive ? 1.5f : 2.25f) : 0.0f;
+    const float ay = (raise ? 1.0f : -1.0f) * std::sin(s.swing * kPi);
+    const float ax = std::sin((1.0f - (1.0f - s.swing) * (1.0f - s.swing)) * kPi);
+    const float xRot = drop + ay * 1.2f - ax * 0.4f, yRot = 0.1f - ay * 0.6f;
+    if (ra) ra->xRot = xRot, ra->yRot = raise ? -yRot : yRot, ra->zRot = 0;
+    if (la) la->xRot = xRot, la->yRot = raise ? yRot : -yRot, la->zRot = 0;
+    bob(ra, s.age, 1.0f);
+    bob(la, s.age, -1.0f);
+}
+
+void quadrupedLegs(const Parts& P, const AnimState& s) {
+    const float pos = s.walkPos, speed = s.walkSpeed;
+    if (PartPose* l = P[RightHindLeg]) l->xRot = std::cos(pos * 0.6662f) * 1.4f * speed;
+    if (PartPose* l = P[LeftHindLeg]) l->xRot = std::cos(pos * 0.6662f + kPi) * 1.4f * speed;
+    if (PartPose* l = P[RightFrontLeg]) l->xRot = std::cos(pos * 0.6662f + kPi) * 1.4f * speed;
+    if (PartPose* l = P[LeftFrontLeg]) l->xRot = std::cos(pos * 0.6662f) * 1.4f * speed;
+}
+
+float triangleWave(float t, float period) {
+    return (std::abs(std::fmod(t, period) - period * 0.5f) - period * 0.25f) / (period * 0.25f);
+}
+
+}  // namespace
+
+u64 animate(Anim kind, const AnimState& s, const Model& model, PartPose* poses) {
+    Parts P{model, poses};
+    u64 hidden = 0;
+    switch (kind) {
+        case Anim::None: break;
+        case Anim::Head: head(P, s); break;
+        case Anim::Humanoid:
+        case Anim::Skeleton:
+        case Anim::Zombie:
+            humanoid(P, s);
+            if (kind == Anim::Zombie) zombieArms(P, s);
+            if (kind == Anim::Skeleton && s.aggressive && s.rightItem) {  // BOW_AND_ARROW
+                PartPose *h = P[Head], *ra = P[RightArm], *la = P[LeftArm];
+                if (h && ra && la) {
+                    ra->yRot = -0.1f + h->yRot, la->yRot = 0.1f + h->yRot + 0.4f;
+                    ra->xRot = -kPi / 2 + h->xRot, la->xRot = -kPi / 2 + h->xRot;
+                }
+            }
+            // Player model customisation: hat 6, jacket 1, sleeves 2/3, pants 4/5.
+            if (!(s.skinParts & 64)) hidden |= 1ull << Hat;
+            if (!(s.skinParts & 2)) hidden |= 1ull << Jacket;
+            if (!(s.skinParts & 4)) hidden |= 1ull << LeftSleeve;
+            if (!(s.skinParts & 8)) hidden |= 1ull << RightSleeve;
+            if (!(s.skinParts & 16)) hidden |= 1ull << LeftPants;
+            if (!(s.skinParts & 32)) hidden |= 1ull << RightPants;
+            break;
+        case Anim::Quadruped:
+            head(P, s);
+            quadrupedLegs(P, s);
+            break;
+        case Anim::Chicken: {
+            head(P, s);
+            const float flap = (std::sin(s.flap) + 1.0f) * s.flapSpeed;
+            if (PartPose* l = P[RightLeg]) l->xRot = std::cos(s.walkPos * 0.6662f) * 1.4f * s.walkSpeed;
+            if (PartPose* l = P[LeftLeg]) l->xRot = std::cos(s.walkPos * 0.6662f + kPi) * 1.4f * s.walkSpeed;
+            if (PartPose* w = P[RightWing]) w->zRot = flap;
+            if (PartPose* w = P[LeftWing]) w->zRot = -flap;
+            break;
+        }
+        case Anim::Creeper: {
+            // CreeperModel binds its fields crosswise: "left_hind_leg" drives as the right hind leg, etc.
+            head(P, s);
+            const float pos = s.walkPos, speed = s.walkSpeed;
+            if (PartPose* l = P[LeftHindLeg]) l->xRot = std::cos(pos * 0.6662f) * 1.4f * speed;
+            if (PartPose* l = P[RightHindLeg]) l->xRot = std::cos(pos * 0.6662f + kPi) * 1.4f * speed;
+            if (PartPose* l = P[LeftFrontLeg]) l->xRot = std::cos(pos * 0.6662f + kPi) * 1.4f * speed;
+            if (PartPose* l = P[RightFrontLeg]) l->xRot = std::cos(pos * 0.6662f) * 1.4f * speed;
+            break;
+        }
+        case Anim::Spider: {
+            if (PartPose* h = P[Head]) h->yRot = s.headYaw * kDeg, h->xRot = s.pitch * kDeg;
+            const float pos = s.walkPos * 0.6662f, speed = s.walkSpeed;
+            const float swing[4] = {-(std::cos(pos * 2.0f) * 0.4f) * speed, -(std::cos(pos * 2.0f + kPi) * 0.4f) * speed,
+                                    -(std::cos(pos * 2.0f + kPi / 2) * 0.4f) * speed,
+                                    -(std::cos(pos * 2.0f + kPi * 3 / 2) * 0.4f) * speed};
+            const float step[4] = {std::abs(std::sin(pos) * 0.4f) * speed, std::abs(std::sin(pos + kPi) * 0.4f) * speed,
+                                   std::abs(std::sin(pos + kPi / 2) * 0.4f) * speed,
+                                   std::abs(std::sin(pos + kPi * 3 / 2) * 0.4f) * speed};
+            const Role rights[4] = {RightHindLeg, RightMiddleHindLeg, RightMiddleFrontLeg, RightFrontLeg};
+            const Role lefts[4] = {LeftHindLeg, LeftMiddleHindLeg, LeftMiddleFrontLeg, LeftFrontLeg};
+            for (int i = 0; i < 4; ++i) {
+                if (PartPose* r = P[rights[i]]) r->yRot += swing[i], r->zRot += step[i];
+                if (PartPose* l = P[lefts[i]]) l->yRot -= swing[i], l->zRot -= step[i];
+            }
+            break;
+        }
+        case Anim::IronGolem: {
+            if (PartPose* h = P[Head]) h->yRot = s.headYaw * kDeg, h->xRot = s.pitch * kDeg;
+            const float t = triangleWave(s.walkPos, 13.0f);
+            if (PartPose* l = P[RightLeg]) l->xRot = -1.5f * t * s.walkSpeed;
+            if (PartPose* l = P[LeftLeg]) l->xRot = 1.5f * t * s.walkSpeed;
+            if (PartPose* a = P[RightArm]) a->xRot = (-0.2f + 1.5f * t) * s.walkSpeed;
+            if (PartPose* a = P[LeftArm]) a->xRot = (-0.2f - 1.5f * t) * s.walkSpeed;
+            break;
+        }
+        case Anim::Villager: {
+            if (PartPose* h = P[Head]) h->yRot = s.headYaw * kDeg, h->xRot = s.pitch * kDeg;
+            if (PartPose* l = P[RightLeg]) l->xRot = std::cos(s.walkPos * 0.6662f) * 1.4f * s.walkSpeed * 0.5f;
+            if (PartPose* l = P[LeftLeg]) l->xRot = std::cos(s.walkPos * 0.6662f + kPi) * 1.4f * s.walkSpeed * 0.5f;
+            break;
+        }
+        case Anim::ArmorStand: {
+            // ArmorStandArmorModel + ArmorStandModel: every limb follows the synched pose (degrees).
+            if (!s.standPose) break;
+            auto set = [&](Role r, const float* deg) {
+                if (PartPose* p = P[r]) p->xRot = deg[0] * kDeg, p->yRot = deg[1] * kDeg, p->zRot = deg[2] * kDeg;
+            };
+            set(Head, s.standPose[0]);
+            set(Body, s.standPose[1]);
+            set(LeftArm, s.standPose[2]);
+            set(RightArm, s.standPose[3]);
+            set(LeftLeg, s.standPose[4]);
+            set(RightLeg, s.standPose[5]);
+            set(RightBodyStick, s.standPose[1]);
+            set(LeftBodyStick, s.standPose[1]);
+            set(ShoulderStick, s.standPose[1]);
+            if (PartPose* b = P[BasePlate]) b->yRot = kDeg * -s.headYaw * 0.0f;
+            if (!(s.standFlags & 4)) hidden |= (1ull << LeftArm) | (1ull << RightArm);
+            if (s.standFlags & 8) hidden |= 1ull << BasePlate;
+            break;
+        }
+    }
+    return hidden;
+}
+
+}  // namespace ent
