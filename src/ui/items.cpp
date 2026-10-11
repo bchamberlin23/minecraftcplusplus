@@ -182,6 +182,8 @@ bool Items::init(const GameReports& reports, const Resources& res) {
     std::unordered_map<std::string, int> potionIds;
     load("minecraft:potion", potions_, potionIds);
     load("minecraft:mob_effect", mobEffects_, mobEffectIds_);
+    std::unordered_map<std::string, int> consumeEffectIds;
+    load("minecraft:consume_effect_type", consumeEffects_, consumeEffectIds);
     blockItem_.assign(names_.size(), false);
     for (size_t i = 0; i < names_.size(); ++i) blockItem_[i] = reports.hasBlock(names_[i]);
     return true;
@@ -244,7 +246,8 @@ Text Items::hoverName(const ItemStack& s) const {
     return displayName(s).withStyle(colorStyle(kRarity[std::clamp(rarity, 0, 3)]));
 }
 
-std::vector<Text> Items::tooltip(const ItemStack& s) const {
+std::vector<Text> Items::tooltip(const ItemStack& s, bool creative) const {
+    if (s.hideTooltip && !creative) return {};  // ItemStack.getTooltipLines
     std::vector<Text> lines{hoverName(s)};
     auto shown = [&](const char* component) {
         const int t = componentType(component);
@@ -298,11 +301,12 @@ std::vector<Text> Items::tooltip(const ItemStack& s) const {
         if (p.hasAuthor) lines.push_back(p.author);
         lines.push_back(Text(formatJava(tr("painting.dimensions", "%sx%s"), {std::to_string(p.width), std::to_string(p.height)})));
     }
-    for (const Text& l : s.lore) {
-        Style st = colorStyle(0xAA00AA);
-        st.italic = 1;
-        lines.push_back(l.withStyle(st));
-    }
+    if (shown("lore"))
+        for (const Text& l : s.lore) {
+            Style st = colorStyle(0xAA00AA);
+            st.italic = 1;
+            lines.push_back(l.withStyle(st));
+        }
     const int md = maxDamage(s);
     if (s.damage > 0 && md > 0) {
         lines.push_back(Text(formatJava(lang_->count("item.durability") ? lang_->at("item.durability") : "Durability: %s / %s",
@@ -320,6 +324,7 @@ bool Items::readTemplate(net::Reader& r, int depth) const {
     return readPatch(r, tmp, depth + 1);
 }
 
+// One component value per its network codec (DataComponents: networkSynchronized, else the persistent codec as NBT).
 bool Items::skipValue(net::Reader& r, int type, int depth) const {
     if (depth > kMaxDepth || type < 0 || type >= int(componentNames_.size())) return false;
     const std::string n = shortName(componentNames_[size_t(type)]);
@@ -329,12 +334,40 @@ bool Items::skipValue(net::Reader& r, int type, int depth) const {
             if (!each()) return false;
         return r.ok;
     };
-    auto optional = [&](auto&& each) { return r.boolean() ? each() : true; };
-    auto holder = [&] { return r.varInt() != 0; };  // registry reference; 0 = inline value (unsupported)
-    auto effectDetails = [&](auto&& self) -> bool {
+    auto optional = [&](auto&& each) { return r.boolean() ? each() : r.ok; };
+    auto str = [&] { return r.str(), r.ok; };
+    auto text = [&] { return r.nbt(), r.ok; };  // ComponentSerialization.STREAM_CODEC
+    // ByteBufCodecs.holder: registry id + 1, or 0 followed by the inline value.
+    auto holder = [&](auto&& direct) { return r.varInt() != 0 ? r.ok : direct(); };
+    // ByteBufCodecs.holderSet: 0 + tag id, else count + 1 then registry ids.
+    auto holderSet = [&] {
+        const i32 c = r.varInt();
+        if (c == 0) return str();
+        for (i32 i = 0; i < c - 1 && r.ok; ++i) r.varInt();
+        return r.ok;
+    };
+    auto sound = [&] { return holder([&] { return str() && optional([&] { return r.f32(), r.ok; }); }); };  // SoundEvent
+    auto effectDetails = [&](auto&& self) -> bool {  // MobEffectInstance.Details (the hidden effect recurses)
         r.varInt(), r.varInt();
         r.boolean(), r.boolean(), r.boolean();
-        return r.boolean() ? self(self) : true;
+        return r.boolean() ? self(self) : r.ok;
+    };
+    auto effect = [&] { return r.varInt(), effectDetails(effectDetails); };  // MobEffectInstance (effect registry id)
+    auto consumeEffect = [&] {  // ConsumeEffect: type registry id, then that type's codec
+        const i32 t = r.varInt();
+        const std::string e = t >= 0 && t < int(consumeEffects_.size()) ? shortName(consumeEffects_[size_t(t)]) : "";
+        if (e == "apply_effects") return list(effect) && (r.f32(), r.ok);
+        if (e == "remove_effects") return holderSet();
+        if (e == "clear_all_effects") return r.ok;
+        if (e == "teleport_randomly") return r.f32(), r.boolean(), r.ok;
+        if (e == "play_sound") return sound();
+        return false;
+    };
+    auto resolvableInt = [&] { return r.boolean() ? (r.i32v(), r.ok) : str(); };  // constant, else provider key
+    auto resolvableFloat = [&] { return r.boolean() ? (r.f32(), r.ok) : str(); };
+    auto signTexts = [&] {  // SignText messages: a fixed list of 4
+        for (int i = 0; i < 4 && r.ok; ++i) r.nbt();
+        return r.ok;
     };
 
     static const std::unordered_set<std::string> nbt = {
@@ -342,16 +375,21 @@ bool Items::skipValue(net::Reader& r, int type, int depth) const {
         "bucket_entity_data", "recipes", "lock", "container_loot"};
     static const std::unordered_set<std::string> varint = {
         "max_stack_size", "max_damage", "damage", "repair_cost", "additional_trade_cost", "map_id",
-        "map_post_processing", "rarity", "ominous_bottle_amplifier", "base_color", "dye", "enchantable"};
+        "map_post_processing", "rarity", "ominous_bottle_amplifier", "base_color", "dye", "enchantable",
+        "damage_type", "block_transformer", "villager_food", "provides_pottery_pattern"};
     static const std::unordered_set<std::string> unit = {"unbreakable", "creative_slot_lock", "glider", "waxed"};
-    if (nbt.count(n)) return r.nbt(), r.ok;
+    if (nbt.count(n)) return text();
+    // PaintingVariant is a holder (inline: size, asset, optional title / author); the other entity variant
+    // components are a registry or enum id.
+    if (n == "painting/variant")
+        return holder([&] { return (r.varInt(), r.varInt(), str()) && optional(text) && optional(text); });
     if (varint.count(n) || n.find('/') != std::string::npos) return r.varInt(), r.ok;
     if (unit.count(n)) return true;
     if (n == "minimum_attack_charge" || n == "potion_duration_scale") return r.f32(), r.ok;
     if (n == "enchantment_glint_override") return r.boolean(), r.ok;
-    if (n == "item_model" || n == "tooltip_style" || n == "note_block_sound") return r.str(), r.ok;
+    if (n == "item_model" || n == "tooltip_style" || n == "note_block_sound") return str();
     if (n == "use_effects") return r.boolean(), r.boolean(), r.f32(), r.ok;
-    if (n == "lore") return list([&] { return r.nbt(), r.ok; });
+    if (n == "lore") return list(text);
     if (n == "enchantments" || n == "stored_enchantments") return list([&] { return r.varInt(), r.varInt(), r.ok; });
     if (n == "custom_model_data")
         return list([&] { return r.f32(), true; }) && list([&] { return r.boolean(), true; }) &&
@@ -359,8 +397,8 @@ bool Items::skipValue(net::Reader& r, int type, int depth) const {
     if (n == "tooltip_display") return r.boolean(), list([&] { return r.varInt(), true; });
     if (n == "dyed_color") return r.u32v(), r.ok;
     if (n == "potion_contents")
-        return optional([&] { return r.varInt(), true; }) && optional([&] { return r.u32v(), true; }) &&
-               list([&] { return holder() && effectDetails(effectDetails); }) && optional([&] { return r.str(), true; });
+        return optional([&] { return r.varInt(), true; }) && optional([&] { return r.u32v(), true; }) && list(effect) &&
+               optional(str);
     if (n == "suspicious_stew_effects") return list([&] { return r.varInt(), r.varInt(), true; });
     if (n == "writable_book_content") return list([&] { return r.str(), optional([&] { return r.str(), true; }); });
     if (n == "written_book_content")
@@ -368,6 +406,12 @@ bool Items::skipValue(net::Reader& r, int type, int depth) const {
                             list([&] { return r.nbt(), optional([&] { return r.nbt(), true; }); }) && (r.boolean(), r.ok);
     if (n == "charged_projectiles" || n == "bundle_contents") return list([&] { return readTemplate(r, depth); });
     if (n == "container") return list([&] { return optional([&] { return readTemplate(r, depth); }); });
+    if (n == "use_remainder" || n == "sulfur_cube_content") return readTemplate(r, depth);
+    if (n == "pot_decorations") {  // back, left, right, front: optional item stack templates
+        for (int i = 0; i < 4 && r.ok; ++i)
+            if (!optional([&] { return readTemplate(r, depth); })) return false;
+        return r.ok;
+    }
     if (n == "entity_data" || n == "block_entity_data") return r.varInt(), r.nbt(), r.ok;
     if (n == "lodestone_tracker") return optional([&] { return r.str(), r.u64v(), true; }) && (r.boolean(), r.ok);
     auto explosion = [&] {
@@ -378,15 +422,11 @@ bool Items::skipValue(net::Reader& r, int type, int depth) const {
     if (n == "firework_explosion") return explosion();
     if (n == "fireworks") return r.varInt(), list(explosion);
     if (n == "block_state") return list([&] { return r.str(), r.str(), r.ok; });
-    if (n == "trim") return holder() && holder();
-    if (n == "instrument") return holder();
-    // HolderSet<Block> (ByteBufCodecs.holderSet): 0 + tag id, else count + 1 then registry ids.
-    auto holderSet = [&] {
-        const i32 c = r.varInt();
-        if (c == 0) return r.str(), r.ok;
-        for (i32 i = 0; i < c - 1 && r.ok; ++i) r.varInt();
-        return r.ok;
-    };
+    auto trimMaterial = [&] { return holder([&] { return str() && text(); }); };  // inline: palette, description
+    if (n == "trim") return trimMaterial() && holder([&] { return str() && text() && (r.boolean(), r.ok); });
+    if (n == "provides_trim_material") return trimMaterial();
+    if (n == "instrument") return holder([&] { return sound() && (r.f32(), r.f32(), r.varInt(), text()); });
+    if (n == "jukebox_playable") return holder([&] { return sound() && text() && (r.f32(), r.varInt(), r.ok); });
     if (n == "tool")  // rules (blocks, optional speed, optional correct_for_drops), speed, damage per block, creative
         return list([&] {
                    return holderSet() && optional([&] { return r.f32(), r.ok; }) && optional([&] { return r.boolean(), r.ok; });
@@ -404,14 +444,57 @@ bool Items::skipValue(net::Reader& r, int type, int depth) const {
                 });
             });
             if (!props) return false;
-            if (r.boolean()) r.nbt();                      // NbtPredicate
-            return r.varInt() == 0 && r.varInt() == 0 && r.ok;  // DataComponentMatchers: exact / partial (not decoded)
+            if (r.boolean()) r.nbt();  // NbtPredicate
+            // DataComponentMatchers: exact components (type + value), then partial predicates (a predicate type or a
+            // component type, then the predicate as NBT).
+            return list([&] { return skipValue(r, r.varInt(), depth + 1); }) &&
+                   list([&] { return r.boolean(), r.varInt(), text(); });
         });
-    if (n == "painting/variant") return holder();
-    if (n == "banner_patterns") return list([&] { return holder() && (r.varInt(), r.ok); });
-    if (n == "pot_decorations") return list([&] { return r.varInt(), r.ok; });
-    if (n == "provides_banner_patterns") return r.str(), r.ok;
-    return false;  // profile, jukebox_playable, food, tool, equippable, ... (not decoded yet)
+    if (n == "banner_patterns")  // layers: pattern (inline: asset, translation key), dye colour
+        return list([&] { return holder([&] { return str() && str(); }) && (r.varInt(), r.ok); });
+    if (n == "provides_banner_patterns") return holderSet();
+    if (n == "profile") {  // ResolvableProfile: a full GameProfile or a partial one, then the skin patch
+        auto properties = [&] { return list([&] { return str() && str() && optional(str); }); };
+        const bool profile = r.boolean() ? (r.skip(16), str() && properties())
+                                         : optional(str) && optional([&] { return r.skip(16), r.ok; }) && properties();
+        return profile && optional(str) && optional(str) && optional(str) && optional([&] { return r.boolean(), r.ok; });
+    }
+    if (n == "bees") return list([&] { return r.varInt(), r.nbt(), r.varInt(), r.varInt(), r.ok; });
+    if (n == "attribute_modifiers")  // attribute, modifier id, amount, operation, slot group, display (override: text)
+        return list([&] {
+            r.varInt(), r.str(), r.f64(), r.varInt(), r.varInt();
+            return r.varInt() == 2 ? text() : r.ok;
+        });
+    if (n == "food") return r.varInt(), r.f32(), r.boolean(), r.ok;
+    if (n == "consumable") return (r.f32(), r.varInt(), sound()) && (r.boolean(), list(consumeEffect));
+    if (n == "death_protection") return list(consumeEffect);
+    if (n == "use_cooldown") return r.f32(), optional(str);
+    if (n == "damage_resistant" || n == "repairable") return holderSet();
+    if (n == "weapon") return r.varInt(), r.f32(), r.ok;
+    if (n == "attack_range") {  // min / max reach, creative min / max reach, hitbox margin, mob factor
+        for (int i = 0; i < 6; ++i) r.f32();
+        return r.ok;
+    }
+    if (n == "equippable")  // slot, equip sound, asset, camera overlay, allowed entities, 5 flags, shearing sound
+        return (r.varInt(), sound()) && optional(str) && optional(str) && optional(holderSet) &&
+               (r.boolean(), r.boolean(), r.boolean(), r.boolean(), r.boolean(), sound());
+    if (n == "blocks_attacks")  // delay, disable scale, damage reductions, item damage, bypassed by, block / disable sounds
+        return (r.f32(), r.f32(), list([&] { return r.f32(), optional(holderSet) && (r.f32(), r.f32(), r.ok); })) &&
+               (r.f32(), r.f32(), r.f32(), optional(holderSet)) && optional(sound) && optional(sound);
+    if (n == "piercing_weapon") return (r.boolean(), r.boolean(), optional(sound)) && optional(sound);
+    if (n == "kinetic_weapon") {  // cooldown, delay, dismount / knockback / damage conditions, movement, multiplier, sounds
+        auto condition = [&] { return r.varInt(), r.f32(), r.f32(), r.ok; };
+        return (r.varInt(), r.varInt(), optional(condition)) && optional(condition) && optional(condition) &&
+               (r.f32(), r.f32(), optional(sound)) && optional(sound);
+    }
+    if (n == "attack_animation" || n == "interact_animation") return r.varInt(), r.varInt(), r.ok;  // type, duration
+    if (n == "break_sound") return sound();
+    if (n == "compostable") return resolvableInt();
+    if (n == "cooking_fuel" || n == "brewing_fuel") return resolvableInt() && resolvableFloat();
+    if (n == "mob_visibility") return holderSet() && (r.f32(), r.ok);
+    if (n == "sign_text_front" || n == "sign_text_back")  // messages, optional filtered messages, colour, glowing
+        return signTexts() && optional(signTexts) && (r.varInt(), r.boolean(), r.ok);
+    return false;  // not a component of this protocol version
 }
 
 bool Items::readPatch(net::Reader& r, ItemStack& out, int depth) const {
@@ -455,7 +538,7 @@ bool Items::readPatch(net::Reader& r, ItemStack& out, int depth) const {
         } else if (n == "instrument") out.instrument = v.varInt() - 1;
         else if (n == "painting/variant") out.painting = v.varInt() - 1;
         else if (n == "tooltip_display") {
-            v.boolean();
+            out.hideTooltip = v.boolean();
             const i32 cnt = v.varInt();
             for (i32 k = 0; k < cnt && v.ok; ++k) out.hiddenTooltip.push_back(v.varInt());
         }
@@ -466,6 +549,36 @@ bool Items::readPatch(net::Reader& r, ItemStack& out, int depth) const {
         } else if (n == "potion_contents") {
             if (v.boolean()) out.potion = v.varInt();
             if (v.boolean()) out.potionColor = v.u32v() & 0xFFFFFF;
+        } else if (n == "food") {
+            out.foodNutrition = v.varInt();
+            out.foodSaturation = v.f32();
+            out.foodAlwaysEdible = v.boolean();
+        } else if (n == "consumable") {
+            out.consumeSeconds = v.f32();
+            out.consumeAnimation = v.varInt();
+        } else if (n == "use_cooldown") {
+            out.cooldownSeconds = v.f32();
+            if (v.boolean()) out.cooldownGroup = v.str();
+        } else if (n == "equippable") {
+            out.equipSlot = v.varInt();
+            if (v.varInt() == 0) {  // inline equip sound
+                v.str();
+                if (v.boolean()) v.f32();
+            }
+            if (v.boolean()) out.equipAsset = v.str();
+        } else if (n == "attribute_modifiers") {
+            out.hasAttributeModifiers = true;
+            const i32 cnt = v.varInt();
+            for (i32 k = 0; k < cnt && v.ok; ++k) {
+                ItemStack::AttributeModifier m;
+                m.attribute = v.varInt();
+                m.id = v.str();
+                m.amount = v.f64();
+                m.operation = v.varInt();
+                m.slot = v.varInt();
+                if (v.varInt() == 2) v.nbt();  // display override text
+                out.attributeModifiers.push_back(std::move(m));
+            }
         }
         out.added.push_back(std::move(c));
     }

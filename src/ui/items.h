@@ -40,6 +40,25 @@ struct ItemStack {
     std::vector<std::pair<int, int>> stewEffects;                  // (mob_effect id, duration ticks)
     int instrument = -1, painting = -1;                            // registry network ids
     std::vector<int> hiddenTooltip;                                // tooltip_display hidden component types
+    bool hideTooltip = false;                                      // tooltip_display hide_tooltip
+    // Gameplay components the patch sets (otherwise the item's defaults apply).
+    int foodNutrition = -1;  // food: -1 not patched
+    float foodSaturation = 0;
+    bool foodAlwaysEdible = false;
+    float consumeSeconds = -1;  // consumable: -1 not patched
+    int consumeAnimation = 0;   // ItemUseAnimation id
+    float cooldownSeconds = -1;  // use_cooldown: -1 not patched
+    std::string cooldownGroup;   // "" = the item
+    int equipSlot = -1;          // equippable: EquipmentSlot id (0 main hand, 1..4 feet..head, 5 off hand, 6 body, 7 saddle)
+    std::string equipAsset;      // equippable asset id ("minecraft:diamond"), "" none
+    struct AttributeModifier {
+        int attribute = -1;  // attribute registry id
+        std::string id;
+        double amount = 0;
+        int operation = 0, slot = 0;  // AttributeModifier.Operation, EquipmentSlotGroup ids
+    };
+    bool hasAttributeModifiers = false;  // attribute_modifiers patched (an empty list removes the defaults)
+    std::vector<AttributeModifier> attributeModifiers;
 
     bool empty() const { return item < 0 || count <= 0; }
     bool sameItemSameComponents(const ItemStack& o) const;
@@ -65,7 +84,8 @@ public:
     bool isBlockItem(int id) const { return id >= 0 && id < int(blockItem_.size()) && blockItem_[size_t(id)]; }
     Text displayName(const ItemStack& s) const;   // custom name (italic) > item_name > translated name
     Text hoverName(const ItemStack& s) const;     // displayName in the rarity colour
-    std::vector<Text> tooltip(const ItemStack& s) const;
+    // creative: TooltipFlag.isCreative (creative inventory item slots), which ignores tooltip_display's hide_tooltip.
+    std::vector<Text> tooltip(const ItemStack& s, bool creative = false) const;
     bool foil(const ItemStack& s) const { return s.glint >= 0 ? s.glint == 1 : s.enchantments > 0; }
 
     // Data-driven registries the server synced (net::Client::registryEntries): names and tooltip data of
@@ -103,6 +123,7 @@ private:
     std::unordered_map<std::string, int> componentIds_;
     std::vector<std::string> potions_;
     std::vector<std::string> mobEffects_;
+    std::vector<std::string> consumeEffects_;  // consume_effect_type names by network id
     std::unordered_map<std::string, int> mobEffectIds_;
     std::vector<RegistryInfo> enchantments_, paintings_, instruments_;
     std::vector<std::string> bannerPatterns_;
