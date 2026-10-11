@@ -11,7 +11,6 @@
 #include <unordered_set>
 
 namespace {
-constexpr double kTick = 0.05;   // 20 ticks per second
 constexpr double kPi = 3.14159265358979;
 constexpr int kDir[6][3] = {{0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}};
 constexpr const char* kFaceName[6] = {"down", "up", "north", "south", "west", "east"};
@@ -198,10 +197,12 @@ void Game::frame(Window& w, double dt) {
     else pendingAttacks_ = std::min(pendingAttacks_ + ev.left, 4);
     const bool attackDown = !inputSuspended && w.mouseCaptured() && w.keyDown(VK_LBUTTON);
     tickAccumulator_ += std::min(dt, 0.25);
-    while (tickAccumulator_ >= kTick) {
+    const double tick = tickRate.tickSeconds();  // 20 ticks per second, or the server's slower rate
+    while (tickAccumulator_ >= tick) {
         // Minecraft.tick: the keybinds (attack / digging) with a fresh pick, then the player.
         ++ticks_;
-        border.tick();  // ClientLevel.tick
+        tickRate.tick();                   // TickRateManager.tick
+        if (tickRate.runs) border.tick();  // ClientLevel.tick
         alpha_ = 1.0;
         retarget();
         if (inputSuspended) missTime_ = 10000;
@@ -228,9 +229,9 @@ void Game::frame(Window& w, double dt) {
         ++cooldownTick_;  // Player.tick -> ItemCooldowns.tick
         std::erase_if(cooldowns_, [&](const auto& c) { return c.second.end <= cooldownTick_; });
         if (onPlayerTick) onPlayerTick();
-        tickAccumulator_ -= kTick;
+        tickAccumulator_ -= tick;
     }
-    alpha_ = tickAccumulator_ / kTick;
+    alpha_ = tickAccumulator_ / tick;
     if (ticks_ % 20 == 0)  // LevelRenderer.tick: cracks nobody updated for 400 ticks go away
         for (auto it = destructions_.begin(); it != destructions_.end();)
             it = ticks_ > it->second.tick + 400 ? destructions_.erase(it) : std::next(it);

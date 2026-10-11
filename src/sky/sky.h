@@ -62,6 +62,9 @@ public:
     void setWorldBorder(const WorldBorder* border, float partialTick, float renderDistance) {
         border_ = border, borderPartial_ = partialTick, borderRange_ = renderDistance;
     }
+    // Level ticks per second (the server's tick rate; 0 while frozen, ClientLevel.tickTime then stands still): the
+    // clocks and the cloud / weather animation time advance at it.
+    void setTickRate(double ticksPerSecond) { tickRate_ = ticksPerSecond; }
 
     // Shared with the render passes.
     struct Frame;
@@ -106,6 +109,7 @@ private:
     bool bossDarken_ = false, bossFog_ = false;
     const WorldBorder* border_ = nullptr;
     float borderPartial_ = 0, borderRange_ = 512;
+    double tickRate_ = 20.0;
     float darken_ = 0, darkenO_ = 0;  // GameRenderer.bossOverlayWorldDarkening (per tick)
     double tickAccumulator_ = 0;
 

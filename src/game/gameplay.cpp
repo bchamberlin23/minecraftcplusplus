@@ -184,9 +184,10 @@ void Gameplay::attach(net::Client& client) {
             effects_.clear(), attributes_.clear(), entityAttributes_.clear();
             if (riding_) riding_->dismounted();
             if (game_) {  // a new ClientLevel and player
-                game_->border = WorldBorder{};
+                game_->border = WorldBorder{}, game_->tickRate = TickRate{};
                 game_->clearCooldowns(), game_->cameraEntity = -1;
             }
+            if (entities_) entities_->tickRate = TickRate{};
         });
     });
     // ClientboundCooldownPacket: cooldown group, duration in ticks (0 removes it).
@@ -253,6 +254,24 @@ void Gameplay::attach(net::Client& client) {
             const float pitch = wrap(float(-(std::atan2(dy, std::sqrt(dx * dx + dz * dz)) * kDeg)));
             const float yaw = wrap(float(std::atan2(dz, dx) * kDeg) - 90.0f);
             p.yaw = float(yaw / kDeg), p.pitch = float(pitch / kDeg);
+        });
+    });
+    // ClientboundTickingStatePacket / ClientboundTickingStepPacket (handleTickingState / handleTickingStep): the
+    // tick rate manager of the client level, here one copy for the player's ticks and one for the entities'.
+    client.onPlayPeek("ticking_state", [this](net::Reader& r) {
+        const float rate = r.f32();
+        const bool frozen = r.boolean();
+        if (r.ok) post([this, rate, frozen] {
+            if (verbose_) LOG("gameplay: tick rate %.1f%s", rate, frozen ? ", frozen" : "");
+            for (TickRate* t : {game_ ? &game_->tickRate : nullptr, entities_ ? &entities_->tickRate : nullptr})
+                if (t) t->rate = rate, t->frozen = frozen;
+        });
+    });
+    client.onPlayPeek("ticking_step", [this](net::Reader& r) {
+        const int steps = r.varInt();
+        if (r.ok) post([this, steps] {
+            for (TickRate* t : {game_ ? &game_->tickRate : nullptr, entities_ ? &entities_->tickRate : nullptr})
+                if (t) t->stepTicks = steps;
         });
     });
     // World border (ClientPacketListener.handleInitializeBorder / handleSetBorder*).

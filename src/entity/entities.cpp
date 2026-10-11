@@ -604,10 +604,12 @@ void EntityWorld::frame(double dt) {
     processing_.clear();
     stats_.applyMs = t.ms();
     Timer tt;
+    tickSeconds_ = tickRate.tickSeconds();
     tickAccumulator_ += std::min(dt, 0.25);
-    while (tickAccumulator_ >= 0.05) {
+    while (tickAccumulator_ >= tickSeconds_) {
+        tickRate.tick();
         tick();
-        tickAccumulator_ -= 0.05;
+        tickAccumulator_ -= tickSeconds_;
     }
     stats_.tickMs = tt.ms();
 }
@@ -899,7 +901,8 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
 }
 
 void EntityWorld::tick() {
-    for (auto& [id, e] : entities_) tickEntity(e);
+    for (auto& [id, e] : entities_)  // TickRateManager.isEntityFrozen: all but players and what they drive
+        if (tickRate.runs || e.category == Category::Player || e.id == localControl_) tickEntity(e);
     // The server stops tracking entities in chunks the client forgets, but a respawn or dimension change
     // replaces the whole level without removing them: drop entities whose chunk stays unloaded for 5 s.
     if (++ticks_ % 20 == 0) {

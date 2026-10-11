@@ -507,9 +507,9 @@ void Sky::update(const CameraState& cam, double dt) {
     if (debug_.time < 0)
         for (auto& [name, ticks] : clocks_) {
             auto rate = clockRates_.find(name);
-            ticks += dt * 20.0 * (rate == clockRates_.end() ? 1.0 : rate->second);
+            ticks += dt * tickRate_ * (rate == clockRates_.end() ? 1.0 : rate->second);
         }
-    gameTime_ += dt * 20.0;
+    gameTime_ += dt * tickRate_;
     // Lightning: ClientLevel.tick (skyFlashTime countdown) then LightningBolt.tick, at 20 ticks per second.
     tickAccumulator_ = std::min(tickAccumulator_ + dt * 20.0, 10.0);
     for (; tickAccumulator_ >= 1.0; tickAccumulator_ -= 1.0) {

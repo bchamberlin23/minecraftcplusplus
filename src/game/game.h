@@ -1,6 +1,7 @@
 #pragma once
 #include "core/common.h"
 #include "game/player.h"
+#include "game/tick_rate.h"
 #include "render/renderer.h"
 #include "world/lighting.h"
 
@@ -50,6 +51,9 @@ public:
     double pickBlockDistance() const { return blockDistance_; }  // that first block's distance, < 0: none
     // The level's world border (ClientLevel.getWorldBorder): collisions, block targeting, the wall and the vignette.
     WorldBorder border;
+    // The level's tick rate manager (gameplay layer): the client tick length follows a slower server rate; frozen,
+    // the border stands still (the player keeps ticking).
+    TickRate tickRate;
     bool useTarget(bool place);  // break or place at the current target; true if the world changed
     void setHeld(u16 id) { hotbar_[selected_] = id; }
     int selectedSlot() const { return selected_; }
