@@ -110,6 +110,7 @@ public:
     bool loadScript(const fs::path& file);
     float fovRadians() const;
     bool hudHidden() const;  // F1
+    bool inBed() const;      // sleeping (the bed screen is up)
     // F3 biome name at a block position (local worlds with the generator); unset: not shown.
     void setBiomeLookup(std::function<std::string(int x, int y, int z)> fn);
     Settings& settings();

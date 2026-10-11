@@ -327,6 +327,7 @@ float Ui::fovRadians() const {  // Camera.getFov: the option scaled by the dynam
     return s_->settings.fov * m * kPi / 180.0f;
 }
 bool Ui::hudHidden() const { return s_->hudHidden; }
+bool Ui::inBed() const { return s_->screen == Screen::InBed; }
 void Ui::setBiomeLookup(std::function<std::string(int, int, int)> fn) { s_->biomeLookup = std::move(fn); }
 
 const fs::path* Ui::screenshotRequest() {

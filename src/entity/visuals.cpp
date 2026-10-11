@@ -1476,7 +1476,7 @@ void Visuals::Impl::buildTags(const PassContext& ctx) {
 void Visuals::Impl::buildHand(const PassContext& ctx, float viewProj[16], bool jittered, float* noJitter) {
     if (!game || !ui || game->cameraMode != 0 || !avatarReady) return;
     if (gameMode && gameMode() == 3) return;  // spectators have no hands
-    if (ui->hudHidden()) return;               // GameRenderer.renderItemInHand: F1 hides them too
+    if (ui->hudHidden() || ui->inBed()) return;  // GameRenderer.renderItemInHand: F1 and sleeping hide them too
     const CameraState cam = game->handCamera();  // the hand bobs by itself (bobView below), not with the world
     // Projection like the renderer's, without jitter.
     const float cy = std::cos(cam.yaw), sy = std::sin(cam.yaw), cp = std::cos(cam.pitch), sp = std::sin(cam.pitch);

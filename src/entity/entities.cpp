@@ -1079,14 +1079,14 @@ PickResult EntityWorld::pick(const double o[3], const double dir[3], double maxD
 }
 
 bool EntityWorld::click(const double eye[3], const double dir[3], bool attack, bool use, double blockDistance,
-                        double reach) {
+                        double reach, bool sneaking) {
     const double limit = blockDistance >= 0 ? std::min(blockDistance, reach) : reach;
     const PickResult p = pick(eye, dir, limit);
     if (verbose_)
         LOG("entities: click attack=%d use=%d block=%.2f -> entity %d at %.2f", attack, use, blockDistance, p.id, p.distance);
     if (p.id < 0) return false;
     if (attack) this->attack(p.id);
-    else if (use) this->use(p.id, p.hit, false);
+    else if (use) this->use(p.id, p.hit, sneaking);
     return true;
 }
 

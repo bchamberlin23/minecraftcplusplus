@@ -211,7 +211,8 @@ public:
     const std::string& profession(int id) const { return name(professions_, id); }
     // Left / right click with an entity under the crosshair (before blocks): true when an entity closer than
     // blockDistance (< 0: no block targeted) is targeted; it then takes the click (attack / use when pressed).
-    bool click(const double eye[3], const double dir[3], bool attack, bool use, double blockDistance, double reach);
+    bool click(const double eye[3], const double dir[3], bool attack, bool use, double blockDistance, double reach,
+               bool sneaking = false);  // sneaking: sent with interactions (sneak + use opens a mount's inventory)
     struct Stats {
         double applyMs = 0, tickMs = 0;
         size_t events = 0;
