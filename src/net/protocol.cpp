@@ -293,6 +293,39 @@ u16 BlockIds::resolve(u32 globalId) {
     return map_[globalId] = name.empty() ? u16(0) : registry_->idFor(name);
 }
 
+void decodeBiomes(Reader& r, int biomeBits, const std::vector<u8>* biomeIds, u8 out[16]) {
+    // Biomes (4x4x4, index (y * 4 + z) * 4 + x): keep the lowest layer for biome colours.
+    auto worldBiome = [&](i32 id) {
+        return biomeIds && id >= 0 && size_t(id) < biomeIds->size() ? (*biomeIds)[size_t(id)] : World::kUnknownBiome;
+    };
+    const u8 bb = r.u8v();
+    if (bb == 0) {
+        std::fill(out, out + 16, worldBiome(r.varInt()));
+    } else {
+        const int mem = bb <= 3 ? bb : biomeBits;
+        i32 palette[8] = {};
+        i32 n = 0;
+        if (bb <= 3) {
+            n = r.varInt();
+            for (i32 k = 0; k < n && r.ok; ++k) {
+                const i32 v = r.varInt();
+                if (k < 8) palette[k] = v;
+            }
+        }
+        const u32 bitsPer = u32(std::clamp(mem, 1, 32)), perWord = 64 / bitsPer;
+        const size_t words = (64 + perWord - 1) / perWord;
+        if (r.need(words * 8)) {
+            for (int q = 0; q < 16; ++q) {  // the first 16 entries live in the first words
+                u64 v = 0;
+                for (int b = 0; b < 8; ++b) v = (v << 8) | r.p[size_t(q / perWord) * 8 + size_t(b)];
+                const i32 e = i32((v >> ((q % perWord) * bitsPer)) & ((u64(1) << bitsPer) - 1));
+                out[q] = worldBiome(bb <= 3 ? (e < n && e < 8 ? palette[e] : -1) : e);
+            }
+        }
+        r.skip(words * 8);
+    }
+}
+
 bool decodeSections(Reader& r, int count, BlockIds& ids, int biomeBits, std::vector<World::PackedSection>& out,
                     const std::vector<u8>* biomeIds) {
     thread_local std::vector<u32> seen(65536, 0);
@@ -358,36 +391,7 @@ bool decodeSections(Reader& r, int count, BlockIds& ids, int biomeBits, std::vec
             s.words.clear();
             s.bits = 0;
         }
-        // Biomes (4x4x4, index (y * 4 + z) * 4 + x): keep the lowest layer for biome colours.
-        auto worldBiome = [&](i32 id) {
-            return biomeIds && id >= 0 && size_t(id) < biomeIds->size() ? (*biomeIds)[size_t(id)] : World::kUnknownBiome;
-        };
-        const u8 bb = r.u8v();
-        if (bb == 0) {
-            std::fill(std::begin(s.biomes), std::end(s.biomes), worldBiome(r.varInt()));
-        } else {
-            const int mem = bb <= 3 ? bb : biomeBits;
-            i32 palette[8] = {};
-            i32 n = 0;
-            if (bb <= 3) {
-                n = r.varInt();
-                for (i32 k = 0; k < n && r.ok; ++k) {
-                    const i32 v = r.varInt();
-                    if (k < 8) palette[k] = v;
-                }
-            }
-            const u32 bitsPer = u32(std::clamp(mem, 1, 32)), perWord = 64 / bitsPer;
-            const size_t words = (64 + perWord - 1) / perWord;
-            if (r.need(words * 8)) {
-                for (int q = 0; q < 16; ++q) {  // the first 16 entries live in the first words
-                    u64 v = 0;
-                    for (int b = 0; b < 8; ++b) v = (v << 8) | r.p[size_t(q / perWord) * 8 + size_t(b)];
-                    const i32 e = i32((v >> ((q % perWord) * bitsPer)) & ((u64(1) << bitsPer) - 1));
-                    s.biomes[q] = worldBiome(bb <= 3 ? (e < n && e < 8 ? palette[e] : -1) : e);
-                }
-            }
-            r.skip(words * 8);
-        }
+        decodeBiomes(r, biomeBits, biomeIds, s.biomes);
         s.hasBiomes = biomeIds != nullptr;
     }
     return r.ok;

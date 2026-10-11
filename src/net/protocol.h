@@ -103,6 +103,8 @@ int ceilLog2(u32 n);
 // biomeIds: the server's biome registry ids -> World biome ids (sections keep their lowest quart layer).
 bool decodeSections(Reader& r, int count, BlockIds& ids, int biomeBits, std::vector<World::PackedSection>& out,
                     const std::vector<u8>* biomeIds = nullptr);
+// One section's biome container (PalettedContainer): its lowest quart layer, [qz * 4 + qx], World biome ids.
+void decodeBiomes(Reader& r, int biomeBits, const std::vector<u8>* biomeIds, u8 out[16]);
 
 // One light layer section from a light mask: data (2048 bytes) or all zero (`empty` mask).
 struct LightSection {

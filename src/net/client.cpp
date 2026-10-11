@@ -436,7 +436,8 @@ bool Client::handlePlay(const std::string& name, Reader& r) {
             for (i32 i = 0; i < levels && r.ok; ++i) r.str();
             r.varInt();  // max players
             e.viewDistance = r.varInt();
-            r.varInt();  // simulation distance
+            viewDistance_ = e.viewDistance;
+            simulationDistance_ = r.varInt();
             r.boolean(), r.boolean(), r.boolean();  // reduced debug info, death screen, limited crafting
         }
         const i32 type = r.varInt();
@@ -468,7 +469,29 @@ bool Client::handlePlay(const std::string& name, Reader& r) {
     } else if (name == "set_held_slot") {
         push(HeldSlotEvent{r.varInt()});
     } else if (name == "set_chunk_cache_radius") {
-        LOG("net: server view distance %d chunks", r.varInt());
+        viewDistance_ = r.varInt();
+        LOG("net: server view distance %d chunks", viewDistance_.load());
+    } else if (name == "set_chunk_cache_center") {
+        const int x = r.varInt(), z = r.varInt();
+        if (r.ok) viewCenter_[0] = x, viewCenter_[1] = z;
+    } else if (name == "set_simulation_distance") {
+        simulationDistance_ = r.varInt();
+        LOG("net: server simulation distance %d chunks", simulationDistance_.load());
+    } else if (name == "chunks_biomes") {  // ClientboundChunksBiomesPacket: (ChunkPos, biome containers of every section)
+        BiomesEvent e;
+        const i32 n = r.varInt();
+        for (i32 i = 0; i < n && r.ok; ++i) {
+            const i64 pos = r.i64v();
+            BiomesEvent::Column c;
+            c.cx = int(i32(pos & 0xFFFFFFFF)), c.cz = int(i32(pos >> 32));
+            c.firstSy = minSy;
+            const std::string_view data = r.byteArray();
+            Reader dr(reinterpret_cast<const u8*>(data.data()), data.size());
+            c.sections.resize(size_t(sections));
+            for (auto& s : c.sections) decodeBiomes(dr, biomeBits_, biomeIds_.empty() ? nullptr : &biomeIds_, s.data());
+            if (dr.ok) e.columns.push_back(std::move(c));
+        }
+        if (r.ok) push(std::move(e));
     } else if (name == "system_chat") {
         const std::string text = componentText(r.nbt(), &lang_);
         if (!r.boolean()) chat(text);  // overlay = action bar

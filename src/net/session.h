@@ -47,6 +47,7 @@ private:
     void setBlock(int x, int y, int z, u16 id, std::unordered_set<u64>& dirty);  // holds the world lock
     void applyBlocks(const std::vector<BlockChange>& changes);
     void applyLight(const LightEvent& e);
+    void applyBiomes(const BiomesEvent& e);
     void acknowledge(int sequence);
     void teleport(const TeleportEvent& e);
     void onEdit(const Game::EditAction& a);
