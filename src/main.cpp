@@ -506,14 +506,17 @@ int wmain(int argc, wchar_t** argv) {
                 return world.hasChunk(cx, cz);
             };
             auto load = [&world, &generator](int cx, int cz, wg::GenChunk& out) {
-                std::shared_lock lock(world.mutex());
                 out.init(cx, cz, generator->minY(), generator->height());
                 u16 ids[4096];
                 for (int sy = out.minY >> 4; sy < (out.minY + out.height) >> 4; ++sy) {
-                    const World::Region* r = nullptr;
-                    const World::Section* s = world.section(cx, sy, cz, &r);
-                    if (!s) continue;
-                    World::decode(*r, *s, ids);
+                    {  // the lock per section only: a preempted worker holding it for a whole chunk made the frame
+                       // thread (inserting chunks) wait a scheduler quantum
+                        std::shared_lock lock(world.mutex());
+                        const World::Region* r = nullptr;
+                        const World::Section* s = world.section(cx, sy, cz, &r);
+                        if (!s) continue;
+                        World::decode(*r, *s, ids);
+                    }
                     for (int i = 0; i < 4096; ++i) out.set(i & 15, sy * 16 + (i >> 8), (i >> 4) & 15, ids[i]);
                 }
             };
