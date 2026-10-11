@@ -713,6 +713,12 @@ int wmain(int argc, wchar_t** argv) {
             st.ok ? "" : " (with errors)");
     };
     bool escWas = false;
+    std::future<bool> joining;  // singleplayer login on a worker (see the loop)
+    std::unique_ptr<net::Session> joiningSession;
+    PlayerStart joinStart;
+    net::Dimension joinDim;
+    Timer joinTimer;
+    bool joinFailed = false;
     const double loopStart = nowSeconds();
     Timer frameEnd;  // window.pump() + anything between frames
     for (int frame = 0; window.pump(); ++frame) {
@@ -726,33 +732,40 @@ int wmain(int argc, wchar_t** argv) {
         double now = nowSeconds();
         float dt = float(now - last);
         last = now;
-        if (localServer && !session && localServer->ready()) {  // singleplayer: the local server is up
-            Timer jt;
-            PlayerStart start;
-            net::Dimension dim;
+        // Singleplayer: once the local server is up, connect and log in on a worker (protocol tables, language,
+        // block ids, then the server's login: ~1 s that used to freeze the already visible world), then attach here.
+        if (localServer && !session && !joining.valid() && !joinFailed && localServer->ready()) {
+            joinTimer = Timer();
             netClient = std::make_unique<net::Client>(reports, registry);
             audio.attachNet(*netClient);
             if (haveEntities) entities.attach(*netClient), blockEntityRenderer.attach(*netClient), visuals.attach(*netClient);
             sky.attach(*netClient, haveReports ? &reports : nullptr);
             packs::attachNetwork(*netClient);
             ui.registerHandlers(*netClient);
-            if (netClient->start({"127.0.0.1", localServer->port(), opt.name, jar, localServer->stateTable()})) {
-                session = std::make_unique<net::Session>(*netClient, world, registry, reports);
-                if (session->join(30.0, start, dim)) {
-                    Player& p = game.player();
-                    p.pos[0] = start.x, p.pos[1] = start.y, p.pos[2] = start.z;
-                    p.yaw = start.yaw * kPi / 180.0f, p.pitch = start.pitch * kPi / 180.0f;
-                    session->setKeepForgotten(true);  // unloaded server chunks stay visible
-                    session->attach(game, terrain);
-                    ui.attachSession(netClient.get(), session.get());
-                    LOG("server  %8.1f ms  playing through the local server as %s", jt.ms(), opt.name.c_str());
-                } else {
-                    session.reset();
-                    netClient.reset();
-                    localServer->stop();
-                    localServer.reset();
-                    LOG("error: could not join the local server; continuing without it");
-                }
+            const net::Client::Config config{"127.0.0.1", localServer->port(), opt.name, jar, localServer->stateTable()};
+            joining = std::async(std::launch::async, [&, config] {
+                if (!netClient->start(config)) return false;
+                joiningSession = std::make_unique<net::Session>(*netClient, world, registry, reports);
+                return joiningSession->join(30.0, joinStart, joinDim);
+            });
+        }
+        if (joining.valid() && joining.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            if (joining.get()) {
+                session = std::move(joiningSession);
+                Player& p = game.player();
+                p.pos[0] = joinStart.x, p.pos[1] = joinStart.y, p.pos[2] = joinStart.z;
+                p.yaw = joinStart.yaw * kPi / 180.0f, p.pitch = joinStart.pitch * kPi / 180.0f;
+                session->setKeepForgotten(true);  // unloaded server chunks stay visible
+                session->attach(game, terrain);
+                ui.attachSession(netClient.get(), session.get());
+                LOG("server  %8.1f ms  playing through the local server as %s", joinTimer.ms(), opt.name.c_str());
+            } else {
+                joinFailed = true;
+                joiningSession.reset();
+                netClient.reset();
+                localServer->stop();
+                localServer.reset();
+                LOG("error: could not join the local server; continuing without it");
             }
         }
         if (session) {
