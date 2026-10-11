@@ -2,6 +2,7 @@
 // Gameplay rules that live in the game's code rather than its data files, taken once per version from the game
 // itself (a small Java program against the client jar, like assets/block_shapes) and cached:
 //  - every block's destroy time (BlockBehaviour destroySpeed, -1 = unbreakable) and requiresCorrectToolForDrops;
+//  - every block's piston push reaction and whether it has a block entity (PistonBaseBlock.isPushable);
 //  - every block tag, resolved to block names.
 // Items come from the data generator's item component reports (reports/minecraft/components/item/<item>.json):
 //  - the default Tool component (rules, default mining speed, damage per block, can_destroy_blocks_in_creative);
@@ -25,6 +26,13 @@ public:
     };
     // By full state key ("minecraft:stone", "minecraft:oak_log[axis=y]").
     Hardness hardness(std::string_view stateKey) const;
+
+    enum class PushReaction : u8 { PushPull, Push, Popped, Immoveable, IgnoreEntity };
+    struct Push {
+        u8 reaction = 0;  // PushReaction
+        bool blockEntity = false;
+    };
+    Push push(std::string_view blockName) const;  // "minecraft:obsidian" (no properties)
 
     struct Rule {
         float speed = -1;          // < 0: none
@@ -86,5 +94,6 @@ private:
 
     std::unordered_map<std::string, EntityDims> entities_;
     std::unordered_map<std::string, Hardness> blocks_, states_;
+    std::unordered_map<std::string, Push> push_;
     std::unordered_map<std::string, u32> blockIds_;
 };
