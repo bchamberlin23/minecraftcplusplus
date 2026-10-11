@@ -440,6 +440,7 @@ void Gameplay::attach(net::Client& client) {
                 const int flags = r.u8v();
                 if (r.ok) post([this, flags] {
                     if (!game_) return;
+                    game_->player().spinFlag = (flags & 4) != 0;  // LivingEntity.isAutoSpinAttack (the SPIN_ATTACK pose)
                     const bool serverUsing = (flags & 1) != 0;
                     const int hand = (flags & 2) ? 1 : 0;
                     if (serverUsing && !game_->use.active) startUsing(hand);
@@ -500,6 +501,65 @@ void Gameplay::setPlayer(Game& game, ui::Ui& ui) {
         client_->sendPlay("player_command", w);
     };
     game.onUseTick = [this] { tickUse(); };
+    game.physics().rules = &rules_;
+    // Level.getEntityCollisions for the player (Entity.canCollideWith): boats, living shulkers, adult happy ghasts
+    // from above (or holding still); not the vehicle it rides.
+    game.physics().entityColliders = [this](const AABB& area, std::vector<AABB>& out) {
+        if (!entities_ || !game_) return;
+        const Player& p = game_->player();
+        for (const auto& [id, e] : entities_->entities()) {
+            if (!e.info || e.dying || (riding_ && id == riding_->vehicle())) continue;
+            const std::string& n = e.info->name;
+            double w, h;
+            ent::entitySize(e, w, h);
+            const AABB b{{e.pos[0] - w / 2, e.pos[1], e.pos[2] - w / 2}, {e.pos[0] + w / 2, e.pos[1] + h, e.pos[2] + w / 2}};
+            const bool collides = n.ends_with("_boat") || n.ends_with("_raft") || (n == "minecraft:shulker" && e.health > 0) ||
+                                  (n == "minecraft:happy_ghast" && !e.baby && (p.pos[1] >= b.max[1] || e.staysStill));
+            AABB grown = area;
+            for (int a = 0; a < 3; ++a) grown.min[a] -= 1e-7, grown.max[a] += 1e-7;
+            if (collides && b.intersects(grown)) out.push_back(b);
+        }
+    };
+    // Entity.push(Entity) from the entities that push the local player on the client: living entities touching it
+    // (LivingEntity.pushEntities; not bats, parrots or armor stands), boats within 0.2 blocks (AbstractBoat.tick).
+    game.entityPush = [this](Player& p) {
+        if (!entities_ || p.noClip || game_->dead || p.onClimbable(game_->physics())) return;  // LivingEntity.isPushable
+        const AABB body = p.box();
+        for (const auto& [id, e] : entities_->entities()) {
+            if (!e.info || e.dying || id == entityId_) continue;
+            const std::string& n = e.info->name;
+            const bool boat = n.ends_with("_boat") || n.ends_with("_raft");
+            const bool living = e.category == ent::Category::Living || e.category == ent::Category::Player;
+            if ((!living && !boat) || n == "minecraft:bat" || n == "minecraft:parrot" || n == "minecraft:armor_stand") continue;
+            if (riding_ && id == riding_->vehicle()) continue;
+            double w, h;
+            ent::entitySize(e, w, h);
+            AABB b{{e.pos[0] - w / 2, e.pos[1], e.pos[2] - w / 2}, {e.pos[0] + w / 2, e.pos[1] + h, e.pos[2] + w / 2}};
+            if (boat) b.min[0] -= 0.2, b.max[0] += 0.2, b.min[1] += 0.01, b.max[1] -= 0.01, b.min[2] -= 0.2, b.max[2] += 0.2;
+            if (!b.intersects(body)) continue;
+            double xa = p.pos[0] - e.pos[0], za = p.pos[2] - e.pos[2];
+            double dd = std::max(std::abs(xa), std::abs(za));  // Mth.absMax
+            if (dd < double(0.01f)) continue;
+            dd = std::sqrt(dd);
+            xa /= dd, za /= dd;
+            const double pow = std::min(1.0, 1.0 / dd);
+            p.vel[0] += xa * pow * double(0.05f), p.vel[2] += za * pow * double(0.05f);
+        }
+    };
+    // LivingEntity.checkAutoSpinAttack: a living entity in the swept box.
+    game.player().spinAttackHits = [this](const AABB& swept) {
+        if (!entities_) return false;
+        for (const auto& [id, e] : entities_->entities()) {
+            if (!e.info || e.dying || id == entityId_ ||
+                (e.category != ent::Category::Living && e.category != ent::Category::Player))
+                continue;
+            double w, h;
+            ent::entitySize(e, w, h);
+            const AABB b{{e.pos[0] - w / 2, e.pos[1], e.pos[2] - w / 2}, {e.pos[0] + w / 2, e.pos[1] + h, e.pos[2] + w / 2}};
+            if (b.intersects(swept)) return true;
+        }
+        return false;
+    };
     game.canDestroyInCreative = [this] {  // Item.canDestroyBlock: the tool component's can_destroy_blocks_in_creative
         const ItemRules::Tool* t = heldTool(mainHand());
         return !t || t->canDestroyInCreative;
@@ -545,8 +605,11 @@ void Gameplay::frame() {
     a.stepHeight = attribute("step_height", 0.6);
     a.sneakSpeed = attribute("sneaking_speed", 0.3);
     a.waterEfficiency = attribute("water_movement_efficiency", 0.0);
+    a.movementEfficiency = attribute("movement_efficiency", 0.0);
+    a.frictionModifier = attribute("friction_modifier", 1.0), a.airDragModifier = attribute("air_drag_modifier", 1.0);
     a.jumpBoost = effect("jump_boost"), a.slowFalling = effect("slow_falling"), a.levitation = effect("levitation");
     a.dolphinsGrace = effect("dolphins_grace");
+    a.blind = effect("blindness") >= 0;
     const ui::ItemStack* chest = ui_ ? ui_->playerSlot(6) : nullptr;
     a.canGlide = chest && rules_.glider(itemName(chest->item)) && (chest->maxDamage <= 0 || chest->damage < chest->maxDamage - 1);
     const ui::ItemStack* feet = ui_ ? ui_->playerSlot(8) : nullptr;
@@ -720,26 +783,7 @@ std::string Gameplay::itemName(int item) const {
     return item >= 0 && size_t(item) < itemNames_.size() ? itemNames_[size_t(item)] : std::string();
 }
 
-bool Gameplay::eyeInWater() const {
-    if (!game_) return false;
-    const Player& p = game_->player();
-    const double eyeY = p.pos[1] + p.eyeHeight() - 0.11111111;
-    const int x = int(std::floor(p.pos[0])), y = int(std::floor(eyeY)), z = int(std::floor(p.pos[2]));
-    const u16 id = world_.block(x, y, z);
-    const BlockInfo& b = registry_.infos()[id];
-    if (!b.fluid && !b.waterlogged) return false;
-    const std::string& name = registry_.name(id);
-    if (!b.waterlogged && !name.starts_with("minecraft:water")) return false;
-    // FluidState.getHeight: own amount / 9 (8 / 9 for sources and falling water; full under the same fluid).
-    double height = 8.0 / 9.0;
-    if (const std::string_view level = registry_.property(id, "level"); !b.waterlogged && !level.empty()) {
-        const int l = std::atoi(std::string(level).c_str());
-        if (l > 0 && l < 8) height = double(8 - l) / 9.0;
-    }
-    const u16 above = world_.block(x, y + 1, z);
-    if (registry_.infos()[above].waterlogged || registry_.name(above).starts_with("minecraft:water")) height = 1.0;
-    return y + height > eyeY;
-}
+bool Gameplay::eyeInWater() const { return game_ && game_->player().eyeInWater; }  // the player's fluid tracker
 
 // BlockBehaviour.getDestroyProgress with Player.getDestroySpeed / hasCorrectToolForDrops.
 float Gameplay::destroyProgress(int, int, int, u16 state) {

@@ -348,6 +348,9 @@ int defaultSkinIndex(const u8 uuid[16]);
 // ElytraAnimationState.tick. move: this tick's delta movement; fallFlying: shared flag 7 (the local player's own
 // state for the avatar).
 void tickPoseAnimation(Entity& e, const double move[3], bool fallFlying, bool crouching);
+// The entity's bounding box size (EntityDimensions with the baby / slime size / small armor stand scales, player
+// poses): width and height.
+void entitySize(const Entity& e, double& w, double& h);
 // BedBlock.getBedOrientation at a block (Direction 2D data value, -1 if it is not a bed). Caller holds the world lock.
 int bedFacingAt(const World& world, const BlockRegistry& registry, int x, int y, int z);
 // LivingEntity.isFullyFrozen.

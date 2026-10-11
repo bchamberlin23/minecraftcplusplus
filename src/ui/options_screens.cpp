@@ -468,11 +468,23 @@ Button holdToggleButton(UiState& s, const char* keyName, bool* toggle) {  // Opt
         });
 }
 
+Button sprintWindowSlider(UiState& s) {  // Options.sprintWindow: IntRange(0, 10), 0 shows Off
+    UiState* p = &s;
+    return sliderButton(float(s.settings.sprintWindow) / 10.0f,
+                        [p] {
+                            const int v = p->settings.sprintWindow;
+                            return optionLabel(*p, "options.sprintWindow",
+                                               v == 0 ? Text(p->res.translate("options.off"))
+                                                      : translatable("options.value", {Text(std::to_string(v))}, p->lang()));
+                        },
+                        [p](float v) { p->settings.sprintWindow = int(std::lround(v * 10.0f)); });
+}
+
 void controlsBuild(UiState& s) {
     OptionsList l(s, Text(s.res.translate("controls.title")), Screen::Options);
     l.half(screenButton(s, "options.mouse_settings", Screen::MouseSettings), screenButton(s, "controls.keybinds", Screen::KeyBinds));
     l.halves({holdToggleButton(s, "key.sneak", &s.settings.toggleCrouch), holdToggleButton(s, "key.sprint", &s.settings.toggleSprint),
-              onOffButton(s, "options.autoJump", &s.settings.autoJump)});
+              onOffButton(s, "options.autoJump", &s.settings.autoJump), sprintWindowSlider(s)});
     l.footer();
 }
 

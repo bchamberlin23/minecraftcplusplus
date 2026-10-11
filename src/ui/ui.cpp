@@ -111,6 +111,7 @@ bool Settings::load() {
         else if (k == "toggleCrouch") toggleCrouch = v == "true";
         else if (k == "toggleSprint") toggleSprint = v == "true";
         else if (k == "autoJump") autoJump = v == "true";
+        else if (k == "sprintWindow") sprintWindow = std::clamp(std::atoi(v.c_str()), 0, 10);
         else if (k == "invertXMouse") invertMouseX = v == "true";
         else if (k == "invertYMouse") invertMouseY = v == "true";
         else if (k == "discrete_mouse_scroll") discreteMouseScroll = v == "true";
@@ -146,7 +147,7 @@ void Settings::save() const {
     f << "bobView:" << (bobView ? "true" : "false") << "\nattackIndicator:" << attackIndicator << "\n";
     auto b = [](bool v) { return v ? "true" : "false"; };
     f << "fullscreen:" << b(fullscreen) << "\ntoggleCrouch:" << b(toggleCrouch) << "\ntoggleSprint:" << b(toggleSprint)
-      << "\nautoJump:" << b(autoJump) << "\ninvertXMouse:" << b(invertMouseX) << "\ninvertYMouse:" << b(invertMouseY)
+      << "\nautoJump:" << b(autoJump) << "\nsprintWindow:" << sprintWindow << "\ninvertXMouse:" << b(invertMouseX) << "\ninvertYMouse:" << b(invertMouseY)
       << "\ndiscrete_mouse_scroll:" << b(discreteMouseScroll) << "\nmouseWheelSensitivity:" << mouseWheelSensitivity
       << "\nmainHand:" << (mainHand == 0 ? "left" : "right") << "\nallowServerListing:" << b(allowServerListing)
       << "\npauseOnLostFocus:" << b(pauseOnLostFocus) << "\nadvancedItemTooltips:" << b(advancedItemTooltips) << "\n";
@@ -215,6 +216,7 @@ void Ui::State::applyControls() {  // the key bindings and control options the g
     game->invertMouseX = settings.invertMouseX, game->invertMouseY = settings.invertMouseY;
     game->discreteScroll = settings.discreteMouseScroll, game->wheelSensitivity = settings.mouseWheelSensitivity;
     game->player().autoJump = settings.autoJump;
+    game->player().sprintWindow = settings.sprintWindow;
 }
 
 int Ui::State::gameMode() const {
@@ -1093,6 +1095,8 @@ void Ui::State::runScript(double) {
             const Player& p = game->player();
             LOG("script: %s| pos %.3f %.3f %.3f ground %d health %.1f food %d sneak %d slot %d", msg.c_str(), p.pos[0], p.pos[1],
                 p.pos[2], int(p.onGround), health, food, int(p.lastInput.sneak), game->selectedSlot());
+        } else if (st.verb == "trace") {  // trace on|off: the player's state every tick
+            game->traceTicks = arg(0) != "off";
         } else if (st.verb == "dump") {  // logs the open menu's slots
             const Menu& m = activeMenu();
             for (size_t i = 0; i < m.slots.size(); ++i)

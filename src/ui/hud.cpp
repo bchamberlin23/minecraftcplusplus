@@ -69,16 +69,13 @@ void Ui::State::tickHud() {
     }
     lastToolHighlight = selected;
     // Air supply, simulated locally like LivingEntity.baseTick (the server's entity data is not decoded).
+    // Entity.isEyeInFluid(WATER): the player's fluid tracker (the eyes under the water's surface).
     const Player& p = game->player();
-    const CameraState cam = game->camera();
-    const u16 eye = world->block(int(std::floor(cam.x)), int(std::floor(cam.y)), int(std::floor(cam.z)));
-    const BlockInfo& bi = registry->infos()[eye];
-    const bool eyeInWater = (bi.fluid && eye == registry->waterId()) || bi.waterlogged ||
-                            registry->name(eye).starts_with("minecraft:water") || registry->name(eye).starts_with("minecraft:bubble_column");
-    (void)p;
+    const bool eyeInWater = p.eyeInWater;
     tickViewEffects(eyeInWater);  // view_effects.cpp
     if (!serverAir) {
-        if (eyeInWater && survivalLike()) air = std::max(-20, air - 1);
+        const u16 eye = world->block(int(std::floor(p.pos[0])), int(std::floor(p.pos[1] + p.eyeHeight())), int(std::floor(p.pos[2])));
+        if (eyeInWater && !registry->name(eye).starts_with("minecraft:bubble_column") && survivalLike()) air = std::max(-20, air - 1);
         else air = std::min(maxAir, air + 4);
     }
     // Health blink (Hud.extractPlayerHealth bookkeeping).

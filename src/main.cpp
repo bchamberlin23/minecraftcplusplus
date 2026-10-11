@@ -733,6 +733,7 @@ int wmain(int argc, wchar_t** argv) {
         blockEntityRenderer.setBlockSink([&](const std::vector<net::BlockChange>& c) {
             if (session) session->applyClientBlocks(c);
         });
+        game.pistonSource = [&](std::vector<Physics::Piston>& out) { blockEntityRenderer.pistonMovers(out); };
     }
     gameplay.setPlayer(game, ui);
     if (haveEntities) ui.setEntities(&entities);  // inventory / mount previews, player list heads
@@ -853,6 +854,7 @@ int wmain(int argc, wchar_t** argv) {
             renderer.resetTemporal();
         }
         if (session) terrain.setFarActive(session->dimension().name == "minecraft:overworld");
+        if (session) game.player().fastLava = session->dimension().fastLava;
         if (haveEntities) entities.frame(dt);
         if (haveEntities) entities.viewEntity = game.cameraMode == 0 ? game.cameraEntity : -1;  // set_camera
         ui.beginFrame(dt);  // UI input first: an open screen takes the game's input

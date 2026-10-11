@@ -1347,7 +1347,8 @@ void Visuals::Impl::update() {
         e.headYaw = e.prevHeadYaw = e.yaw;
         e.pitch = e.prevPitch = p.pitch / kDeg;
         // Pose: crouching 5, swimming / crawling 3, gliding 1 (net.minecraft.world.entity.Pose).
-        e.pose = p.pose == Player::Pose::Crouching ? 5 : p.pose == Player::Pose::Swimming ? 3 : p.pose == Player::Pose::FallFlying ? 1 : 0;
+        e.pose = p.pose == Player::Pose::Crouching ? 5 : p.pose == Player::Pose::Swimming ? 3 : p.pose == Player::Pose::FallFlying ? 1
+                 : p.pose == Player::Pose::SpinAttack ? 4 : 0;
         e.sharedFlags = u8(p.pose == Player::Pose::FallFlying ? 0x80 : 0);
         e.ticksFrozen = ui ? ui->ticksFrozen() : 0;
         e.inWater = p.inWater;
@@ -1362,7 +1363,7 @@ void Visuals::Impl::update() {
         }
         e.vehicle = game->vehicleId;  // the sitting pose
         // The item use (third-person arm poses): LivingEntity flags and ticks using the item.
-        e.livingFlags = game->use.active ? u8(1 | (game->use.hand ? 2 : 0)) : 0;
+        e.livingFlags = u8((game->use.active ? 1 | (game->use.hand ? 2 : 0) : 0) | (p.spinFlag ? 4 : 0));
         e.useTicks = game->use.ticksUsing();
         e.chargedCrossbow = u8((chargeOf(36 + game->selectedSlot()) ? 1 : 0) | (chargeOf(45) ? 2 : 0));
         e.swingTime = swinging ? std::max(swingTime, 0) : -1;

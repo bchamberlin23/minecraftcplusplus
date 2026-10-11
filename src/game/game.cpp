@@ -186,17 +186,6 @@ void Game::frame(Window& w, double dt) {
     escWasDown_ = esc;
     for (int i = 0; i < 9; ++i)
         if (presses(keys.hotbar[i])) selected_ = i;
-    // Double-tapping jump toggles flight, like creative mode.
-    for (int n = presses(keys.jump); n > 0; --n) {
-        if (clock_ - lastJumpPress_ < 0.3 && player_.mayFly && !player_.noClip && !riding()) {
-            player_.flying = !player_.flying;
-            player_.vel[1] = 0;
-            lastJumpPress_ = -1;
-        } else {
-            lastJumpPress_ = clock_;
-        }
-    }
-
     const PlayerInput input = inputSuspended ? PlayerInput{} : readInput(w);
     const Window::MouseEvents ev = w.takeMouseEvents();
     if (inputSuspended) pendingAttacks_ = 0;
@@ -229,8 +218,17 @@ void Game::frame(Window& w, double dt) {
             player_.tick(physics_, PlayerInput{});
             player_.lastInput = input;
         } else {
+            refreshPistons();
+            player_.tickPistons(physics_);  // the moving blocks' ticks (ClientLevel block entities)
             player_.tick(physics_, input);
+            if (entityPush) entityPush(player_);  // other entities' pushEntities / boats push the player
         }
+        if (traceTicks)
+            LOG("tick %llu: pos %.4f %.4f %.4f vel %.4f %.4f %.4f ground %d hcol %d water %.3f lava %.3f eye %d swim %d sprint %d "
+                "fly %d glide %d pose %d spin %d", (unsigned long long)ticks_, player_.pos[0], player_.pos[1], player_.pos[2],
+                player_.vel[0], player_.vel[1], player_.vel[2], int(player_.onGround), int(player_.horizontalCollision),
+                player_.waterHeight, player_.lavaHeight, int(player_.eyeInWater), int(player_.swimming), int(player_.sprinting),
+                int(player_.flying), int(player_.fallFlying), int(player_.pose), player_.autoSpinAttackTicks);
         tickCameraFeedback();
         ++cooldownTick_;  // Player.tick -> ItemCooldowns.tick
         std::erase_if(cooldowns_, [&](const auto& c) { return c.second.end <= cooldownTick_; });
@@ -245,6 +243,17 @@ void Game::frame(Window& w, double dt) {
     retarget();
     handleClicks(w, dt, presses(keys.use), presses(keys.pickItem), ev.wheel);
     buildOverlay();
+}
+
+// The moving blocks the block entity layer animates, keeping each one's tick progress (keyed by its identity).
+void Game::refreshPistons() {
+    if (!pistonSource) return;
+    std::vector<Physics::Piston> fresh;
+    pistonSource(fresh);
+    for (Physics::Piston& p : fresh)
+        for (const Physics::Piston& old : physics_.pistons)
+            if (old.key == p.key) p.progress = old.progress, p.progressO = old.progressO;
+    physics_.pistons = std::move(fresh);
 }
 
 void Game::retarget() {

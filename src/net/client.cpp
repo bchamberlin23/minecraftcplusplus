@@ -47,7 +47,14 @@ Dimension parseDimensionType(const std::string& id, std::string_view nbt) {
     while (r.field(tag, name)) {
         if (tag == TagInt && name == "min_y") d.minY = r.i32v();
         else if (tag == TagInt && name == "height") d.height = r.i32v();
-        else r.skip(tag);
+        else if (tag == TagCompound && name == "attributes") {  // environment attributes: gameplay/fast_lava
+            u8 t;
+            std::string_view n;
+            while (r.field(t, n)) {
+                if (t == TagByte && n == "minecraft:gameplay/fast_lava") d.fastLava = r.u8v() != 0;
+                else r.skip(t);
+            }
+        } else r.skip(tag);
     }
     return d;
 }

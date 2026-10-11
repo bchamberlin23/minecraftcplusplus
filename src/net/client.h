@@ -23,6 +23,7 @@ namespace net {
 struct Dimension {
     std::string name;  // e.g. "minecraft:overworld"
     int minY = -64, height = 384;
+    bool fastLava = false;  // EnvironmentAttributes.FAST_LAVA (the nether): lava currents push harder
 };
 
 // login (respawn = false) or respawn: the world must be cleared on respawn.

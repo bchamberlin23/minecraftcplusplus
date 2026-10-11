@@ -41,6 +41,11 @@ public:
     std::function<void()> onSwing;
     std::string status() const;
     Player& player() { return player_; }
+    Physics& physics() { return physics_; }
+    // Moving blocks of pistons (the block entity layer) for the player's collisions and pushes, every tick; and the
+    // entities pushing the player after its tick (living entities' pushEntities, boats).
+    std::function<void(std::vector<Physics::Piston>& out)> pistonSource;
+    std::function<void(Player& player)> entityPush;
 
     // Used by input handling and by the scripted self-test.
     void retarget();
@@ -208,12 +213,14 @@ public:
     float destroyProgressValue() const { return dig_.progress; }
     void setSelectedSlot(int slot) { selected_ = slot; }
     void simulate(const PlayerInput& input, int ticks);
+    bool traceTicks = false;  // logs the player's state every tick (the script's "trace on")
     void buildOverlay();
 
 private:
     PlayerInput readInput(Window& window);
     bool held(Window& window, int vk) const;  // a bound key / button is down while the mouse is captured
     void handleClicks(Window& window, double dt, int rightPresses, int middlePresses, int wheel);
+    void refreshPistons();
     void tickAttack(bool down);  // Minecraft.handleKeybinds: queued attack presses, then continueAttack
     void tickCameraFeedback();
     bool startAttack();
@@ -241,7 +248,7 @@ private:
     u16 hotbar_[9] = {};
     int selected_ = 0;
     double repeatTimer_ = 0;
-    double lastJumpPress_ = -1, clock_ = 0;
+    double clock_ = 0;
     bool escWasDown_ = false;
     bool useConsumed_ = false;  // the last useTarget(place) placed a block or used the targeted block
     bool usingItem_ = false;    // onUseItem sent, the use key not yet released
