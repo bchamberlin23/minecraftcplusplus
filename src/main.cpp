@@ -85,6 +85,7 @@ struct Options {
     // Video settings for this run (override options.txt, not saved; render/upscalers/video_settings.h).
     bool shadersGiven = false;
     std::string upscaler, upscaleQuality, frameGen, lowLatency;  // --upscaler / --upscale-quality / --framegen / --low-latency
+    std::string pathTracing;  // --path-tracing low|medium|high|ultra (with --shaders pathtraced)
     float sharpness = -1;                  // --sharpness 0..1
     int fpsLimit = -1;                     // --fps-limit (0 = unlimited)
     // Front end (ui/title.cpp): the title screen when no world or server is given.
@@ -103,7 +104,8 @@ void usage() {
         "                          [--cam x,y,z[,yaw,pitch]] [--readonly] [--selftest [--save]] [--world-io-test]\n"
         "                          [--no-gen] [--gen-radius <chunks>] [--far <blocks>] [--lod-quality <x, default 2>] [--gentest <region dir> <seed>]\n"
         "                          [--connect <host[:port]> [--name <player>]] [--play [--lan]] [--seconds <n>] [--mods-dir <dir>]\n"
-        "                          [--shaders off|low|medium|high|ultra (default high)] [--render-scale <0.33..1>]\n"
+        "                          [--shaders off|low|medium|high|ultra|pathtraced (default high)] [--render-scale <0.33..1>]\n"
+        "                          [--path-tracing low|medium|high|ultra (default high)]\n"
         "                          [--upscaler taa|dlss|fsr|xess] [--upscale-quality native|ultraqualityplus|ultraquality|quality|\n"
         "                           balanced|performance|ultraperformance] [--sharpness 0..1]\n"
         "                          [--framegen off|dlss|dlss2x|dlss3x|dlss4x|fsr|xess] [--low-latency off|on|boost] [--fps-limit <n>]\n"
@@ -238,6 +240,7 @@ int wmain(int argc, wchar_t** argv) {
         else if (a == L"--render-scale") opt.renderScale = float(_wtof(next().c_str()));
         else if (a == L"--upscaler") opt.upscaler = fs::path(next()).string();
         else if (a == L"--upscale-quality") opt.upscaleQuality = fs::path(next()).string();
+        else if (a == L"--path-tracing") opt.pathTracing = fs::path(next()).string();
         else if (a == L"--framegen") opt.frameGen = fs::path(next()).string();
         else if (a == L"--low-latency") opt.lowLatency = fs::path(next()).string();
         else if (a == L"--sharpness") opt.sharpness = float(_wtof(next().c_str()));
@@ -762,6 +765,8 @@ int wmain(int argc, wchar_t** argv) {
         if (!opt.upscaleQuality.empty() && !VideoSettings::parseQuality(opt.upscaleQuality, v.quality))
             LOG("warning: unknown --upscale-quality %s", opt.upscaleQuality.c_str());
         if (!opt.frameGen.empty() && !v.parseFrameGen(opt.frameGen)) LOG("warning: unknown --framegen %s", opt.frameGen.c_str());
+        if (!opt.pathTracing.empty() && !VideoSettings::parsePathTracing(opt.pathTracing, v.pathTracing))
+            LOG("warning: unknown --path-tracing %s", opt.pathTracing.c_str());
         if (!opt.lowLatency.empty() && !VideoSettings::parseLowLatency(opt.lowLatency, v.lowLatency))
             LOG("warning: unknown --low-latency %s", opt.lowLatency.c_str());
         if (opt.sharpness >= 0) v.sharpness = opt.sharpness;

@@ -1676,6 +1676,14 @@ void EntityRenderer::record(const PassContext& ctx) {
     if (mv) list->OMSetRenderTargets(1, &ctx.colorRtv, FALSE, &ctx.dsv);
 }
 
+bool EntityRenderer::rtEntities(u32 frame, RtEntities& out) {
+    if (!quads_ || !upload_ || (!cutoutRefs_ && !freeCount_)) return false;
+    const u64 base = u64(frame) * kFrameBytes;
+    out = {quads_.Get(), upload_.Get(), base + kMatOffset, base + kInstOffset, base + kRefOffset, base + kFreeOffset,
+           cutoutRefs_, freeCount_};
+    return true;
+}
+
 void EntityRenderer::drawShadow(const ShadowContext& sc) {
     if (casters_.empty() || !built_) return;
     ID3D12GraphicsCommandList* list = sc.list;

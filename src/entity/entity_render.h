@@ -22,6 +22,7 @@ public:
     // the previous frame's part matrices kept per entity).
     void prepare(const PassContext& ctx) override;
     void drawShadow(const ShadowContext& sc) override;
+    bool rtEntities(u32 frame, RtEntities& out) override;
 
     struct Stats {
         double cpuMs = 0;  // last frame: culling, animation, matrices and uploads
