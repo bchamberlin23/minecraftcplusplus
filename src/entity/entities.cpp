@@ -567,7 +567,13 @@ void EntityWorld::attach(net::Client& client) {
         e.a = r.varInt();  // hand
         if (r.ok) q.events.push_back(e);
     });
-    on("animate", [](net::Reader&, EventQueue&) {});  // wake up / critical hit particles: nothing to draw
+    on("animate", [](net::Reader& r, EventQueue& q) {  // wake up / critical hit particles
+        Event e;
+        e.type = EventType::Animate;
+        e.id = r.varInt();
+        e.a = r.u8v();
+        if (r.ok) q.events.push_back(e);
+    });
     on("hurt_animation", [](net::Reader& r, EventQueue& q) {
         Event e;
         e.type = EventType::Hurt;
@@ -725,7 +731,10 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
         return;
     }
     if (ev.type == EventType::Remove) {
-        for (u32 i = 0; i < ev.count; ++i) entities_.erase(q.ints[ev.first + i]);
+        for (u32 i = 0; i < ev.count; ++i) {
+            auto r = entities_.find(q.ints[ev.first + i]);
+            if (r != entities_.end() && r->second.pickupBy == INT_MIN) entities_.erase(r);  // picked up: goes by itself
+        }
         return;
     }
     if (ev.type == EventType::Add) {
@@ -762,10 +771,12 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
     }
     auto it = entities_.find(ev.id);
     if (ev.type == EventType::TakeItem) {
-        // The collected item flies to the collector in the game; here it simply disappears.
-        if (it != entities_.end() && it->second.category == Category::Item) {
-            if (ev.b > 0 && it->second.itemCount > ev.b) it->second.itemCount -= ev.b;
-            else entities_.erase(it);
+        // ClientPacketListener.handleTakeItemEntity: a fully collected item flies to the collector (ItemPickupParticle)
+        // and goes after 3 ticks; a partly collected stack shrinks.
+        if (it != entities_.end() && it->second.category == Category::Item && it->second.pickupBy == INT_MIN) {
+            Entity& item = it->second;
+            if (ev.b > 0 && item.itemCount > ev.b) item.itemCount -= ev.b;
+            else item.pickupBy = ev.a, item.pickupLife = 0, item.stepCount = 0, item.linearRemaining = 0;
         }
         return;
     }
@@ -851,6 +862,10 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
         case EventType::EntityEvent:
             if (ev.a == 3 && e.category == Category::Living) e.dying = true;  // death
             if (ev.a == 2) e.hurtTime = 10;                                     // legacy hurt
+            if (onEntityEvent) onEntityEvent(e, ev.a);
+            break;
+        case EventType::Animate:
+            if (onAnimate) onAnimate(e, ev.a);
             break;
         case EventType::Passengers:
             for (auto& [id, other] : entities_)
@@ -1059,6 +1074,8 @@ u32 displayLight(const Entity& e, u32 worldLight) {
 
 void EntityWorld::tick() {
     for (auto& [id, e] : entities_) tickEntity(e);
+    for (auto it = entities_.begin(); it != entities_.end();)  // ItemPickupParticle.LIFE_TIME
+        it = it->second.pickupBy != INT_MIN && it->second.pickupLife >= 3 ? entities_.erase(it) : std::next(it);
     // The server stops tracking entities in chunks the client forgets, but a respawn or dimension change
     // replaces the whole level without removing them: drop entities whose chunk stays unloaded for 5 s.
     if (++ticks_ % 20 == 0) {
@@ -1076,6 +1093,10 @@ void EntityWorld::tickEntity(Entity& e) {
     std::copy(e.pos, e.pos + 3, e.prevPos);
     e.prevYaw = e.yaw, e.prevPitch = e.pitch;
     e.prevHeadYaw = e.headYaw, e.prevBodyYaw = e.bodyYaw;
+    if (e.pickupBy != INT_MIN) {  // flying to its collector: the visuals move it, nothing else changes
+        ++e.pickupLife;
+        return;
+    }
     ++e.age;
     if (e.display.is) {  // Display.tick (client side)
         DisplayState& s = e.display;

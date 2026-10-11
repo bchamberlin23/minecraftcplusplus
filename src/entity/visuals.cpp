@@ -210,6 +210,18 @@ struct Visuals::Impl {
     std::unordered_map<int, Bolt> boltStates;
     u64 boltRandom = 0x2545F4914F6CDD1Dull;
     void buildBolts(const PassContext& ctx);
+    // Particles of entity events and animate packets: TrackingEmitter (critical hits, totems) and the entities'
+    // handleEntityEvent bursts (poof, hearts, villager moods, teleport portal).
+    struct Emitter {
+        int entity;
+        const char* type;
+        int life, lifetime;
+    };
+    std::vector<Emitter> emitters;
+    std::mt19937 fxRandom{0xC0FFEEu};
+    void entityEffect(const Entity& e, int event, bool animate);
+    bool emit(Emitter& em);  // TrackingEmitter.tick; false when the emitter is done
+    void tickEmitters();
     bool crackDraw = false;
     int crackRects[2][10] = {{-2, -2, -2, -2, -2, -2, -2, -2, -2, -2}, {-2, -2, -2, -2, -2, -2, -2, -2, -2, -2}};
     void buildCracks(const PassContext& ctx);
@@ -349,6 +361,8 @@ bool Visuals::load(const fs::path& jar, const fs::path& minecraftDir, const Game
     if (!m.font->load(*m.res, m.fontAtlas)) m.font.reset();
     m.particles = std::make_unique<fx::Particles>(m.world.world(), m.world.registry(), reports, m.models);
     m.particles->init(*m.res);
+    m.world.onEntityEvent = [&m](const Entity& e, int event) { m.entityEffect(e, event, false); };
+    m.world.onAnimate = [&m](const Entity& e, int action) { m.entityEffect(e, action, true); };
     m.loaded = true;
     LOG("visuals %7.1f ms  item models, font and particles from the game", t.ms());
     return true;
@@ -1295,7 +1309,7 @@ void Visuals::Impl::update() {
     if (game) {
         tickClock += dt;
         int n = 0;
-        while (tickClock >= 0.05 && n < 5) tickClock -= 0.05, ++n, tickLocal();
+        while (tickClock >= 0.05 && n < 5) tickClock -= 0.05, ++n, tickLocal(), tickEmitters();
         if (tickClock >= 0.05) tickClock = 0;
         partial = float(tickClock / 0.05);
         // The avatar for the third-person camera (drawn by the entity renderer this frame).
@@ -1481,6 +1495,23 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
         if (!frame && e.type != paintingType && e.category != Category::Item && e.type != ominousType) continue;
         double p[3];
         for (int a = 0; a < 3; ++a) p[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt;
+        if (e.pickupBy != INT_MIN) {  // ItemPickupParticleGroup: towards the collector's middle, (time / 3)^2
+            double to[3];
+            if (auto c = entities.find(e.pickupBy); c != entities.end() && c->second.info) {
+                const Entity& t = c->second;
+                for (int a = 0; a < 3; ++a) to[a] = t.prevPos[a] + (t.pos[a] - t.prevPos[a]) * pt;
+                to[1] += t.info->eye / 2.0;
+            } else if (game) {  // the local player
+                const Player& pl = game->player();
+                for (int a = 0; a < 3; ++a) to[a] = pl.prev[a] + (pl.pos[a] - pl.prev[a]) * pt;
+                to[1] += pl.eyeHeight() / 2.0;
+            } else {
+                std::copy(p, p + 3, to);
+            }
+            float t = (float(e.pickupLife) + pt) / 3.0f;
+            t = std::min(t * t, 1.0f);
+            for (int a = 0; a < 3; ++a) p[a] += (to[a] - p[a]) * t;
+        }
         const float rx = float(p[0] - cam[0]), ry = float(p[1] - cam[1]), rz = float(p[2] - cam[2]);
         const float radius = e.type == paintingType ? 4.0f : 1.0f;
         Lists* target = &worldLists;
@@ -1781,6 +1812,92 @@ void Visuals::Impl::buildBolts(const PassContext& ctx) {
     if (frameCounter % 64 == 0)  // forget removed bolts
         for (auto it = boltStates.begin(); it != boltStates.end();)
             it = world.entities().count(it->first) ? std::next(it) : boltStates.erase(it);
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Entity event / animate particles
+
+namespace {
+void entityBox(const Entity& e, float& w, float& h) {
+    w = e.info ? e.info->width : 0.6f, h = e.info ? e.info->height : 1.8f;
+    if (e.baby && e.category == Category::Living) w *= 0.5f, h *= 0.5f;
+}
+}  // namespace
+
+void Visuals::Impl::entityEffect(const Entity& e, int event, bool animate) {
+    if (!particles || !e.info) return;
+    if (animate) {  // ClientPacketListener.handleAnimate
+        if (event == 1 || event == 2) {
+            emitters.push_back({e.id, event == 1 ? "crit" : "enchanted_hit", 0, 3});
+            if (!emit(emitters.back())) emitters.pop_back();  // TrackingEmitter ticks once when created
+        }
+        return;
+    }
+    if (event == 35) {  // totem of undying
+        emitters.push_back({e.id, "totem_of_undying", 0, 30});
+        if (!emit(emitters.back())) emitters.pop_back();
+        return;
+    }
+    std::uniform_real_distribution<double> u(0.0, 1.0);
+    std::normal_distribution<double> g(0.0, 1.0);
+    float w, h;
+    entityBox(e, w, h);
+    const std::string& n = e.info->name;
+    // n particles at getRandomX(1), getRandomY() + dy, getRandomZ(1), gaussian * 0.02 motion (offset back by `back`).
+    auto burst = [&](const char* type, int count, double dy, double back) {
+        std::shared_lock lock(world.world().mutex());
+        for (int i = 0; i < count; ++i) {
+            const double xa = g(fxRandom) * 0.02, ya = g(fxRandom) * 0.02, za = g(fxRandom) * 0.02;
+            const double x = e.pos[0] + (2 * u(fxRandom) - 1) * w, y = e.pos[1] + u(fxRandom) * h + dy,
+                         z = e.pos[2] + (2 * u(fxRandom) - 1) * w;
+            particles->spawn(type, x - xa * back, y - ya * back, z - za * back, xa, ya, za);
+        }
+    };
+    const bool villager = n == "minecraft:villager";
+    const bool tamable = n == "minecraft:wolf" || n == "minecraft:cat" || n == "minecraft:parrot" || n.ends_with("horse") ||
+                         n == "minecraft:donkey" || n == "minecraft:mule" || n.ends_with("llama") || n == "minecraft:camel" ||
+                         n == "minecraft:nautilus";
+    if (event == 60 || event == 20) burst("poof", 20, 0, 10);  // LivingEntity.makePoofParticles, Mob.spawnAnim
+    else if (event == 18 && e.category == Category::Living) burst("heart", 7, 0.5, 0);  // Animal: in love
+    else if ((event == 6 || event == 7) && tamable) burst(event == 7 ? "heart" : "smoke", 7, 0.5, 0);  // taming
+    else if (villager && event == 12) burst("heart", 5, 1.0, 0);  // Villager.addParticlesAroundSelf
+    else if (villager && event == 13) burst("angry_villager", 5, 1.0, 0);
+    else if (villager && event == 14) burst("happy_villager", 5, 1.0, 0);
+    else if (villager && event == 42) burst("splash", 5, 1.0, 0);
+    else if (event == 46 && e.category != Category::Other) {  // LivingEntity: teleport (chorus fruit, endermen)
+        std::shared_lock lock(world.world().mutex());
+        for (int i = 0; i < 128; ++i) {
+            const double d = i / 127.0;
+            const float xa = (float(u(fxRandom)) - 0.5f) * 0.2f, ya = (float(u(fxRandom)) - 0.5f) * 0.2f,
+                        za = (float(u(fxRandom)) - 0.5f) * 0.2f;
+            const double x = e.prevPos[0] + (e.pos[0] - e.prevPos[0]) * d + (u(fxRandom) - 0.5) * w * 2.0;
+            const double y = e.prevPos[1] + (e.pos[1] - e.prevPos[1]) * d + u(fxRandom) * h;
+            const double z = e.prevPos[2] + (e.pos[2] - e.prevPos[2]) * d + (u(fxRandom) - 0.5) * w * 2.0;
+            particles->spawn("portal", x, y, z, xa, ya, za);
+        }
+    }
+}
+
+bool Visuals::Impl::emit(Emitter& em) {
+    auto it = world.entities().find(em.entity);
+    if (it == world.entities().end() || !particles) return false;
+    const Entity& e = it->second;
+    float w, h;
+    entityBox(e, w, h);
+    std::uniform_real_distribution<float> u(-1.0f, 1.0f);
+    std::shared_lock lock(world.world().mutex());
+    for (int i = 0; i < 16; ++i) {
+        const double xa = u(fxRandom), ya = u(fxRandom), za = u(fxRandom);
+        if (xa * xa + ya * ya + za * za > 1.0) continue;
+        particles->spawn(em.type, e.pos[0] + w * xa / 4.0, e.pos[1] + h * (0.5 + ya / 4.0), e.pos[2] + w * za / 4.0, xa, ya + 0.2, za);
+    }
+    return ++em.life < em.lifetime;
+}
+
+void Visuals::Impl::tickEmitters() {
+    for (size_t i = 0; i < emitters.size();)
+        if (emit(emitters[i])) ++i;
+        else emitters.erase(emitters.begin() + ptrdiff_t(i));
 }
 
 // ---------------------------------------------------------------------------------------------------------

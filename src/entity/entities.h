@@ -33,7 +33,7 @@ struct MetaValue {
 
 enum class EventType : u8 {
     Add, Remove, Move, PositionSync, Teleport, Motion, HeadRot, Data, Equipment, PlayerInfo, PlayerRemove, Swing,
-    Hurt, Damage, EntityEvent, TakeItem, Passengers
+    Hurt, Damage, EntityEvent, TakeItem, Passengers, Animate
 };
 
 struct Step {
@@ -179,6 +179,9 @@ struct Entity {
     u8 chargedCrossbow = 0;  // bit 0: the main hand holds a charged crossbow, bit 1: the off hand (local player only)
     int attachedTo = -1;     // firework rocket: the entity it is attached to (DATA_ATTACHED_TO_TARGET), -1 none
     int unloadedTicks = 0;  // ticks spent outside the loaded world
+    // ItemPickupParticle: a collected item flies to its collector (entity id; the local player when it is not one of
+    // the tracked entities) for 3 ticks, then goes. INT_MIN: not being picked up.
+    int pickupBy = INT_MIN, pickupLife = 0;
     // Pose animation (ticked by tickPoseAnimation): LivingEntity swimAmount / fallFlyTicks, ElytraAnimationState,
     // the delta movement of this and the previous tick (fall-flying body turn), the bed (SLEEPING_POS_ID).
     float swimAmount = 0, swimAmountO = 0;
@@ -262,6 +265,11 @@ public:
     // blockDistance (< 0: no block targeted) is targeted; it then takes the click (attack / use when pressed).
     bool click(const double eye[3], const double dir[3], bool attack, bool use, double blockDistance, double reach,
                bool sneaking = false);  // sneaking: sent with interactions (sneak + use opens a mount's inventory)
+    // Client effects for the visuals (particles), main thread: entity events (ClientboundEntityEventPacket ids) and
+    // animate actions (ClientboundAnimatePacket: 0 wake up, 1 critical hit, 2 magic critical hit).
+    std::function<void(const Entity&, int event)> onEntityEvent;
+    std::function<void(const Entity&, int action)> onAnimate;
+
     struct Stats {
         double applyMs = 0, tickMs = 0;
         size_t events = 0;
