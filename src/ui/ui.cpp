@@ -349,8 +349,8 @@ void Ui::State::sendChat(const std::string& raw) {
 }
 
 void Ui::State::syncHotbarToGame() {
-    for (int i = 0; i < 9; ++i) {
-        const ItemStack& s = inventory.slots[size_t(36 + i)];
+    for (int i = 0; i < 10; ++i) {  // the hotbar, then the off hand (45)
+        const ItemStack& s = inventory.slots[size_t(i < 9 ? 36 + i : 45)];
         const int item = s.empty() ? -1 : s.item;
         if (item == hotbarSynced[i]) continue;
         hotbarSynced[i] = item;
@@ -370,7 +370,8 @@ void Ui::State::syncHotbarToGame() {
                 if (name == from) name = to, mapped = true;
             if (mapped || items.isBlockItem(item)) block = registry->idFor(name);
         }
-        game->setHotbarBlock(i, block);
+        if (i < 9) game->setHotbarBlock(i, block);
+        else game->setOffhandBlock(block);
     }
 }
 
@@ -958,28 +959,16 @@ void Ui::attachSession(net::Client* client, net::Session* session) {
     for (const UiModule& m : uiModules())
         if (m.attached) m.attached(s);
     if (!session) return;
-    // Minecraft.startUseItem: the main hand first, then the off hand when the main hand's use passes. The client
-    // cannot simulate item uses, so the off hand gets its turn when the main hand holds nothing, a block or a
-    // sword / pickaxe (no use of their own): torches and shields in the off hand. After a use of an entity (which
-    // mostly passes, but feeds or trades with some) only such hands go on.
-    s.game->onUseItem = [&s, session](const RayHit* hit, bool afterEntity) {
-        const int sel = s.game->selectedSlot();
-        const ItemStack& main = s.inventory.slots[size_t(36 + sel)];
-        const ItemStack& off = s.inventory.slots[45];
-        const std::string mainName = main.empty() ? std::string() : s.items.name(main.item);
-        const bool mainPasses = main.empty() || s.items.isBlockItem(main.item) || mainName.ends_with("_sword") ||
-                                mainName.ends_with("_pickaxe");
-        if (afterEntity && !mainPasses) return;
-        if (!afterEntity) openWritableBook(s, 0);  // signs_books.cpp: book and quill (opened client side)
-        session->useItem(0);
-        if (off.empty() || !mainPasses) return;
-        if (!afterEntity) openWritableBook(s, 1);
-        if (hit) session->useItemOn(1, *hit);
-        session->useItem(1);
+    // Minecraft.startUseItem reached this hand's item use (Game::startUseItem decides the hands' turns from the
+    // gameplay layer's predicted results): ServerboundUseItemPacket; a book and quill opens client side.
+    s.game->onUseItem = [&s, session](int hand) {
+        openWritableBook(s, hand);  // signs_books.cpp
+        session->useItem(hand);
     };
 }
 
 void Ui::setEntities(ent::EntityWorld* entities) { s_->entities = entities; }
+void Ui::setEquipmentRule(std::function<int(const ItemStack&, bool&)> rule) { s_->equipmentRule = std::move(rule); }
 void Ui::setItemModels(ent::ItemModels* models) { s_->itemModels = models; }
 
 int Ui::ticksFrozen() const { return s_->ticksFrozen; }
@@ -1083,7 +1072,7 @@ void Ui::State::runScript(double) {
             game->retarget();
             game->useTarget(arg(0) != "break");
         } else if (st.verb == "useitem") {  // right click into the air: use the held item
-            if (game->onUseItem) game->onUseItem(nullptr, false);
+            game->startUseItem(false);
         } else if (st.verb == "attack") {  // left click on the entity under the crosshair
             if (game->onEntityClick) game->onEntityClick(true, false, -1.0);
         } else if (st.verb == "shot") {
@@ -1095,6 +1084,9 @@ void Ui::State::runScript(double) {
             const Player& p = game->player();
             LOG("script: %s| pos %.3f %.3f %.3f ground %d health %.1f food %d sneak %d slot %d", msg.c_str(), p.pos[0], p.pos[1],
                 p.pos[2], int(p.onGround), health, food, int(p.lastInput.sneak), game->selectedSlot());
+        } else if (st.verb == "block") {  // block x y z: logs the block state there
+            const int x = std::atoi(arg(0).c_str()), y = std::atoi(arg(1).c_str()), z = std::atoi(arg(2).c_str());
+            LOG("script: block %d %d %d = %s", x, y, z, registry->name(world->block(x, y, z)).c_str());
         } else if (st.verb == "trace") {  // trace on|off: the player's state every tick
             game->traceTicks = arg(0) != "off";
         } else if (st.verb == "dump") {  // logs the open menu's slots

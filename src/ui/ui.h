@@ -178,6 +178,10 @@ public:
     // Player inventory menu slot (5-8 armour, 36-44 hotbar, 45 offhand); nullptr when empty.
     const ItemStack* playerSlot(int slot) const;
     const Items& items() const;
+    // LivingEntity.getEquipmentSlotForItem / isEquippableInSlot for the player (the stack's equippable component, set
+    // by the gameplay layer): the EquipmentSlot id (0 main hand, 1 feet .. 4 head, 5 off hand...), allowed: the
+    // equippable allows players. Unset: armour by name.
+    void setEquipmentRule(std::function<int(const ItemStack& s, bool& allowed)> rule);
     int ticksFrozen() const;  // our DATA_TICKS_FROZEN (the third-person avatar shakes when fully frozen)
     // The local player's mob effects as the view shows them (fog, lightmap: view_effects.cpp), and the nausea / nether
     // portal warp of the world camera (GameRenderer.renderLevel).

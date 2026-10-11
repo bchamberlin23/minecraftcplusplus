@@ -35,7 +35,6 @@ public:
     void report() const;  // timings
     // The held item's use (food, bows, buckets...) and, unpredicted, a use on a block with the off hand.
     void useItem(int hand);
-    void useItemOn(int hand, const RayHit& hit);
     // Block changes the game's client makes itself (piston moves, blockentity/block_entities.h); the server's updates
     // follow. Main thread, outside the world lock.
     void applyClientBlocks(const std::vector<BlockChange>& changes) { applyBlocks(changes, false); }

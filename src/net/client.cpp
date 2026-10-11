@@ -581,14 +581,14 @@ void Client::sendPlayerAction(int action, int x, int y, int z, int face, int seq
     send(Play, "player_action", w);
 }
 
-void Client::sendUseItemOn(int x, int y, int z, int face, const float cursor[3], int sequence, int hand) {
+void Client::sendUseItemOn(int x, int y, int z, int face, const float cursor[3], int sequence, int hand, bool inside) {
     Writer w;
     w.varInt(hand);  // 0 main, 1 off hand
     w.blockPos(x, y, z);
     w.varInt(face);
     for (int a = 0; a < 3; ++a) w.f32(cursor[a]);
-    w.boolean(false);  // inside
-    w.boolean(false);  // world border hit
+    w.boolean(inside);
+    w.boolean(false);  // world border hit (BlockHitResult.hitBorder is never used)
     w.varInt(sequence);
     send(Play, "use_item_on", w);
 }

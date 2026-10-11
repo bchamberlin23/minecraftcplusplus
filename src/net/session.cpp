@@ -19,6 +19,7 @@ constexpr double kPi = 3.14159265358979;
 constexpr int kChunksPerFrame = 8;       // like generated chunks in main.cpp
 constexpr double kChunkBudgetMs = 4.0;   // ...but never more than this per frame
 constexpr int kReleaseUseItem = 6;
+constexpr int kStab = 8;  // ServerboundPlayerActionPacket.Action.STAB
 
 u64 posKey(int x, int y, int z) { return (u64(x & 0x3FFFFFF) << 38) | (u64(z & 0x3FFFFFF) << 12) | u64(y & 0xFFF); }
 void unpackPos(u64 k, int& x, int& y, int& z) {
@@ -90,8 +91,11 @@ void Session::attach(Game& game, Terrain& terrain) {
     game.onPunch = [this] {
         if (gameMode_ != 3) client_.sendPlay("punch", Writer{});  // spectators do not attack
     };
-    game.onUseItem = [this](const RayHit*, bool afterEntity) {
-        if (!afterEntity) useItem(0);
+    game.onUseItem = [this](int hand) { useItem(hand); };
+    game.onStab = [this] {  // ServerboundPlayerActionPacket STAB (piercing weapons)
+        syncHotbar();
+        client_.sendPlayerAction(kStab, 0, 0, 0, 0, 0);
+        if (verbose_) LOG("net: player_action stab");
     };
     game.onReleaseUseItem = [this] {  // ServerPlayerGameMode.releaseUsingItem (bows; stops eating early)
         client_.sendPlayerAction(kReleaseUseItem, 0, 0, 0, 0, 0);
@@ -497,7 +501,7 @@ void Session::onEdit(const Game::EditAction& a) {
         return;
     }
     const float cursor[3] = {float(a.hit[0] - a.x), float(a.hit[1] - a.y), float(a.hit[2] - a.z)};
-    client_.sendUseItemOn(a.x, a.y, a.z, a.face, cursor, sequence);
+    client_.sendUseItemOn(a.x, a.y, a.z, a.face, cursor, sequence, a.hand, a.inside);
 }
 
 void Session::useItem(int hand) {  // ServerboundUseItemPacket
@@ -510,12 +514,6 @@ void Session::useItem(int hand) {  // ServerboundUseItemPacket
     w.f32(float(p.pitch * 180.0 / kPi));
     client_.sendPlay("use_item", w);
     if (verbose_) LOG("net: use_item hand %d (sequence %d)", hand, sequence_);
-}
-
-void Session::useItemOn(int hand, const RayHit& hit) {  // ServerboundUseItemOnPacket, not predicted
-    const float cursor[3] = {float(hit.point[0] - hit.x), float(hit.point[1] - hit.y), float(hit.point[2] - hit.z)};
-    client_.sendUseItemOn(hit.x, hit.y, hit.z, hit.face, cursor, ++sequence_, hand);
-    if (verbose_) LOG("net: use_item_on hand %d %d %d %d face %d (sequence %d)", hand, hit.x, hit.y, hit.z, hit.face, sequence_);
 }
 
 void Session::report() const {

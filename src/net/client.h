@@ -126,7 +126,8 @@ public:
     void sendTickEnd();
     void sendPlayerLoaded();
     void sendPlayerAction(int action, int x, int y, int z, int face, int sequence);  // 0 start, 3 stop destroy
-    void sendUseItemOn(int x, int y, int z, int face, const float cursor[3], int sequence, int hand = 0);
+    // inside: BlockHitResult.isInside; the world border flag is never set by the client (hitBorder is unused).
+    void sendUseItemOn(int x, int y, int z, int face, const float cursor[3], int sequence, int hand = 0, bool inside = false);
     void sendCarriedItem(int slot);
     void sendCreativeSlot(int slot, int itemId, int count);  // inventory menu slot; itemId < 0 = empty
     // Any thread; before start() it only sets what the login sends. Options.broadcastOptions in the play phase.

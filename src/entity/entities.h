@@ -274,7 +274,8 @@ public:
     // Left / right click with an entity under the crosshair (before blocks): true when an entity closer than
     // blockDistance (< 0: no block targeted) is targeted; it then takes the click (attack / use when pressed).
     bool click(const double eye[3], const double dir[3], bool attack, bool use, double blockDistance, double reach,
-               bool sneaking = false);  // sneaking: sent with interactions (sneak + use opens a mount's inventory)
+               bool sneaking = false, double minReach = 0);  // sneaking: sent with interactions (sneak + use opens a
+                                                             // mount's inventory); minReach: a weapon's attack range
     // Client effects for the visuals (particles), main thread: entity events (ClientboundEntityEventPacket ids, after
     // they are applied; 17 makes a firework rocket explode) and
     // animate actions (ClientboundAnimatePacket: 0 wake up, 1 critical hit, 2 magic critical hit).

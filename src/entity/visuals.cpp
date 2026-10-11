@@ -240,7 +240,7 @@ struct Visuals::Impl {
     } mainHand, offHand;
     int itemSwapTicker = 0, lastMainItem = -2;
     bool swinging = false;
-    int swingTime = 0;
+    int swingTime = 0, swingTicks = 6;  // swingTicks: this swing's duration (the weapon's attack_animation)
     float attackAnim = 0, oAttackAnim = 0;
     float xBob = 0, yBob = 0, xBobO = 0, yBobO = 0, walkDist = 0, walkDistO = 0, bob = 0, bobO = 0;
     double tickClock = 0;
@@ -410,8 +410,9 @@ void Visuals::setPlayer(Game& game, ui::Ui& ui, const std::string& name, std::fu
     ui.setItemModels(&m.models);
     m.playerName = name;
     m.gameMode = std::move(gameMode);
-    game.onSwing = [&m] {  // LivingEntity.swing
-        if (!m.swinging || m.swingTime >= 3 || m.swingTime < 0) m.swingTime = -1, m.swinging = true;
+    game.onSwing = [&m] {  // LivingEntity.swing: SwingState.startIfAble (not in the first half of a swing)
+        if (!m.swinging || m.swingTime > m.swingTicks / 2 || m.swingTime <= 0)
+            m.swingTime = -1, m.swinging = true, m.swingTicks = std::max(m.game->swingTicks, 1);
     };
     game.onBlockChanged = [&m, prev = std::move(game.onBlockChanged)](bool place, int x, int y, int z, u16 state) {
         if (prev) prev(place, x, y, z, state);
@@ -1234,14 +1235,14 @@ const Visuals::Impl::TextBlock& Visuals::Impl::textBlock(int id, const DisplaySt
 
 void Visuals::Impl::tickLocal() {
     Player& p = game->player();
-    // LivingEntity.updateSwingTime (swing duration 6).
+    // LivingEntity.SwingState.tick (the swing's duration: 6, or the weapon's attack_animation).
     oAttackAnim = attackAnim;
     if (swinging) {
-        if (++swingTime >= 6) swingTime = 0, swinging = false;
+        if (++swingTime >= swingTicks) swingTime = 0, swinging = false;
     } else {
         swingTime = 0;
     }
-    attackAnim = float(swingTime) / 6.0f;
+    attackAnim = float(swingTime) / float(swingTicks);
     // LocalPlayer.aiStep: hand sway follows the view.
     const float yawDeg = p.yaw / kDeg, pitchDeg = p.pitch / kDeg;
     xBobO = xBob, yBobO = yBob;
@@ -1367,7 +1368,7 @@ void Visuals::Impl::update() {
         e.useTicks = game->use.ticksUsing();
         e.chargedCrossbow = u8((chargeOf(36 + game->selectedSlot()) ? 1 : 0) | (chargeOf(45) ? 2 : 0));
         e.swingTime = swinging ? std::max(swingTime, 0) : -1;
-        e.swingDuration = 6;
+        e.swingDuration = swingTicks;
         if (const PlayerInfo* info = world.playerNamed(playerName)) e.skin = info->skin, e.slim = info->slim;
         else if (e.skin < 0) e.skin = assets.texture("entity/player/wide/steve"), e.slim = false;
         auto equip = [&](int slot, int menuSlot) {

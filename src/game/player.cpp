@@ -572,7 +572,7 @@ void Player::move(const Physics& physics, double dx, double dy, double dz, bool 
     // tick that was left.
     if (verticalCollision || horizontalCollision) {
         const bool suppress = lastInput.sneak;  // Entity.isSuppressingBounce: the sneak key
-        double restitution = 0;
+        double restitution = suppress ? 0.0 : attr.bounciness;
         double next[3] = {vel[0], vel[1], vel[2]};
         if (xCollision) next[0] = -vel[0] * restitution;
         if (zCollision) next[2] = -vel[2] * restitution;

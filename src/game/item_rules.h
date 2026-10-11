@@ -66,6 +66,22 @@ public:
     };
     Use use(std::string_view itemName);
     bool glider(std::string_view itemName);  // the minecraft:glider component (elytra)
+    // Other default components the client's use / equipment rules read (stack patches override them).
+    struct Components {
+        bool consumable = false, blocksAttacks = false, kinetic = false;
+        bool classUse = false;  // the item class decides the use (bows, crossbows, tridents, spyglasses, horns...)
+        int equipSlot = -1;     // equippable: EquipmentSlot id (1 feet .. 4 head, 5 off hand, 6 body, 7 saddle), -1 none
+        bool swappable = true, equipForPlayer = true;  // equippable swappable / allowed_entities includes players
+        float cooldownSeconds = -1;  // use_cooldown, -1 none
+        std::string cooldownGroup;
+        // Weapons: piercing_weapon (attacks stab), minimum_attack_charge, attack_range (min / max reach, creative
+        // min / max, hitbox margin, mob factor), attack_animation duration.
+        bool piercing = false, hasAttackRange = false;
+        float minimumAttackCharge = 0;
+        float attackRange[6] = {0, 3, 0, 5, 0.3f, 1};
+        int attackSwingTicks = 6;
+    };
+    const Components& components(std::string_view itemName);
     bool inTag(std::string_view tag, std::string_view blockName) const;  // "minecraft:climbable"
 
     // EntityType dimensions and attachment points (EntityAttachments at yRot 0).
@@ -84,6 +100,7 @@ private:
         bool hasTool = false, glider = false;
         Tool tool;
         Use use;
+        Components components;
     };
     const ItemInfo& item(std::string_view itemName);  // read from the component report on first use
     std::vector<u32> blockSet(const nlohmann::json& holderSet) const;

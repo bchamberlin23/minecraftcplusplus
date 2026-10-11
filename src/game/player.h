@@ -161,6 +161,7 @@ public:
         double waterEfficiency = 0;  // water_movement_efficiency (Depth Strider)
         double movementEfficiency = 0;  // movement_efficiency (Soul Speed): the block speed factor towards 1
         double frictionModifier = 1, airDragModifier = 1;  // friction_modifier / air_drag_modifier
+        double bounciness = 0;  // the bounciness attribute (LivingEntity.getEntityBounciness): bounces off anything
         int jumpBoost = -1, slowFalling = -1, levitation = -1, dolphinsGrace = -1;  // effect amplifiers, -1 none
         bool blind = false;             // Blindness (LivingEntity.isMobilityRestricted: no sprinting)
         bool canGlide = false;          // a usable glider (elytra) worn

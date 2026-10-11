@@ -48,6 +48,10 @@ Gameplay::Gameplay(World& world, BlockRegistry& registry, const GameReports& rep
         if (components[i] == "minecraft:can_break") canBreakType_ = int(i);
     }
     blockNames_ = registryNames(reports, "minecraft:block");
+    soundNames_ = registryNames(reports, "minecraft:sound_event");
+    const std::vector<std::string> entityTypes = registryNames(reports, "minecraft:entity_type");
+    for (size_t i = 0; i < entityTypes.size(); ++i)
+        if (entityTypes[i] == "minecraft:player") playerEntityType_ = int(i);
 }
 
 namespace {
@@ -200,6 +204,13 @@ void Gameplay::attach(net::Client& client) {
             if (duration == 0) game_->removeCooldown(group);
             else game_->addCooldown(group, duration);
         });
+    });
+    // ClientboundGameEventPacket rain events (ClientPacketListener.handleGameEvent): the rain level (isRaining > 0.2).
+    client.onPlayPeek("game_event", [this](net::Reader& r) {
+        const int type = r.u8v();
+        const float param = r.f32();
+        if (r.ok && (type == 1 || type == 2 || type == 7))
+            post([this, type, param] { rainLevel_ = type == 1 ? 0.0f : type == 2 ? 1.0f : std::clamp(param, 0.0f, 1.0f); });
     });
     // ClientboundSetCameraPacket: the entity the view follows (handleSetCamera: only an entity we know).
     client.onPlayPeek("set_camera", [this](net::Reader& r) {
@@ -489,7 +500,12 @@ void Gameplay::setPlayer(Game& game, ui::Ui& ui) {
         for (int t : s->removed) mix(&t, sizeof(t));
         return h;
     };
-    game.predictUse = [this](const RayHit* target, bool afterEntity) { predictUse(target, afterEntity); };
+    game.predictItemUse = [this](int hand, const RayHit* target) { return predictItemUse(hand, target); };
+    game.predictUseOn = [this](int hand, const RayHit& hit) { return predictUseOn(hand, hit); };
+    game.handHasItem = [this](int hand) { return (hand == 0 ? mainHand() : offHand()) != nullptr; };
+    game.handOnCooldown = [this](int hand) { return onCooldown(hand == 0 ? mainHand() : offHand()); };
+    game.predictRelease = [this] { releaseUse(); };
+    ui.setEquipmentRule([this](const ui::ItemStack& s, bool& allowed) { return equipSlot(s, allowed, nullptr); });
     riding_ = std::make_unique<Riding>(*this, game, entities_, rules_);
     riding_->setClient(client_);
     game.player().onStartFallFlying = [this] {  // ServerboundPlayerCommandPacket START_FALL_FLYING
@@ -565,7 +581,6 @@ void Gameplay::setPlayer(Game& game, ui::Ui& ui) {
         return !t || t->canDestroyInCreative;
     };
     game.adventureMayBreak = [this](int x, int y, int z) { return adventureMayBreak(x, y, z); };
-    game.mainHandOnCooldown = [this] { return onCooldown(mainHand()); };
     game.entityView = [this](int id, CameraState& c) {  // Camera.setup on an entity: its eyes, its view rotation
         const ent::Entity* e = entities_ ? entities_->entity(id) : nullptr;
         if (!e || !e->info) return false;
@@ -607,6 +622,7 @@ void Gameplay::frame() {
     a.waterEfficiency = attribute("water_movement_efficiency", 0.0);
     a.movementEfficiency = attribute("movement_efficiency", 0.0);
     a.frictionModifier = attribute("friction_modifier", 1.0), a.airDragModifier = attribute("air_drag_modifier", 1.0);
+    a.bounciness = attribute("bounciness", 0.0);
     a.jumpBoost = effect("jump_boost"), a.slowFalling = effect("slow_falling"), a.levitation = effect("levitation");
     a.dolphinsGrace = effect("dolphins_grace");
     a.blind = effect("blindness") >= 0;
@@ -615,6 +631,7 @@ void Gameplay::frame() {
     const ui::ItemStack* feet = ui_ ? ui_->playerSlot(8) : nullptr;
     a.powderSnowWalker = feet && itemName(feet->item) == "minecraft:leather_boots";
     game_->attackSpeed = float(attribute("attack_speed", 4.0));
+    heldWeapon();
     // Player.blockInteractionRange / entityInteractionRange (creative adds 0.5 / 2 as attribute modifiers).
     const bool creative = game_->gameMode == 1;
     game_->blockReach = attribute("block_interaction_range", creative ? 5.0 : 4.5);
@@ -696,7 +713,7 @@ bool Gameplay::hasProjectile() const {
 bool Gameplay::startUsing(int hand) {
     const ui::ItemStack* s = hand == 0 ? mainHand() : offHand();
     if (!s || !game_) return false;
-    const ItemRules::Use u = rules_.use(itemName(s->item));
+    const ItemRules::Use u = stackUse(*s);
     Game::ItemUse& use = game_->use;
     use.active = true;
     use.hand = hand;
@@ -708,33 +725,354 @@ bool Gameplay::startUsing(int hand) {
     return true;
 }
 
-// Minecraft.startUseItem -> MultiPlayerGameMode.useItem -> ItemStack.use: the main hand, then the off hand when the
-// main hand's use passes. Uses that start over time are predicted; the server's living flags confirm or end them.
-void Gameplay::predictUse(const RayHit* target, bool) {
-    if (!game_ || game_->use.active || game_->gameMode == 3) return;
-    for (int hand = 0; hand < 2; ++hand) {
-        const ui::ItemStack* s = hand == 0 ? mainHand() : offHand();
-        if (!s || onCooldown(s)) continue;  // MultiPlayerGameMode.useItem: a cooling item passes to the other hand
-        const ItemRules::Use u = rules_.use(itemName(s->item));
-        if (u.anim == ItemRules::Anim::None && u.duration <= 0) {
-            if (hand == 0) continue;  // nothing to use: the off hand's turn
-            return;
+namespace {
+const std::string* patchOf(const ui::ItemStack& s, int type) {
+    if (type < 0) return nullptr;
+    for (const ui::ItemStack::Component& c : s.added)
+        if (c.type == type) return &c.data;
+    return nullptr;
+}
+bool removedFrom(const ui::ItemStack& s, int type) {
+    return type >= 0 && std::find(s.removed.begin(), s.removed.end(), type) != s.removed.end();
+}
+}  // namespace
+
+int Gameplay::componentType(const char* name) {
+    auto it = componentTypes_.find(name);
+    if (it != componentTypes_.end()) return it->second;
+    const int id = ui_ ? ui_->items().componentType(name) : -1;
+    if (ui_) componentTypes_.emplace(name, id);
+    return id;
+}
+
+// The stack's use as Item.getUseAnimation / getUseDuration, Consumable and UseEffects see it: the item's defaults
+// (component reports and the item classes) with the stack's own patch of consumable, food, blocks_attacks,
+// kinetic_weapon and use_effects.
+ItemRules::Use Gameplay::stackUse(const ui::ItemStack& s) {
+    const std::string name = itemName(s.item);
+    ItemRules::Use u = rules_.use(name);
+    const ItemRules::Components& d = rules_.components(name);
+    auto present = [&](const char* type, bool fallback) {
+        const int t = componentType(type);
+        return patchOf(s, t) ? true : removedFrom(s, t) ? false : fallback;
+    };
+    if (!d.classUse) {
+        if (const std::string* c = patchOf(s, componentType("consumable"))) {  // Consumable.STREAM_CODEC
+            net::Reader r(reinterpret_cast<const u8*>(c->data()), c->size());
+            const float seconds = r.f32();
+            const int anim = r.varInt();
+            const int holder = r.varInt();  // Holder<SoundEvent>: 0 inline (identifier, optional range), else id + 1
+            std::string sound;
+            if (holder == 0) {
+                sound = std::string(r.str());
+                if (r.boolean()) r.f32();
+            } else if (size_t(holder - 1) < soundNames_.size()) {
+                sound = soundNames_[size_t(holder - 1)];
+            }
+            const bool particles = r.boolean();
+            if (r.ok) {
+                u.anim = ItemRules::Anim(std::clamp(anim, 0, int(ItemRules::Anim::Spear)));
+                u.duration = int(seconds * 20.0f);
+                u.consumable = true, u.particles = particles;
+                if (!sound.empty()) u.sound = sound;
+            }
+        } else if (!present("consumable", d.consumable)) {  // Item.getUseAnimation without a consumable
+            const bool blocks = present("blocks_attacks", d.blocksAttacks), kinetic = present("kinetic_weapon", d.kinetic);
+            u.consumable = false;
+            u.anim = blocks ? ItemRules::Anim::Block : kinetic ? ItemRules::Anim::Spear : ItemRules::Anim::None;
+            u.duration = blocks || kinetic ? 72000 : 0;
         }
-        bool can = u.duration > 0;
-        switch (u.anim) {
-            case ItemRules::Anim::Eat:
-            case ItemRules::Anim::Drink:  // Consumable.canConsume -> Player.canEat
-                can = can && (!u.food || u.alwaysEat || food_ < 20 || game_->gameMode == 1);
-                break;
-            case ItemRules::Anim::Bow: can = can && hasProjectile(); break;
-            case ItemRules::Anim::Crossbow: can = can && chargeType(s) == 0 && hasProjectile(); break;  // charged: fires
-            case ItemRules::Anim::Brush: can = can && target != nullptr; break;
-            case ItemRules::Anim::Bundle: can = false; break;  // depends on the contents: the server decides
-            default: break;
-        }
-        if (can) startUsing(hand);
-        return;  // this hand's use was handled (consumed or failed): Minecraft.startUseItem stops
     }
+    if (patchOf(s, componentType("food"))) u.food = true, u.alwaysEat = s.foodAlwaysEdible;
+    else if (removedFrom(s, componentType("food"))) u.food = false;
+    if (const std::string* c = patchOf(s, componentType("use_effects"))) {  // can_sprint, interact_vibrations, speed
+        net::Reader r(reinterpret_cast<const u8*>(c->data()), c->size());
+        const bool sprint = r.boolean();
+        r.boolean();
+        const float speed = r.f32();
+        if (r.ok) u.canSprint = sprint, u.speed = speed;
+    } else if (removedFrom(s, componentType("use_effects"))) {
+        u.canSprint = false, u.speed = 0.2f;  // UseEffects.DEFAULT
+    }
+    return u;
+}
+
+// LivingEntity.getEquipmentSlotForItem for the player: the stack's equippable (patched, else the item's default)
+// slot, else the main hand. allowed: isEquippableInSlot (the equippable's allowed entities include players);
+// swappable: Equippable.swappable.
+int Gameplay::equipSlot(const ui::ItemStack& s, bool& allowed, bool* swappable) {
+    const ItemRules::Components& d = rules_.components(itemName(s.item));
+    allowed = true;
+    if (swappable) *swappable = true;
+    const int type = componentType("equippable");
+    if (const std::string* c = patchOf(s, type)) {  // Equippable.STREAM_CODEC
+        net::Reader r(reinterpret_cast<const u8*>(c->data()), c->size());
+        const int slot = r.varInt();
+        if (r.varInt() == 0) {  // equip sound: inline
+            r.str();
+            if (r.boolean()) r.f32();
+        }
+        if (r.boolean()) r.str();  // asset id
+        if (r.boolean()) r.str();  // camera overlay
+        if (r.boolean()) {         // allowed entities: a tag (not resolved: no players) or entity type ids
+            const i32 n = r.varInt();
+            if (n == 0) {
+                r.str();
+                allowed = false;
+            } else {
+                allowed = false;
+                for (i32 i = 0; i < n - 1 && r.ok; ++i)
+                    if (r.varInt() == playerEntityType_) allowed = true;
+            }
+        }
+        r.boolean();  // dispensable
+        const bool swap = r.boolean();
+        if (!r.ok) return 0;
+        if (swappable) *swappable = swap;
+        return slot;
+    }
+    if (removedFrom(s, type) || d.equipSlot < 0) return 0;
+    allowed = d.equipForPlayer;
+    if (swappable) *swappable = d.swappable;
+    return d.equipSlot;
+}
+
+// Level.isRainingAt for the player's position or the top of its box (Entity.isInRain): raining, open sky, a biome
+// that rains rather than snows.
+bool Gameplay::rainingAt(int x, int y, int z) const {
+    if (rainLevel_ <= 0.2f) return false;
+    for (int yy = y; yy < y + 384; ++yy) {  // the motion-blocking heightmap: nothing solid or liquid above
+        const BlockInfo& b = registry_.infos()[world_.block(x, yy, z)];
+        if (b.collisionCount || b.fluid || b.waterlogged) return false;
+        if (yy > y + 2 && world_.block(x, yy, z) == 0 && yy > 320) break;
+    }
+    const u8 biome = world_.biomeAt(x, z);
+    if (biome == World::kUnknownBiome) return true;
+    const std::string_view b = World::biomeNameView(biome);
+    return !(b.find("desert") != b.npos || b.find("savanna") != b.npos || b.find("badlands") != b.npos ||
+             b.find("snowy") != b.npos || b.find("frozen") != b.npos || b.find("ice") != b.npos || b.find("grove") != b.npos ||
+             b.find("peaks") != b.npos || b.find("nether") != b.npos || b.find("the_end") != b.npos);
+}
+
+bool Gameplay::inWaterOrRain() const {  // Entity.isInWaterOrRain
+    const Player& p = game_->player();
+    const int x = int(std::floor(p.pos[0])), y = int(std::floor(p.pos[1])), z = int(std::floor(p.pos[2]));
+    return p.inWater || rainingAt(x, y, z) || rainingAt(x, int(std::floor(p.box().max[1])), z);
+}
+
+// EnchantmentHelper.getTridentSpinAttackStrength: the stack's enchantments with a trident_spin_attack_strength effect
+// (riptide: 1.5 + 0.75 per level above the first).
+float Gameplay::riptideStrength(const ui::ItemStack& s) const {
+    if (!ui_) return 0;
+    float strength = 0;
+    const auto& reg = ui_->items().enchantments();
+    for (const auto& [id, level] : s.enchantList)
+        if (id >= 0 && size_t(id) < reg.size() && reg[size_t(id)].id == "minecraft:riptide")
+            strength += 1.5f + 0.75f * float(level - 1);
+    return strength;
+}
+
+// Minecraft.startUseItem -> MultiPlayerGameMode.useItem -> ItemStack.use for one hand: kUseConsume when the use was
+// consumed (started using, instant success), kUseFail when it failed (both end startUseItem; a failed use still lets
+// the other hand try), kUsePass when nothing happened. Uses that start over time are predicted (the server's living
+// flags confirm or end them); instant uses apply their use_cooldown; buckets place / pick up fluids.
+int Gameplay::predictItemUse(int hand, const RayHit* target) {
+    const ui::ItemStack* s = hand == 0 ? mainHand() : offHand();
+    if (!s || !game_ || game_->gameMode == 3 || onCooldown(s)) return Game::kUsePass;
+    const std::string name(shortName(itemName(s->item)));
+    const ItemRules::Use u = stackUse(*s);
+    const bool creative = game_->gameMode == 1;
+    auto start = [&] {
+        startUsing(hand);
+        return Game::kUseConsume;
+    };
+    auto instant = [&] {  // ItemStack.applyAfterUseComponentSideEffects: use_cooldown of an instantly used item
+        const ItemRules::Components& d = rules_.components(itemName(s->item));
+        float seconds = d.cooldownSeconds;
+        if (const std::string* c = patchOf(*s, componentType("use_cooldown"))) {
+            net::Reader r(reinterpret_cast<const u8*>(c->data()), c->size());
+            seconds = r.f32();
+        } else if (removedFrom(*s, componentType("use_cooldown"))) {
+            seconds = -1;
+        }
+        if (seconds > 0 && ui_) game_->addCooldown(ui_->items().cooldownGroup(*s), int(seconds * 20.0f));
+        return Game::kUseConsume;
+    };
+    // Item classes with their own use.
+    if (name == "bow") return creative || hasProjectile() ? start() : Game::kUseFail;
+    if (name == "crossbow") return chargeType(s) != 0 ? Game::kUseConsume : hasProjectile() ? start() : Game::kUseFail;
+    if (name == "trident") {
+        if (s->maxDamage > 0 && s->damage >= s->maxDamage - 1) return Game::kUseFail;  // nextDamageWillBreak
+        if (riptideStrength(*s) > 0 && !inWaterOrRain()) return Game::kUseFail;
+        return start();
+    }
+    if (name == "spyglass" || name == "goat_horn" || name == "bundle" || name.ends_with("_bundle")) return start();
+    if (name == "bucket" || name == "water_bucket" || name == "lava_bucket" || name.ends_with("_bucket") && name != "milk_bucket" &&
+        name != "powder_snow_bucket")
+        return predictBucket(hand, name);
+    if (name == "ender_pearl" || name == "snowball" || name == "egg" || name == "blue_egg" || name == "brown_egg" ||
+        name == "wind_charge" || name == "experience_bottle" || name == "splash_potion" || name == "lingering_potion" ||
+        name == "fishing_rod" || name == "writable_book" || name == "written_book" || name == "knowledge_book" || name == "map" ||
+        name == "ender_eye")
+        return instant();
+    if (name == "firework_rocket") return game_->player().fallFlying ? instant() : Game::kUsePass;
+    if (name == "carrot_on_a_stick" || name == "warped_fungus_on_a_stick") return Game::kUsePass;  // steering: riding.cpp
+    // Item.use: consumables, swappable equipment, shields, kinetic weapons.
+    if (u.consumable) {
+        // Consumable.canConsume -> Player.canEat: invulnerable (creative), can_always_eat, or hungry.
+        if (u.food && !(creative || u.alwaysEat || food_ < 20)) return Game::kUseFail;
+        return u.duration > 0 ? start() : instant();
+    }
+    bool allowed, swappable;
+    const int slot = equipSlot(*s, allowed, &swappable);
+    if (slot != 0 && swappable) {  // Equippable.swapWithEquipmentSlot
+        if (!allowed || slot == 6 || slot == 7) return Game::kUsePass;
+        static constexpr int kMenuSlot[6] = {-1, 8, 7, 6, 5, 45};  // feet .. head, off hand
+        const ui::ItemStack* worn = ui_ ? ui_->playerSlot(kMenuSlot[slot]) : nullptr;
+        if (worn && worn->sameItemSameComponents(*s)) return Game::kUseFail;
+        return instant();
+    }
+    if (u.anim == ItemRules::Anim::Block || u.anim == ItemRules::Anim::Spear) return start();
+    (void)target;
+    return Game::kUsePass;
+}
+
+// BucketItem.use on the client: an empty bucket picks up the fluid source it looks at (or empties a waterlogged
+// block), a filled one places its fluid in front of the targeted block (or waterlogs a block that can hold water).
+int Gameplay::predictBucket(int hand, const std::string& name) {
+    (void)hand;
+    Player& p = game_->player();
+    const CameraState c = game_->camera();
+    const double eye[3] = {c.x, c.y, c.z}, cp = std::cos(c.pitch);
+    const double dir[3] = {-std::sin(c.yaw) * cp, -std::sin(c.pitch), std::cos(c.yaw) * cp};
+    const double reach = game_->blockReach;
+    const Physics& physics = game_->physics();
+    const RayHit block = physics.raycast(eye, dir, reach);
+    const double blockT = block.hit ? block.distance : reach;
+    if (name == "bucket") {  // ClipContext.Fluid.SOURCE_ONLY: the first source (or block) along the ray
+        for (double t = 0; t < blockT; t += 0.01) {
+            const int x = int(std::floor(eye[0] + dir[0] * t)), y = int(std::floor(eye[1] + dir[1] * t)), z = int(std::floor(eye[2] + dir[2] * t));
+            const Physics::Fluid f = physics.fluid(x, y, z);
+            if (!f.type || !f.source || eye[1] + dir[1] * t > y + physics.fluidHeight(x, y, z, f)) continue;
+            const u16 state = world_.block(x, y, z);
+            if (!registry_.property(state, "waterlogged").empty()) {  // SimpleWaterloggedBlock.pickupBlock
+                game_->predictBlock(x, y, z, registry_.withProperty(state, "waterlogged", "false"));
+                return Game::kUseConsume;
+            }
+            if (!registry_.infos()[state].fluid) return Game::kUseFail;  // kelp, seagrass: not a BucketPickup
+            game_->predictBlock(x, y, z, 0);  // LiquidBlock.pickupBlock
+            return Game::kUseConsume;
+        }
+        return block.hit ? Game::kUseFail : Game::kUsePass;
+    }
+    if (!block.hit) return Game::kUsePass;
+    const bool water = name != "lava_bucket";
+    const u16 fluidState = registry_.idFor(water ? "minecraft:water[level=0]" : "minecraft:lava[level=0]");
+    auto tryPlace = [&](int x, int y, int z) {  // BucketItem.emptyContents
+        const u16 state = world_.block(x, y, z);
+        const std::string_view logged = registry_.property(state, "waterlogged");
+        if (water && logged == "false") {  // LiquidBlockContainer.placeLiquid
+            game_->predictBlock(x, y, z, registry_.withProperty(state, "waterlogged", "true"));
+            return true;
+        }
+        const BlockInfo& b = registry_.infos()[state];
+        if (!b.replaceable && state != 0) return false;
+        game_->predictBlock(x, y, z, fluidState);
+        return true;
+    };
+    const int fx = block.x + (block.face == 4 ? -1 : block.face == 5 ? 1 : 0), fy = block.y + (block.face == 0 ? -1 : block.face == 1 ? 1 : 0),
+              fz = block.z + (block.face == 2 ? -1 : block.face == 3 ? 1 : 0);
+    const bool container = water && registry_.property(world_.block(block.x, block.y, block.z), "waterlogged") == "false";
+    const bool ok = container ? tryPlace(block.x, block.y, block.z) : (tryPlace(fx, fy, fz));
+    (void)p;
+    return ok ? Game::kUseConsume : Game::kUseFail;
+}
+
+// ItemStack.useOn for items that are not blocks: the uses that act on the clicked block on the client side consume
+// the click (the other hand gets no turn); the rest pass to the item's own use.
+int Gameplay::predictUseOn(int hand, const RayHit& hit) {
+    const ui::ItemStack* s = hand == 0 ? mainHand() : offHand();
+    if (!s || !game_) return Game::kUsePass;
+    const std::string name(shortName(itemName(s->item)));
+    const std::string& state = registry_.name(world_.block(hit.x, hit.y, hit.z));
+    const std::string block(shortName(state.substr(0, state.find('['))));
+    const bool airAbove = world_.block(hit.x, hit.y + 1, hit.z) == 0;
+    if (name == "flint_and_steel" || name == "fire_charge" || name.ends_with("_spawn_egg") || name == "armor_stand" ||
+        name == "item_frame" || name == "glow_item_frame" || name == "painting")
+        return Game::kUseConsume;
+    if (name == "brush") {  // BrushItem.useOn: starts brushing whatever it hits
+        startUsing(hand);
+        return Game::kUseConsume;
+    }
+    if (name == "end_crystal") return block == "obsidian" || block == "bedrock" ? Game::kUseConsume : Game::kUseFail;
+    if (name.ends_with("minecart")) return block.find("rail") != std::string::npos ? Game::kUseConsume : Game::kUseFail;
+    if (name.ends_with("_hoe") && hit.face != 0 && airAbove &&  // HoeItem: tilling
+        (block == "grass_block" || block == "dirt_path" || block == "dirt" || block == "coarse_dirt" || block == "rooted_dirt"))
+        return Game::kUseConsume;
+    if (name.ends_with("_shovel") && hit.face != 0 && airAbove &&  // ShovelItem: paths
+        (block == "grass_block" || block == "dirt" || block == "podzol" || block == "coarse_dirt" || block == "mycelium" ||
+         block == "rooted_dirt"))
+        return Game::kUseConsume;
+    if (name.ends_with("_axe") && !block.starts_with("stripped_") &&  // AxeItem: stripping, scraping, unwaxing
+        (block.ends_with("_log") || block.ends_with("_wood") || block.ends_with("_stem") || block.ends_with("_hyphae") ||
+         block == "bamboo_block" || block.find("copper") != std::string::npos))
+        return Game::kUseConsume;
+    if (name == "honeycomb" && block.find("copper") != std::string::npos && !block.starts_with("waxed_")) return Game::kUseConsume;
+    if (name == "ender_eye" && block == "end_portal_frame" && registry_.property(world_.block(hit.x, hit.y, hit.z), "eye") == "false")
+        return Game::kUseConsume;
+    return Game::kUsePass;
+}
+
+// The main hand's weapon components for Minecraft.startAttack (defaults with the stack's patch): piercing_weapon,
+// minimum_attack_charge, attack_range (the player's: creative or survival reaches, plus the hitbox margin) and the
+// attack_animation duration with Haste / Conduit Power / Mining Fatigue (LivingEntity.getModifiedSwingDuration).
+void Gameplay::heldWeapon() {
+    const ui::ItemStack* s = mainHand();
+    ItemRules::Components d = s ? rules_.components(itemName(s->item)) : ItemRules::Components{};
+    if (s) {
+        auto read = [&](const char* type, auto fn) {
+            const int t = componentType(type);
+            if (const std::string* c = patchOf(*s, t)) {
+                net::Reader r(reinterpret_cast<const u8*>(c->data()), c->size());
+                fn(r, true);
+            } else if (removedFrom(*s, t)) {
+                net::Reader r(nullptr, 0);
+                fn(r, false);
+            }
+        };
+        read("piercing_weapon", [&](net::Reader&, bool on) { d.piercing = on; });
+        read("minimum_attack_charge", [&](net::Reader& r, bool on) { d.minimumAttackCharge = on ? r.f32() : 0.0f; });
+        read("attack_range", [&](net::Reader& r, bool on) {
+            d.hasAttackRange = on;
+            for (int i = 0; i < 6 && on; ++i) d.attackRange[i] = r.f32();
+        });
+        read("attack_animation", [&](net::Reader& r, bool on) {
+            if (on) r.varInt();
+            d.attackSwingTicks = on ? r.varInt() : 6;
+        });
+    }
+    game_->heldPiercing = d.piercing;
+    game_->heldMinimumCharge = d.minimumAttackCharge;
+    const bool creative = game_->gameMode == 1;
+    game_->attackMinReach = d.hasAttackRange ? std::max(0.0, double(d.attackRange[creative ? 2 : 0] - d.attackRange[4])) : 0.0;
+    game_->attackMaxReach = d.hasAttackRange ? double(d.attackRange[creative ? 3 : 1] + d.attackRange[4]) : -1.0;
+    int swing = d.attackSwingTicks;
+    const int haste = effect("haste"), conduit = effect("conduit_power");
+    if (haste >= 0 || conduit >= 0) swing -= 1 + std::max(haste, conduit);  // MobEffectUtil.getDigSpeedAmplification
+    else if (const int fatigue = effect("mining_fatigue"); fatigue >= 0) swing += (1 + fatigue) * 2;
+    game_->swingTicks = swing;
+}
+
+// Item.releaseUsing on the client: a riptide trident held for 10 ticks in water or rain launches the player.
+void Gameplay::releaseUse() {
+    Game::ItemUse& use = game_->use;
+    const ui::ItemStack* s = use.hand == 0 ? mainHand() : offHand();
+    if (!s || s->item != use.item || shortName(itemName(s->item)) != "trident" || use.ticksUsing() < 10) return;
+    if (s->maxDamage > 0 && s->damage >= s->maxDamage - 1) return;  // nextDamageWillBreak
+    const float strength = riptideStrength(*s);
+    if (strength <= 0 || !inWaterOrRain() || (riding_ && riding_->vehicle() >= 0)) return;
+    if (verbose_) LOG("gameplay: riptide %.2f", strength);
+    game_->player().riptide(game_->physics(), strength);
 }
 
 // LivingEntity.updatingUsingItem / updateUsingItem (before the count down) and ItemStack.onUseTick.
