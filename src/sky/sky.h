@@ -17,6 +17,7 @@ class Renderer;
 class World;
 class BlockRegistry;
 struct CameraState;
+struct WorldBorder;
 namespace net {
 class Client;
 }
@@ -56,6 +57,14 @@ public:
     // the world darkening ramps in (GameRenderer.bossOverlayWorldDarkening) and darkens the lightmap and fog colour;
     // the world fog closes the fog in to 10..96 blocks and hides the sky.
     void setBossOverlay(bool darkenScreen, bool worldFog) { bossDarken_ = darkenScreen, bossFog_ = worldFog; }
+    // The level's world border, before update(): its wall (WorldBorderRenderer) is drawn after the weather when the
+    // camera is within renderDistance blocks of it. nullptr: none.
+    void setWorldBorder(const WorldBorder* border, float partialTick, float renderDistance) {
+        border_ = border, borderPartial_ = partialTick, borderRange_ = renderDistance;
+    }
+    // Level ticks per second (the server's tick rate; 0 while frozen, ClientLevel.tickTime then stands still): the
+    // clocks and the cloud / weather animation time advance at it.
+    void setTickRate(double ticksPerSecond) { tickRate_ = ticksPerSecond; }
 
     // Shared with the render passes.
     struct Frame;
@@ -71,6 +80,7 @@ private:
     void buildCelestial(const Value* attr, float rainLevel, bool darkDisc);
     void buildWeather(const CameraState& cam, const Value* attr, float rain);
     void buildClouds(const CameraState& cam, const Value* attr);
+    void buildBorder(const CameraState& cam);
 
     Environment env_;
     Renderer* renderer_ = nullptr;
@@ -97,6 +107,9 @@ private:
     std::vector<Bolt> bolts_;
     int flashTime_ = 0;  // ClientLevel.skyFlashTime
     bool bossDarken_ = false, bossFog_ = false;
+    const WorldBorder* border_ = nullptr;
+    float borderPartial_ = 0, borderRange_ = 512;
+    double tickRate_ = 20.0;
     float darken_ = 0, darkenO_ = 0;  // GameRenderer.bossOverlayWorldDarkening (per tick)
     double tickAccumulator_ = 0;
 
@@ -151,6 +164,8 @@ struct Sky::Frame {
     // Weather columns (rain then snow), camera-relative.
     std::vector<Vertex> weather;
     u32 rainVertices = 0;
+    // World border wall: forcefield quads (camera-relative triangles, additive), nearest side first.
+    std::vector<Vertex> border;
 };
 
 }  // namespace sky

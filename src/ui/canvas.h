@@ -53,7 +53,9 @@ public:
     struct Batch {
         u32 first = 0, count = 0;
         bool clip = false;
-        u8 blend = 0;  // 0 alpha, 1 invert (one minus destination colour: crosshair), 2 glint (src * src + dst)
+        // 0 alpha, 1 invert (one minus destination colour: crosshair), 2 glint (src * src + dst), 3 vignette
+        // (dst * (1 - src): RenderPipelines.VIGNETTE; like invert, drawn onto the final image with a separate UI layer)
+        u8 blend = 0;
         int scissor[4] = {0, 0, 0, 0};  // screen pixels x0 y0 x1 y1 when clip
     };
 

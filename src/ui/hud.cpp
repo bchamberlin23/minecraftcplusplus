@@ -88,15 +88,13 @@ void Ui::State::tickHud() {
     if (clock - lastHealthTime > 1.0) displayHealth = hp;
     lastHealthInt = hp;
     // Camera.tickFov with AbstractClientPlayer.getFieldOfViewModifier: flying, and the movement speed attribute
-    // (sprinting x1.3, Speed +20% / Slowness -15% per level) against the walking speed.
+    // (the server's value with effects and equipment, x1.3 sprinting) against the ability's walking speed.
     float target = 1.0f;
     if (p.flying) target *= 1.1f;
-    float speed = p.sprinting ? 1.3f : 1.0f;
-    for (const auto& [id, e] : effects) {
-        if (e.name == "speed") speed *= 1.0f + 0.2f * float(e.amplifier + 1);
-        if (e.name == "slowness") speed *= std::max(0.0f, 1.0f - 0.15f * float(e.amplifier + 1));
+    if (p.walkingSpeed != 0.0f) {
+        const float speed = float(p.attr.moveSpeed * (p.sprinting ? 1.3 : 1.0)) / p.walkingSpeed;
+        target *= (speed + 1.0f) / 2.0f;
     }
-    target *= (speed + 1.0f) / 2.0f;
     target *= game->useFovModifier();                         // bow drawing (game/game.h)
     if (game->scoping() && game->cameraMode == 0) target = 0.1f;  // spyglass
     oldFovModifier = fovModifier;
@@ -130,6 +128,13 @@ void Ui::State::drawItem(Canvas& c, const ItemStack& s, float x, float y, bool d
     if (s.count != 1 || countOverride) {
         const std::string n = countOverride ? countOverride : std::to_string(s.count);
         font.draw(c, n, x + 19 - 2 - float(font.width(n)), y + 6 + 3, kWhite, true);
+    }
+    if (game) {  // GuiGraphics.itemCooldown: the remaining part of the cooldown as a white sweep from the top
+        const float cooldown = game->cooldownPercent(items.cooldownGroup(s), game->partialTick());
+        if (cooldown > 0.0f) {
+            const float top = y + std::floor(16.0f * (1.0f - cooldown)), bottom = top + std::ceil(16.0f * cooldown);
+            c.fill(x, top, x + 16, bottom, 0x7FFFFFFF);
+        }
     }
 }
 
@@ -541,27 +546,33 @@ void Ui::State::drawDebug(Canvas& c) {
         rs.commands[0] + rs.commands[1] + rs.commands[2] + rs.commands[3]);
     add(left, "F: %zu/%zu far regions, %.0f/%.0f MB", ts.farRegions, ts.farPending,
         double(renderer->arenaBytesUsed()) / (1 << 20), double(renderer->arenaBytesTotal()) / (1 << 20));
-    if (session) add(left, "Server: game mode %d, entity %d", gameMode(), session->entityId());
-    left.emplace_back("");
-    add(left, "XYZ: %.3f / %.5f / %.3f", p.pos[0], p.pos[1], p.pos[2]);
-    const int bx = int(std::floor(p.pos[0])), by = int(std::floor(p.pos[1])), bz = int(std::floor(p.pos[2]));
-    add(left, "Block: %d %d %d [%d %d %d]", bx, by, bz, bx & 15, by & 15, bz & 15);
-    add(left, "Chunk: %d %d %d [%d %d in r.%d.%d.mca]", bx >> 4, by >> 4, bz >> 4, (bx >> 4) & 31, (bz >> 4) & 31, bx >> 9, bz >> 9);
-    float yaw = std::fmod(p.yaw * 180.0f / 3.14159265f, 360.0f);
-    if (yaw >= 180) yaw -= 360;
-    if (yaw < -180) yaw += 360;
-    const int dir = int(std::floor(yaw / 90.0f + 0.5f)) & 3;
-    add(left, "Facing: %s (%s) (%.1f / %.1f)", kDirNames[dir], kTowards[dir], yaw, p.pitch * 180.0f / 3.14159265f);
-    {
-        std::shared_lock lock(world->mutex());
-        const int ey = int(std::floor(cam.y));
-        const World::LightView lv = world->light(bx >> 4, ey >> 4, bz >> 4);
-        const u8 l = lv.at(bx & 15, ey & 15, bz & 15);
-        add(left, "Light: %d (%d sky, %d block)", std::max(l >> 4, l & 15), l >> 4, l & 15);
+    static const char* const kDifficulty[4] = {"peaceful", "easy", "normal", "hard"};
+    if (session)
+        add(left, "Server: game mode %d, entity %d, %s%s", gameMode(), session->entityId(), kDifficulty[difficulty & 3],
+            difficultyLocked ? " (locked)" : "");
+    // Reduced debug info (the server's gamerule): only the entries DebugScreenEntry.isAllowed keeps, no positions.
+    if (!reducedDebugInfo) {
+        left.emplace_back("");
+        add(left, "XYZ: %.3f / %.5f / %.3f", p.pos[0], p.pos[1], p.pos[2]);
+        const int bx = int(std::floor(p.pos[0])), by = int(std::floor(p.pos[1])), bz = int(std::floor(p.pos[2]));
+        add(left, "Block: %d %d %d [%d %d %d]", bx, by, bz, bx & 15, by & 15, bz & 15);
+        add(left, "Chunk: %d %d %d [%d %d in r.%d.%d.mca]", bx >> 4, by >> 4, bz >> 4, (bx >> 4) & 31, (bz >> 4) & 31, bx >> 9, bz >> 9);
+        float yaw = std::fmod(p.yaw * 180.0f / 3.14159265f, 360.0f);
+        if (yaw >= 180) yaw -= 360;
+        if (yaw < -180) yaw += 360;
+        const int dir = int(std::floor(yaw / 90.0f + 0.5f)) & 3;
+        add(left, "Facing: %s (%s) (%.1f / %.1f)", kDirNames[dir], kTowards[dir], yaw, p.pitch * 180.0f / 3.14159265f);
+        {
+            std::shared_lock lock(world->mutex());
+            const int ey = int(std::floor(cam.y));
+            const World::LightView lv = world->light(bx >> 4, ey >> 4, bz >> 4);
+            const u8 l = lv.at(bx & 15, ey & 15, bz & 15);
+            add(left, "Light: %d (%d sky, %d block)", std::max(l >> 4, l & 15), l >> 4, l & 15);
+        }
+        if (biomeLookup) add(left, "Biome: %s", biomeLookup(bx, int(std::floor(cam.y)), bz).c_str());
+        add(left, "%s%s", p.flying ? "Flying" : p.inWater ? "Swimming" : p.onGround ? "On ground" : "Airborne",
+            p.sneaking ? ", sneaking" : "");
     }
-    if (biomeLookup) add(left, "Biome: %s", biomeLookup(bx, int(std::floor(cam.y)), bz).c_str());
-    add(left, "%s%s", p.flying ? "Flying" : p.inWater ? "Swimming" : p.onGround ? "On ground" : "Airborne",
-        p.sneaking ? ", sneaking" : "");
 
     MEMORYSTATUSEX mem{sizeof(mem)};
     GlobalMemoryStatusEx(&mem);
@@ -576,7 +587,7 @@ void Ui::State::drawDebug(Canvas& c) {
     add(right, "Display: %ux%u (%s)", renderer->width(), renderer->height(), renderer->adapterName().c_str());
     add(right, "Direct3D 12, GUI scale %d", c.scale());
     const RayHit& t = game->target();
-    if (t.hit) {
+    if (t.hit && !reducedDebugInfo) {
         right.emplace_back("");
         add(right, "\xC2\xA7nTargeted Block: %d, %d, %d", t.x, t.y, t.z);
         const std::string& state = registry->name(world->block(t.x, t.y, t.z));

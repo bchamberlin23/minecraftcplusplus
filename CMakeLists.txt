@@ -77,6 +77,7 @@ add_shader(sky.hlsl SkyDarkDiscPS ps_6_0)
 add_shader(sky.hlsl SkyGeoVS vs_6_0)
 add_shader(sky.hlsl SkyGeoPS ps_6_0)
 add_shader(sky.hlsl SkyWeatherPS ps_6_0)
+add_shader(sky.hlsl SkyBorderPS ps_6_0)
 add_shader(sky.hlsl SkyCloudVS vs_6_0)
 add_shader(sky.hlsl SkyCloudPS ps_6_0)
 # Built-in shader pipeline (src/render/shading.cpp).

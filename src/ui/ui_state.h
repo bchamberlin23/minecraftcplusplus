@@ -146,6 +146,11 @@ struct Ui::State {
         return false;
     }
     bool hardcore = false;
+    // The server's policy for this player (login, game_event, entity_event): F3 without positions, the death screen
+    // (off: immediate respawn), limited crafting (stored; the recipe book does not use it yet); the level's difficulty.
+    bool reducedDebugInfo = false, showDeathScreen = true, limitedCrafting = false;
+    int difficulty = 2;  // 0 peaceful, 1 easy, 2 normal, 3 hard
+    bool difficultyLocked = false;
     Text deathMessage;  // ClientboundPlayerCombatKillPacket
     int lastGameMode = -1;
 

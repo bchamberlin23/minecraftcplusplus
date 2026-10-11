@@ -11,8 +11,6 @@
 #include <unordered_set>
 
 namespace {
-constexpr double kTick = 0.05;   // 20 ticks per second
-constexpr double kReach = 5.0;   // creative block reach
 constexpr double kPi = 3.14159265358979;
 constexpr int kDir[6][3] = {{0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}};
 constexpr const char* kFaceName[6] = {"down", "up", "north", "south", "west", "east"};
@@ -28,6 +26,7 @@ Game::Game(World& world, BlockRegistry& registry, Terrain& terrain, Renderer& re
       renderer_(renderer),
       physics_(world, registry),
       lighting_(world, registry) {
+    physics_.border = &border;
     player_.pos[0] = start.x, player_.pos[1] = start.y, player_.pos[2] = start.z;
     std::copy(player_.pos, player_.pos + 3, player_.prev);
     player_.yaw = float(start.yaw * kPi / 180.0);
@@ -40,6 +39,7 @@ Game::Game(World& world, BlockRegistry& registry, Terrain& terrain, Renderer& re
 
 CameraState Game::camera() const {
     CameraState c;
+    if (cameraEntity >= 0 && entityView && entityView(cameraEntity, c)) return c;
     double eye[3];
     if (riding() && rideEye && rideEye(eye)) {  // the seat of the vehicle as it is drawn
         c.x = eye[0], c.y = eye[1], c.z = eye[2];
@@ -197,9 +197,12 @@ void Game::frame(Window& w, double dt) {
     else pendingAttacks_ = std::min(pendingAttacks_ + ev.left, 4);
     const bool attackDown = !inputSuspended && w.mouseCaptured() && w.keyDown(VK_LBUTTON);
     tickAccumulator_ += std::min(dt, 0.25);
-    while (tickAccumulator_ >= kTick) {
+    const double tick = tickRate.tickSeconds();  // 20 ticks per second, or the server's slower rate
+    while (tickAccumulator_ >= tick) {
         // Minecraft.tick: the keybinds (attack / digging) with a fresh pick, then the player.
         ++ticks_;
+        tickRate.tick();                   // TickRateManager.tick
+        if (tickRate.runs) border.tick();  // ClientLevel.tick
         alpha_ = 1.0;
         retarget();
         if (inputSuspended) missTime_ = 10000;
@@ -216,14 +219,19 @@ void Game::frame(Window& w, double dt) {
         if (riding()) {  // a passenger does not move itself (LocalPlayer.rideTick)
             player_.lastInput = input;
             rideTick(input);
+        } else if (cameraEntity >= 0) {  // spectating another entity: the keys reach the server, the player stays
+            player_.tick(physics_, PlayerInput{});
+            player_.lastInput = input;
         } else {
             player_.tick(physics_, input);
         }
         tickCameraFeedback();
+        ++cooldownTick_;  // Player.tick -> ItemCooldowns.tick
+        std::erase_if(cooldowns_, [&](const auto& c) { return c.second.end <= cooldownTick_; });
         if (onPlayerTick) onPlayerTick();
-        tickAccumulator_ -= kTick;
+        tickAccumulator_ -= tick;
     }
-    alpha_ = tickAccumulator_ / kTick;
+    alpha_ = tickAccumulator_ / tick;
     if (ticks_ % 20 == 0)  // LevelRenderer.tick: cracks nobody updated for 400 ticks go away
         for (auto it = destructions_.begin(); it != destructions_.end();)
             it = ticks_ > it->second.tick + 400 ? destructions_.erase(it) : std::next(it);
@@ -238,7 +246,9 @@ void Game::retarget() {
     const double origin[3] = {cam.x, cam.y, cam.z};
     const double cp = std::cos(cam.pitch);
     const double dir[3] = {-std::sin(cam.yaw) * cp, -std::sin(cam.pitch), std::cos(cam.yaw) * cp};
-    target_ = physics_.raycast(origin, dir, kReach);
+    target_ = physics_.raycast(origin, dir, std::max(blockReach, entityReach));
+    blockDistance_ = target_.hit ? target_.distance : -1.0;
+    if (target_.hit && !(target_.distance < blockReach)) target_.hit = false;  // filterHitResult: a miss
 }
 
 void Game::simulate(const PlayerInput& input, int ticks) {
@@ -273,7 +283,7 @@ void Game::handleClicks(Window& w, double dt, int rightPresses, int middlePresse
         use.active = false;  // Player.releaseUsingItem: the client stops at once
         if (onReleaseUseItem) onReleaseUseItem();
     }
-    if (doPlace && onEntityClick && onEntityClick(false, ev.right > 0, target_.hit ? target_.distance : -1.0)) {
+    if (doPlace && onEntityClick && onEntityClick(false, ev.right > 0, blockDistance_)) {
         repeatTimer_ = 0.3;
         if (ev.right > 0 && !usingItem_ && onUseItem) {  // e.g. a shield raised facing a mob
             onUseItem(nullptr, true);
@@ -308,9 +318,15 @@ bool Game::useTarget(bool place) {
         if (onSwing) onSwing();
         return true;
     }
+    // MultiPlayerGameMode.useItemOn: a block outside the world border fails (nothing is sent, no item use follows).
+    if (!border.blockWithinBounds(target_.x, target_.z)) {
+        useConsumed_ = true;
+        return false;
+    }
     // Using a block that opens a screen (or acting with an item that is not a block) goes to the server as is.
     const bool interacts = onInteract && !player_.sneaking && onInteract(target_.x, target_.y, target_.z);
-    if (interacts || !hotbar_[selected_]) {
+    // A held block cooling down is not placed (ItemStack.useOn is skipped); the use still goes to the server.
+    if (interacts || !hotbar_[selected_] || (mainHandOnCooldown && mainHandOnCooldown())) {
         useConsumed_ = interacts;  // else the held item may still be used (food, buckets...)
         if (onEdit) onEdit(action);
         return false;
@@ -347,6 +363,14 @@ float Game::useFovModifier() const {
 }
 
 bool Game::scoping() const { return use.active && use.anim == 7; }  // ItemRules::Anim::Spyglass
+
+float Game::cooldownPercent(const std::string& group, float partial) const {
+    auto it = cooldowns_.find(group);
+    if (it == cooldowns_.end()) return 0.0f;
+    const float duration = float(it->second.end - it->second.start);
+    const float remaining = float(it->second.end) - (float(cooldownTick_) + partial);
+    return std::clamp(remaining / duration, 0.0f, 1.0f);
+}
 
 void Game::tickCameraFeedback() {
     // LocalPlayer.move -> addWalkedDistance; AbstractClientPlayer.updateBob (resetBob while riding).
@@ -406,6 +430,7 @@ bool Game::destroyBlock(int x, int y, int z) {
 bool Game::startDestroyBlock(int x, int y, int z, int face) {
     // Player.blockActionRestricted: spectators never, adventure only with a matching can_break on the held item.
     if (gameMode == 3 || (gameMode == 2 && !(adventureMayBreak && adventureMayBreak(x, y, z)))) return false;
+    if (!border.blockWithinBounds(x, z)) return false;
     if (instabuild) {
         const bool breaks = !(canDestroyInCreative && !canDestroyInCreative()) && world_.block(x, y, z) != 0;
         sendDig(kStartDestroy, x, y, z, face, breaks);
@@ -445,7 +470,7 @@ bool Game::continueDestroyBlock(int x, int y, int z, int face) {
         --destroyDelay_;
         return true;
     }
-    if (instabuild) {
+    if (instabuild && border.blockWithinBounds(x, z)) {
         destroyDelay_ = 5;
         const bool breaks = !(canDestroyInCreative && !canDestroyInCreative()) && world_.block(x, y, z) != 0;
         sendDig(kStartDestroy, x, y, z, face, breaks);
@@ -482,7 +507,7 @@ bool Game::startAttack() {
     if (missTime_ > 0 || handsBusy) return false;
     if (gameMode == 3) return true;  // spectators: no attack, no digging
     // An entity in front of the targeted block takes the press (the attack packet carries its own punch).
-    if (onEntityClick && onEntityClick(true, false, target_.hit ? target_.distance : -1.0)) {
+    if (onEntityClick && onEntityClick(true, false, blockDistance_)) {
         attackStrengthTicker = 0;  // MultiPlayerGameMode.attack -> resetAttackStrengthTicker
         if (onSwing) onSwing();
         return false;
@@ -580,8 +605,8 @@ void Game::buildOverlay() {
     std::vector<LineVertex> world, screen;
     std::vector<SpriteVertex> sprites;
 
-    // Outline of the targeted block's selection shape.
-    if (target_.hit) {
+    // Outline of the targeted block's selection shape (none outside the world border).
+    if (target_.hit && border.blockWithinBounds(target_.x, target_.z)) {
         const BlockInfo& b = registry_.infos()[world_.block(target_.x, target_.y, target_.z)];
         for (u32 i = 0; i < b.selectionCount; ++i) {
             const Box& s = registry_.box(b.selectionFirst + i);

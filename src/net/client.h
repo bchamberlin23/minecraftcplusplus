@@ -8,6 +8,7 @@
 #include "net/protocol.h"
 #include "world/world.h"
 
+#include <array>
 #include <atomic>
 #include <functional>
 #include <thread>
@@ -59,6 +60,7 @@ struct AckEvent {
 };
 struct AbilitiesEvent {
     bool flying = false, mayFly = false, instabuild = false;
+    float flyingSpeed = 0.05f, walkingSpeed = 0.1f;
 };
 struct GameModeEvent {
     int mode = 0;  // 0 survival, 1 creative, 2 adventure, 3 spectator
@@ -66,11 +68,19 @@ struct GameModeEvent {
 struct HeldSlotEvent {
     int slot = 0;
 };
+// chunks_biomes: new biomes of loaded columns (sections[i] is section y firstSy + i; lowest quart layer each).
+struct BiomesEvent {
+    struct Column {
+        int cx = 0, cz = 0, firstSy = 0;
+        std::vector<std::array<u8, 16>> sections;
+    };
+    std::vector<Column> columns;
+};
 struct DisconnectEvent {
     std::string reason;
 };
 using Event = std::variant<JoinEvent, ChunkEvent, ForgetEvent, BlocksEvent, LightEvent, TeleportEvent, AckEvent,
-                           AbilitiesEvent, GameModeEvent, HeldSlotEvent, DisconnectEvent>;
+                           AbilitiesEvent, GameModeEvent, HeldSlotEvent, DisconnectEvent, BiomesEvent>;
 
 struct ClientStats {
     double connectMs = -1, joinMs = -1, firstChunkMs = -1;  // since start()
@@ -125,6 +135,12 @@ public:
     };
     const std::vector<RegistryEntry>& registryEntries(const std::string& registry) const;
     bool inPlay() const { return phase_ == Play; }
+    // The server's chunk cache view (set_chunk_cache_center / _radius, the login's distances) and simulation
+    // distance (set_simulation_distance), in chunks; any thread.
+    int viewDistance() const { return viewDistance_; }
+    int simulationDistance() const { return simulationDistance_; }
+    int viewCenterX() const { return viewCenter_[0]; }
+    int viewCenterZ() const { return viewCenter_[1]; }
 
 private:
     enum Phase { Login, Configuration, Play, PhaseCount };
@@ -155,6 +171,7 @@ private:
     std::thread thread_;
     std::atomic<bool> alive_{false}, quit_{false};
     std::atomic<int> phase_{Login};
+    std::atomic<int> viewDistance_{0}, simulationDistance_{0}, viewCenter_[2] = {0, 0};
     mutable std::mutex mutex_;  // events_, stats_
     std::mutex sendMutex_;  // phase check + send are atomic w.r.t. phase changes
     std::vector<Event> events_;

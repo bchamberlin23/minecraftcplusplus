@@ -1,6 +1,7 @@
 #include "ui/gameplay_hud.h"
 
 #include "game/item_rules.h"
+#include "game/world_border.h"
 
 #include <algorithm>
 #include <cmath>
@@ -8,6 +9,7 @@
 namespace ui {
 
 static void drawSpyglass(Ui::State& s, Canvas& c);
+static void drawVignette(Ui::State& s, Canvas& c);
 
 // Hud.extractTextureOverlay: a full-screen texture tinted white with `alpha`.
 static void textureOverlay(Canvas& c, const Sprite* tex, float alpha) {
@@ -18,9 +20,30 @@ static void textureOverlay(Canvas& c, const Sprite* tex, float alpha) {
 }
 
 void drawCameraOverlays(Ui::State& s, Canvas& c) {
+    drawVignette(s, c);
     drawSpyglass(s, c);
     // Hud.extractCameraOverlays, after the scope: the powder snow frost by Entity.getPercentFrozen.
     if (s.ticksFrozen > 0) textureOverlay(c, s.sprites.texture("misc/powder_snow_outline"), float(std::min(s.ticksFrozen, 140)) / 140.0f);
+}
+
+// Hud.extractVignette, the world border warning: red as the camera nears the border (or a moving border's reach
+// within its warning time). The vignette's darkness from the light level (vignetteBrightness) is not drawn natively,
+// so it is drawn only while warning, as at full light (brightness 0).
+static void drawVignette(Ui::State& s, Canvas& c) {
+    const WorldBorder& b = s.game->border;
+    const Player& p = s.game->player();
+    const float dist = float(b.distanceToBorder(p.pos[0], p.pos[2]));
+    const double moving = std::min(b.lerpSpeed() * b.warningTime, std::abs(b.lerpTarget() - b.size()));
+    const double warning = std::max(double(b.warningBlocks), moving);
+    if (!(dist < warning)) return;
+    const float strength = std::clamp(1.0f - float(dist / warning), 0.0f, 1.0f);
+    const Sprite* tex = s.sprites.texture("misc/vignette");
+    if (!tex || strength <= 0.0f) return;
+    const int gw = c.guiWidth(), gh = c.guiHeight();
+    const int gb = int(strength * 255.0f + 0.5f);  // red: brightness * (1 - strength), green / blue: strength
+    c.setBlend(3);
+    blitTexture(c, tex, 0, 0, 0, 0, float(gw), float(gh), gw, gh, argb(255, 0, gb, gb));
+    c.setBlend(0);
 }
 
 static void drawSpyglass(Ui::State& s, Canvas& c) {

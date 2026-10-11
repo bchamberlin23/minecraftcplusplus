@@ -183,11 +183,140 @@ void Gameplay::attach(net::Client& client) {
             entityId_ = id;
             effects_.clear(), attributes_.clear(), entityAttributes_.clear();
             if (riding_) riding_->dismounted();
+            if (game_) {  // a new ClientLevel and player
+                game_->border = WorldBorder{}, game_->tickRate = TickRate{};
+                game_->clearCooldowns(), game_->cameraEntity = -1;
+            }
+            if (entities_) entities_->tickRate = TickRate{};
         });
+    });
+    // ClientboundCooldownPacket: cooldown group, duration in ticks (0 removes it).
+    client.onPlayPeek("cooldown", [this](net::Reader& r) {
+        std::string group(r.str());
+        const int duration = r.varInt();
+        if (r.ok) post([this, group = std::move(group), duration] {
+            if (verbose_) LOG("gameplay: cooldown %s %d ticks", group.c_str(), duration);
+            if (!game_) return;
+            if (duration == 0) game_->removeCooldown(group);
+            else game_->addCooldown(group, duration);
+        });
+    });
+    // ClientboundSetCameraPacket: the entity the view follows (handleSetCamera: only an entity we know).
+    client.onPlayPeek("set_camera", [this](net::Reader& r) {
+        const int id = r.varInt();
+        if (r.ok) post([this, id] {
+            if (!game_) return;
+            if (id == entityId_) game_->cameraEntity = -1;
+            else if (entities_ && entities_->entity(id)) game_->cameraEntity = id;
+        });
+    });
+    // ClientboundPlayerRotationPacket (handleRotatePlayer): yaw / pitch, each absolute or relative; the client answers
+    // with its new rotation (ServerboundMovePlayerPacket.Rot, not on the ground, no collision).
+    client.onPlayPeek("player_rotation", [this](net::Reader& r) {
+        const float yRot = r.f32();
+        const bool relativeY = r.boolean();
+        const float xRot = r.f32();
+        const bool relativeX = r.boolean();
+        if (r.ok) post([this, yRot, relativeY, xRot, relativeX] {
+            if (!game_) return;
+            Player& p = game_->player();
+            constexpr float kDeg = 180.0f / 3.14159265f;
+            const float yaw = (relativeY ? p.yaw * kDeg : 0.0f) + yRot;
+            const float pitch = std::clamp((relativeX ? p.pitch * kDeg : 0.0f) + xRot, -90.0f, 90.0f);
+            p.yaw = yaw / kDeg, p.pitch = pitch / kDeg;
+            if (!client_) return;
+            net::Writer w;
+            w.f32(yaw), w.f32(pitch);
+            w.u8v(0);
+            client_->sendPlay("move_player_rot", w);
+        });
+    });
+    // ClientboundPlayerLookAtPacket (handleLookAt -> Entity.lookAt): turn from our feet or eyes towards a point, or
+    // towards an entity's feet or eyes when we know it.
+    client.onPlayPeek("player_look_at", [this](net::Reader& r) {
+        const int fromEyes = r.varInt();
+        double to[3];
+        for (double& v : to) v = r.f64();
+        int entity = -1, toEyes = 0;
+        if (r.boolean()) entity = r.varInt(), toEyes = r.varInt();
+        if (r.ok) post([this, fromEyes, x = to[0], y = to[1], z = to[2], entity, toEyes] {
+            if (!game_) return;
+            double target[3] = {x, y, z};
+            if (const ent::Entity* e = entity >= 0 && entities_ ? entities_->entity(entity) : nullptr) {
+                std::copy(e->pos, e->pos + 3, target);
+                if (toEyes == 1 && e->info) target[1] += e->info->eye;
+            }
+            Player& p = game_->player();
+            const double dx = target[0] - p.pos[0], dy = target[1] - (p.pos[1] + (fromEyes == 1 ? p.eyeHeight() : 0.0));
+            const double dz = target[2] - p.pos[2];
+            auto wrap = [](float deg) { return deg - 360.0f * std::floor((deg + 180.0f) / 360.0f); };  // Mth.wrapDegrees
+            constexpr double kDeg = 180.0 / 3.14159265358979;
+            const float pitch = wrap(float(-(std::atan2(dy, std::sqrt(dx * dx + dz * dz)) * kDeg)));
+            const float yaw = wrap(float(std::atan2(dz, dx) * kDeg) - 90.0f);
+            p.yaw = float(yaw / kDeg), p.pitch = float(pitch / kDeg);
+        });
+    });
+    // ClientboundTickingStatePacket / ClientboundTickingStepPacket (handleTickingState / handleTickingStep): the
+    // tick rate manager of the client level, here one copy for the player's ticks and one for the entities'.
+    client.onPlayPeek("ticking_state", [this](net::Reader& r) {
+        const float rate = r.f32();
+        const bool frozen = r.boolean();
+        if (r.ok) post([this, rate, frozen] {
+            if (verbose_) LOG("gameplay: tick rate %.1f%s", rate, frozen ? ", frozen" : "");
+            for (TickRate* t : {game_ ? &game_->tickRate : nullptr, entities_ ? &entities_->tickRate : nullptr})
+                if (t) t->rate = rate, t->frozen = frozen;
+        });
+    });
+    client.onPlayPeek("ticking_step", [this](net::Reader& r) {
+        const int steps = r.varInt();
+        if (r.ok) post([this, steps] {
+            for (TickRate* t : {game_ ? &game_->tickRate : nullptr, entities_ ? &entities_->tickRate : nullptr})
+                if (t) t->stepTicks = steps;
+        });
+    });
+    // World border (ClientPacketListener.handleInitializeBorder / handleSetBorder*).
+    auto border = [this](std::function<void(WorldBorder&)> fn) {
+        post([this, fn = std::move(fn)] {
+            if (game_) fn(game_->border);
+        });
+    };
+    client.onPlayPeek("initialize_border", [border](net::Reader& r) {
+        const double x = r.f64(), z = r.f64(), oldSize = r.f64(), newSize = r.f64();
+        const i64 lerpTime = r.varLong();
+        const int maxSize = r.varInt(), warningBlocks = r.varInt(), warningTime = r.varInt();
+        if (r.ok) border([=](WorldBorder& b) {
+            b.setCenter(x, z);
+            if (lerpTime > 0) b.lerpSizeBetween(oldSize, newSize, lerpTime);
+            else b.setSize(newSize);
+            b.absoluteMaxSize = maxSize;
+            b.warningBlocks = warningBlocks, b.warningTime = warningTime;
+        });
+    });
+    client.onPlayPeek("set_border_center", [border](net::Reader& r) {
+        const double x = r.f64(), z = r.f64();
+        if (r.ok) border([=](WorldBorder& b) { b.setCenter(x, z); });
+    });
+    client.onPlayPeek("set_border_lerp_size", [border](net::Reader& r) {
+        const double oldSize = r.f64(), newSize = r.f64();
+        const i64 lerpTime = r.varLong();
+        if (r.ok) border([=](WorldBorder& b) { b.lerpSizeBetween(oldSize, newSize, lerpTime); });
+    });
+    client.onPlayPeek("set_border_size", [border](net::Reader& r) {
+        const double size = r.f64();
+        if (r.ok) border([=](WorldBorder& b) { b.setSize(size); });
+    });
+    client.onPlayPeek("set_border_warning_delay", [border](net::Reader& r) {
+        const int time = r.varInt();
+        if (r.ok) border([=](WorldBorder& b) { b.warningTime = time; });
+    });
+    client.onPlayPeek("set_border_warning_distance", [border](net::Reader& r) {
+        const int blocks = r.varInt();
+        if (r.ok) border([=](WorldBorder& b) { b.warningBlocks = blocks; });
     });
     client.onPlayPeek("respawn", [this](net::Reader&) {  // a new player entity: no effects, default attributes
         post([this] {
             effects_.clear(), attributes_.clear();
+            if (game_) game_->clearCooldowns(), game_->cameraEntity = -1;
             if (riding_) riding_->dismounted();
         });
     });
@@ -376,6 +505,26 @@ void Gameplay::setPlayer(Game& game, ui::Ui& ui) {
         return !t || t->canDestroyInCreative;
     };
     game.adventureMayBreak = [this](int x, int y, int z) { return adventureMayBreak(x, y, z); };
+    game.mainHandOnCooldown = [this] { return onCooldown(mainHand()); };
+    game.entityView = [this](int id, CameraState& c) {  // Camera.setup on an entity: its eyes, its view rotation
+        const ent::Entity* e = entities_ ? entities_->entity(id) : nullptr;
+        if (!e || !e->info) return false;
+        const float a = entities_->partialTick();
+        c.x = e->prevPos[0] + (e->pos[0] - e->prevPos[0]) * a;
+        c.y = e->prevPos[1] + (e->pos[1] - e->prevPos[1]) * a + e->info->eye;
+        c.z = e->prevPos[2] + (e->pos[2] - e->prevPos[2]) * a;
+        // LivingEntity.getViewYRot: the head's rotation; other entities their own.
+        const bool living = e->category == ent::Category::Living || e->category == ent::Category::Player;
+        const float y0 = living ? e->prevHeadYaw : e->prevYaw, y1 = living ? e->headYaw : e->yaw;
+        const float yaw = y0 + (y1 - y0 - 360.0f * std::floor((y1 - y0 + 180.0f) / 360.0f)) * a;  // Mth.rotLerp
+        const float pitch = e->prevPitch + (e->pitch - e->prevPitch) * a;
+        c.yaw = yaw * 3.14159265f / 180.0f, c.pitch = pitch * 3.14159265f / 180.0f;
+        return true;
+    };
+}
+
+bool Gameplay::onCooldown(const ui::ItemStack* s) const {  // ItemCooldowns.isOnCooldown
+    return s && game_ && ui_ && game_->cooldownPercent(ui_->items().cooldownGroup(*s), 0.0f) > 0.0f;
 }
 
 void Gameplay::frame() {
@@ -403,6 +552,10 @@ void Gameplay::frame() {
     const ui::ItemStack* feet = ui_ ? ui_->playerSlot(8) : nullptr;
     a.powderSnowWalker = feet && itemName(feet->item) == "minecraft:leather_boots";
     game_->attackSpeed = float(attribute("attack_speed", 4.0));
+    // Player.blockInteractionRange / entityInteractionRange (creative adds 0.5 / 2 as attribute modifiers).
+    const bool creative = game_->gameMode == 1;
+    game_->blockReach = attribute("block_interaction_range", creative ? 5.0 : 4.5);
+    game_->entityReach = attribute("entity_interaction_range", creative ? 5.0 : 3.0);
     {  // Player.tick: another item in the main hand resets the attack strength
         const ui::ItemStack* held = mainHand();
         const int item = held ? held->item : -1;
@@ -414,7 +567,8 @@ void Gameplay::frame() {
         const CameraState c = game_->camera();
         const double eye[3] = {c.x, c.y, c.z}, cp = std::cos(c.pitch);
         const double dir[3] = {-std::sin(c.yaw) * cp, -std::sin(c.pitch), std::cos(c.yaw) * cp};
-        const double limit = game_->target().hit ? std::min(game_->target().distance, 3.0) : 3.0;
+        const double block = game_->pickBlockDistance();
+        const double limit = block >= 0 ? std::min(block, game_->entityReach) : game_->entityReach;
         const ent::PickResult pick = entities_->pick(eye, dir, limit);
         if (pick.id >= 0)
             if (const ent::Entity* e = entities_->entity(pick.id))
@@ -497,7 +651,7 @@ void Gameplay::predictUse(const RayHit* target, bool) {
     if (!game_ || game_->use.active || game_->gameMode == 3) return;
     for (int hand = 0; hand < 2; ++hand) {
         const ui::ItemStack* s = hand == 0 ? mainHand() : offHand();
-        if (!s) continue;
+        if (!s || onCooldown(s)) continue;  // MultiPlayerGameMode.useItem: a cooling item passes to the other hand
         const ItemRules::Use u = rules_.use(itemName(s->item));
         if (u.anim == ItemRules::Anim::None && u.duration <= 0) {
             if (hand == 0) continue;  // nothing to use: the off hand's turn

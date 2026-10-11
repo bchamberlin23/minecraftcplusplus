@@ -1,5 +1,6 @@
 #pragma once
 #include "core/common.h"
+#include "game/world_border.h"
 
 #include <functional>
 
@@ -45,8 +46,12 @@ public:
         bool set = false;
         double feetY = 0, fallDistance = 0;
         bool descending = false, powderSnowWalker = false;
+        double x = 0, z = 0;  // the entity's position (the world border collides only near it)
     };
     mutable EntityContext context;
+    // The level's world border: with an entity context, Entity.collectColliders adds its collision shape (everything
+    // outside the border's block-aligned box) when the entity is close to it (WorldBorder.isInsideCloseToBorder).
+    const WorldBorder* border = nullptr;
     const World& world() const { return world_; }
     const BlockRegistry& registry() const { return registry_; }
 
@@ -78,6 +83,8 @@ public:
     bool sprinting = false;          // LocalPlayer sprint state (started by the sprint key, ends like the game)
     bool canSprint = true;           // food > 6 (or may fly), set from the server's health updates
     bool mayFly = true;              // Abilities.mayfly (double-tapping jump toggles flight only then)
+    float flyingSpeed = 0.05f;       // Abilities flying / walking speed (the server's player_abilities)
+    float walkingSpeed = 0.1f;
     bool noClip = false;             // spectator: flies through blocks
     bool horizontalCollision = false;
     PlayerInput lastInput;           // this tick's raw input (sent to the server)

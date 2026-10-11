@@ -3,6 +3,7 @@
 #include "assets/assets.h"
 #include "assets/game_reports.h"
 #include "assets/asset_source.h"
+#include "game/world_border.h"
 #include "net/client.h"
 #include "render/packs/pack_api.h"
 #include "render/renderer.h"
@@ -260,7 +261,8 @@ bool Sky::init(Renderer& renderer, World& world, BlockRegistry& registry, const 
     for (int i = 0; i < 8; ++i) ok &= loadImage(zip, env + "celestial/moon/" + kPhases[i] + ".png", images.celestial[i + 1]);
     for (const Image& im : images.celestial) ok &= im.w == images.celestial[0].w && im.h == images.celestial[0].h;
     ok &= loadImage(zip, env + "end_sky.png", images.endSky) && loadImage(zip, env + "rain.png", images.rain) &&
-          loadImage(zip, env + "snow.png", images.snow);
+          loadImage(zip, env + "snow.png", images.snow) &&
+          loadImage(zip, "assets/minecraft/textures/misc/forcefield.png", images.forcefield);
     Image clouds;
     ok &= loadImage(zip, env + "clouds.png", clouds);
     if (!ok) return false;
@@ -505,9 +507,9 @@ void Sky::update(const CameraState& cam, double dt) {
     if (debug_.time < 0)
         for (auto& [name, ticks] : clocks_) {
             auto rate = clockRates_.find(name);
-            ticks += dt * 20.0 * (rate == clockRates_.end() ? 1.0 : rate->second);
+            ticks += dt * tickRate_ * (rate == clockRates_.end() ? 1.0 : rate->second);
         }
-    gameTime_ += dt * 20.0;
+    gameTime_ += dt * tickRate_;
     // Lightning: ClientLevel.tick (skyFlashTime countdown) then LightningBolt.tick, at 20 ticks per second.
     tickAccumulator_ = std::min(tickAccumulator_ + dt * 20.0, 10.0);
     for (; tickAccumulator_ >= 1.0; tickAccumulator_ -= 1.0) {
@@ -679,9 +681,67 @@ void Sky::update(const CameraState& cam, double dt) {
     buildCelestial(a, rain, f.darkDisc);
     buildClouds(cam, a);
     buildWeather(cam, a, rain);
+    buildBorder(cam);
 
     cpuMs_ += timer.ms();
     ++frames_;
+}
+
+// WorldBorderRenderer.extract / prepare / render: the four walls as quads from y -depthFar to depthFar, those
+// closer than the render distance drawn with the forcefield texture scrolling diagonally, tinted by the border's
+// status, faded in by (1 - distance / render distance)^4.
+void Sky::buildBorder(const CameraState& cam) {
+    Frame& f = *frame_;
+    f.border.clear();
+    if (!border_) return;
+    const WorldBorder& b = *border_;
+    const double rd = borderRange_;
+    const double minX = b.minX(borderPartial_), maxX = b.maxX(borderPartial_);
+    const double minZ = b.minZ(borderPartial_), maxZ = b.maxZ(borderPartial_);
+    const double x = cam.x, z = cam.z;
+    const bool nearEdge = !(x < maxX - rd) || !(x > minX + rd) || !(z < maxZ - rd) || !(z > minZ + rd);
+    const bool farOutside = x < minX - rd || x > maxX + rd || z < minZ - rd || z > maxZ + rd;
+    if (!nearEdge || farOutside) return;
+    const double alpha = std::clamp(std::pow(1.0 - b.distanceToBorder(x, z) / rd, 4.0), 0.0, 1.0);
+    if (alpha <= 0.0) return;
+    const u32 tint = b.color();
+    const u32 color = (u32(alpha * 255.0 + 0.5) << 24) | ((tint & 0xFF) << 16) | (tint & 0xFF00) | ((tint >> 16) & 0xFF);
+    // rebuildWorldBorderBuffer: the wall spans the render distance around the camera along each side.
+    const double bMinX = minX + 0.01, bMaxX = maxX - 0.01, bMinZ = minZ + 0.01, bMaxZ = maxZ - 0.01;
+    const double z0 = std::max(std::floor(z - rd), bMinZ), z1 = std::min(std::ceil(z + rd), bMaxZ);
+    const double x0 = std::max(std::floor(x - rd), bMinX), x1 = std::min(std::ceil(x + rd), bMaxX);
+    const float u0z = float(i64(std::floor(z0)) & 1) * 0.5f, u1z = float(z1 - z0) / 2.0f;
+    const float u0x = float(i64(std::floor(x0)) & 1) * 0.5f, u1x = float(x1 - x0) / 2.0f;
+    const float h = float(std::max(rd * 4.0, 2048.0));  // Camera depthFar (the cloud range's 2048 at least)
+    const float v0 = -float(cam.y * 0.5 - std::floor(cam.y * 0.5)), v1 = v0 + h;
+    // TextureMat: the texture slides by (t, t) every 3 seconds.
+    const float slide = float(std::fmod(nowSeconds() * 1000.0, 3000.0) / 3000.0);
+    auto quad = [&](const double (&p)[4][2], const float (&u)[4]) {  // p: world x, z; corners low, low, high, high
+        static constexpr int kOrder[6] = {0, 1, 2, 2, 3, 0};
+        for (int k : kOrder) {
+            const bool top = k >= 2;
+            Frame::Vertex v{};
+            v.pos[0] = float(p[k][0] - x), v.pos[1] = float((top ? h : -h) - cam.y), v.pos[2] = float(p[k][1] - z);
+            v.uv[0] = u[k] + slide, v.uv[1] = (top ? v0 : v1) + slide;
+            v.color = color;
+            f.border.push_back(v);
+        }
+    };
+    // WorldBorderRenderState.closestBorder: nearest first; Direction.get2DDataValue picks the quad.
+    struct Side {
+        int index;
+        double distance;
+    } sides[4] = {{2, z - minZ}, {0, maxZ - z}, {1, x - minX}, {3, maxX - x}};
+    std::stable_sort(std::begin(sides), std::end(sides), [](const Side& a, const Side& c) { return a.distance < c.distance; });
+    for (const Side& s : sides) {
+        if (!(s.distance < rd)) continue;
+        switch (s.index) {
+            case 0: quad({{x0, bMaxZ}, {x1, bMaxZ}, {x1, bMaxZ}, {x0, bMaxZ}}, {u0x, u1x + u0x, u1x + u0x, u0x}); break;  // south
+            case 1: quad({{x0, z0}, {x0, z1}, {x0, z1}, {x0, z0}}, {u0z, u1z + u0z, u1z + u0z, u0z}); break;          // west
+            case 2: quad({{x1, z0}, {x0, z0}, {x0, z0}, {x1, z0}}, {u0x, u1x + u0x, u1x + u0x, u0x}); break;          // north
+            default: quad({{bMaxX, z1}, {bMaxX, z0}, {bMaxX, z0}, {bMaxX, z1}}, {u0z, u1z + u0z, u1z + u0z, u0z}); break;  // east
+        }
+    }
 }
 
 void Sky::buildCelestial(const Value* a, float rain, bool) {

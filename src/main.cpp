@@ -703,7 +703,7 @@ int wmain(int argc, wchar_t** argv) {
         const CameraState c = game.camera();
         const double eye[3] = {c.x, c.y, c.z}, cp = std::cos(c.pitch);
         const double dir[3] = {-std::sin(c.yaw) * cp, -std::sin(c.pitch), std::cos(c.yaw) * cp};
-        return entities.click(eye, dir, attack, use, blockDistance, 5.0, game.player().sneaking);
+        return entities.click(eye, dir, attack, use, blockDistance, game.entityReach, game.player().sneaking);
     };
     // Music, ambience, sky / fog colours and rain or snow follow the surface biome the world stores (from the
     // save, the server or our generator); where it has none, the generator's biome at that position.
@@ -815,6 +815,7 @@ int wmain(int argc, wchar_t** argv) {
         }
         if (session) terrain.setFarActive(session->dimension().name == "minecraft:overworld");
         if (haveEntities) entities.frame(dt);
+        if (haveEntities) entities.viewEntity = game.cameraMode == 0 ? game.cameraEntity : -1;  // set_camera
         ui.beginFrame(dt);  // UI input first: an open screen takes the game's input
 
         if (opt.bench && opt.fly) {
@@ -958,6 +959,9 @@ int wmain(int argc, wchar_t** argv) {
         const bool timeUp = opt.seconds > 0 && now - loopStart >= opt.seconds;  // --seconds: shoot the last frame
         if (opt.seconds > 0) shot = timeUp && !opt.screenshot.empty();
         sky.setBossOverlay(ui::bossDarkenScreen(), ui::bossWorldFog());  // boss bar flags (mp_hud.h)
+        sky.setTickRate(game.tickRate.runs ? 1.0 / game.tickRate.tickSeconds() : 0.0);
+        sky.setWorldBorder(session ? &game.border : nullptr, game.partialTick(),
+                           float(std::min(ui.settings().renderDistance, opt.detail) * 16));
         sky.update(cam, dt);
         ui.endFrame();
         if (haveReports) packs::updatePlayer(renderer, ui, game.selectedSlot(), reports, registry);  // held light

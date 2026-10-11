@@ -152,6 +152,8 @@ void Session::handle(Event& e) {
         applyBlocks(b->changes);
     } else if (auto* l = std::get_if<LightEvent>(&e)) {
         applyLight(*l);
+    } else if (auto* bi = std::get_if<BiomesEvent>(&e)) {
+        applyBiomes(*bi);
     } else if (auto* f = std::get_if<ForgetEvent>(&e)) {
         forget(f->cx, f->cz);
     } else if (auto* a = std::get_if<AckEvent>(&e)) {
@@ -179,6 +181,7 @@ void Session::handle(Event& e) {
         p.flying = ab->flying || (ab->mayFly && p.flying);
         if (!ab->mayFly) p.flying = false;
         p.mayFly = ab->mayFly;
+        p.flyingSpeed = ab->flyingSpeed, p.walkingSpeed = ab->walkingSpeed;
         sentFlying_ = p.flying;  // the server's own state
         instabuild_ = ab->instabuild;
     } else if (auto* g = std::get_if<GameModeEvent>(&e)) {
@@ -335,6 +338,28 @@ void Session::applyLight(const LightEvent& e) {
                 }
     }
     if (!changed.empty()) terrain_->refresh(std::vector<u64>(changed.begin(), changed.end()));
+}
+
+// ClientPacketListener.handleChunksBiomes: the columns' new biomes (the surface biome World keeps: the highest section
+// with blocks, as in applyChunk), then every section of them and their neighbours is remeshed for the new tints.
+void Session::applyBiomes(const BiomesEvent& e) {
+    std::unordered_set<u64> dirty;
+    {
+        std::unique_lock lock(world_.mutex());
+        for (const BiomesEvent::Column& c : e.columns) {
+            if (!world_.hasChunk(c.cx, c.cz)) continue;
+            for (size_t i = c.sections.size(); i-- > 0;)
+                if (world_.section(c.cx, c.firstSy + int(i), c.cz, nullptr)) {
+                    world_.setChunkBiomes(c.cx, c.cz, c.sections[i].data());
+                    break;
+                }
+            for (int dz = -1; dz <= 1; ++dz)
+                for (int dx = -1; dx <= 1; ++dx)
+                    for (int sy = world_.minSectionY(); sy <= world_.maxSectionY(); ++sy)
+                        dirty.insert(Lighting::sectionKey(c.cx + dx, sy, c.cz + dz));
+        }
+    }
+    if (!dirty.empty()) terrain_->remesh(std::vector<u64>(dirty.begin(), dirty.end()));
 }
 
 void Session::teleport(const TeleportEvent& e) {

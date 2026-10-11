@@ -77,6 +77,7 @@ private:
     // Player.blockActionRestricted in adventure mode: the held stack's can_break (AdventureModePredicate) allows it.
     bool adventureMayBreak(int x, int y, int z);
     void predictUse(const struct RayHit* target, bool afterEntity);
+    bool onCooldown(const ui::ItemStack* s) const;
     bool startUsing(int hand);  // LivingEntity.startUsingItem
     void tickUse();
     bool hasProjectile() const;  // Player.getProjectile: arrows anywhere in the inventory (creative: always)

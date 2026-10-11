@@ -5,6 +5,7 @@
 // hurt/death/swing timers). Rendering lives in entity_render.*; picking for attack/use is here.
 #include "core/common.h"
 #include "entity/entity_assets.h"
+#include "game/tick_rate.h"
 
 #include <functional>
 #include <mutex>
@@ -215,7 +216,13 @@ public:
         localTick_ = std::move(tick);
     }
     int localControl() const { return localControl_; }
-    float partialTick() const { return float(tickAccumulator_ / 0.05); }
+    // The entity the camera views from in first person (set_camera): not drawn (LevelRenderer skips the camera's
+    // entity), its shadow still cast. -1: none.
+    int viewEntity = -1;
+    // The level's tick rate (ticking_state / ticking_step, kept by the gameplay layer): entities tick at the server's
+    // slower rate; frozen, only players (and the vehicle we drive) tick and the rest are drawn where they stand.
+    TickRate tickRate;
+    float partialTick() const { return tickRate.runs ? float(tickAccumulator_ / tickSeconds_) : 1.0f; }
     const EntityAssets& assets() const { return assets_; }
     World& world() const { return world_; }
     BlockRegistry& registry() const { return registry_; }
@@ -275,7 +282,7 @@ private:
     int entityEffectParticle_ = -1;
     int localControl_ = -1;
     std::function<void(Entity&)> localTick_;
-    double tickAccumulator_ = 0;
+    double tickAccumulator_ = 0, tickSeconds_ = 0.05;
     u64 ticks_ = 0;
     Stats stats_;
     bool verbose_ = false;  // MCPP_ENTITY_VERBOSE=1: log spawns, variants, attacks

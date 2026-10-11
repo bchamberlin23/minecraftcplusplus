@@ -29,6 +29,7 @@ class ItemModels;
 namespace ui {
 
 struct ItemStack;
+class Items;
 
 struct Settings {
     float fov = 70;           // degrees (vertical), 30..110
@@ -123,6 +124,7 @@ public:
     void setItemModels(ent::ItemModels* models);
     // Player inventory menu slot (5-8 armour, 36-44 hotbar, 45 offhand); nullptr when empty.
     const ItemStack* playerSlot(int slot) const;
+    const Items& items() const;
     int ticksFrozen() const;  // our DATA_TICKS_FROZEN (the third-person avatar shakes when fully frozen)
 
     struct State;  // ui_state.h
