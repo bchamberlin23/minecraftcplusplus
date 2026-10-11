@@ -32,6 +32,9 @@ public:
     int entityId() const { return entityId_; }
     bool creativeHotbarSync = true;  // false once the UI owns the (server-driven) inventory
     void report() const;  // timings
+    // The held item's use (food, bows, buckets...) and, unpredicted, a use on a block with the off hand.
+    void useItem(int hand);
+    void useItemOn(int hand, const RayHit& hit);
     int gameMode() const { return gameMode_; }                  // main thread
     const Dimension& dimension() const { return dimension_; }  // main thread
 
@@ -75,6 +78,8 @@ private:
     float sentRot_[2] = {};
     bool haveServerPos_ = false, loadedSent_ = false;
     int sentSlot_ = -1;
+    int sentInput_ = 0;  // ServerboundPlayerInputPacket flags last sent
+    bool sentSprinting_ = false, sentFlying_ = false;
     int sentItems_[9] = {-2, -2, -2, -2, -2, -2, -2, -2, -2};
     Dimension dimension_;
     double applyMs_ = 0, maxApplyMs_ = 0;

@@ -63,6 +63,13 @@ public:
     // Right click on a block that reacts to use (containers, doors...): true sends the use to the server as is
     // instead of placing the held block.
     std::function<bool(int x, int y, int z)> onInteract;
+    // Multiplayer: every attack press (Minecraft.startAttack sends ServerboundPunchPacket: the arm swing others see,
+    // attack cooldown), a right press that did not place a block or use one (the held item is used: food, bows,
+    // buckets...), and the use key released after that (bows, eating stop).
+    // onUseItem gets the targeted block (nullptr: none) for the off hand's turn (Minecraft.startUseItem tries
+    // the main hand, then the off hand); afterEntity: the press was also sent as a use of an entity.
+    std::function<void()> onPunch, onReleaseUseItem;
+    std::function<void(const RayHit* target, bool afterEntity)> onUseItem;
     void setHotbarBlock(int slot, u16 id) { hotbar_[slot] = id; }
     void setSelectedSlot(int slot) { selected_ = slot; }
     void simulate(const PlayerInput& input, int ticks);
@@ -88,5 +95,7 @@ private:
     double repeatTimer_ = 0;
     double lastJumpPress_ = -1, clock_ = 0;
     bool jumpWasDown_ = false, escWasDown_ = false, f5WasDown_ = false;
+    bool useConsumed_ = false;  // the last useTarget(place) placed a block or used the targeted block
+    bool usingItem_ = false;    // onUseItem sent, the use key not yet released
     bool keyWasDown_[9] = {};
 };

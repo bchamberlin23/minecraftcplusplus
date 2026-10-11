@@ -85,7 +85,11 @@ void Session::attach(Game& game, Terrain& terrain) {
     terrain_ = &terrain;
     world_.setTrackChanges(false);  // nothing received from a server is saved
     game.onEdit = [this](const Game::EditAction& a) { onEdit(a); };
-    game.onPunch = [this] { client_.sendPlay("punch", Writer{}); };
+    game.player().noClip = gameMode_ == 3;
+    game.player().mayFly = gameMode_ == 1 || gameMode_ == 3;  // until the server's abilities arrive
+    game.onPunch = [this] {
+        if (gameMode_ != 3) client_.sendPlay("punch", Writer{});  // spectators do not attack
+    };
     game.onUseItem = [this](const RayHit*, bool afterEntity) {
         if (!afterEntity) useItem(0);
     };
@@ -162,6 +166,7 @@ void Session::handle(Event& e) {
         dimension_ = j->dimension;
         if (!j->respawn) entityId_ = j->entityId;
         gameMode_ = j->gameMode;
+        game_->player().noClip = gameMode_ == 3;
         instabuild_ = gameMode_ == 1;
         loadedSent_ = false;
         if (dimension_.minY < world_.minSectionY() * 16 || dimension_.minY + dimension_.height > (world_.maxSectionY() + 1) * 16)
@@ -171,9 +176,12 @@ void Session::handle(Event& e) {
         Player& p = game_->player();
         p.flying = ab->flying || (ab->mayFly && p.flying);
         if (!ab->mayFly) p.flying = false;
+        p.mayFly = ab->mayFly;
+        sentFlying_ = p.flying;  // the server's own state
         instabuild_ = ab->instabuild;
     } else if (auto* g = std::get_if<GameModeEvent>(&e)) {
         gameMode_ = g->mode;
+        game_->player().noClip = gameMode_ == 3;
         LOG("net: game mode %d", gameMode_);
         std::fill(std::begin(sentItems_), std::end(sentItems_), -2);  // creative inventory needs a resync
     } else if (std::holds_alternative<HeldSlotEvent>(e)) {
@@ -353,6 +361,13 @@ void Session::tick() {
         w.u8v(u8(flags));
         client_.sendPlay("player_input", w);
         sentInput_ = flags;
+    }
+    // LocalPlayer.onUpdateAbilities: flight toggled by double-tapping jump, or ended by landing.
+    if (p.flying != sentFlying_) {
+        Writer w;
+        w.u8v(p.flying ? 2 : 0);
+        client_.sendPlay("player_abilities", w);
+        sentFlying_ = p.flying;
     }
     // LocalPlayer.sendIsSprintingIfNeeded: ServerboundPlayerCommandPacket START / STOP_SPRINTING.
     if (p.sprinting != sentSprinting_) {

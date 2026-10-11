@@ -459,6 +459,7 @@ void Ui::State::buildButtons() {
                 w.varInt(0);  // ServerboundClientCommandPacket.Action.PERFORM_RESPAWN
                 client->sendPlay("client_command", w);
             }
+            deathMessage = Text();
             closeScreen();
         };
         buttons.push_back(std::move(respawn));
@@ -612,6 +613,7 @@ void Ui::State::drawScreen(Canvas& c) {
             c.scaleBy(2);
             drawCentered(c, Text(res.translate("deathScreen.title")), float(W / 2 / 2), 30, 0xFFFFFFFF);
             c.pop();
+            if (!deathMessage.plain().empty()) drawCentered(c, deathMessage, float(W / 2), 85, 0xFFFFFFFF);
             drawCentered(c, translatable("deathScreen.score.value", {Text(std::to_string(xpTotal), colorStyle(0xFFFF55))}, lang()),
                          float(W / 2), 100, 0xFFFFFFFF);
             drawButtons(c);

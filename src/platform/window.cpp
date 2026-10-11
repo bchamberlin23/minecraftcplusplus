@@ -107,6 +107,8 @@ void Window::push(InputEvent::Type type, int code, bool down, bool repeat) {
 
 void Window::inject(const InputEvent& e) {
     if (e.type == InputEvent::Key && e.code >= 0 && e.code < 256) injectedDown_[e.code] = e.down;
+    if (e.type == InputEvent::Button && e.code >= 0 && e.code < 3)  // scripted buttons can be held (keyDown)
+        injectedDown_[e.code == 0 ? VK_LBUTTON : e.code == 1 ? VK_RBUTTON : VK_MBUTTON] = e.down;
     InputEvent q = e;
     if (q.type == InputEvent::Button || q.type == InputEvent::Wheel) cursorPos(q.x, q.y);
     if (q.type == InputEvent::Button && q.down && captured_) {

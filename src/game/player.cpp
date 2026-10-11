@@ -35,6 +35,66 @@ bool Physics::inFluid(const AABB& box) const {
     return false;
 }
 
+bool Physics::inLava(const AABB& box) const {
+    for (int y = int(std::floor(box.min[1])); y <= int(std::floor(box.max[1] - 0.4)); ++y)
+        for (int z = int(std::floor(box.min[2])); z <= int(std::floor(box.max[2])); ++z)
+            for (int x = int(std::floor(box.min[0])); x <= int(std::floor(box.max[0])); ++x)
+                if (registry_.infos()[world_.block(x, y, z)].fluid && registry_.name(world_.block(x, y, z)).starts_with("minecraft:lava"))
+                    return true;
+    return false;
+}
+
+bool Physics::containsLiquid(const AABB& box) const {
+    const BlockInfo* infos = registry_.infos();
+    for (int y = int(std::floor(box.min[1])); y <= int(std::floor(box.max[1] - 1e-7)); ++y)
+        for (int z = int(std::floor(box.min[2])); z <= int(std::floor(box.max[2] - 1e-7)); ++z)
+            for (int x = int(std::floor(box.min[0])); x <= int(std::floor(box.max[0] - 1e-7)); ++x)
+                if (infos[world_.block(x, y, z)].fluid || infos[world_.block(x, y, z)].waterlogged) return true;
+    return false;
+}
+
+bool Physics::noCollision(const AABB& box) const {
+    std::vector<AABB> boxes;
+    collisionBoxes(box, boxes);
+    return std::none_of(boxes.begin(), boxes.end(), [&](const AABB& o) { return o.intersects(box); });
+}
+
+namespace {
+std::string_view shortBlock(const std::string& state) {
+    std::string_view n = state;
+    n = n.substr(0, n.find('['));
+    if (n.starts_with("minecraft:")) n.remove_prefix(10);
+    return n;
+}
+}  // namespace
+
+bool Physics::climbable(int x, int y, int z) const {
+    const std::string_view n = shortBlock(registry_.name(world_.block(x, y, z)));
+    return n == "ladder" || n == "vine" || n == "scaffolding" || n == "weeping_vines" || n == "weeping_vines_plant" ||
+           n == "twisting_vines" || n == "twisting_vines_plant" || n == "cave_vines" || n == "cave_vines_plant";
+}
+
+float Physics::speedFactor(int x, int y, int z) const {
+    const std::string_view n = shortBlock(registry_.name(world_.block(x, y, z)));
+    return n == "soul_sand" || n == "honey_block" ? 0.4f : 1.0f;
+}
+
+float Physics::jumpFactor(int x, int y, int z) const {
+    return shortBlock(registry_.name(world_.block(x, y, z))) == "honey_block" ? 0.5f : 1.0f;
+}
+
+bool Physics::stuckMultiplier(const AABB& b, double out[3]) const {
+    bool any = false;
+    for (int y = int(std::floor(b.min[1] + 1e-5)); y <= int(std::floor(b.max[1] - 1e-5)); ++y)
+        for (int z = int(std::floor(b.min[2] + 1e-5)); z <= int(std::floor(b.max[2] - 1e-5)); ++z)
+            for (int x = int(std::floor(b.min[0] + 1e-5)); x <= int(std::floor(b.max[0] - 1e-5)); ++x) {
+                const std::string_view n = shortBlock(registry_.name(world_.block(x, y, z)));
+                if (n == "cobweb") out[0] = 0.25, out[1] = 0.05, out[2] = 0.25, any = true;
+                else if (n == "sweet_berry_bush" && !any) out[0] = 0.8, out[1] = 0.75, out[2] = 0.8, any = true;
+            }
+    return any;
+}
+
 float Physics::slipperiness(int x, int y, int z) const {
     const std::string& n = registry_.name(world_.block(x, y, z));
     if (n.find("blue_ice") != std::string::npos) return 0.989f;
@@ -139,7 +199,45 @@ void collide(const std::vector<AABB>& boxes, AABB& b, double out[3], const doubl
 }
 }  // namespace
 
+// Player.canFallAtLeast: nothing below the box (moved by dx, dz) within minHeight.
+bool Player::canFallAtLeast(const Physics& physics, double dx, double dz, double minHeight) const {
+    const AABB b = box();
+    const AABB area{{b.min[0] + 1e-7 + dx, b.min[1] - minHeight - 1e-7, b.min[2] + 1e-7 + dz},
+                    {b.max[0] - 1e-7 + dx, b.min[1], b.max[2] - 1e-7 + dz}};
+    std::vector<AABB> boxes;
+    physics.collisionBoxes(area, boxes);
+    return std::none_of(boxes.begin(), boxes.end(), [&](const AABB& o) { return o.intersects(area); });
+}
+
 void Player::move(const Physics& physics, double dx, double dy, double dz) {
+    // Player.maybeBackOffFromEdge: sneaking on the ground never walks off an edge higher than a step.
+    if (!flying && dy <= 0 && sneaking && onGround) {
+        constexpr double kStep = 0.05, kMaxDown = 0.6;
+        const double sx = dx > 0 ? kStep : dx < 0 ? -kStep : 0, sz = dz > 0 ? kStep : dz < 0 ? -kStep : 0;
+        while (dx != 0 && canFallAtLeast(physics, dx, 0, kMaxDown)) {
+            if (std::abs(dx) <= kStep) {
+                dx = 0;
+                break;
+            }
+            dx -= sx;
+        }
+        while (dz != 0 && canFallAtLeast(physics, 0, dz, kMaxDown)) {
+            if (std::abs(dz) <= kStep) {
+                dz = 0;
+                break;
+            }
+            dz -= sz;
+        }
+        while (dx != 0 && dz != 0 && canFallAtLeast(physics, dx, dz, kMaxDown)) {
+            dx = std::abs(dx) <= kStep ? 0 : dx - sx;
+            dz = std::abs(dz) <= kStep ? 0 : dz - sz;
+        }
+    }
+    if (stuck_[0] != 0 || stuck_[1] != 0 || stuck_[2] != 0) {  // Entity.move: stuck in a cobweb / bush
+        dx *= stuck_[0], dy *= stuck_[1], dz *= stuck_[2];
+        std::fill(stuck_, stuck_ + 3, 0.0);
+        std::fill(vel, vel + 3, 0.0);
+    }
     const double in[3] = {dx, dy, dz};
     AABB start = box();
     AABB area = start;
@@ -176,6 +274,8 @@ void Player::move(const Physics& physics, double dx, double dy, double dz) {
     pos[1] = b.min[1];
     pos[2] = (b.min[2] + b.max[2]) / 2;
     onGround = out[1] != dy && dy < 0;
+    horizontalCollision = out[0] != dx || out[2] != dz;
+    moved_[0] = out[0], moved_[2] = out[2];
     if (out[0] != dx) vel[0] = 0;
     if (out[2] != dz) vel[2] = 0;
     if (out[1] != dy) vel[1] = 0;
@@ -184,10 +284,79 @@ void Player::move(const Physics& physics, double dx, double dy, double dz) {
 void Player::tick(const Physics& physics, const PlayerInput& rawInput) {
     std::copy(pos, pos + 3, prev);
     PlayerInput input = rawInput;
+    lastInput = rawInput;
     sneaking = input.sneak && !flying;
-    if (sneaking) input.forward *= 0.3f, input.strafe *= 0.3f;
-    inWater = physics.inFluid(box());
+    // LocalPlayer.aiStep sprinting: the sprint key starts it while moving forward; it lasts until the forward
+    // impulse ends, a wall stops the player, food runs low or the player sneaks.
+    const bool forwardImpulse = rawInput.forward > 0;
+    if (!sprinting && rawInput.sprint && forwardImpulse && !sneaking && canSprint) sprinting = true;
+    bool minorCollision = false;  // LocalPlayer.isHorizontalCollisionMinor: moved within 8 degrees of the input
+    {
+        const double sy = std::sin(yaw), cy = std::cos(yaw);
+        const double gx = rawInput.strafe * cy - rawInput.forward * sy, gz = rawInput.forward * cy + rawInput.strafe * sy;
+        const double in2 = gx * gx + gz * gz, mv2 = moved_[0] * moved_[0] + moved_[2] * moved_[2];
+        if (in2 >= 1e-5 && mv2 >= 1e-5)
+            minorCollision = std::acos(std::clamp((gx * moved_[0] + gz * moved_[2]) / std::sqrt(in2 * mv2), -1.0, 1.0)) < 0.13962634;
+    }
+    if (sprinting && (!forwardImpulse || (horizontalCollision && !minorCollision) || sneaking || !canSprint || inWater))
+        sprinting = false;
+    input.sprint = sprinting;
+    {  // KeyboardInput (normalized) + LocalPlayer.modifyInput: 0.98, sneaking 0.3, stretched to the unit square
+        float f = input.forward, s = input.strafe;
+        const float len = std::sqrt(f * f + s * s);
+        if (len > 0) {
+            f /= len, s /= len;
+            float scale = 0.98f * (sneaking ? 0.3f : 1.0f);
+            const float ax = std::abs(s), ay = std::abs(f);
+            const float tan = ay > ax ? ax / ay : ay / ax;
+            scale = std::min(scale * std::sqrt(1.0f + tan * tan), 1.0f);
+            input.forward = f * scale, input.strafe = s * scale;
+        }
+    }
+    inLava = physics.inLava(box());
+    inWater = physics.inFluid(box()) && !inLava;
+    const int bx = int(std::floor(pos[0])), by = int(std::floor(pos[1])), bz = int(std::floor(pos[2]));
+    const bool onClimbable = !flying && physics.climbable(bx, by, bz);
+    // Entity.getBlockSpeedFactor: the block at the feet, else the one below (soul sand, honey).
+    auto blockFactor = [&](float (Physics::*f)(int, int, int) const) {
+        const float at = (physics.*f)(bx, by, bz);
+        return at != 1.0f || inWater ? at : (physics.*f)(bx, int(std::floor(pos[1] - 0.5000001)), bz);
+    };
+    // Entity.move tail: block speed factor, then blocks the player is inside (cobwebs).
+    auto afterMove = [&] {
+        const float f = blockFactor(&Physics::speedFactor);
+        vel[0] *= f, vel[2] *= f;
+        double stuck[3];
+        if (physics.stuckMultiplier(box(), stuck)) std::copy(stuck, stuck + 3, stuck_);
+    };
+    // LivingEntity.handleOnClimbable.
+    auto climbClamp = [&] {
+        if (!onClimbable) return;
+        vel[0] = std::clamp(vel[0], -0.15, 0.15), vel[2] = std::clamp(vel[2], -0.15, 0.15);
+        vel[1] = std::max(vel[1], -0.15);
+        if (vel[1] < 0 && sneaking && physics.registry().name(physics.world().block(bx, by, bz)).find("scaffolding") == std::string::npos)
+            vel[1] = 0;
+    };
+    // LivingEntity.jumpOutOfFluid: a wall at the surface lifts the player out.
+    auto jumpOut = [&](double startY) {
+        if (!horizontalCollision) return;
+        AABB b = box();
+        const double d[3] = {vel[0], vel[1] + 0.6 - pos[1] + startY, vel[2]};
+        for (int a = 0; a < 3; ++a) b.min[a] += d[a], b.max[a] += d[a];
+        if (physics.noCollision(b) && !physics.containsLiquid(b)) vel[1] = 0.3;
+    };
 
+    if (noClip) {  // spectators: always flying, no collisions (Entity.noPhysics)
+        flying = true;
+        const double flySpeed = input.sprint ? 0.1 : 0.05;
+        if (input.jump) vel[1] += flySpeed * 3;
+        if (input.sneak) vel[1] -= flySpeed * 3;
+        moveRelative(input, flySpeed);
+        for (int a = 0; a < 3; ++a) pos[a] += vel[a];
+        onGround = horizontalCollision = false;
+        vel[0] *= 0.91, vel[2] *= 0.91, vel[1] *= 0.6;
+        return;
+    }
     if (flying) {
         const double flySpeed = input.sprint ? 0.1 : 0.05;
         if (input.jump) vel[1] += flySpeed * 3;
@@ -198,28 +367,45 @@ void Player::tick(const Physics& physics, const PlayerInput& rawInput) {
         if (onGround) flying = false;  // landing ends flight, like the game
         return;
     }
-    if (inWater) {
-        moveRelative(input, 0.02);
+    if (inWater || inLava) {  // LivingEntity.travelInWater / travelInLava
+        const double startY = pos[1];
         if (input.jump) vel[1] += 0.04;
+        moveRelative(input, 0.02);
         move(physics, vel[0], vel[1], vel[2]);
-        vel[0] *= 0.8, vel[1] *= 0.8, vel[2] *= 0.8;
-        vel[1] -= 0.02;
+        afterMove();
+        if (inWater) {
+            if (horizontalCollision && onClimbable) vel[1] = 0.2;
+            const double slow = sprinting ? 0.9 : 0.8;
+            vel[0] *= slow, vel[1] *= 0.8, vel[2] *= slow;
+            vel[1] -= 0.005;  // getFluidFallingAdjustedMovement: gravity / 16
+        } else {
+            vel[0] *= 0.5, vel[1] *= 0.5, vel[2] *= 0.5;
+            vel[1] -= 0.02;
+        }
+        jumpOut(startY);
         return;
     }
-    const double slip = onGround ? physics.slipperiness(int(std::floor(pos[0])), int(std::floor(pos[1] - 0.5)),
-                                                         int(std::floor(pos[2]))) * 0.91
-                                 : 0.91;
+    // LivingEntity.travelInAir: block friction (1 in the air) scales the acceleration only above 0.6 (ice,
+    // slime); the velocity keeps friction * 0.91 per tick.
+    const double friction = onGround ? physics.slipperiness(int(std::floor(pos[0])), int(std::floor(pos[1] - 0.5)),
+                                                             int(std::floor(pos[2])))
+                                     : 1.0;
+    const double slip = friction * 0.91;
     if (input.jump && onGround) {
-        vel[1] = 0.42;
+        vel[1] = 0.42 * blockFactor(&Physics::jumpFactor);
         if (input.sprint) {
             vel[0] -= std::sin(yaw) * 0.2;
             vel[2] += std::cos(yaw) * 0.2;
         }
     }
     const double walk = input.sprint && input.forward > 0 ? 0.13 : 0.1;
-    const double speed = onGround ? walk * (0.21600002 / (slip * slip * slip)) : (input.sprint ? 0.026 : 0.02);
+    const double speed = onGround ? (friction > 0.6 ? walk * (0.21600002 / (friction * friction * friction)) : walk)
+                                  : (input.sprint ? 0.026 : 0.02);
     moveRelative(input, speed);
+    climbClamp();
     move(physics, vel[0], vel[1], vel[2]);
+    afterMove();
+    if ((horizontalCollision || input.jump) && onClimbable) vel[1] = 0.2;
     vel[1] = (vel[1] - 0.08) * 0.98;
     vel[0] *= slip, vel[2] *= slip;
 }

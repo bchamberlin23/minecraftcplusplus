@@ -19,6 +19,22 @@ namespace {
 constexpr double kTick = 0.05;
 constexpr float kPi = 3.14159265f;
 
+// Vec3.LP_STREAM_CODEC (as entity/entities.cpp reads it).
+void readLpVec3(net::Reader& r, double out[3]) {
+    out[0] = out[1] = out[2] = 0;
+    const u32 lowest = r.u8v();
+    if (lowest == 0) return;
+    const u32 middle = r.u8v();
+    const u64 highest = r.u32v();
+    const u64 buffer = (highest << 16) | (u64(middle) << 8) | lowest;
+    u64 scale = lowest & 3;
+    if (lowest & 4) scale |= (u64(u32(r.varInt())) & 0xFFFFFFFFull) << 2;
+    auto unpack = [](u64 v) { return std::min(double(v & 32767), 32766.0) * 2.0 / 32766.0 - 1.0; };
+    out[0] = unpack(buffer >> 3) * double(scale);
+    out[1] = unpack(buffer >> 18) * double(scale);
+    out[2] = unpack(buffer >> 33) * double(scale);
+}
+
 std::string shortName(const std::string& n) { return n.substr(n.find(':') + 1); }
 
 // Vanilla chat types in registry order (the server sends minecraft:chat_type sorted by id).
@@ -302,7 +318,11 @@ Settings& Ui::settings() { return s_->settings; }
 bool Ui::quitRequested() const { return s_->quit; }
 bool Ui::menuOpen() const { return s_->screen != Screen::None && s_->screen != Screen::Chat; }
 
-float Ui::fovRadians() const { return s_->settings.fov * kPi / 180.0f; }
+float Ui::fovRadians() const {  // Camera.getFov: the option scaled by the dynamic FOV modifier
+    const float m = s_->oldFovModifier + (s_->fovModifier - s_->oldFovModifier) * s_->partialTick;
+    return s_->settings.fov * m * kPi / 180.0f;
+}
+bool Ui::hudHidden() const { return s_->hudHidden; }
 void Ui::setBiomeLookup(std::function<std::string(int, int, int)> fn) { s_->biomeLookup = std::move(fn); }
 
 const fs::path* Ui::screenshotRequest() {
@@ -401,7 +421,7 @@ bool Ui::init(const Init& in) {
         if (!st.online()) return false;
         std::string n = st.registry->name(st.world->block(x, y, z));
         n = n.substr(n.find(':') + 1, n.find('[') == std::string::npos ? std::string::npos : n.find('[') - n.find(':') - 1);
-        static const char* exact[] = {"chest", "trapped_chest", "ender_chest", "barrel", "crafting_table", "crafter",
+        static const char* exact[] = {"barrel", "crafting_table", "crafter",
                                       "furnace", "blast_furnace", "smoker", "dispenser", "dropper", "hopper",
                                       "enchanting_table", "brewing_stand", "loom", "stonecutter", "grindstone",
                                       "smithing_table", "cartography_table", "beacon", "lectern", "lever", "repeater",
@@ -410,7 +430,9 @@ bool Ui::init(const Init& in) {
         for (const char* e : exact)
             if (n == e) return true;
         const bool iron = n.starts_with("iron_");
-        return n.ends_with("shulker_box") || n.ends_with("_bed") || n.ends_with("_button") || n.ends_with("_fence_gate") ||
+        // chest, trapped / ender / copper chests; shelves; signs (the server opens the sign editor)
+        return n.ends_with("chest") || n.ends_with("_shelf") || n.ends_with("_sign") ||
+               n.ends_with("shulker_box") || n.ends_with("_bed") || n.ends_with("_button") || n.ends_with("_fence_gate") ||
                (!iron && (n.ends_with("_door") || n.ends_with("_trapdoor")));
     };
     // The launch detail radius sized the geometry arena: the option goes up to it.
@@ -434,7 +456,43 @@ void Ui::registerHandlers(net::Client& client) {
         if (std::getenv("MCPP_UI_VERBOSE")) LOG("ui: set_health %.1f food %d sat %.1f", health, food, sat);
         s->post([s, health, food, sat] {
             s->health = health, s->food = food, s->saturation = sat;
+            s->game->player().canSprint = food > 6 || s->creative() || s->spectator();  // hasEnoughFoodToSprint
             if (health <= 0 && s->screen != Screen::Death) s->openScreen(Screen::Death);
+        });
+    });
+    client.onPlay("player_combat_kill", [s, lang](net::Reader& r) {  // DeathScreen with the cause of death
+        const int id = r.varInt();
+        Text message = parseComponent(r.nbt(), lang);
+        s->post([s, id, message] {
+            if (s->session && id != s->session->entityId()) return;
+            s->deathMessage = message;
+            if (s->screen != Screen::Death) s->openScreen(Screen::Death);
+        });
+    });
+    // Knockback: the server sets the local player's motion (ClientPacketListener.handleSetEntityMotion) and adds an
+    // explosion's push (handleExplosion).
+    client.onPlay("set_entity_motion", [s](net::Reader& r) {
+        const int id = r.varInt();
+        double v[3];
+        readLpVec3(r, v);
+        if (!r.ok) return;
+        s->post([s, id, v0 = v[0], v1 = v[1], v2 = v[2]] {
+            if (!s->session || id != s->session->entityId()) return;
+            Player& p = s->game->player();
+            p.vel[0] = v0, p.vel[1] = v1, p.vel[2] = v2;
+        });
+    });
+    client.onPlay("explode", [s](net::Reader& r) {
+        for (int i = 0; i < 3; ++i) r.f64();  // centre
+        r.f32();                              // radius
+        r.i32v();                             // block count
+        if (!r.boolean()) return;
+        double k[3];
+        for (double& c : k) c = r.f64();
+        if (!r.ok) return;
+        s->post([s, k0 = k[0], k1 = k[1], k2 = k[2]] {
+            Player& p = s->game->player();
+            p.vel[0] += k0, p.vel[1] += k1, p.vel[2] += k2;
         });
     });
     client.onPlay("set_experience", [s](net::Reader& r) {
@@ -733,6 +791,24 @@ void Ui::attachSession(net::Client* client, net::Session* session) {
     s.carried = ItemStack{};
     s.container.reset();
     if (s.screen != Screen::None && s.screen != Screen::Chat) s.closeScreen(false);
+    if (!session) return;
+    // Minecraft.startUseItem: the main hand first, then the off hand when the main hand's use passes. The client
+    // cannot simulate item uses, so the off hand gets its turn when the main hand holds nothing, a block or a
+    // sword / pickaxe (no use of their own): torches and shields in the off hand. After a use of an entity (which
+    // mostly passes, but feeds or trades with some) only such hands go on.
+    s.game->onUseItem = [&s, session](const RayHit* hit, bool afterEntity) {
+        const int sel = s.game->selectedSlot();
+        const ItemStack& main = s.inventory.slots[size_t(36 + sel)];
+        const ItemStack& off = s.inventory.slots[45];
+        const std::string mainName = main.empty() ? std::string() : s.items.name(main.item);
+        const bool mainPasses = main.empty() || s.items.isBlockItem(main.item) || mainName.ends_with("_sword") ||
+                                mainName.ends_with("_pickaxe");
+        if (afterEntity && !mainPasses) return;
+        session->useItem(0);
+        if (off.empty() || !mainPasses) return;
+        if (hit) session->useItemOn(1, *hit);
+        session->useItem(1);
+    };
 }
 
 const ItemStack* Ui::playerSlot(int slot) const {
@@ -801,11 +877,11 @@ void Ui::State::runScript(double) {
             int px, py;
             toPixels(float(std::atof(arg(0).c_str())), float(std::atof(arg(1).c_str())), px, py);
             window->setScriptedCursor(px, py);
-            const std::string b = arg(2);
+            const std::string b = arg(2) == "down" ? arg(3) : arg(2);  // move x y down [right|middle]: hold
             const int button = b == "right" ? 1 : b == "middle" ? 2 : 0;
             if (st.verb == "click") window->inject({E::Button, button, true}), window->inject({E::Button, button, false});
             if (st.verb == "release") window->inject({E::Button, button, false});
-            if (st.verb == "move" && b == "down") window->inject({E::Button, button, true});
+            if (st.verb == "move" && arg(2) == "down") window->inject({E::Button, button, true});
         } else if (st.verb == "slot") {  // slot <index> [left|right] [shift]: click a slot of the open menu
             const Menu& m = activeMenu();
             const Layout l = layoutFor(m);
@@ -837,7 +913,9 @@ void Ui::State::runScript(double) {
         } else if (st.verb == "log") {
             std::string msg;
             for (const auto& w : a) msg += w + " ";
-            LOG("script: %s", msg.c_str());
+            const Player& p = game->player();
+            LOG("script: %s| pos %.3f %.3f %.3f ground %d health %.1f food %d", msg.c_str(), p.pos[0], p.pos[1], p.pos[2],
+                int(p.onGround), health, food);
         } else if (st.verb == "dump") {  // logs the open menu's slots
             const Menu& m = activeMenu();
             for (size_t i = 0; i < m.slots.size(); ++i)

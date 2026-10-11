@@ -86,6 +86,18 @@ void Ui::State::tickHud() {
     if (hp != lastHealthInt) lastHealthTime = clock;
     if (clock - lastHealthTime > 1.0) displayHealth = hp;
     lastHealthInt = hp;
+    // Camera.tickFov with AbstractClientPlayer.getFieldOfViewModifier: flying, and the movement speed attribute
+    // (sprinting x1.3, Speed +20% / Slowness -15% per level) against the walking speed.
+    float target = 1.0f;
+    if (p.flying) target *= 1.1f;
+    float speed = p.sprinting ? 1.3f : 1.0f;
+    for (const auto& [id, e] : effects) {
+        if (e.name == "speed") speed *= 1.0f + 0.2f * float(e.amplifier + 1);
+        if (e.name == "slowness") speed *= std::max(0.0f, 1.0f - 0.15f * float(e.amplifier + 1));
+    }
+    target *= (speed + 1.0f) / 2.0f;
+    oldFovModifier = fovModifier;
+    fovModifier = std::clamp(fovModifier + (target - fovModifier) * 0.5f, 0.1f, 1.5f);
 }
 
 // --- items --------------------------------------------------------------------------------------------------
@@ -138,8 +150,8 @@ void Ui::State::drawTooltip(Canvas& c, const std::vector<Text>& lines, float mx,
 void Ui::State::drawHud(Canvas& c) {
     const float W = float(c.guiWidth()), H = float(c.guiHeight());
     const int gw = c.guiWidth(), gh = c.guiHeight();
-    // Crosshair (inverting blend).
-    if (!spectator() && screen == Screen::None) {
+    // Crosshair (inverting blend), first person only (Hud.extractCrosshair).
+    if (!spectator() && screen == Screen::None && game->cameraMode == 0) {
         c.setInvert(true);
         blitSprite(c, sprites.sprite("hud/crosshair"), float((gw - 15) / 2), float((gh - 15) / 2), 15, 15);
         c.setInvert(false);

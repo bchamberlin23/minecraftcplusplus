@@ -135,6 +135,7 @@ struct Ui::State {
         return false;
     }
     bool hardcore = false;
+    Text deathMessage;  // ClientboundPlayerCombatKillPacket
     int lastGameMode = -1;
 
     Menu inventory;                   // 46 slots, container 0
@@ -159,6 +160,7 @@ struct Ui::State {
     std::deque<float> frameTimes;
     int heartBlinkEnd = 0, lastHealthInt = 20, displayHealth = 20;
     double lastHealthTime = 0;
+    float fovModifier = 1, oldFovModifier = 1;  // Camera.tickFov
 
     // Chat
     std::vector<ChatLine> chatLines;  // newest first, wrapped

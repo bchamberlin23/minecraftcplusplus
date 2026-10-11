@@ -515,9 +515,9 @@ void Client::sendPlayerAction(int action, int x, int y, int z, int face, int seq
     send(Play, "player_action", w);
 }
 
-void Client::sendUseItemOn(int x, int y, int z, int face, const float cursor[3], int sequence) {
+void Client::sendUseItemOn(int x, int y, int z, int face, const float cursor[3], int sequence, int hand) {
     Writer w;
-    w.varInt(0);  // main hand
+    w.varInt(hand);  // 0 main, 1 off hand
     w.blockPos(x, y, z);
     w.varInt(face);
     for (int a = 0; a < 3; ++a) w.f32(cursor[a]);

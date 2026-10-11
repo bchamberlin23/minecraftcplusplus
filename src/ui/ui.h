@@ -106,6 +106,7 @@ public:
     const fs::path* screenshotRequest();  // scripted screenshots: pass to Renderer::render
     bool loadScript(const fs::path& file);
     float fovRadians() const;
+    bool hudHidden() const;  // F1
     // F3 biome name at a block position (local worlds with the generator); unset: not shown.
     void setBiomeLookup(std::function<std::string(int x, int y, int z)> fn);
     Settings& settings();

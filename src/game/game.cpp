@@ -101,7 +101,7 @@ void Game::frame(Window& w, double dt) {
     // Double-tapping jump toggles flight, like creative mode.
     const bool jump = !inputSuspended && w.mouseCaptured() && w.keyDown(VK_SPACE);
     if (jump && !jumpWasDown_) {
-        if (clock_ - lastJumpPress_ < 0.3) {
+        if (clock_ - lastJumpPress_ < 0.3 && player_.mayFly && !player_.noClip) {
             player_.flying = !player_.flying;
             player_.vel[1] = 0;
             lastJumpPress_ = -1;
@@ -157,14 +157,30 @@ void Game::handleClicks(Window& w, double dt) {
         else hotbar_[selected_] = world_.block(target_.x, target_.y, target_.z);
     }
     // An entity in front of the targeted block takes the click (attack / use only on a press, like the game).
+    if (usingItem_ && !rightHeld) {  // Minecraft.handleKeybinds: releaseUsingItem
+        usingItem_ = false;
+        if (onReleaseUseItem) onReleaseUseItem();
+    }
     if ((doBreak || doPlace) && onEntityClick &&
         onEntityClick(ev.left > 0, ev.left == 0 && ev.right > 0, target_.hit ? target_.distance : -1.0)) {
         repeatTimer_ = 0.3;
+        if (ev.left == 0 && ev.right > 0 && !usingItem_ && onUseItem) {  // e.g. a shield raised facing a mob
+            onUseItem(nullptr, true);
+            usingItem_ = true;
+        }
         return;
     }
-    if (!target_.hit || !(doBreak || doPlace)) return;
-    repeatTimer_ = (ev.left || ev.right) ? 0.3 : 0.2;  // the game repeats every 4 ticks while held
-    useTarget(!doBreak);
+    useConsumed_ = false;
+    if (target_.hit && (doBreak || doPlace)) {
+        repeatTimer_ = (ev.left || ev.right) ? 0.3 : 0.2;  // the game repeats every 4 ticks while held
+        useTarget(!doBreak);
+    }
+    if (ev.left > 0 && onPunch) onPunch();
+    // Minecraft.startUseItem: a press that neither placed a block nor used the targeted one uses the held item.
+    if (ev.right > 0 && !doBreak && !useConsumed_ && !usingItem_ && onUseItem) {
+        onUseItem(target_.hit ? &target_ : nullptr, false);
+        usingItem_ = true;
+    }
 }
 
 bool Game::useTarget(bool place) {
@@ -180,7 +196,9 @@ bool Game::useTarget(bool place) {
         return true;
     }
     // Using a block that opens a screen (or acting with an item that is not a block) goes to the server as is.
-    if ((onInteract && !player_.sneaking && onInteract(target_.x, target_.y, target_.z)) || !hotbar_[selected_]) {
+    const bool interacts = onInteract && !player_.sneaking && onInteract(target_.x, target_.y, target_.z);
+    if (interacts || !hotbar_[selected_]) {
+        useConsumed_ = interacts;  // else the held item may still be used (food, buckets...)
         if (onEdit) onEdit(action);
         return false;
     }
@@ -203,6 +221,7 @@ bool Game::useTarget(bool place) {
         onEdit(action);
     }
     edit(t[0], t[1], t[2], id);
+    useConsumed_ = true;
     if (onBlockChanged) onBlockChanged(true, t[0], t[1], t[2], id);
     if (onSwing) onSwing();
     return true;
@@ -224,7 +243,10 @@ u16 Game::orientForPlacement(u16 id, const RayHit& hit, const int target[3]) {
     if (!registry_.property(id, "facing").empty()) {
         static const char* look[4] = {"south", "west", "north", "east"};
         const int q = int(std::floor(player_.yaw / (kPi / 2) + 0.5)) & 3;
-        const bool towardsPlayer = name.find("stairs") == std::string::npos;  // furnaces, chests... face the player
+        // Furnaces, chests... face the player; stairs, doors, fence gates and beds face where the player looks.
+        const std::string base = name.substr(0, name.find('['));
+        const bool towardsPlayer = name.find("stairs") == std::string::npos && !base.ends_with("_door") &&
+                                   !base.ends_with("_fence_gate") && !base.ends_with("_bed");
         id = registry_.withProperty(id, "facing", look[towardsPlayer ? (q + 2) & 3 : q]);
     }
     const bool upper = face == 0 || (face >= 2 && hit.point[1] - target[1] > 0.5);
