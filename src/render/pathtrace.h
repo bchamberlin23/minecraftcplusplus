@@ -13,7 +13,7 @@
 #include "render/shading.h"
 
 struct Renderer::PathTracer {
-    static constexpr u32 kTableSize = 16;          // SRVs / UAVs per path tracer table (space4)
+    static constexpr u32 kTableSize = 24;          // SRVs / UAVs per path tracer table (space4)
     static constexpr u32 kMaxSections = 16384;     // sections in the acceleration structure at once
     static constexpr u32 kMaxJobs = 128;           // BLAS builds per frame
     static constexpr u32 kQuadsPerFrame = 600000;  // quads expanded and built per frame (startup: they queue)
@@ -23,6 +23,11 @@ struct Renderer::PathTracer {
     enum Target : u32 { TgtLight, TgtHist0, TgtHist1, TgtGeom0, TgtGeom1, TgtNormalRough, TgtDiffAlbedo, TgtSpecAlbedo,
                         TgtCount };
     static constexpr u32 kTargetBase = 8;
+    static constexpr u32 kReservoirBase = 16;       // two R32G32B32A32_UINT reservoir targets (u16, u17)
+    // Emissive lights: records per section (pt index), this frame's list, and how near a section must be to count.
+    static constexpr u32 kSectionLights = 256;
+    static constexpr u32 kFrameLights = 1 << 16;
+    static constexpr float kLightRange = 96.0f;
 
     Renderer& r;
     explicit PathTracer(Renderer& renderer) : r(renderer) {}
@@ -81,8 +86,12 @@ struct Renderer::PathTracer {
     void dropEntry(u32 e, bool recording);
 
     ComPtr<ID3D12Device5> dev5_;
-    ComPtr<ID3D12PipelineState> psoBlasGen_, psoTrace_, psoAccum_;
-    ComPtr<ID3D12Resource> targets_[TgtCount];
+    ComPtr<ID3D12PipelineState> psoBlasGen_, psoTrace_, psoAccum_, psoClear_, psoGather_, psoCdf_;
+    ComPtr<ID3D12Resource> targets_[TgtCount], reservoirs_[2];
+    ComPtr<ID3D12Resource> lights_, lightCounts_, frameLights_, frameLightCount_, lightSections_, lightPower_, frameSecs_,
+        frameSecCdf_, lightSlot_;
+    u8* lightSectionsMapped_ = nullptr;
+    u32 lightSectionCount_ = 0;
     u32 histSlot_ = 0;
     bool histValid_ = false;
     double prevCam_[3] = {};

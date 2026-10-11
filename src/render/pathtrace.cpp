@@ -7,6 +7,9 @@
 #include "BlasGenCS.h"
 #include "PathTraceCS.h"
 #include "PtAccumCS.h"
+#include "PtClearCS.h"
+#include "LightGatherCS.h"
+#include "LightCdfCS.h"
 
 namespace {
 
@@ -28,6 +31,7 @@ struct PtConstants {
     u32 jobs[4];
     u32 slots[4];
     float move[4];
+    u32 lights[4];
 };
 static_assert(sizeof(PtConstants) <= Renderer::PathTracer::kConstantBytes);
 
@@ -89,7 +93,8 @@ bool Renderer::PathTracer::create() {
         return check(r.device_->CreateComputePipelineState(&d, IID_PPV_ARGS(&out)), "compute pipeline");
     };
     if (!compute(g_BlasGenCS, sizeof(g_BlasGenCS), psoBlasGen_) || !compute(g_PathTraceCS, sizeof(g_PathTraceCS), psoTrace_) ||
-        !compute(g_PtAccumCS, sizeof(g_PtAccumCS), psoAccum_))
+        !compute(g_PtAccumCS, sizeof(g_PtAccumCS), psoAccum_) || !compute(g_PtClearCS, sizeof(g_PtClearCS), psoClear_) ||
+        !compute(g_LightGatherCS, sizeof(g_LightGatherCS), psoGather_) || !compute(g_LightCdfCS, sizeof(g_LightCdfCS), psoCdf_))
         return false;
 
     jobs_ = r.createBuffer(u64(kJobBytes) * kMaxJobs * Renderer::kFrames, D3D12_HEAP_TYPE_UPLOAD);
@@ -99,7 +104,20 @@ bool Renderer::PathTracer::create() {
     postbuild_ = r.createBuffer(u64(kMaxJobs) * 8 * Renderer::kFrames, D3D12_HEAP_TYPE_DEFAULT,
                                 D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
     postbuildReadback_ = r.createBuffer(u64(kMaxJobs) * 8 * Renderer::kFrames, D3D12_HEAP_TYPE_READBACK);
-    if (!jobs_ || !instances_ || !constants_ || !vertices_ || !postbuild_ || !postbuildReadback_) return false;
+    const auto uavFlag = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    lights_ = r.createBuffer(u64(kMaxSections) * kSectionLights * 8, D3D12_HEAP_TYPE_DEFAULT, uavFlag);
+    lightSlot_ = r.createBuffer(u64(kMaxSections) * 4, D3D12_HEAP_TYPE_DEFAULT, uavFlag);
+    lightCounts_ = r.createBuffer(u64(kMaxSections) * 4, D3D12_HEAP_TYPE_DEFAULT, uavFlag);
+    frameLights_ = r.createBuffer(u64(kFrameLights) * 4, D3D12_HEAP_TYPE_DEFAULT, uavFlag);
+    frameLightCount_ = r.createBuffer(256, D3D12_HEAP_TYPE_DEFAULT, uavFlag);
+    lightSections_ = r.createBuffer(u64(kMaxSections) * 8 * Renderer::kFrames, D3D12_HEAP_TYPE_UPLOAD);
+    lightPower_ = r.createBuffer(u64(kMaxSections) * 4, D3D12_HEAP_TYPE_DEFAULT, uavFlag);
+    frameSecs_ = r.createBuffer(u64(kMaxSections) * 16, D3D12_HEAP_TYPE_DEFAULT, uavFlag);
+    frameSecCdf_ = r.createBuffer(u64(kMaxSections) * 4, D3D12_HEAP_TYPE_DEFAULT, uavFlag);
+    if (!jobs_ || !instances_ || !constants_ || !vertices_ || !postbuild_ || !postbuildReadback_ || !lights_ || !lightCounts_ ||
+        !frameLights_ || !frameLightCount_ || !lightSections_ || !lightPower_ || !frameSecs_ || !frameSecCdf_ || !lightSlot_)
+        return false;
+    lightSections_->Map(0, nullptr, reinterpret_cast<void**>(&lightSectionsMapped_));
     jobs_->Map(0, nullptr, reinterpret_cast<void**>(&jobsMapped_));
     instances_->Map(0, nullptr, reinterpret_cast<void**>(&instancesMapped_));
     constants_->Map(0, nullptr, reinterpret_cast<void**>(&constantsMapped_));
@@ -128,6 +146,24 @@ bool Renderer::PathTracer::create() {
         s.Buffer.NumElements = kMaxJobs * Renderer::kFrames;
         s.Buffer.StructureByteStride = kJobBytes;
         r.device_->CreateShaderResourceView(jobs_.Get(), &s, r.cpuDescriptor(descBase_));
+        s.Buffer.NumElements = kMaxSections * Renderer::kFrames;  // t5: light sections (frame slices)
+        s.Buffer.StructureByteStride = 8;
+        r.device_->CreateShaderResourceView(lightSections_.Get(), &s, r.cpuDescriptor(descBase_ + 5));
+        // u1..u7: lights, light counts, frame light list, its count, light power, frame sections, their CDF
+        ID3D12Resource* bufs[7] = {lights_.Get(),      lightCounts_.Get(), frameLights_.Get(), frameLightCount_.Get(),
+                                   lightPower_.Get(), frameSecs_.Get(),   frameSecCdf_.Get()};
+        const u32 elems[7] = {kMaxSections * kSectionLights, kMaxSections, kFrameLights, 64, kMaxSections, kMaxSections,
+                              kMaxSections};
+        const u32 strides[7] = {8, 4, 4, 4, 4, 16, 4};
+        for (u32 i = 0; i < 8; ++i) {  // + u18: light slots
+            D3D12_UNORDERED_ACCESS_VIEW_DESC u{};
+            u.Format = DXGI_FORMAT_UNKNOWN;
+            u.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+            u.Buffer.NumElements = i < 7 ? elems[i] : kMaxSections;
+            u.Buffer.StructureByteStride = i < 7 ? strides[i] : 4;
+            r.device_->CreateUnorderedAccessView(i < 7 ? bufs[i] : lightSlot_.Get(), nullptr, &u,
+                                                 r.cpuDescriptor(descBase_ + kTableSize + (i < 7 ? 1 + i : 18)));
+        }
     }
     slotEntry_.assign(r.slotCapacity_, kNone);
     level0Index_.assign(r.slotCapacity_, kNone);
@@ -162,6 +198,16 @@ bool Renderer::PathTracer::createTargets() {
         u.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
         r.device_->CreateUnorderedAccessView(targets_[i].Get(), nullptr, &u,
                                              r.cpuDescriptor(descBase_ + kTableSize + kTargetBase + i));
+    }
+    for (u32 i = 0; i < 2; ++i) {
+        reservoirs_[i] = sh.texture(DXGI_FORMAT_R32G32B32A32_UINT, w, h, 1, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, kUav,
+                                    nullptr);
+        if (!reservoirs_[i]) return false;
+        D3D12_UNORDERED_ACCESS_VIEW_DESC u{};
+        u.Format = DXGI_FORMAT_R32G32B32A32_UINT;
+        u.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        r.device_->CreateUnorderedAccessView(reservoirs_[i].Get(), nullptr, &u,
+                                             r.cpuDescriptor(descBase_ + kTableSize + kReservoirBase + i));
     }
     histValid_ = false;
     return true;
@@ -287,7 +333,8 @@ void Renderer::PathTracer::build(ID3D12GraphicsCommandList* list, const Shading:
     };
     thread_local std::vector<Candidate> cand;
     thread_local std::vector<u32> visible;
-    cand.clear(), visible.clear();
+    thread_local std::vector<std::pair<u32, float>> lightSections;  // (pt index, distance)
+    cand.clear(), visible.clear(), lightSections.clear();
     const float radius = set.ptRadius;
     {  // The full-detail sections in the radius: walked again when the cut changes or the camera has moved a few
        // blocks (the active list is long - every LOD node - and its slots are scattered in memory).
@@ -310,8 +357,12 @@ void Renderer::PathTracer::build(ID3D12GraphicsCommandList* list, const Shading:
     }
     for (const auto& [d, slot] : inRadius_) {
         const u32 e = slotEntry_[slot];
-        if (e == kNone) cand.push_back({d, slot});
-        else entries_[e].lastSeen = frame_, visible.push_back(e);
+        if (e == kNone) {
+            cand.push_back({d, slot});
+        } else {
+            entries_[e].lastSeen = frame_, visible.push_back(e);
+            if (d <= kLightRange) lightSections.push_back({e, d});
+        }
     }
     for (u32 e = 0; e < entries_.size(); ++e)  // left the radius (or the cut) a while ago
         if (entries_[e].slot != kNone && entries_[e].lastSeen + 8 < frame_) dropEntry(e, true);
@@ -348,6 +399,7 @@ void Renderer::PathTracer::build(ID3D12GraphicsCommandList* list, const Shading:
     // ---- new BLASes, nearest first ----
     std::sort(cand.begin(), cand.end(), [](const Candidate& a, const Candidate& b) { return a.d < b.d; });
     BuildJob jobs[kMaxJobs];  // copied to the upload heap below (never read back from it)
+    float jobDist[kMaxJobs];
     u32 jobCount = 0, quads = 0;
     for (const Candidate& c : cand) {
         if (jobCount == kMaxJobs || (entries_.size() - freeEntries_.size()) >= kMaxSections) break;
@@ -363,6 +415,7 @@ void Renderer::PathTracer::build(ID3D12GraphicsCommandList* list, const Shading:
         Entry& en = entries_[e];
         en.slot = c.slot, en.lastSeen = frame_, en.compacted = false, en.kindMap = 0;
         slotEntry_[c.slot] = e;
+        jobDist[jobCount] = c.d;
         BuildJob& j = jobs[jobCount++];
         j = {c.slot, quads, quads * 4, e, {counts[0], counts[1], counts[2], counts[3]}};
         quads += n;
@@ -380,6 +433,7 @@ void Renderer::PathTracer::build(ID3D12GraphicsCommandList* list, const Shading:
     k.jobs[0] = jobCount, k.jobs[1] = fi * kMaxJobs, k.jobs[2] = quads, k.jobs[3] = 0;
     k.slots[0] = histSlot_, k.slots[1] = histSlot_ ^ 1;
     for (int c = 0; c < 3; ++c) k.move[c] = float(move[c]);
+    k.lights[1] = fi * kMaxSections, k.lights[2] = kFrameLights;
     std::memcpy(constantsMapped_ + size_t(fi) * kConstantBytes, &k, sizeof(k));
     const D3D12_GPU_VIRTUAL_ADDRESS ptCb = constants_->GetGPUVirtualAddress() + u64(fi) * kConstantBytes;
 
@@ -392,9 +446,18 @@ void Renderer::PathTracer::build(ID3D12GraphicsCommandList* list, const Shading:
         list->SetComputeRootShaderResourceView(RootSections, r.sections_->GetGPUVirtualAddress());
         list->SetComputeRootShaderResourceView(RootRemap, r.remap_->GetGPUVirtualAddress() + u64(fi) * kRemapCapacity * 4);
         list->SetComputeRootUnorderedAccessView(RootCounts, vertices_->GetGPUVirtualAddress());
+        list->SetComputeRootDescriptorTable(RootBlockTex, r.srvHeap_->GetGPUDescriptorHandleForHeapStart());
         list->SetComputeRootDescriptorTable(RootPtSrv, r.gpuDescriptor(descBase_));
         list->SetComputeRootDescriptorTable(RootPtUav, r.gpuDescriptor(descBase_ + kTableSize));
         list->SetComputeRootConstantBufferView(RootPtConstants, ptCb);
+        list->SetPipelineState(psoClear_.Get());
+        list->Dispatch((jobCount + 63) / 64, 1, 1);
+        {
+            D3D12_RESOURCE_BARRIER u{};
+            u.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+            list->ResourceBarrier(1, &u);
+        }
+        list->SetPipelineState(psoBlasGen_.Get());
         list->Dispatch((quads + 63) / 64, 1, 1);
         D3D12_RESOURCE_BARRIER b[2]{};
         b[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -473,6 +536,7 @@ void Renderer::PathTracer::build(ID3D12GraphicsCommandList* list, const Shading:
             list4->BuildRaytracingAccelerationStructure(&d, 1, &post);
             compactions_[fi].push_back({jobs[j].ptIndex, en.gen, j});
             visible.push_back(jobs[j].ptIndex);
+            if (jobDist[j] <= kLightRange) lightSections.push_back({jobs[j].ptIndex, jobDist[j]});
         }
         D3D12_RESOURCE_BARRIER uav{};
         uav.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
@@ -548,10 +612,40 @@ void Renderer::PathTracer::build(ID3D12GraphicsCommandList* list, const Shading:
     td.Inputs = tin;
     td.ScratchAccelerationStructureData = tlasScratch_->GetGPUVirtualAddress();
     list4->BuildRaytracingAccelerationStructure(&td, 0, nullptr);
+
+    // ---- this frame's emissive light list: the lights of the sections near the camera ----
+    lightSectionCount_ = u32(std::min<size_t>(lightSections.size(), kMaxSections));
+    static_assert(sizeof(std::pair<u32, float>) == 8);
+    std::memcpy(lightSectionsMapped_ + size_t(fi) * kMaxSections * 8, lightSections.data(), size_t(lightSectionCount_) * 8);
+    reinterpret_cast<PtConstants*>(constantsMapped_ + size_t(fi) * kConstantBytes)->lights[0] = lightSectionCount_;
+    {
+        D3D12_RESOURCE_BARRIER b{};
+        b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        b.Transition.pResource = frameLightCount_.Get();
+        b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        b.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+        b.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+        list->ResourceBarrier(1, &b);
+        list->CopyBufferRegion(frameLightCount_.Get(), 0, r.zeros_.Get(), 0, 16);
+        b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+        b.Transition.StateAfter = kUav;
+        list->ResourceBarrier(1, &b);
+    }
     D3D12_RESOURCE_BARRIER uav{};
     uav.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-    uav.UAV.pResource = tlas_[fi].Get();
-    list->ResourceBarrier(1, &uav);
+    list->ResourceBarrier(1, &uav);  // BLAS builds / compaction, the TLAS, light counts
+    if (lightSectionCount_) {
+        sh.bindCompute(list, cb);
+        list->SetComputeRootDescriptorTable(RootPtSrv, r.gpuDescriptor(descBase_));
+        list->SetComputeRootDescriptorTable(RootPtUav, r.gpuDescriptor(descBase_ + kTableSize));
+        list->SetComputeRootConstantBufferView(RootPtConstants, ptCb);
+        list->SetPipelineState(psoGather_.Get());
+        list->Dispatch((lightSectionCount_ + 63) / 64, 1, 1);
+        list->ResourceBarrier(1, &uav);
+        list->SetPipelineState(psoCdf_.Get());
+        list->Dispatch(1, 1, 1);
+        list->ResourceBarrier(1, &uav);
+    }
     cpuMs_ += timer.ms();
     if (debug_ && frame_ % 120 == 0) {
         LOG("path tracing: %s | build cpu %.3f ms/frame (%.3f %.3f %.3f) | active %u", status().c_str(), cpuMs_ / 120.0,
@@ -590,7 +684,7 @@ void Renderer::PathTracer::trace(ID3D12GraphicsCommandList* list, const Shading:
 
 std::string Renderer::PathTracer::status() const {
     char b[256];
-    std::snprintf(b, sizeof(b), "%u sections traced (radius %.0f), %.0f MB acceleration structures%s", instanceCount_, radius_,
-                  double(asBytes_) / 1048576.0, queued_ ? ", building..." : "");
+    std::snprintf(b, sizeof(b), "%u sections traced (radius %.0f), %.0f MB acceleration structures, %u light sections%s",
+                  instanceCount_, radius_, double(asBytes_) / 1048576.0, lightSectionCount_, queued_ ? ", building..." : "");
     return b;
 }

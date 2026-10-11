@@ -159,6 +159,7 @@ ShaderSettings ShaderSettings::preset(ShaderPreset p) {
             break;
         case ShaderPreset::PathTraced:  // High for what lies beyond the traced radius (and the volumetrics)
             s.pathTrace = true;
+            s.waving = false;  // the acceleration structures hold the blocks where they stand (no self-shadowing)
             s.setPathTraceQuality(PathTraceQuality::High);
             break;
     }

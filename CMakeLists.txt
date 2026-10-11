@@ -135,6 +135,9 @@ add_shader(post.hlsl TonemapPS ps_6_0)
 add_shader(pathtrace.hlsl BlasGenCS cs_6_5)
 add_shader(pathtrace.hlsl PathTraceCS cs_6_5)
 add_shader(pathtrace.hlsl PtAccumCS cs_6_5)
+add_shader(pathtrace.hlsl PtClearCS cs_6_5)
+add_shader(pathtrace.hlsl LightGatherCS cs_6_5)
+add_shader(pathtrace.hlsl LightCdfCS cs_6_5)
 # Vendor upscaler inputs (src/render/upscalers).
 add_shader(upscale_prep.hlsl ReactiveCS cs_6_0)
 # OptiFine / Iris shader packs (src/render/packs): utility passes, and the vertex adapters embedded as text (compiled
