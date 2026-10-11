@@ -7,6 +7,7 @@
 // Chunks that already exist in the world are used as read-only neighbours.
 #include "worldgen/generator.h"
 
+#include <atomic>
 #include <condition_variable>
 #include <deque>
 #include <mutex>
@@ -50,6 +51,7 @@ private:
     bool hasTerrain(int cx, int cz);  // generated, or present in the world (loaded on demand)
     bool existsInWorld(int cx, int cz);  // exists_, remembering misses until the next setWanted
     void schedule();                  // under mutex_
+    void applyWanted(std::vector<std::pair<int, int>> chunks);  // under mutex_
     void terrainWorker();
     void decorationWorker();
 
@@ -63,10 +65,16 @@ private:
     std::unordered_map<u64, Entry> chunks_;
     std::vector<std::pair<int, int>> wanted_;
     size_t scanFrom_ = 0;               // wanted_ before this index are all delivered or in the world
-    std::unordered_set<u64> missing_;   // not in the world as of the last setWanted
+    std::unordered_set<u64> missing_;  // not in the world as of the last setWanted
+    size_t existsCalls_ = 0, loads_ = 0;  // profiling
+    std::vector<std::unique_ptr<GenChunk>> graveyard_;  // dropped by setWanted, freed by a terrain worker
     std::deque<std::pair<int, int>> terrainQueue_, decorateQueue_;
     std::vector<std::pair<int, int>> decorating_;  // queued or running decorations
-    std::vector<std::unique_ptr<GenChunk>> done_;
+    // Mailbox between the main thread and the workers (never held while waiting for mutex_; taken after it).
+    mutable std::mutex mailMutex_;
+    std::vector<std::unique_ptr<GenChunk>> done_;         // delivered chunks, for take()
+    std::vector<std::pair<int, int>> pendingWanted_;     // the latest setWanted, for a terrain worker
+    std::atomic<bool> wantedPending_{false};
     double totalMs_ = 0, decorateMs_ = 0;
     size_t decorated_ = 0;
     size_t generated_ = 0;

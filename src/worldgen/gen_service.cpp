@@ -40,6 +40,7 @@ GenService::Entry* GenService::find(int cx, int cz) {
 bool GenService::existsInWorld(int cx, int cz) {
     const u64 k = key(cx, cz);
     if (missing_.count(k)) return false;
+    ++existsCalls_;
     if (exists_(cx, cz)) return true;
     missing_.insert(k);
     return false;
@@ -50,15 +51,28 @@ bool GenService::hasTerrain(int cx, int cz) {
     if (!existsInWorld(cx, cz)) return false;
     Entry& e = chunks_[key(cx, cz)];  // a saved chunk next to generated ones: read-only neighbour
     e.chunk = std::make_unique<GenChunk>();
+    ++loads_;
     load_(cx, cz, *e.chunk);
     e.external = true;
     e.state = State::Decorated;
     return true;
 }
 
+// The main thread never waits for mutex_ (workers hold it while scheduling): the new list goes to the mailbox and
+// a terrain worker applies it.
 void GenService::setWanted(const std::vector<std::pair<int, int>>& chunks) {
-    std::lock_guard lock(mutex_);
-    wanted_ = chunks;
+    {
+        std::lock_guard mail(mailMutex_);
+        pendingWanted_ = chunks;
+    }
+    wantedPending_ = true;
+    terrainCv_.notify_one();
+}
+
+void GenService::applyWanted(std::vector<std::pair<int, int>> chunks) {
+    const Timer tLock;
+    const double lockMs = 0;
+    wanted_ = std::move(chunks);
     scanFrom_ = 0;
     missing_.clear();
     // Drop finished work far from the area of interest (never anything in progress).
@@ -72,16 +86,22 @@ void GenService::setWanted(const std::vector<std::pair<int, int>>& chunks) {
             const bool distant = std::abs(cx - ox) > reach || std::abs(cz - oz) > reach;
             const bool busy = it->second.state == State::Generating || it->second.state == State::Decorating ||
                               it->second.pins > 0;
-            if (distant && !busy && (it->second.state != State::Queued))
+            if (distant && !busy && (it->second.state != State::Queued)) {
+                if (it->second.chunk) graveyard_.push_back(std::move(it->second.chunk));  // freed by a worker
                 it = chunks_.erase(it);
-            else
+            } else
                 ++it;
         }
     }
     terrainQueue_.clear();
     for (auto it = chunks_.begin(); it != chunks_.end();)  // re-queued below in priority order
         it = it->second.state == State::Queued ? chunks_.erase(it) : std::next(it);
+    const double dropMs = tLock.ms() - lockMs;
+    const size_t existsBefore = existsCalls_, loadsBefore = loads_;
     schedule();
+    if (std::getenv("MCPP_GEN_PROFILE") && tLock.ms() > 5.0)
+        LOG("gen setWanted: lock %.1f, drop %.1f, schedule %.1f ms | %zu exists checks, %zu loads, %zu entries", lockMs,
+            dropMs, tLock.ms() - lockMs - dropMs, existsCalls_ - existsBefore, loads_ - loadsBefore, chunks_.size());
 }
 
 // Walks the wanted chunks nearest first and advances whatever blocks each one.
@@ -143,12 +163,15 @@ void GenService::schedule() {
                 auto out = std::make_unique<GenChunk>(*region[4]);
                 region[4] = out.get();
                 structures->postProcess(region);  // LevelChunk.postProcessGeneration, on the delivered copy
+                std::lock_guard mail(mailMutex_);
                 done_.push_back(std::move(out));
                 find(cx, cz)->delivered = true;
             }
         } else if (ready) {
             Entry& e = chunks_[key(cx, cz)];
-            done_.push_back(std::make_unique<GenChunk>(*e.chunk));
+            auto out = std::make_unique<GenChunk>(*e.chunk);
+            std::lock_guard mail(mailMutex_);
+            done_.push_back(std::move(out));
             e.delivered = true;
         }
     }
@@ -157,7 +180,7 @@ void GenService::schedule() {
 }
 
 std::vector<std::unique_ptr<GenChunk>> GenService::take(size_t max) {
-    std::lock_guard lock(mutex_);
+    std::lock_guard mail(mailMutex_);
     std::vector<std::unique_ptr<GenChunk>> out;
     while (!done_.empty() && out.size() < max) {
         out.push_back(std::move(done_.back()));
@@ -168,6 +191,7 @@ std::vector<std::unique_ptr<GenChunk>> GenService::take(size_t max) {
 
 std::string GenService::debugCounts() const {
     std::lock_guard lock(mutex_);
+    std::lock_guard mail(mailMutex_);
     size_t states[5] = {}, delivered = 0, external = 0;
     for (const auto& [k, e] : chunks_) ++states[int(e.state)], delivered += e.delivered, external += e.external;
     char buf[256];
@@ -197,10 +221,30 @@ void GenService::terrainWorker() {
     DensityContext ctx;
     for (;;) {
         std::pair<int, int> c;
+        std::vector<std::unique_ptr<GenChunk>> dead;
         {
             std::unique_lock lock(mutex_);
-            terrainCv_.wait(lock, [&] { return quit_ || !terrainQueue_.empty(); });
+            // wait_for: wantedPending_ is set without mutex_, so a notify can slip past the predicate check.
+            terrainCv_.wait_for(lock, std::chrono::milliseconds(50),
+                                [&] { return quit_ || !terrainQueue_.empty() || !graveyard_.empty() || wantedPending_; });
             if (quit_) return;
+            if (wantedPending_.exchange(false)) {
+                std::vector<std::pair<int, int>> w;
+                {
+                    std::lock_guard mail(mailMutex_);
+                    w.swap(pendingWanted_);
+                }
+                applyWanted(std::move(w));
+            }
+            dead.swap(graveyard_);
+        }
+        if (!dead.empty()) {  // chunks setWanted dropped: freeing them (hundreds of MB) is slow, so not under mutex_
+            dead.clear();
+            continue;
+        }
+        {
+            std::unique_lock lock(mutex_);
+            if (terrainQueue_.empty()) continue;
             c = terrainQueue_.front();
             terrainQueue_.pop_front();
             Entry* e = find(c.first, c.second);
