@@ -11,6 +11,7 @@
 #include "world/world.h"
 
 #include <cmath>
+#include <shared_mutex>
 
 namespace ui {
 
@@ -196,8 +197,12 @@ void drawScreenEffects(Ui::State& s, Canvas& c) {
             // The quad spans x, y in -1..1 at z = -0.5; u = uOff + 2 (1 - x), v = vOff + 2 (1 - y).
             const float ex = aspect / (2.0f * f), ey = 1.0f / (2.0f * f);  // screen edges at that depth
             const int ex0 = int(std::floor(cam.x)), ey0 = int(std::floor(cam.y)), ez0 = int(std::floor(cam.z));
-            const World::LightView lv = s.world->light(ex0 >> 4, ey0 >> 4, ez0 >> 4);
-            const float level = float(std::max(lv.sky4(ex0 & 15, ey0 & 15, ez0 & 15), lv.block4(ex0 & 15, ey0 & 15, ez0 & 15))) / 15.0f;
+            float level;
+            {
+                std::shared_lock lock(s.world->mutex());
+                const World::LightView lv = s.world->light(ex0 >> 4, ey0 >> 4, ez0 >> 4);
+                level = float(std::max(lv.sky4(ex0 & 15, ey0 & 15, ez0 & 15), lv.block4(ex0 & 15, ey0 & 15, ez0 & 15))) / 15.0f;
+            }
             const float bright = level / (4.0f - 3.0f * level);  // Lightmap.getBrightness
             const int b = int(bright * 255.0f);
             wrapped(c, tex, uOff + 2 * (1 + ex), uOff + 2 * (1 - ex), vOff + 2 * (1 - ey), vOff + 2 * (1 + ey),
