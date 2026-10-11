@@ -82,6 +82,7 @@ private:
     double sentPos_[3] = {};
     float sentRot_[2] = {};
     bool haveServerPos_ = false, loadedSent_ = false;
+    double levelStart_ = 0;
     int sentSlot_ = -1;
     int sentInput_ = 0;  // ServerboundPlayerInputPacket flags last sent
     bool sentSprinting_ = false, sentFlying_ = false;

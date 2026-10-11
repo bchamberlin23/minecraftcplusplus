@@ -15,7 +15,7 @@ namespace net {
 
 namespace {
 constexpr const char* kPhaseNames[] = {"login", "configuration", "play"};
-constexpr float kChunksPerTick = 25.0f;  // asked for in chunk batch acks; the main thread applies ~8 per frame
+constexpr float kChunksPerTick = 25.0f;  // asked for in chunk batch acks; main-thread application has a 4 ms budget
 
 // Offline-mode player UUID: name-based (version 3) UUID of "OfflinePlayer:<name>", like the game.
 void offlineUuid(const std::string& name, u8 out[16]) {
@@ -451,6 +451,7 @@ bool Client::handlePlay(const std::string& name, Reader& r) {
         push(e);
     } else if (name == "login" || name == "respawn") {
         JoinEvent e;
+        e.receivedAt = nowSeconds();
         e.respawn = name == "respawn";
         if (!e.respawn) {
             e.entityId = r.i32v();

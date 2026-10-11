@@ -30,6 +30,7 @@ struct JoinEvent {
     bool respawn = false;
     int entityId = 0, gameMode = 0, viewDistance = 0;
     Dimension dimension;
+    double receivedAt = 0;  // time the login/respawn packet was decoded, for destination readiness timing
 };
 struct ChunkEvent {
     int cx = 0, cz = 0, firstSy = 0;  // sections[i] is section y firstSy + i (light included)

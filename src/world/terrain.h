@@ -13,6 +13,7 @@
 #include <mutex>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 
 class BlockRegistry;
 class Renderer;
@@ -56,10 +57,12 @@ public:
     void setDetailRadius(float blocks) { detailRadius_ = blocks, cutDirty_ = true; }  // full-detail radius (options)
     void enableFar(FarGenFn fn, int genMinY, unsigned threads);
     void stopFar();  // joins the far threads (before whatever fn uses goes away)
+    void stopBackground();  // stop accepting work on exit; destructors join executing jobs
     // Far terrain shows the overworld: off (and dropped) while the player is in another dimension.
     void setFarActive(bool active);
 
     bool buildCoarse();
+    void prime(double x, double y, double z);  // prepare a small playable centre, then stream detail outward
     void update(double x, double y, double z, bool waitForDetail);
     // Re-meshes full-detail sections right away after an edit (keys from Lighting::sectionKey).
     void remesh(const std::vector<u64>& sections);
@@ -68,6 +71,8 @@ public:
     void addChunk(int cx, int cz, const std::vector<u64>& dirtySections);
     // A chunk was dropped from the world: frees its full-detail meshes; coarse levels rebuild.
     void removeChunk(int cx, int cz);
+    // Whole dimension unload: free all meshes in one pass and invalidate background results.
+    void clearChunks();
     // Re-meshes resident full-detail sections in the background (e.g. after light changes).
     void refresh(const std::vector<u64>& sections);
     const TerrainStats& stats() const { return stats_; }
@@ -109,6 +114,7 @@ private:
         float dist;
         u32 stamp = 0;         // edit stamp at dispatch; stale results are dropped
         bool refresh = false;  // re-mesh of a resident section: swap the mesh in place
+        u64 epoch = 0;         // dimension at dispatch
     };
     struct Result {
         Request req;
@@ -124,6 +130,7 @@ private:
     float lodQuality_ = 2.0f;
     u32& detailState(const Request& r) { return regions_[r.region].at(0, r.cx & 31, r.sy - minSy_, r.cz & 31); }
     struct CoarseBuild {
+        u64 epoch = 0;
         int region = 0;
         const World::Region* source = nullptr;  // what the build saw, to drop stale results
         int farLevel = 0;
@@ -137,6 +144,7 @@ private:
         int ny[kMaxLevel + 1];
         std::shared_ptr<const FarGrid> farData;
         int rx = 0, rz = 0;
+        u64 epoch = 0;
     };
     struct FarJob {
         int region, rx, rz, level;
@@ -174,6 +182,7 @@ private:
     const BlockRegistry& registry_;
     Renderer& renderer_;
     float detailRadius_;
+    float loadRadiusLimit_ = 1e30f;  // only limited during prime()
     int minSy_ = 0, worldMinY_ = 0, heightBlocks_ = 0;
     u16 water_ = 0;
     u16 solidFill_ = 0;  // opaque cube used for unknown space beside a region
@@ -184,6 +193,7 @@ private:
     std::vector<Request> resident_;             // level-0 sections currently meshed
     std::vector<Request> wanted_;               // sorted far -> near; dispatched from the back
     std::vector<Request> refresh_;              // resident sections to re-mesh (neighbours of new chunks)
+    std::unordered_set<u64> refreshQueued_;     // coalesce repeated light/edge updates before dispatch
     std::vector<Result> pendingUpload_;         // finished meshes waiting for upload budget
     double scanX_ = 0, scanY_ = 0, scanZ_ = 0;
     bool scanned_ = false;
@@ -194,6 +204,7 @@ private:
     };
     std::vector<CutCache> cutCache_;
     size_t inFlight_ = 0;
+    u64 epoch_ = 0;  // main thread only; copied into jobs while dispatching
     std::unordered_map<u64, u32> stamps_;  // section -> edit count
     std::vector<u32> active_;
     std::vector<std::vector<u32>> cutParts_;  // per region: its part of active_
