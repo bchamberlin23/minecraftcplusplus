@@ -39,7 +39,7 @@ enum LayerFlags : u8 { Emissive = 1, Translucent = 2, TintWool = 8, TintCollar =
 enum Special : u8 {
     SpNone, SpCow, SpPig, SpChicken, SpSheep, SpWolf, SpCat, SpHorse, SpLlama, SpRabbit, SpParrot, SpFox, SpAxolotl,
     SpPanda, SpMooshroom, SpVillager, SpZombieVillager, SpSlime, SpPlayer, SpFrog, SpArmorStand, SpCreeper, SpBoat,
-    SpMinecart, SpArrow, SpXpOrb, SpTrident
+    SpMinecart, SpArrow, SpXpOrb, SpTrident, SpDisplay
 };
 
 struct GpuInstance {
@@ -304,11 +304,12 @@ void EntityRenderer::buildDefs() {
         else if (n == "dragon_fireball") sprite(T("enderdragon/dragon_fireball"), 2.0f);
         else if (n == "fishing_bobber") sprite(T("fishing/fishing_hook"), 1.0f);
         else if (n == "experience_orb") sprite(T("experience/experience_orb"), 0.6f), d.special = SpXpOrb;
-        else if (n == "area_effect_cloud" || n == "marker" || n == "interaction" || n == "block_display" ||
-                 n == "item_display" || n == "text_display" || n == "lightning_bolt" || n == "ominous_item_spawner")
-            d.kind = Kind::None;  // invisible or effect-only
+        else if (n == "block_display") d.kind = Kind::Block, d.special = SpDisplay;  // DisplayRenderer.BlockDisplayRenderer
+        else if (n == "area_effect_cloud" || n == "marker" || n == "interaction" || n == "item_display" ||
+                 n == "text_display" || n == "lightning_bolt" || n == "ominous_item_spawner")
+            d.kind = Kind::None;  // invisible, effect-only or drawn by the visuals pass (item / text displays)
         else if (n == "item_frame" || n == "glow_item_frame" || n == "painting")
-            d.kind = Kind::None;  // block-attached decorations: not drawn yet
+            d.kind = Kind::None;  // block-attached decorations: the visuals pass
         {  // ArmorModelSet (HumanoidArmorLayer)
             static const char* kPieces[4] = {"#helmet", "#chestplate", "#leggings", "#boots"};
             const std::string set = n == "player" || n == "mannequin" ? "player" : n;
@@ -1162,6 +1163,14 @@ void EntityRenderer::freeEntity(const Entity& e, const TypeDef& d, float pt, con
     double p[3];
     for (int a = 0; a < 3; ++a) p[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt - cam[a];
     BlockRegistry& reg = world_.registry();
+    if (d.kind == Kind::Block && d.special == SpDisplay) {  // the block model in block space, under the display's pose
+        const u16 block = world_.localBlock(e.blockState);
+        M34 m;
+        if (!block || !displayMatrix(e, pt, camYaw_, camPitch_, m.m)) return;
+        m.m[3] += float(p[0]), m.m[7] += float(p[1]), m.m[11] += float(p[2]);
+        emitBlock(block, *reinterpret_cast<const Mat34*>(&m), displayLight(e, light), 0);
+        return;
+    }
     if (d.kind == Kind::Block) {
         if (!d.block.empty() && !d.blockId) d.blockId = reg.idFor(world_.reports().complete(d.block));
         const u16 block = !d.block.empty() ? d.blockId : world_.localBlock(e.blockState);
@@ -1307,6 +1316,12 @@ void EntityRenderer::build(const PassContext& ctx) {
         l = std::sqrt(std::max(l, 1e-12f));
         for (int c = 0; c < 3; ++c) camVec[r * 3 + c] = vp(r, c) / l;
     }
+    {  // camera rotation from its forward direction (the projection's w row)
+        float f[3], l = 0;
+        for (int c = 0; c < 3; ++c) f[c] = vp(3, c), l += f[c] * f[c];
+        l = std::sqrt(std::max(l, 1e-12f));
+        camYaw_ = std::atan2(-f[0], f[2]) / kDeg, camPitch_ = std::asin(std::clamp(-f[1] / l, -1.0f, 1.0f)) / kDeg;
+    }
     const double cam[3] = {ctx.camX, ctx.camY, ctx.camZ};
     const float pt = std::clamp(world_.partialTick(), 0.0f, 1.0f);
     const float maxDist = std::min(ctx.fogEnd, 192.0f);
@@ -1323,10 +1338,16 @@ void EntityRenderer::build(const PassContext& ctx) {
         float w = e.info->width, h = e.info->height;
         if (d.special == SpSlime) w *= float(e.size), h *= float(e.size);
         sphere[3] = std::max(w, h) * 0.75f * d.scale + 0.5f;
+        if (d.special == SpDisplay) {  // bounds of the transformed block (rotations keep lengths)
+            const DisplayState::Xform& x = e.display.to;
+            const float s = std::max({std::abs(x.s[0]), std::abs(x.s[1]), std::abs(x.s[2])});
+            sphere[3] = std::sqrt(x.t[0] * x.t[0] + x.t[1] * x.t[1] + x.t[2] * x.t[2]) + s * 1.75f + 0.5f;
+        }
         for (int a = 0; a < 3; ++a) sphere[a] = float(e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt - cam[a]);
         sphere[1] += h * 0.5f;
         const float dist = std::sqrt(sphere[0] * sphere[0] + sphere[1] * sphere[1] + sphere[2] * sphere[2]);
         if (dist - sphere[3] > maxDist) return 0;
+        if (d.special == SpDisplay && dist > e.display.viewRange * 64.0f) return 0;  // shouldRenderAtSqrDistance
         if (&e != localShadow_) {
             bool inside = true;
             for (const auto& pl : planes) {

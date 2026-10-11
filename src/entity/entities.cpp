@@ -198,6 +198,19 @@ EntityWorld::EntityWorld(EntityAssets& assets, World& world, BlockRegistry& regi
         d.paddleLeft = id({"DATA_ID_PADDLE_LEFT"});
         d.paddleRight = id({"DATA_ID_PADDLE_RIGHT"});
         d.chest = id({"DATA_ID_CHEST"});
+        if (t.name == "minecraft:block_display" || t.name == "minecraft:item_display" || t.name == "minecraft:text_display") {
+            d.dStart = id({"DATA_TRANSFORMATION_INTERPOLATION_START_DELTA_TICKS_ID"});
+            d.dDuration = id({"DATA_TRANSFORMATION_INTERPOLATION_DURATION_ID"});
+            d.dPosRot = id({"DATA_POS_ROT_INTERPOLATION_DURATION_ID"});
+            d.dTranslation = id({"DATA_TRANSLATION_ID"}), d.dScale = id({"DATA_SCALE_ID"});
+            d.dLeft = id({"DATA_LEFT_ROTATION_ID"}), d.dRight = id({"DATA_RIGHT_ROTATION_ID"});
+            d.dBillboard = id({"DATA_BILLBOARD_RENDER_CONSTRAINTS_ID"}), d.dBrightness = id({"DATA_BRIGHTNESS_OVERRIDE_ID"});
+            d.dViewRange = id({"DATA_VIEW_RANGE_ID"}), d.dWidth = id({"DATA_WIDTH_ID"}), d.dHeight = id({"DATA_HEIGHT_ID"});
+            d.dBlock = id({"DATA_BLOCK_STATE_ID"}), d.dItem = id({"DATA_ITEM_STACK_ID"}), d.dItemContext = id({"DATA_ITEM_DISPLAY_ID"});
+            d.dText = id({"DATA_TEXT_ID"}), d.dLineWidth = id({"DATA_LINE_WIDTH_ID"});
+            d.dBackground = id({"DATA_BACKGROUND_COLOR_ID"}), d.dOpacity = id({"DATA_TEXT_OPACITY_ID"});
+            d.dStyle = id({"DATA_STYLE_FLAGS_ID"});
+        }
         categories_[i] = categoryFor(t.name);
         // Synched data only carries values that differ from the default: start registry variants at the
         // default each entity defines (VariantUtils.getDefaultOrAny(..., DEFAULT)).
@@ -287,8 +300,8 @@ void readEntityData(net::Reader& r, EventQueue& q, int entityEffect) {
             case 2: v.i = r.varLong(); break;              // long
             case 3: v.f[0] = r.f32(); break;               // float
             case 4: q.strings.emplace_back(r.str()), v.str = i32(q.strings.size() - 1); break;  // string
-            case 5:  // component
-                q.strings.push_back(net::componentText(r.nbt(), nullptr)), v.str = i32(q.strings.size() - 1);
+            case 5:  // component: kept as NBT (text displays lay out the styled text)
+                q.strings.emplace_back(r.nbt()), v.str = i32(q.strings.size() - 1);
                 break;
             case 6:  // optional component
                 if (r.boolean()) q.strings.push_back(net::componentText(r.nbt(), nullptr));
@@ -616,7 +629,9 @@ void EntityWorld::startInterpolation(Entity& e, const Step* steps, u32 count, fl
     // AbstractInterpolationHandler.interpolateTo with the handler the entity type uses.
     const double* end = count ? steps[count - 1].pos : nullptr;
     const bool stepped = e.category == Category::Living || e.category == Category::Player;
-    const bool linear = e.category == Category::Vehicle || (e.info && e.info->name == "minecraft:experience_orb");
+    // Displays: LinearInterpolationHandler over teleport_duration steps (0: placed at once).
+    const bool linear = e.category == Category::Vehicle || (e.info && e.info->name == "minecraft:experience_orb") ||
+                        (e.display.is && e.display.posRotDuration > 0);
     if (!hasRot) {
         if (stepped && e.stepCount) yaw = e.steps[(e.stepHead + e.stepCount - 1) % Entity::kMaxSteps].yaw;
         else yaw = e.yaw;
@@ -635,7 +650,7 @@ void EntityWorld::startInterpolation(Entity& e, const Step* steps, u32 count, fl
     if (linear) {
         std::copy(target, target + 3, e.linearTarget);
         e.linearYaw = yaw, e.linearPitch = pitch;
-        e.linearRemaining = 3;
+        e.linearRemaining = e.display.is ? e.display.posRotDuration : 3;
         return;
     }
     const int interval = std::max(1, e.info ? e.info->updateInterval : 3);
@@ -716,6 +731,7 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
         e.lerpHeadYaw = ev.f[2];
         if (e.category == Category::Block) e.blockState = ev.b;
         e.direction = ev.b;
+        e.display.is = size_t(ev.a) < dataIds_.size() && dataIds_[size_t(ev.a)].dTranslation >= 0;
         if (e.category == Category::Player) {
             auto it = players_.find(uuidKey(ev.uuid));
             const int skin = defaultSkinIndex(ev.uuid);
@@ -842,6 +858,7 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
     for (u32 i = 0; i < count; ++i) {
         const MetaValue& v = values[i];
         const int idx = v.index;
+        if (e.display.is && applyDisplayData(e, d, v, q)) continue;
         if (idx == d.flags) e.sharedFlags = u8(v.i);
         else if (idx == d.mobFlags) e.mobFlags = u8(v.i);
         else if (idx == d.noGravity) e.noGravity = v.i != 0;
@@ -898,6 +915,132 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
     }
 }
 
+// Display.onSyncedDataUpdated (and the BlockDisplay / ItemDisplay / TextDisplay overrides).
+bool EntityWorld::applyDisplayData(Entity& e, const DataIds& d, const MetaValue& v, const EventQueue& q) {
+    DisplayState& s = e.display;
+    const int idx = v.index;
+    auto copy = [&](float* out, int n) { std::copy(v.f, v.f + n, out); };
+    if (idx == d.dStart) s.startDelta = int(v.i), s.updateStart = true;
+    else if (idx == d.dDuration) s.duration = int(v.i), s.updateDuration = true;
+    else if (idx == d.dPosRot) s.posRotDuration = int(v.i);
+    else if (idx == d.dTranslation) copy(s.synched.t, 3), s.updateRender = true;
+    else if (idx == d.dScale) copy(s.synched.s, 3), s.updateRender = true;
+    else if (idx == d.dLeft) copy(s.synched.l, 4), s.updateRender = true;
+    else if (idx == d.dRight) copy(s.synched.r, 4), s.updateRender = true;
+    else if (idx == d.dBillboard) s.billboard = u8(v.i), s.updateRender = true;
+    else if (idx == d.dBrightness) s.brightness = int(v.i), s.updateRender = true;
+    else if (idx == d.dViewRange) s.viewRange = v.f[0];
+    else if (idx == d.dWidth) s.width = v.f[0];
+    else if (idx == d.dHeight) s.height = v.f[0];
+    else if (idx == d.dBlock && v.serializer == 14) e.blockState = int(v.i), s.updateRender = true;
+    else if (idx == d.dItem && v.serializer == 7) {
+        e.itemId = int(v.i), e.itemCount = std::max(1, int(v.f[0])), e.itemDye = i32(v.f[1]), e.itemFoil = v.f[2] > 0.5f;
+        s.updateRender = true;
+    } else if (idx == d.dItemContext) s.itemContext = int(v.i), s.updateRender = true;
+    else if (idx == d.dText && v.str >= 0) s.text = q.strings[size_t(v.str)], ++s.textVersion, s.updateRender = true;
+    else if (idx == d.dLineWidth) s.lineWidth = int(v.i), ++s.textVersion, s.updateRender = true;
+    else if (idx == d.dBackground) s.background = int(v.i), s.updateRender = true;
+    else if (idx == d.dOpacity) s.opacity = int(i8(u8(v.i))), s.updateRender = true;
+    else if (idx == d.dStyle) s.style = u8(v.i), ++s.textVersion, s.updateRender = true;
+    else return false;
+    return true;
+}
+
+namespace {
+
+// JOML Quaternionf.slerp (Transformation.slerp: translation / scale lerp, rotations slerp).
+void slerp(const float a[4], const float b[4], float alpha, float out[4]) {
+    const float cosom = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+    const float absCosom = std::abs(cosom);
+    float scale0, scale1;
+    if (1.0f - absCosom > 1e-6f) {
+        const float sinSqr = 1.0f - absCosom * absCosom, sinom = 1.0f / std::sqrt(sinSqr);
+        const float omega = std::atan2(sinSqr * sinom, absCosom);
+        scale0 = std::sin((1.0f - alpha) * omega) * sinom, scale1 = std::sin(alpha * omega) * sinom;
+    } else {
+        scale0 = 1.0f - alpha, scale1 = alpha;
+    }
+    if (cosom < 0) scale1 = -scale1;
+    for (int k = 0; k < 4; ++k) out[k] = scale0 * a[k] + scale1 * b[k];
+}
+DisplayState::Xform xformAt(const DisplayState& s, float progress) {
+    if (progress >= 1.0f) return s.to;
+    DisplayState::Xform x;
+    for (int k = 0; k < 3; ++k)
+        x.t[k] = s.from.t[k] + (s.to.t[k] - s.from.t[k]) * progress, x.s[k] = s.from.s[k] + (s.to.s[k] - s.from.s[k]) * progress;
+    slerp(s.from.l, s.to.l, progress, x.l);
+    slerp(s.from.r, s.to.r, progress, x.r);
+    return x;
+}
+// Row-major 3x3 of a quaternion like JOML Matrix4f.rotation (not normalised).
+void quatMatrix(const float q[4], float m[9]) {
+    const float x = q[0], y = q[1], z = q[2], w = q[3];
+    const float w2 = w * w, x2 = x * x, y2 = y * y, z2 = z * z;
+    const float dzw = 2 * z * w, dxy = 2 * x * y, dxz = 2 * x * z, dyw = 2 * y * w, dyz = 2 * y * z, dxw = 2 * x * w;
+    m[0] = w2 + x2 - z2 - y2, m[1] = dxy - dzw, m[2] = dyw + dxz;
+    m[3] = dxy + dzw, m[4] = y2 - z2 + w2 - x2, m[5] = dyz - dxw;
+    m[6] = dxz - dyw, m[7] = dyz + dxw, m[8] = z2 - y2 - x2 + w2;
+}
+void mul33(const float a[9], const float b[9], float out[9]) {
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j) out[i * 3 + j] = a[i * 3] * b[j] + a[i * 3 + 1] * b[3 + j] + a[i * 3 + 2] * b[6 + j];
+}
+int lerpByte(float a, int from, int to) { return from + int(std::floor(a * float(to - from))); }  // Mth.lerpInt
+int lerpArgb(float a, int from, int to) {  // ARGB.srgbLerp
+    u32 c = 0;
+    for (int k = 0; k < 32; k += 8) c |= u32(lerpByte(a, (from >> k) & 255, (to >> k) & 255) & 255) << k;
+    return int(c);
+}
+
+}  // namespace
+
+void displayTextColors(const Entity& e, float pt, u32& background, int& opacity) {
+    const DisplayState& s = e.display;
+    const float p = displayProgress(e, pt);
+    background = u32(lerpArgb(p, s.background0, s.background1));
+    opacity = lerpByte(p, s.opacity0, s.opacity1);
+}
+
+float displayProgress(const Entity& e, float pt) {
+    const DisplayState& s = e.display;
+    if (s.activeDuration <= 0) return 1.0f;
+    const float t = float(e.age) - float(s.startTick) + pt;
+    return std::clamp(t / float(s.activeDuration), 0.0f, 1.0f);
+}
+
+bool displayMatrix(const Entity& e, float pt, float camYaw, float camPitch, float out[12]) {
+    const DisplayState& s = e.display;
+    if (!s.hasRender) return false;
+    const DisplayState::Xform x = xformAt(s, displayProgress(e, pt));
+    // DisplayRenderer.calculateOrientation: rotationYXZ(-yRot, xRot, 0) of the entity or the camera.
+    float yaw = e.prevYaw + wrapDegrees(e.yaw - e.prevYaw) * pt, pitch = e.prevPitch + (e.pitch - e.prevPitch) * pt;
+    if (s.billboard == 1 || s.billboard == 3) yaw = camYaw - 180.0f;  // vertical, center
+    if (s.billboard == 2 || s.billboard == 3) pitch = -camPitch;       // horizontal, center
+    const float ya = -yaw * kPi / 180.0f, xa = pitch * kPi / 180.0f;
+    const float cy = std::cos(ya), sy = std::sin(ya), cx = std::cos(xa), sx = std::sin(xa);
+    const float ry[9] = {cy, 0, sy, 0, 1, 0, -sy, 0, cy}, rx[9] = {1, 0, 0, 0, cx, -sx, 0, sx, cx};
+    float orient[9], left[9], right[9], tmp[9], m[9];
+    mul33(ry, rx, orient);
+    // Transformation.getMatrix: translate(t) * rotate(left) * scale(s) * rotate(right).
+    quatMatrix(x.l, left);
+    quatMatrix(x.r, right);
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j) left[i * 3 + j] *= x.s[j];
+    mul33(left, right, tmp);
+    mul33(orient, tmp, m);
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < 3; ++j) out[i * 4 + j] = m[i * 3 + j];
+        out[i * 4 + 3] = orient[i * 3] * x.t[0] + orient[i * 3 + 1] * x.t[1] + orient[i * 3 + 2] * x.t[2];
+    }
+    return true;
+}
+
+u32 displayLight(const Entity& e, u32 worldLight) {
+    const int b = e.display.brightness;
+    if (b == -1) return worldLight;
+    return u32(((b >> 20) & 15) << 4 | ((b >> 4) & 15));
+}
+
 void EntityWorld::tick() {
     for (auto& [id, e] : entities_) tickEntity(e);
     // The server stops tracking entities in chunks the client forgets, but a respawn or dimension change
@@ -918,6 +1061,23 @@ void EntityWorld::tickEntity(Entity& e) {
     e.prevYaw = e.yaw, e.prevPitch = e.pitch;
     e.prevHeadYaw = e.headYaw, e.prevBodyYaw = e.bodyYaw;
     ++e.age;
+    if (e.display.is) {  // Display.tick (client side)
+        DisplayState& s = e.display;
+        const float last = displayProgress(e, 0.0f);  // lastProgress: the progress the last frame drew
+        if (s.updateStart) s.updateStart = false, s.startTick = e.age + s.startDelta;
+        if (s.updateDuration) s.updateDuration = false, s.activeDuration = s.duration;
+        if (s.updateRender) {
+            s.updateRender = false;
+            if (s.activeDuration != 0 && s.hasRender) {  // createInterpolatedRenderState from the current state
+                s.from = xformAt(s, last);
+                s.background0 = lerpArgb(last, s.background0, s.background1), s.opacity0 = lerpByte(last, s.opacity0, s.opacity1);
+            } else {
+                s.from = s.synched, s.background0 = s.background, s.opacity0 = s.opacity;
+            }
+            s.to = s.synched, s.background1 = s.background, s.opacity1 = s.opacity;
+            s.hasRender = true;
+        }
+    }
     if (e.hurtTime > 0) --e.hurtTime;
     if (e.vehicleHurt > 0) --e.vehicleHurt;
     if (e.vehicleDamage > 0) e.vehicleDamage = std::max(0.0f, e.vehicleDamage - 1.0f);

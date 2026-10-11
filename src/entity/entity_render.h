@@ -147,6 +147,7 @@ private:
     u32 entHash_ = 0;
     u64 buildFrame_ = 0;
     float freeMotion_[3] = {};    // emitFree: current - previous position (blocks) of the entity being built
+    float camYaw_ = 0, camPitch_ = 0;  // camera yRot / xRot (degrees) of the frame being built: display billboards
     std::vector<Attachment> attachments_;
     std::vector<int> ridden_;  // entities with a passenger this frame (EquineSaddleModel riding lines)
     int elytraModel_ = -1, elytraBabyModel_ = -1;

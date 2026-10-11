@@ -7,6 +7,7 @@
 //  - held items of mobs and players (ItemInHandLayer), worn heads / blocks (CustomHeadLayer), dropped items as 3D
 //    item models (ItemEntityRenderer); armour and elytra are entity renderer layers (entity_render.cpp);
 //  - item frames (with the framed item and its rotation), glow item frames and paintings;
+//  - item displays and text displays (block displays are entity renderer free quads);
 //  - name tags (players, named mobs): see-through and depth-tested parts like the game, dimmed while sneaking;
 //  - enchantment glint on items;
 //  - particles (fx/particles.h).

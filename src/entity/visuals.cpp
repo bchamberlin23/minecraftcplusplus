@@ -42,7 +42,7 @@ constexpr float kPi = 3.14159265f;
 constexpr float kDeg = kPi / 180.0f;
 
 // Per-frame upload slice: three constant buffers, instances, dynamic quads, particles, staging for copies.
-constexpr u32 kMaxInstances = 1 << 14, kMaxDynamic = 1 << 13, kMaxParticles = 16384;
+constexpr u32 kMaxInstances = 1 << 14, kMaxDynamic = 1 << 15, kMaxParticles = 16384;
 constexpr u64 kCbBytes = 1024;
 constexpr u64 kInstOffset = kCbBytes * 3;
 constexpr u64 kDynOffset = kInstOffset + u64(kMaxInstances) * 128;
@@ -92,6 +92,14 @@ float wrapDegrees(float d) {
     if (d >= 180.0f) d -= 360.0f;
     if (d < -180.0f) d += 360.0f;
     return d;
+}
+
+// Camera yRot / xRot (degrees) from the view direction (the view-projection's w row): display billboards.
+void cameraAngles(const PassContext& ctx, float& yaw, float& pitch) {
+    float f[3], l = 0;
+    for (int c = 0; c < 3; ++c) f[c] = ctx.viewProj[c * 4 + 3], l += f[c] * f[c];
+    l = std::sqrt(std::max(l, 1e-12f));
+    yaw = std::atan2(-f[0], f[2]) / kDeg, pitch = std::asin(std::clamp(-f[1] / l, -1.0f, 1.0f)) / kDeg;
 }
 
 // Instance list of one draw (contiguous in the upload slice after copying).
@@ -227,6 +235,16 @@ struct Visuals::Impl {
         float width = 0;
     };
     std::unordered_map<std::string, Tag> tags;
+    // Text displays: the laid out text per entity (background quad first, then the glyphs, font units), drawn from
+    // the per-frame quads; rebuilt when the text, line width or style changes.
+    struct TextBlock {
+        u32 version = 0;
+        bool valid = false;
+        float width = 0, height = 0;
+        std::vector<MeshQuad> quads;
+    };
+    std::unordered_map<int, TextBlock> textBlocks;
+    const TextBlock& textBlock(int id, const DisplayState& s);
 
     // Paintings: painting_variant network id -> asset / size.
     struct PaintingInfo {
@@ -1074,6 +1092,50 @@ const Visuals::Impl::Tag& Visuals::Impl::tag(const std::string& name) {
     return tags.emplace(name, t).first->second;
 }
 
+// TextDisplayRenderer.splitLines + submitInner's layout: lines wrapped at the line width, aligned within the widest
+// line; the background covers (-1, -1) .. (width, height).
+const Visuals::Impl::TextBlock& Visuals::Impl::textBlock(int id, const DisplayState& s) {
+    TextBlock& b = textBlocks[id];
+    if (b.valid && b.version == s.textVersion) return b;
+    b = TextBlock{};
+    b.valid = true, b.version = s.textVersion;
+    if (!font) return b;
+    const ui::Text text = s.text.empty() ? ui::Text() : ui::parseComponent(s.text, &res->lang());
+    const std::vector<ui::Text> lines = font->split(text, s.lineWidth);
+    std::vector<int> widths;
+    int width = 0;
+    for (const ui::Text& l : lines) widths.push_back(font->width(l)), width = std::max(width, widths.back());
+    const int height = int(lines.size()) * 10 - 1;
+    b.width = float(width), b.height = float(height);
+    MeshQuad bg{};
+    const float corners[4][2] = {{-1, -1}, {-1, float(height)}, {float(width), float(height)}, {float(width), -1}};
+    for (int k = 0; k < 4; ++k) bg.pos[k][0] = corners[k][0], bg.pos[k][1] = corners[k][1], bg.pos[k][2] = -0.01f;  // behind
+    bg.normal = packNormal(0, 0, 1), bg.color = 0xFFFFFFFF, bg.tex = kTexSolid, bg.flags = kQuadNoShade;
+    b.quads.push_back(bg);
+    canvas.begin(1u << 14, 1u << 14, 1);
+    float y = 0;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        const float x = (s.style & 8) ? 0.0f : (s.style & 16) ? float(width - widths[i]) : float(width) / 2.0f - float(widths[i]) / 2.0f;
+        font->draw(canvas, lines[i], x, y, 0xFFFFFFFF, (s.style & 1) != 0);
+        y += 10;
+    }
+    const auto& v = canvas.vertices();
+    for (size_t k = 0; k + 5 < v.size(); k += 6) {
+        const ui::UiVertex* c[4] = {&v[k], &v[k + 1], &v[k + 2], &v[k + 5]};
+        MeshQuad q{};
+        for (int j = 0; j < 4; ++j) {
+            q.pos[j][0] = c[j]->x, q.pos[j][1] = c[j]->y, q.pos[j][2] = 0;
+            q.uv[j][0] = c[j]->u, q.uv[j][1] = c[j]->v;
+        }
+        q.normal = packNormal(0, 0, 1);
+        q.color = c[0]->color;
+        q.tex = c[0]->mode == ui::ModeSolid ? kTexSolid : kTexFont;
+        q.flags = kQuadNoShade;
+        b.quads.push_back(q);
+    }
+    return b;
+}
+
 // ---------------------------------------------------------------------------------------------------------
 // Local player state (20 Hz)
 
@@ -1328,7 +1390,32 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
         return false;
     };
     static const int kStep[6][3] = {{0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}};
+    static const int itemDisplayType = assets.typeId("minecraft:item_display");
+    float camYaw, camPitch;
+    cameraAngles(ctx, camYaw, camPitch);
     for (const auto& [id, e] : entities) {
+        if (e.type == itemDisplayType && e.itemId >= 0) {  // DisplayRenderer.ItemDisplayRenderer
+            double p[3];
+            for (int a = 0; a < 3; ++a) p[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt - cam[a];
+            const float d2 = float(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]), range = e.display.viewRange * 64.0f;
+            Xf m;
+            if (d2 > range * range || !displayMatrix(e, pt, camYaw, camPitch, m.m)) continue;
+            m.m[3] += float(p[0]), m.m[7] += float(p[1]), m.m[11] += float(p[2]);
+            // Culled like the entity renderer when the display has a size (width and height), else always drawn.
+            const DisplayState& s = e.display;
+            if (s.width > 0 && s.height > 0 &&
+                !visible(float(p[0]), float(p[1]) + s.height * 0.5f, float(p[2]), std::max(s.width, s.height)))
+                continue;
+            static const Display kContext[10] = {Display::None,  Display::ThirdLeft, Display::ThirdRight, Display::FirstLeft,
+                                                 Display::FirstRight, Display::Head, Display::Gui,     Display::Ground,
+                                                 Display::Fixed, Display::None};
+            const Display ctxt = kContext[std::clamp(s.itemContext, 0, 9)];
+            const bool flat = ctxt == Display::Gui || ctxt == Display::Ground || ctxt == Display::Fixed;
+            worldLists.begin(u64(u32(id)) << 4 | 3);
+            pushItem(worldLists, models.mesh(e.itemId, e.itemDye, flat), ctxt, xfMul(m, xfRotY(kPi)),
+                     displayLight(e, lightAt(e.pos[0], e.pos[1], e.pos[2])), e.itemFoil);
+            continue;
+        }
         const bool frame = e.type == frameType || e.type == glowFrameType;
         if (!frame && e.type != paintingType && e.category != Category::Item) continue;
         double p[3];
@@ -1448,6 +1535,44 @@ void Visuals::Impl::buildTags(const PassContext& ctx) {
         targeted = world.pick(eye, dir, limit).id;
     }
     std::shared_lock lock(world.world().mutex());
+    // Text displays (DisplayRenderer.TextDisplayRenderer): the display's pose, then rotate(Y, pi) and scale(-0.025);
+    // one-sided (the text pipelines cull back faces), see-through ones without the depth test.
+    static const int textDisplayType = assets.typeId("minecraft:text_display");
+    float camYaw, camPitch;
+    cameraAngles(ctx, camYaw, camPitch);
+    for (const auto& [id, e] : world.entities()) {
+        if (e.type != textDisplayType) continue;
+        double p[3];
+        for (int a = 0; a < 3; ++a) p[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt - cam[a];
+        const float range = e.display.viewRange * 64.0f;
+        Xf m;
+        if (float(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]) > range * range || !displayMatrix(e, pt, camYaw, camPitch, m.m))
+            continue;
+        m.m[3] += float(p[0]), m.m[7] += float(p[1]), m.m[11] += float(p[2]);
+        const TextBlock& t = textBlock(id, e.display);
+        m = xfMul(m, xfRotY(kPi));
+        m = xfMul(m, xfScale(-0.025f, -0.025f, -0.025f));
+        m = xfMul(m, xfTranslate(1.0f - t.width / 2.0f, -t.height, 0));
+        const float c0[3] = {m.m[0], m.m[4], m.m[8]}, c1[3] = {m.m[1], m.m[5], m.m[9]};
+        const float n[3] = {c0[1] * c1[2] - c0[2] * c1[1], c0[2] * c1[0] - c0[0] * c1[2], c0[0] * c1[1] - c0[1] * c1[0]};
+        if (n[0] * m.m[3] + n[1] * m.m[7] + n[2] * m.m[11] <= 0) continue;  // seen from behind
+        u32 background;
+        int opacity;
+        displayTextColors(e, pt, background, opacity);
+        if (e.display.style & 4) background = u32(int(0.25f * 255.0f)) << 24;  // default background: text background opacity
+        u32 alpha = u8(opacity);
+        if ((alpha & 0xFC) == 0) alpha = 255;  // Font.adjustColor
+        const u32 first = u32(dyn.size());
+        if (first + t.quads.size() > kMaxDynamic) continue;
+        dyn.insert(dyn.end(), t.quads.begin(), t.quads.end());
+        const u32 light = displayLight(e, lightAt(e.pos[0], e.pos[1], e.pos[2])) | 512u;
+        List& L = (e.display.style & 2) ? tagSee : tagNormal;
+        if (background) L.add(m, first, 1, light, abgr(background & 0xFFFFFF, background >> 24), 1);
+        L.add(m, first + 1, u32(t.quads.size()) - 1, light, (alpha << 24) | 0xFFFFFF, 1);
+    }
+    if (frameCounter % 256 == 0)  // forget the text of removed displays
+        for (auto it = textBlocks.begin(); it != textBlocks.end();)
+            it = world.entities().count(it->first) ? std::next(it) : textBlocks.erase(it);
     for (const auto& [id, e] : world.entities()) {
         if (!e.info || e.name.empty() || e.deathTime > 0) continue;
         if (e.category == Category::Living && (e.sharedFlags & 0x20)) continue;

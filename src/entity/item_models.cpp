@@ -676,6 +676,7 @@ struct ItemModels::Impl {
                 const JModel::Tr& tr = m->display[src];
                 part.display[c] = displayXf(tr.rot, tr.trans, tr.scale, left, !tr.set);
             }
+            part.display[size_t(Display::None)] = xfTranslate(-0.5f, -0.5f, -0.5f);
             // ItemStackRenderState.getModelBoundingBox (GROUND display) for dropped items.
             float lo[3] = {1e9f, 1e9f, 1e9f}, hi[3] = {-1e9f, -1e9f, -1e9f};
             for (const auto* v : {&out.cutout, &out.translucent})

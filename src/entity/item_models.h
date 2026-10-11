@@ -51,7 +51,8 @@ Xf xfRotZ(float radians);
 void xfPoint(const Xf& m, const float in[3], float out[3]);
 u32 packNormal(float x, float y, float z);
 
-enum class Display : u8 { FirstRight, FirstLeft, ThirdRight, ThirdLeft, Head, Gui, Ground, Fixed, Count };
+// None: ItemDisplayContext.NONE (no model transform, only the centring).
+enum class Display : u8 { FirstRight, FirstLeft, ThirdRight, ThirdLeft, Head, Gui, Ground, Fixed, None, Count };
 
 struct ItemMesh {
     struct Part {

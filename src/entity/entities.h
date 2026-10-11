@@ -6,6 +6,7 @@
 #include "core/common.h"
 #include "entity/entity_assets.h"
 
+#include <climits>
 #include <functional>
 #include <mutex>
 #include <unordered_map>
@@ -67,6 +68,34 @@ struct EventQueue {
 };
 
 enum class Category : u8 { Living, Player, Item, Block, Vehicle, Projectile, Other };
+
+// Display entities (Display.java: block / item / text display): the synched transformation and render state,
+// interpolated on the client like Display.tick / calculateInterpolationProgress. Block displays use
+// Entity::blockState, item displays Entity::itemId.
+struct DisplayState {
+    bool is = false;
+    // Transformation: translation, left rotation, scale, right rotation (quaternions x y z w).
+    struct Xform {
+        float t[3] = {}, l[4] = {0, 0, 0, 1}, s[3] = {1, 1, 1}, r[4] = {0, 0, 0, 1};
+    };
+    Xform synched, from, to;  // synched data; the render state's TransformationInterpolator (from -> to)
+    int startDelta = 0, duration = 0;            // synched interpolation start delay / duration (ticks)
+    int startTick = INT_MIN, activeDuration = 0;  // applied at the next tick (updateStartTick / updateInterpolationDuration)
+    bool updateStart = false, updateDuration = false, updateRender = false, hasRender = false;
+    int posRotDuration = 0;  // teleport_duration: linear position / rotation interpolation steps
+    u8 billboard = 0;        // fixed, vertical, horizontal, center
+    int brightness = -1;     // packed block << 4 | sky << 20, -1: the world's light
+    float viewRange = 1, width = 0, height = 0;
+    int itemContext = 0;  // ItemDisplayContext id (0 none)
+    // Text display: component NBT, line width, style flags (1 shadow, 2 see through, 4 default background, 8 left,
+    // 16 right), background ARGB and text opacity (signed byte): synched and the render state's interpolators.
+    std::string text;
+    int lineWidth = 200;
+    u8 style = 0;
+    int background = 0x40000000, opacity = -1;
+    int background0 = 0x40000000, background1 = 0x40000000, opacity0 = -1, opacity1 = -1;
+    u32 textVersion = 0;  // changes with the text, line width or style (renderers cache the laid out text)
+};
 
 struct Entity {
     i32 id = 0, type = -1;
@@ -162,6 +191,7 @@ struct Entity {
     // Player skin (default skins chosen from the UUID like the game).
     bool slim = false;
     int skin = -1;
+    DisplayState display;
 };
 
 struct PlayerInfo {
@@ -241,11 +271,16 @@ public:
            damage = -1, mainGene = -1, hiddenGene = -1, mobFlags = -1, noGravity = 5, inGround = -1, rotation = -1,
            painting = -1, nameVisible = 3, livingFlags = -1, attachedTo = -1, sleepPos = -1, ticksFrozen = -1,
            paddleLeft = -1, paddleRight = -1, chest = -1;
+        // Display entities.
+        i8 dStart = -1, dDuration = -1, dPosRot = -1, dTranslation = -1, dScale = -1, dLeft = -1, dRight = -1,
+           dBillboard = -1, dBrightness = -1, dViewRange = -1, dWidth = -1, dHeight = -1, dBlock = -1, dItem = -1,
+           dItemContext = -1, dText = -1, dLineWidth = -1, dBackground = -1, dOpacity = -1, dStyle = -1;
     };
 
 private:
     void apply(const Event& e, const EventQueue& q);
     void applyData(Entity& e, const MetaValue* values, u32 count, const EventQueue& q);
+    bool applyDisplayData(Entity& e, const DataIds& d, const MetaValue& v, const EventQueue& q);
     void tick();
     void tickEntity(Entity& e);
     void startInterpolation(Entity& e, const Step* steps, u32 count, float yaw, float pitch, bool hasRot);
@@ -292,5 +327,16 @@ void tickPoseAnimation(Entity& e, const double move[3], bool fallFlying, bool cr
 int bedFacingAt(const World& world, const BlockRegistry& registry, int x, int y, int z);
 // LivingEntity.isFullyFrozen.
 inline bool fullyFrozen(const Entity& e) { return e.ticksFrozen >= 140; }
+
+// Display.calculateInterpolationProgress at a partial tick (1 without an interpolation).
+float displayProgress(const Entity& e, float partialTick);
+// DisplayRenderer.submit before submitInner: the billboard orientation and the interpolated transformation as a
+// row-major 3x4 matrix in the entity's space (translation to the entity position not included). camYaw / camPitch:
+// the camera's yRot / xRot in degrees. False when the display has no render state yet (nothing is drawn).
+bool displayMatrix(const Entity& e, float partialTick, float camYaw, float camPitch, float out[12]);
+// The display's light (brightness override, else `worldLight`) as sky << 4 | block.
+u32 displayLight(const Entity& e, u32 worldLight);
+// Text display: the interpolated background (ARGB) and text opacity (signed byte value) at a partial tick.
+void displayTextColors(const Entity& e, float partialTick, u32& background, int& opacity);
 
 }  // namespace ent
