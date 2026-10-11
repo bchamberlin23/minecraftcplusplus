@@ -55,7 +55,7 @@ struct Particle {
     uint tex;      // like Quad.tex
     float roll;
     float3 motion; // moved since the last frame (blocks)
-    float pad;
+    uint orient;   // bit 31: turned by rotationY(a).rotateX(b).rotateY(c) (10 bits each), not facing the camera
 };
 
 StructuredBuffer<Quad> gStatic : register(t0);
@@ -159,6 +159,14 @@ VSOut ParticleVS(uint vid : SV_VertexID) {
     float cr = cos(pt.roll), sr = sin(pt.roll);
     float2 r = float2(xy.x * cr - xy.y * sr, xy.x * sr + xy.y * cr) * pt.size;
     float3 rel = pt.pos + gCamRight.xyz * r.x + gCamUp.xyz * r.y;
+    if (pt.orient & 0x80000000u) {  // QuadParticleRenderState with a rotation of its own (VibrationSignalParticle)
+        float3 ang = float3(pt.orient & 1023u, (pt.orient >> 10) & 1023u, (pt.orient >> 20) & 1023u) * (6.28318531 / 1024.0);
+        float3 v = float3(xy * pt.size, 0);
+        v = float3(v.x * cos(ang.z), v.y, -v.x * sin(ang.z));                         // rotateY(c)
+        v = float3(v.x, v.y * cos(ang.y) - v.z * sin(ang.y), v.y * sin(ang.y) + v.z * cos(ang.y));  // rotateX(b)
+        v = float3(v.x * cos(ang.x) + v.z * sin(ang.x), v.y, -v.x * sin(ang.x) + v.z * cos(ang.x));  // rotationY(a)
+        rel = pt.pos + v;
+    }
     float2 uv = float2(xy.x > 0 ? pt.uv.z : pt.uv.x, xy.y > 0 ? pt.uv.y : pt.uv.w);
     VSOut o = finish(rel, float3(0, 1, 0), uv, pt.tex, unpackColor(pt.color), pt.light | 512, 0, false);
     o.prevClip = mul(gPrevViewProj, float4(rel - pt.motion, 1));

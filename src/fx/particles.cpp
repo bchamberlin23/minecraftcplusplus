@@ -23,9 +23,9 @@ enum class Kind : u8 {
     None, Generic, Terrain, Crumble, DustPillar, FallingDust, Rain, Splash, Poof, Explosion, ExplosionSeed, Smoke,
     LargeSmoke, WhiteSmoke, Flame, SmallFlame, Crit, DamageIndicator, EnchantedHit, Heart, AngryVillager, Bubble,
     BubblePop, CherryLeaves, PaleLeaves, TintedLeaves, Portal, Enchant, CampfireCosy, CampfireSignal, Spell, Witch,
-    Suspended, HappyVillager, Lava, Dust, Note, Cloud, Snowflake
+    Suspended, HappyVillager, Lava, Dust, DustTransition, Note, Cloud, Snowflake, Item, Vibration
 };
-enum class Opt : u8 { None, Block, Dust, DustTransition, Spell, Color, Float, VarInt, Int, IntFloat, Trail, Unsupported };
+enum class Opt : u8 { None, Block, Dust, DustTransition, Spell, Color, Float, VarInt, Int, IntFloat, Trail, Item, Vibration };
 enum SizeMode : u8 { SizeConst, SizeGrow, SizeFlame, SizePortal, SizeLava };
 enum Flags : u8 { Physics = 1, OnGround = 2, SpeedUp = 4, Stopped = 8, Removed = 16, Translucent = 32, NoRender = 64, AgeSprite = 128 };
 
@@ -45,8 +45,9 @@ const std::pair<const char*, Kind> kKinds[] = {
     {"entity_effect", Kind::Spell}, {"infested", Kind::Spell}, {"raid_omen", Kind::Spell}, {"trial_omen", Kind::Spell},
     {"witch", Kind::Witch}, {"mycelium", Kind::Suspended}, {"happy_villager", Kind::HappyVillager},
     {"composter", Kind::HappyVillager}, {"egg_crack", Kind::HappyVillager}, {"dolphin", Kind::Suspended},
-    {"lava", Kind::Lava}, {"dust", Kind::Dust}, {"dust_color_transition", Kind::Dust}, {"note", Kind::Note},
-    {"cloud", Kind::Cloud}, {"sneeze", Kind::Cloud}, {"snowflake", Kind::Snowflake}};
+    {"lava", Kind::Lava}, {"dust", Kind::Dust}, {"dust_color_transition", Kind::DustTransition}, {"note", Kind::Note},
+    {"cloud", Kind::Cloud}, {"sneeze", Kind::Cloud}, {"snowflake", Kind::Snowflake}, {"item", Kind::Item},
+    {"item_slime", Kind::Item}, {"item_snowball", Kind::Item}, {"item_cobweb", Kind::Item}, {"vibration", Kind::Vibration}};
 
 const std::pair<const char*, Opt> kOptions[] = {
     {"block", Opt::Block}, {"block_marker", Opt::Block}, {"falling_dust", Opt::Block}, {"dust_pillar", Opt::Block},
@@ -54,13 +55,22 @@ const std::pair<const char*, Opt> kOptions[] = {
     {"effect", Opt::Spell}, {"instant_effect", Opt::Spell}, {"entity_effect", Opt::Color}, {"tinted_leaves", Opt::Color},
     {"flash", Opt::Color}, {"dragon_breath", Opt::Float}, {"sculk_charge", Opt::Float}, {"shriek", Opt::VarInt},
     {"geyser", Opt::Int}, {"geyser_plume", Opt::Int}, {"geyser_base", Opt::IntFloat}, {"geyser_poof", Opt::IntFloat},
-    {"trail", Opt::Trail}, {"item", Opt::Unsupported}, {"vibration", Opt::Unsupported}};
+    {"trail", Opt::Trail}, {"item", Opt::Item}, {"vibration", Opt::Vibration}};
 
 constexpr u32 kTints[8] = {0xFFFFFF, 0x91BD59, 0x77AB2F, 0x80A755, 0x619961, 0x3F76E4, 0x208030, 0x8B1A00};
 
 u32 abgrF(float r, float g, float b, float a) {
     auto c = [](float v) { return u32(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
     return (c(a) << 24) | (c(b) << 16) | (c(g) << 8) | c(r);
+}
+
+// GpuParticle::orient for a quad turned by rotationY(a).rotateX(b).rotateY(c).
+u32 orientedQuad(float a, float b, float c) {
+    auto q = [](float v) {
+        const float t = v / (2.0f * kPi);
+        return u32(int(std::floor((t - std::floor(t)) * 1024.0f + 0.5f)) & 1023);
+    };
+    return 0x80000000u | q(a) | q(b) << 10 | q(c) << 20;
 }
 }  // namespace
 
@@ -82,6 +92,7 @@ struct Particles::Particle {
     u8 flags, light, sizeMode;
     u8 emissive;           // minimum block light
     float uo, vo;          // terrain shard sub-rectangle (-1: whole sprite)
+    i32 target;            // vibration: destination entity (-1: the block centre in sx, sy, sz)
 };
 
 Particles::Particles(World& world, BlockRegistry& registry, const GameReports& reports, ent::ItemModels& items)
@@ -146,21 +157,7 @@ void Particles::attach(net::Client& client) {
         s.type = r.varInt();
         if (!r.ok || s.type < 0 || size_t(s.type) >= types_.size()) return;
         const Type& t = types_[size_t(s.type)];
-        auto argb = [&] { return u32(r.i32v()); };
-        switch (t.opt) {
-            case Opt::None: break;
-            case Opt::Block: s.opt.block = r.varInt(); break;
-            case Opt::Dust: s.opt.color = 0xFF000000u | argb(), s.opt.scale = r.f32(), s.opt.hasColor = true; break;
-            case Opt::DustTransition: s.opt.color = 0xFF000000u | argb(), argb(), s.opt.scale = r.f32(), s.opt.hasColor = true; break;
-            case Opt::Spell: s.opt.color = argb(), s.opt.power = r.f32(), s.opt.hasColor = true; break;
-            case Opt::Color: s.opt.color = argb(), s.opt.hasColor = true; break;
-            case Opt::Float: r.f32(); break;
-            case Opt::VarInt: r.varInt(); break;
-            case Opt::Int: r.i32v(); break;
-            case Opt::IntFloat: r.i32v(), r.f32(); break;
-            case Opt::Trail: r.f64(), r.f64(), r.f64(), r.i32v(), r.varInt(); break;
-            case Opt::Unsupported: return;  // item stacks / position sources: the rest of the packet is unreadable
-        }
+        if (!readOptions(&r, s.type, s.opt)) return;  // options that cannot be decoded: the rest is unreadable
         r.boolean();  // override limiter
         s.alwaysShow = r.boolean();
         s.x = r.f64(), s.y = r.f64(), s.z = r.f64();
@@ -231,7 +228,9 @@ bool Particles::readOptions(void* reader, int type, Options& o) const {
         case Opt::None: break;
         case Opt::Block: o.block = r.varInt(); break;
         case Opt::Dust: o.color = 0xFF000000u | u32(r.i32v()), o.scale = r.f32(), o.hasColor = true; break;
-        case Opt::DustTransition: o.color = 0xFF000000u | u32(r.i32v()), r.i32v(), o.scale = r.f32(), o.hasColor = true; break;
+        case Opt::DustTransition:
+            o.color = 0xFF000000u | u32(r.i32v()), o.color2 = 0xFF000000u | u32(r.i32v()), o.scale = r.f32(), o.hasColor = true;
+            break;
         case Opt::Spell: o.color = u32(r.i32v()), o.power = r.f32(), o.hasColor = true; break;
         case Opt::Color: o.color = u32(r.i32v()), o.hasColor = true; break;
         case Opt::Float: r.f32(); break;
@@ -239,7 +238,23 @@ bool Particles::readOptions(void* reader, int type, Options& o) const {
         case Opt::Int: r.i32v(); break;
         case Opt::IntFloat: r.i32v(), r.f32(); break;
         case Opt::Trail: r.f64(), r.f64(), r.f64(), r.i32v(), r.varInt(); break;
-        case Opt::Unsupported: return false;
+        case Opt::Item:
+            if (!readItem || !readItem(r, o.item)) return false;
+            break;
+        case Opt::Vibration: {  // PositionSource (position_source_type registry: 0 block, 1 entity), arrival ticks
+            const int source = r.varInt();
+            if (source == 0) {
+                int bx, by, bz;
+                r.blockPos(bx, by, bz);
+                o.target[0] = bx + 0.5, o.target[1] = by + 0.5, o.target[2] = bz + 0.5;  // Vec3.atCenterOf
+            } else if (source == 1) {
+                o.entity = r.varInt(), o.yOffset = r.f32();
+            } else {
+                return false;
+            }
+            o.arrival = r.varInt();
+            break;
+        }
     }
     return r.ok;
 }
@@ -308,6 +323,23 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
     Type& t = types_[size_t(typeIndex)];
     if (t.kind == Kind::None) return nullptr;
     if (live_.size() + spawnQueue_.size() >= kMaxParticles) return nullptr;
+    if (t.kind == Kind::Item) {  // BreakingItemParticle: the item's particle texture, no sprite set
+        if (t.name == "item") {
+            if (!opt || opt->item < 0) return nullptr;
+            int& sprite = itemSprites_[opt->item];  // 0 unresolved, -1 none, else rect + 1
+            if (sprite == 0) {
+                const std::string tex = items_.itemParticleTexture(opt->item);
+                const int rect = tex.empty() ? -1 : items_.texture(tex);
+                sprite = rect >= 0 ? rect + 1 : -1;
+            }
+            if (sprite > 0) shard(sprite - 1, x, y, z, xa, ya, za, true);
+        } else {  // SlimeProvider / SnowballProvider / CobwebProvider: a fixed item, the plain random push
+            const char* tex = t.name == "item_slime" ? "item/slime_ball" : t.name == "item_snowball" ? "item/snowball" : "block/cobweb";
+            const int rect = items_.texture(tex);
+            if (rect >= 0) shard(rect, x, y, z, 0, 0, 0, false);
+        }
+        return nullptr;
+    }
     if (t.sprites.empty() && t.kind != Kind::Terrain && t.kind != Kind::Crumble && t.kind != Kind::DustPillar &&
         t.kind != Kind::ExplosionSeed) {
         // Sprite set from assets/minecraft/particles/<type>.json (loaded on first use).
@@ -331,6 +363,7 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
     p.flags = Physics;
     p.uo = -1;
     p.sprite = -1;
+    p.target = -1;
     p.light = lightAt(x, y, z);
     auto base = [&](double px, double py, double pz) {  // Particle(level, x, y, z) + SingleQuadParticle
         p.x = p.xo = px, p.y = p.yo = py, p.z = p.zo = pz;
@@ -602,7 +635,8 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
             p.sizeMode = SizeLava;
             randomSprite();
             break;
-        case Kind::Dust: {  // DustParticleBase
+        case Kind::Dust:
+        case Kind::DustTransition: {  // DustParticleBase
             baseVel(x, y, z, xa, ya, za);
             p.friction = 0.96f;
             p.flags |= SpeedUp;
@@ -611,6 +645,12 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
             const float br = randf() * 0.4f + 0.6f;
             if (opt && opt->hasColor) color(opt->color);
             p.r *= br, p.g *= br, p.b *= br;
+            if (t.kind == Kind::DustTransition) {  // DustColorTransitionParticle: from (r, g, b) to (e1, e2, e3)
+                const u32 to = opt ? opt->color2 : 0xFFFFFFFF;
+                p.e1 = float((to >> 16) & 255) / 255.0f * br, p.e2 = float((to >> 8) & 255) / 255.0f * br;
+                p.e3 = float(to & 255) / 255.0f * br;
+                p.sx = p.r, p.sy = p.g, p.sz = p.b;
+            }
             p.quadSize *= 0.75f * scale;
             p.lifetime = std::max(int(float(int(8.0 / (randf() * 0.8 + 0.2))) * scale), 1);
             p.sizeMode = SizeGrow;
@@ -643,6 +683,26 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
             p.sizeMode = SizeGrow;
             ageSprite();
             break;
+        case Kind::Vibration: {  // VibrationSignalParticle: flies to its destination, arriving after `arrival` ticks
+            if (!opt) return nullptr;
+            base(x, y, z);
+            p.quadSize = 0.3f;
+            p.lifetime = opt->arrival;
+            p.target = opt->entity;
+            p.sx = opt->target[0], p.sy = opt->target[1], p.sz = opt->target[2];
+            p.e0 = opt->yOffset;
+            p.flags &= u8(~Physics);
+            p.flags |= Translucent;
+            p.emissive = 15;
+            double dest[3];
+            if (vibrationTarget(p, dest)) {
+                const double dx = x - dest[0], dy = y - dest[1], dz = z - dest[2];
+                p.roll = p.oRoll = float(std::atan2(dx, dz));                          // rot
+                p.e1 = p.e2 = float(std::atan2(dy, std::sqrt(dx * dx + dz * dz)));   // pitch, pitchO
+            }
+            randomSprite();
+            break;
+        }
         case Kind::Snowflake:
             baseVel(x, y, z, xa, ya, za);
             p.gravity = 0.225f, p.friction = 1.0f;
@@ -777,36 +837,52 @@ void Particles::blockCrack(int x, int y, int z, int face) {
 }
 
 void Particles::itemShard(int item, double x, double y, double z, double xa, double ya, double za) {
-    static int itemType = -2;  // ticked like terrain shards (same motion as BreakingItemParticle)
-    if (itemType == -2) itemType = typeId("block");
-    if (live_.size() + spawnQueue_.size() >= kMaxParticles) return;
     int& sprite = itemSprites_[item];  // 0 unresolved, -1 none, else rect + 1
     if (sprite == 0) {
         const std::string tex = items_.itemParticleTexture(item);
         const int rect = tex.empty() ? -1 : items_.texture(tex);
         sprite = rect >= 0 ? rect + 1 : -1;
     }
-    if (sprite < 0) return;
+    if (sprite > 0) shard(sprite - 1, x, y, z, xa, ya, za, true);
+}
+
+void Particles::shard(int rect, double x, double y, double z, double xa, double ya, double za, bool scaled) {
+    static int itemType = -2;  // ticked like terrain shards (same motion as BreakingItemParticle)
+    if (itemType == -2) itemType = typeId("block");
+    if (live_.size() + spawnQueue_.size() >= kMaxParticles) return;
     Particle p{};
     p.type = u16(std::max(itemType, 0));
     p.a = 1, p.r = p.g = p.b = 1;
     p.flags = Physics;
+    p.target = -1;
     p.x = p.xo = x, p.y = p.yo = y, p.z = p.zo = z;
     p.lifetime = int(4.0f / (randf() * 0.9f + 0.1f));
-    // Particle(level, x, y, z, 0, 0, 0): a random push, then BreakingItemParticle keeps a tenth of it plus (xa, ya, za).
+    // Particle(level, x, y, z, 0, 0, 0): a random push; with a velocity BreakingItemParticle keeps a tenth of it plus
+    // (xa, ya, za).
     p.xd = (randf() * 2.0f - 1.0f) * 0.4f, p.yd = (randf() * 2.0f - 1.0f) * 0.4f, p.zd = (randf() * 2.0f - 1.0f) * 0.4f;
     const double speed = (randf() + randf() + 1.0f) * 0.15f;
     const double dd = std::max(std::sqrt(p.xd * p.xd + p.yd * p.yd + p.zd * p.zd), 1e-9);
     p.xd = p.xd / dd * speed * 0.4f, p.yd = p.yd / dd * speed * 0.4f + 0.1f, p.zd = p.zd / dd * speed * 0.4f;
-    p.xd = p.xd * 0.1f + xa, p.yd = p.yd * 0.1f + ya, p.zd = p.zd * 0.1f + za;
+    if (scaled) p.xd = p.xd * 0.1f + xa, p.yd = p.yd * 0.1f + ya, p.zd = p.zd * 0.1f + za;
     p.quadSize = 0.1f * (randf() * 0.5f + 0.5f) * 2.0f / 2.0f;
     p.gravity = 1.0f, p.friction = 0.98f;
-    p.sprite = sprite - 1;
+    p.sprite = rect;
     p.uo = randf() * 3.0f, p.vo = randf() * 3.0f;
     if (items_.rect(p.sprite).translucent) p.flags |= Translucent;
     p.light = lightAt(x, y, z);
     spawnQueue_.push_back(p);
     ++stats_.spawned;
+}
+
+// PositionSource.getPosition: the block centre, or the entity's position raised by its y offset.
+bool Particles::vibrationTarget(const Particle& p, double out[3]) {
+    if (p.target < 0) {
+        out[0] = p.sx, out[1] = p.sy, out[2] = p.sz;
+        return true;
+    }
+    if (!entityPosition || !entityPosition(p.target, out)) return false;
+    out[1] += p.e0;
+    return true;
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -976,6 +1052,26 @@ void Particles::tickOne(Particle& p) {
             defaultTick();
             p.g *= 0.96f, p.b *= 0.9f;
             break;
+        case Kind::Vibration: {
+            if (p.age++ >= p.lifetime) return remove();
+            double dest[3];
+            if (!vibrationTarget(p, dest)) return remove();
+            const int remaining = p.lifetime - p.age;  // the rest of the way over the ticks remaining
+            const double alpha = remaining > 0 ? 1.0 / double(remaining) : 1.0;
+            p.x += (dest[0] - p.x) * alpha, p.y += (dest[1] - p.y) * alpha, p.z += (dest[2] - p.z) * alpha;
+            const double dx = p.x - dest[0], dy = p.y - dest[1], dz = p.z - dest[2];
+            p.oRoll = p.roll, p.roll = float(std::atan2(dx, dz));
+            p.e2 = p.e1, p.e1 = float(std::atan2(dy, std::sqrt(dx * dx + dz * dz)));
+            break;
+        }
+        case Kind::DustTransition: {
+            defaultTick();
+            ageSprite();
+            const float f = float(p.age) / (float(p.lifetime) + 1.0f);  // lerpColors (per tick)
+            p.r = float(p.sx) + (p.e1 - float(p.sx)) * f, p.g = float(p.sy) + (p.e2 - float(p.sy)) * f;
+            p.b = float(p.sz) + (p.e3 - float(p.sz)) * f;
+            break;
+        }
         case Kind::Lava:
             defaultTick();
             if (!(p.flags & Removed) && randf() > float(p.age) / float(p.lifetime)) {
@@ -1335,7 +1431,18 @@ u32 Particles::build(GpuParticle* out, u32 max, const double cam[3], u32& opaque
         g.roll = p.oRoll + (p.roll - p.oRoll) * pt;
         // Moved since the last frame: the tick velocity over the frame's length (motion vectors).
         g.motion[0] = float(p.x - p.xo) * frameTicks_, g.motion[1] = float(p.y - p.yo) * frameTicks_;
-        g.motion[2] = float(p.z - p.zo) * frameTicks_, g.pad = 0;
+        g.motion[2] = float(p.z - p.zo) * frameTicks_, g.orient = 0;
+        if (types_[p.type].kind == Kind::Vibration) {  // two quads along the path, swaying (VibrationSignalParticle.extract)
+            const float sway = std::sin((float(p.age) + pt - 2.0f * kPi) * 0.05f) * 2.0f;
+            const float rot = p.oRoll + (p.roll - p.oRoll) * pt, pitch = p.e2 + (p.e1 - p.e2) * pt + kPi / 2.0f;
+            g.roll = 0;
+            g.orient = orientedQuad(rot, -pitch, sway);
+            if (n < back) {
+                GpuParticle& g2 = buf[--back];
+                g2 = g;
+                g2.orient = orientedQuad(-kPi + rot, pitch, sway);
+            }
+        }
     }
     opaque = n;
     const u32 tcount = max - back;

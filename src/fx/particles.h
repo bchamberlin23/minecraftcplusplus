@@ -15,6 +15,7 @@
 // Rendering: build() writes camera-relative billboards (shaders/visuals.hlsl ParticleVS) for the visuals pass.
 #include "core/common.h"
 
+#include <functional>
 #include <mutex>
 #include <random>
 #include <unordered_map>
@@ -25,6 +26,7 @@ class BlockRegistry;
 class GameReports;
 namespace net {
 class Client;
+struct Reader;
 }
 namespace ent {
 class ItemModels;
@@ -45,7 +47,9 @@ struct GpuParticle {
     u32 tex;    // ent::kTexItems or a block texture layer
     float roll;
     float motion[3];  // movement since the previous frame (blocks): motion vectors
-    float pad;
+    // 0: a camera-facing billboard. Else (bit 31 set) a quad turned by rotationY(a).rotateX(b).rotateY(c) instead of
+    // the camera, the angles in 10 bits each (a | b << 10 | c << 20, units of 2 pi / 1024): orientedQuad().
+    u32 orient;
 };
 static_assert(sizeof(GpuParticle) == 64);
 
@@ -76,6 +80,11 @@ public:
     };
     const Stats& stats() const { return stats_; }
     void setRainOverride(float level) { rainOverride_ = level; }
+    // ItemParticleOption (ItemStackTemplate.STREAM_CODEC): reads the stack and returns its item network id (network
+    // thread; unset or false: the packet is dropped).
+    std::function<bool(net::Reader& r, int& item)> readItem;
+    // EntityPositionSource: an entity's position (main thread); false when unknown (the vibration ends).
+    std::function<bool(int entity, double pos[3])> entityPosition;
 
     struct Particle;  // particles.cpp
 
@@ -86,6 +95,13 @@ private:
         u32 color = 0;        // ARGB (dust, entity_effect, tinted_leaves, effect)
         float scale = 1, power = 1;
         bool hasColor = false;
+        u32 color2 = 0;       // dust_color_transition: the colour it fades to (ARGB)
+        int item = -1;        // item: network item id
+        // vibration: the destination (a block's centre, or entity >= 0 with a y offset) and the travel time
+        int entity = -1;
+        double target[3] = {};
+        float yOffset = 0;
+        int arrival = 0;
     };
     void tick();
     void ambient(const double cam[3]);
@@ -97,6 +113,9 @@ private:
     u8 lightAt(double x, double y, double z) const;
     int typeId(std::string_view name) const;
     u16 localBlock(int networkState);
+    // BreakingItemParticle with an item atlas rect: scaled keeps a tenth of the random push plus (xa, ya, za).
+    void shard(int rect, double x, double y, double z, double xa, double ya, double za, bool scaled);
+    bool vibrationTarget(const Particle& p, double out[3]);
     int blockSprite(u16 block, u32& tint);  // item atlas rect of the block's particle texture
     u32 dustColor(u16 block);
     float randf() { return std::uniform_real_distribution<float>(0.0f, 1.0f)(rng_); }

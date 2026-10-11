@@ -20,6 +20,8 @@ public:
     void setScale(int guiScale);  // re-renders lazily at the new size
     // Atlas UVs of the icon (u0 v0 u1 v1); false when the item draws nothing.
     bool icon(const ItemStack& s, float uv[4]);
+    // Icons with animated textures (prismarine, magma, sea lantern...) are redrawn when a frame changes.
+    void tick(u64 tick);
     int iconSize() const { return size_; }
 
 private:

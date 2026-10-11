@@ -113,6 +113,8 @@ public:
 
     // Textures in the item atlas (path below textures/, e.g. "particle/flame"): atlas rect index or -1.
     int texture(const std::string& path);
+    // Animated textures (.mcmeta) in the atlas show their frame for this client tick (interpolated ones blended).
+    void tick(u64 tick);
     struct Rect {
         float u0, v0, du, dv;
         int w, h;

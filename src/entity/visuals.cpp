@@ -142,6 +142,7 @@ struct Visuals::Impl {
     std::unique_ptr<ui::Items> items;
     ItemModels models;
     std::unique_ptr<fx::Particles> particles;
+    double animClock = 0;  // seconds of updates: the client ticks of the item atlas animations
     ui::Atlas fontAtlas;
     std::unique_ptr<ui::Font> font;
     ui::Canvas canvas;
@@ -314,6 +315,17 @@ bool Visuals::load(const fs::path& jar, const fs::path& minecraftDir, const Game
     if (!m.font->load(*m.res, m.fontAtlas)) m.font.reset();
     m.particles = std::make_unique<fx::Particles>(m.world.world(), m.world.registry(), reports, m.models);
     m.particles->init(*m.res);
+    m.particles->readItem = [items = m.items.get()](net::Reader& r, int& item) {  // ItemParticleOption
+        ui::ItemStack stack;
+        const bool ok = items->readTemplate(r, stack);
+        item = stack.item;
+        return ok;
+    };
+    m.particles->entityPosition = [&world = m.world](int id, double pos[3]) {  // vibrations travelling to an entity
+        const Entity* e = world.entity(id);
+        if (e) std::copy(e->pos, e->pos + 3, pos);
+        return e != nullptr;
+    };
     m.loaded = true;
     LOG("visuals %7.1f ms  item models, font and particles from the game", t.ms());
     return true;
@@ -1226,6 +1238,8 @@ void Visuals::Impl::update() {
         er.setLocalPlayer(avatarReady && game->cameraMode != 0 && !spectator ? &avatar : nullptr);
         er.setLocalPlayerShadow(avatarReady && game->cameraMode == 0 && !spectator ? &avatar : nullptr);  // first person
     }
+    animClock += dt;
+    models.tick(u64(animClock * 20.0));  // animated textures in the item atlas (block items, vibration particles)
     if (particles) {
         const CameraState c = game ? game->viewCamera() : CameraState{};
         const double cam[3] = {c.x, c.y, c.z};

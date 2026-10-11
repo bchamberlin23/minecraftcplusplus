@@ -1099,7 +1099,8 @@ void Ui::endFrame() {
         s.pass->glint[4] = -float(std::fmod(ms, 110000.0) / 110000.0), s.pass->glint[5] = float(std::fmod(ms, 30000.0) / 30000.0);
         s.pass->glint[6] = float(16 * scale) * 2.0f;
     }
-    s.sprites.tick(u64(s.guiTicks));  // animated GUI sprites and textures
+    s.sprites.tick(u64(s.guiTicks));  // animated GUI sprites and textures, item icons
+    s.icons.tick(u64(s.guiTicks));
     if (!s.fe->cfg.menu) drawScreenEffects(s, c);  // view_effects.cpp: in the 3D view, with or without the HUD
     const bool hud = !s.hudHidden && !s.fe->cfg.menu;  // the title screen has no HUD
     if (hud) s.drawHud(c);
