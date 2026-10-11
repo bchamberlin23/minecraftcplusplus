@@ -36,6 +36,7 @@ constexpr u32 kCommandBytes = 28;  // matches renderer.cpp
 constexpr u32 kQuadIndexCapacity = 65536;
 constexpr DXGI_FORMAT kHdr = DXGI_FORMAT_R16G16B16A16_FLOAT;
 constexpr DXGI_FORMAT kLdr = DXGI_FORMAT_R8G8B8A8_UNORM;
+constexpr float kCaveScale = 0.45f, kCaveScaleNoSun = 1.7f;  // vanilla light level 0 (linear) -> HDR minimum light
 constexpr DXGI_FORMAT kAlbedo = DXGI_FORMAT_R8G8B8A8_UNORM;  // sRGB-encoded values, decoded by the deferred pass
 constexpr D3D12_RESOURCE_STATES kSrv = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
 constexpr D3D12_RESOURCE_STATES kUav = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
@@ -57,6 +58,7 @@ struct ShadeConstants {
     float lightDir[4], lightColor[4], sunDir[4], ambient[4], blockColor[4], fog[4], water[4], waterScatter[4];
     float screen[4], jitter[4], time[4], skyZenith[4], skyHorizon[4], misc[4], moonDir[4], output[4];
     u32 opts[4], flags[4];
+    float cave[4];
 };
 static_assert(sizeof(ShadeConstants) <= Renderer::Shading::kConstantBytes);
 
@@ -579,7 +581,20 @@ void Renderer::Shading::prepare(const FrameInput& in) {
     k.skyHorizon[3] = in.viewDistance * 0.6f;
     const float blockColor[3] = {1.0f, 0.56f, 0.26f};
     for (int c = 0; c < 3; ++c) k.blockColor[c] = blockColor[c];
-    k.blockColor[3] = lights ? 0.004f : 0.02f;  // cave light (more in the Nether / End: no sky light)
+    {  // Minimum (cave) light: the game's lightmap at light level 0 (the dimension's ambient light colour with the
+       // brightness lift: #0a0a0a in the overworld, warm in the Nether, green-grey in the End), linear. Without a sun
+       // it is the main light, so it counts for more there.
+        const Lightmap& lm = r.lightmap_;
+        float m = 0;
+        for (int c = 0; c < 3; ++c) m = std::max(m, std::clamp(lm.ambient[c], 0.0f, 1.0f));
+        const float inv = 1 - m, lift = m > 0 ? (1 - inv * inv * inv * inv) / m : 1.0f;
+        const float scale = lights ? kCaveScale : kCaveScaleNoSun;
+        for (int c = 0; c < 3; ++c) {
+            const float a = std::clamp(lm.ambient[c], 0.0f, 1.0f);
+            k.cave[c] = srgbToLinear(a + (a * lift - a) * lm.brightness) * scale;
+        }
+    }
+    k.blockColor[3] = 0.2126f * k.cave[0] + 0.7152f * k.cave[1] + 0.0722f * k.cave[2];
 
     k.fog[0] = (1.0f / 7000.0f) * (1 + rain * 7.0f + thunder * 4.0f);
     k.fog[1] = 1.0f / 110.0f;

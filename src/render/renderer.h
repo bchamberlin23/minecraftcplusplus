@@ -50,8 +50,12 @@ struct PassContext {
     bool shading = false;
     // StructuredBuffer<uint>: block texture layer -> layer of its current animation frame (see setTextureRemap).
     D3D12_GPU_VIRTUAL_ADDRESS textureRemap = 0;
+    float lightmap[3][4] = {};  // Lightmap::pack: for passes that light with the game's lightmap (lightmap.hlsli)
     PassStage stage{};  // the stage being drawn (a pass may be registered for several)
     bool uiLayer = false;  // Hud passes draw into a separate UI layer (composited later), not onto the scene
+    // An OptiFine / Iris shader pack is active (render/packs): passes that support it hand vanilla-style geometry to
+    // the pack's gbuffers programs (render/pack_sink.h); others draw as usual into a layer the pack merges.
+    class PackSink* pack = nullptr;
 };
 class RenderPass {
 public:
@@ -90,6 +94,20 @@ struct ShaderSettings {
     static ShaderSettings preset(ShaderPreset p);
 };
 // Sky state the pipeline lights with; set each frame by the sky system.
+// Inputs of the game's lightmap (shaders/lightmap.hlsli), from the dimension's environment attributes.
+struct Lightmap {
+    float ambient[3] = {10 / 255.0f, 10 / 255.0f, 10 / 255.0f};  // visual/ambient_light_color
+    float brightness = 0.5f;                                     // the brightness (gamma) option
+    float skyColor[3] = {1, 1, 1};                               // visual/sky_light_color
+    float skyFactor = 1.0f;                                      // visual/sky_light_factor
+    float blockTint[3] = {1.0f, 216 / 255.0f, 140 / 255.0f};      // visual/block_light_tint
+    float blockFactor = 1.4f;                                    // 1.4 + flicker
+    void pack(float out[3][4]) const {
+        for (int c = 0; c < 3; ++c) out[0][c] = ambient[c], out[1][c] = skyColor[c], out[2][c] = blockTint[c];
+        out[0][3] = brightness, out[1][3] = skyFactor, out[2][3] = blockFactor;
+    }
+};
+
 struct SkyLighting {
     float sunAngle = 0, moonAngle = 0;  // the game's celestial angles (radians; 0 = noon / midnight overhead)
     float skyColor[3] = {0.47f, 0.65f, 1.0f};  // vanilla sky colour (sRGB 0..1)
@@ -142,6 +160,8 @@ public:
         std::copy(fogColor, fogColor + 4, fogColor_);
         daylight_ = daylight;
     }
+    void setLightmap(const Lightmap& l) { lightmap_ = l; }
+    const Lightmap& lightmap() const { return lightmap_; }
 
     // Shader pipeline. setShaderPreset can be called any time (the UI's options screen); Off restores vanilla.
     void setShaderPreset(ShaderPreset preset);
@@ -161,6 +181,9 @@ public:
     void setUpscaler(Upscaler* upscaler) { upscaler_ = upscaler; }
     // Vendor upscalers / frame generation / low latency (render/upscalers/upscalers.h); created by init.
     Upscalers& upscalers() { return *upscalers_; }
+    // OptiFine / Iris shader packs (API: render/packs/pack_api.h); while one is active it replaces the pipeline above.
+    struct Packs;
+    Packs& packs();  // created on first use
     // Main loop, once per frame before input and simulation: latency sleep (Reflex / XeLL), frame limiter, markers.
     void beginFrame();
     // History of the temporal passes is invalid (camera cut, dimension change); the next frame resets it.
@@ -272,6 +295,7 @@ private:
     std::vector<RenderPass*> passes_[5];
     float fogColor_[4] = {0.62f, 0.76f, 1.0f, 1.0f};
     float daylight_ = 1.0f;
+    Lightmap lightmap_;
     u32 descriptorSize_ = 0, descriptorsUsed_ = 1, descriptorCapacity_ = 0;  // 0: block textures
     void runPasses(PassStage stage, const PassContext& ctx);
     void submitAndWait();  // close + execute list_ (recorded from allocators_[0]) and wait
@@ -294,5 +318,6 @@ private:
     std::string adapterName_;
     HWND hwnd_ = nullptr;
     u32 jitterPhase_ = 0;
+    std::unique_ptr<Packs> packs_;
     std::unique_ptr<Upscalers> upscalers_;  // last: destroyed first (after ~Renderer released the swap chain)
 };

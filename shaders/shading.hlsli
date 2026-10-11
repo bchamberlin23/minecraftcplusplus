@@ -28,6 +28,7 @@ cbuffer Shade : register(b2) {
     float4 gOutput;              // output (swap chain) resolution: xy = size, zw = 1 / size
     uint4 gOpts;                 // x = cascades, y = shadow taps, z = ssr steps, w = volumetric steps
     uint4 gFlags;                // x = flags (kFlag*), y = frame index, z = previous history slot, w = this history slot
+    float4 gCave;                // minimum light: the dimension's ambient light colour (linear, HDR)
 };
 // Debug views (MCPP_SHADERS_DEBUG): 1 raw HDR (exposure 1, no tonemap), 2 albedo, 3 normal, 4 shadow, 5 lighting only,
 // 6 volumetric in-scatter x4.
@@ -240,7 +241,7 @@ float3 shadeSurface(Surface s, float3 rel, float2 pixel) {
     float hemi = 0.65 + 0.35 * s.n.y;
     float3 ambient = gAmbient.rgb * skyCurve(s.sky) * hemi;
     float3 block = gBlockColor.rgb * blockCurve(s.block);
-    float3 cave = gBlockColor.w * float3(0.7, 0.8, 1.0);
+    float3 cave = gCave.rgb * hemi;
     float3 light = diffuse + (ambient + cave) * s.ao + block * lerp(1.0, s.ao, 0.7);
     float3 c = s.albedo * light;
     if (s.mat == kMatGlow) c += s.albedo * gShadeMisc.z;

@@ -1151,7 +1151,9 @@ void EntityRenderer::draw(const PassContext& ctx) {
         float fogParams[4];
         float light0[4], light1[4];
         float glintRect[4], glint[4];
+        float lightmap[3][4];
     } k{};
+    std::memcpy(k.lightmap, ctx.lightmap, sizeof(k.lightmap));
     std::memcpy(k.viewProj, ctx.viewProj, sizeof(k.viewProj));
     std::memcpy(k.fogColor, ctx.fogColor, sizeof(k.fogColor));
     k.fogParams[0] = ctx.fogStart, k.fogParams[1] = ctx.fogEnd, k.fogParams[2] = ctx.daylight;

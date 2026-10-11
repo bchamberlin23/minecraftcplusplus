@@ -10,7 +10,9 @@ cbuffer Frame : register(b0) {
     uint4 gSegBase;      // first indirect command of each pass
     uint4 gSegCap;       // command capacity of each pass
     uint4 gMisc;         // x = active slot count, y = texture LOD bias (float bits)
+    float4 gLightmap[3]; // the game's lightmap inputs (lightmap.hlsli)
 };
+#include "lightmap.hlsli"
 
 struct DrawConstants {
     uint quadOffset;
@@ -50,11 +52,7 @@ float lightCurve(float level) {
     return f / (4.0 - 3.0 * f);
 }
 float3 lightColorLevels(float skyLevel, float blockLevel) {  // fractional levels 0..15
-    float sky = lightCurve(skyLevel) * gFogParams.w;
-    float block = lightCurve(blockLevel);
-    float3 c = saturate(max(float3(sky, sky, sky), block * float3(1.0, 0.9, 0.75)));
-    float3 lifted = 1.0 - pow(saturate(1.0 - c), 4.0);  // pow of a negative base is NaN
-    return lerp(lerp(c, lifted, 0.5), 0.75, 0.04);
+    return vanillaLight(skyLevel, blockLevel, gLightmap);
 }
 float3 lightColor(uint packed) { return lightColorLevels(float(packed >> 4), float(packed & 15)); }
 

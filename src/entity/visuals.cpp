@@ -58,6 +58,7 @@ struct FrameCb {
     float camRight[4], camUp[4];
     float glintRect[4];
     float glint[4];
+    float lightmap[3][4];
 };
 static_assert(sizeof(FrameCb) <= kCbBytes);
 
@@ -617,6 +618,7 @@ void Visuals::Impl::uploadPending(const PassContext& ctx) {
 void Visuals::Impl::writeCb(int slot, const PassContext& ctx, const float* viewProj, bool pipeline, bool hand) {
     FrameCb k{};
     std::memcpy(k.viewProj, viewProj, sizeof(k.viewProj));
+    std::memcpy(k.lightmap, ctx.lightmap, sizeof(k.lightmap));
     std::memcpy(k.fogColor, ctx.fogColor, sizeof(k.fogColor));
     k.fogParams[0] = ctx.fogStart, k.fogParams[1] = ctx.fogEnd, k.fogParams[2] = ctx.daylight;
     k.fogParams[3] = pipeline ? 1.0f : 0.0f;

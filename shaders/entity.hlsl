@@ -10,7 +10,9 @@ cbuffer Frame : register(b0) {
     float4 gLight1;
     float4 gGlintRect;   // atlas rect of misc/enchanted_glint_armor (u0 v0 du dv)
     float4 gGlint;       // x, y: scroll offset; z: strength
+    float4 gLightmap[3]; // the game's lightmap inputs (lightmap.hlsli)
 };
+#include "lightmap.hlsli"
 cbuffer Draw : register(b1) {
     uint gRefBase;
     uint gPad;
@@ -72,13 +74,7 @@ float lightCurve(float level) {
     float f = level / 15.0;
     return f / (4.0 - 3.0 * f);
 }
-float3 lightColor(uint packed) {
-    float sky = lightCurve(float((packed >> 4) & 15)) * gFogParams.z;
-    float block = lightCurve(float(packed & 15));
-    float3 c = saturate(max(float3(sky, sky, sky), block * float3(1.0, 0.9, 0.75)));
-    float3 lifted = 1.0 - pow(saturate(1.0 - c), 4.0);
-    return lerp(lerp(c, lifted, 0.5), 0.75, 0.04);
-}
+float3 lightColor(uint packed) { return vanillaLight(float((packed >> 4) & 15), float(packed & 15), gLightmap); }
 
 float4 unpackColor(uint c) {
     return float4(c & 255, (c >> 8) & 255, (c >> 16) & 255, c >> 24) / 255.0;

@@ -1,5 +1,6 @@
 #include "render/renderer.h"
 #include "render/shading.h"
+#include "render/packs/pack_pipeline.h"
 #include "render/upscalers/upscalers.h"
 
 #include "assets/assets.h"
@@ -41,8 +42,9 @@ struct FrameConstants {
     u32 segBase[4];
     u32 segCap[4];
     u32 misc[4];
+    float lightmap[3][4];
 };
-static_assert(sizeof(FrameConstants) == 384);
+static_assert(sizeof(FrameConstants) == 432);
 
 struct GpuSection {
     i32 origin[4];  // xyz in blocks, w = LOD level
@@ -281,6 +283,7 @@ void Renderer::recreateSwapChain() {
     for (u64& f : frameFence_) f = 0;
     createTargets();
     if (shading_) shading_->createTargets();
+    if (packs_) packs_->resize();
 }
 
 void Renderer::resizeSwapChain(u32 width, u32 height) {
@@ -333,6 +336,7 @@ void Renderer::resize(u32 width, u32 height) {
     width_ = width, height_ = height;
     createTargets();
     if (shading_) shading_->createTargets();
+    if (packs_) packs_->resize();
 }
 
 bool Renderer::createPipelines() {
@@ -684,6 +688,7 @@ u64 Renderer::arenaBytesTotal() const {
 }
 
 void Renderer::render(const CameraState& cam, float viewDistance, const fs::path* screenshot) {
+    if (packs_) packs_->beginFrame();  // switches shader packs (a finished load, or back to the built-in pipeline)
     upscalers_->submitStart();
     const u32 fi = swapchain_->GetCurrentBackBufferIndex();
     waitFence(frameFence_[fi]);
@@ -704,7 +709,8 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
         }
         if (shading_) shading_->readTimings(fi);
     }
-    const bool shaded = shading_ && shaderPreset_ != ShaderPreset::Off;
+    const bool packActive = packs_ && packs_->active();  // an OptiFine / Iris shader pack replaces the pipeline
+    const bool shaded = !packActive && shading_ && shaderPreset_ != ShaderPreset::Off;
     if (!shaded) stats_.passCount = 0;
 
     // Camera-relative matrices: the world is translated by -camera on the GPU in integer
@@ -747,6 +753,7 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     fc.fogParams[1] = viewDistance;
     fc.fogParams[2] = viewDistance;
     fc.fogParams[3] = daylight_;
+    lightmap_.pack(fc.lightmap);
     const u32 tints[8] = {0xFFFFFF, 0x91BD59, 0x77AB2F, 0x80A755, 0x619961, 0x3F76E4, 0x208030, 0x8B1A00};
     for (int t = 0; t < 8; ++t) setRgb(fc.tints[t], tints[t]);
     std::memcpy(fc.segBase, segBase_, sizeof(segBase_));
@@ -838,6 +845,7 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     std::memcpy(pc.fogColor, fogColor_, sizeof(fogColor_));
     pc.shading = shaded;
     pc.textureRemap = remapVa;
+    std::memcpy(pc.lightmap, fc.lightmap, sizeof(pc.lightmap));
     if (shaded) {
         shading_->mark(list_.Get(), "cull");
         shadeTimer = Timer();
@@ -852,6 +860,16 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
         list_->SetGraphicsRootDescriptorTable(4, srvHeap_->GetGPUDescriptorHandleForHeapStart());
         list_->RSSetViewports(1, &vpRect);
         list_->RSSetScissorRects(1, &scissor);
+    } else if (packActive) {
+        // The pack renders the frame (final -> back buffer); overlays and the Hud stage then draw onto it.
+        packs_->record(list_.Get(), {&cam, viewDistance, activeVa, activeCount, haveWorld, fi}, pc, bb, rtv);
+        list_->SetDescriptorHeaps(1, heaps);
+        list_->SetGraphicsRootSignature(rootSig_.Get());
+        list_->SetGraphicsRootConstantBufferView(1, cb);
+        list_->SetGraphicsRootDescriptorTable(4, srvHeap_->GetGPUDescriptorHandleForHeapStart());
+        list_->RSSetViewports(1, &vpRect);
+        list_->RSSetScissorRects(1, &scissor);
+        list_->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
     } else {
     list_->ClearRenderTargetView(rtv, fogColor_, 0, nullptr);
     list_->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
@@ -1015,8 +1033,14 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     }
 }
 
-u32 Renderer::renderWidth() const { return shading_ && shaderPreset_ != ShaderPreset::Off ? shading_->renderW_ : width_; }
-u32 Renderer::renderHeight() const { return shading_ && shaderPreset_ != ShaderPreset::Off ? shading_->renderH_ : height_; }
+u32 Renderer::renderWidth() const {
+    if (packs_ && packs_->active()) return width_;
+    return shading_ && shaderPreset_ != ShaderPreset::Off ? shading_->renderW_ : width_;
+}
+u32 Renderer::renderHeight() const {
+    if (packs_ && packs_->active()) return height_;
+    return shading_ && shaderPreset_ != ShaderPreset::Off ? shading_->renderH_ : height_;
+}
 
 void Renderer::setTextureRemap(const std::vector<u32>& remap) {
     const size_t n = std::min<size_t>(remap.size(), kRemapCapacity);
