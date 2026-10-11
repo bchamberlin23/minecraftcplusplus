@@ -95,9 +95,9 @@ struct SavedChunk {
 int statusRank(const std::string& s) {
     static const char* kOrder[] = {"minecraft:empty", "minecraft:structure_starts", "minecraft:structure_references",
                                    "minecraft:biomes", "minecraft:noise", "minecraft:surface", "minecraft:carvers",
-                                   "minecraft:features", "minecraft:initialize_light", "minecraft:light", "minecraft:spawn",
-                                   "minecraft:full"};
-    for (int i = 0; i < 12; ++i)
+                                   "minecraft:terrain", "minecraft:features", "minecraft:initialize_light", "minecraft:light",
+                                   "minecraft:spawn", "minecraft:full"};
+    for (int i = 0; i < 13; ++i)
         if (s == kOrder[i]) return i;
     return -1;
 }
