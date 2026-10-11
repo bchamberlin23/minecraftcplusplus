@@ -197,6 +197,24 @@ void Client::run() {
     if (!quit_ && !reason.empty()) push(DisconnectEvent{reason});
 }
 
+namespace {
+// ClientInformation.write: language, view distance, chat visibility / colours, skin parts, main hand, text filtering,
+// server listing, particles.
+Writer informationPacket(const Client::Information& info) {
+    Writer w;
+    w.str(info.language);
+    w.u8v(u8(info.viewDistance));
+    w.varInt(info.chatVisibility);
+    w.boolean(info.chatColors);
+    w.u8v(info.modelParts);
+    w.varInt(info.mainHand);
+    w.boolean(info.textFiltering);
+    w.boolean(info.allowListing);
+    w.varInt(info.particles);
+    return w;
+}
+}  // namespace
+
 bool Client::handleLogin(const std::string& name, Reader& r) {
     if (name == "login_compression") {
         connection_.setCompression(r.varInt());
@@ -229,19 +247,24 @@ bool Client::handleLogin(const std::string& name, Reader& r) {
         brand.str("minecraft:brand");
         brand.str("minecraftCplusplus");
         send(Configuration, "custom_payload", brand);
-        Writer info;  // client_information: language, view distance, chat, skin parts, main hand...
-        info.str("en_us");
-        info.u8v(12);
-        info.varInt(0);  // chat fully visible
-        info.boolean(true);
-        info.u8v(0x7F);
-        info.varInt(1);  // right handed
-        info.boolean(false);
-        info.boolean(true);
-        info.varInt(0);  // all particles
-        send(Configuration, "client_information", info);
+        Information information;
+        {
+            std::lock_guard lock(sendMutex_);
+            information = info_;
+        }
+        send(Configuration, "client_information", informationPacket(information));
     }
     return true;
+}
+
+void Client::setInformation(const Information& info) {
+    {
+        std::lock_guard lock(sendMutex_);
+        info_ = info;
+    }
+    if (send(Play, "client_information", informationPacket(info)))  // ignored outside the play phase
+        LOG("net: client information: main hand %s, skin parts 0x%02X, server listing %s", info.mainHand ? "right" : "left",
+            info.modelParts, info.allowListing ? "on" : "off");
 }
 
 // Packets shared by the configuration and play phases.

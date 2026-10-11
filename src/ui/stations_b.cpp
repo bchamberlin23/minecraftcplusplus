@@ -179,7 +179,7 @@ void merchantDrawTop(State& s, Canvas& c, Menu&, const Layout&, float left, floa
         if (s.mouseX < bx + 20) st = &o.costA;
         else if (s.mouseX < bx + 50 && s.mouseX > bx + 30) st = o.costB.empty() ? nullptr : &o.costB;
         else if (s.mouseX > bx + 65) st = &o.result;
-        if (st) s.drawTooltip(c, s.items.tooltip(*st), s.mouseX, s.mouseY);
+        if (st) s.drawTooltip(c, s.items.tooltip(*st, s.settings.advancedItemTooltips), s.mouseX, s.mouseY);
         return;
     }
     if (g.shopItem >= 0 && g.shopItem < n && g.offers[size_t(g.shopItem)].outOfStock && inRect(s, left + 186, top + 35, 22, 21) &&
@@ -601,7 +601,7 @@ bool ridingJumpable(State& s) {
     return false;
 }
 bool worldKey(State& s, const InputEvent& e) {
-    if (e.type != InputEvent::Key || !e.down || e.code != 'E' || !s.online() || !s.session || !ridingJumpable(s)) return false;
+    if (e.repeat || !s.isKey(Key::Inventory, e) || !s.online() || !s.session || !ridingJumpable(s)) return false;
     net::Writer w;
     w.varInt(s.session->entityId());
     w.varInt(5);  // Action.OPEN_INVENTORY

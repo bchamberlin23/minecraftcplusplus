@@ -226,7 +226,8 @@ void stoneDrawTop(UiState& s, Canvas& c, Menu& m, const Layout&, float left, flo
         const int pos = index - stone.startIndex;
         const float px = left + 52 + float(pos % 4 * 16), py = top + 14 + float(pos / 4 * 18 + 2);
         if (inRect(s.mouseX, s.mouseY, px, py, 16, 18))
-            s.drawTooltip(c, s.items.tooltip(g_stoneRecipes[size_t(vis[size_t(index)])].result), s.mouseX, s.mouseY);
+            s.drawTooltip(c, s.items.tooltip(g_stoneRecipes[size_t(vis[size_t(index)])].result, s.settings.advancedItemTooltips), s.mouseX,
+                          s.mouseY);
     }
 }
 

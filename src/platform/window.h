@@ -3,6 +3,8 @@
 
 #include <windows.h>
 
+#include <array>
+
 class Window {
 public:
     // Where a window was (platform/launch.h passes it to the next instance): outer top-left, client size.
@@ -16,7 +18,11 @@ public:
     void reveal();  // uncloaks, raises and focuses the window
     Placement placement() const;
     bool pump();  // processes messages; false once the window is closed
-    bool keyDown(int vk) const;
+    bool keyDown(int vk) const;  // VK_SHIFT / VK_CONTROL / VK_MENU also match their left / right keys and back
+    bool focused() const { return GetForegroundWindow() == hwnd_; }
+    // Borderless fullscreen on the monitor the window is on (Window.setFullscreen); off restores the window.
+    void setFullscreen(bool on);
+    bool fullscreen() const { return fullscreen_; }
     void setMouseCaptured(bool captured);
     bool mouseCaptured() const { return captured_; }
     void takeMouseDelta(float& dx, float& dy) {
@@ -31,6 +37,13 @@ public:
         events_ = {};
         return e;
     }
+    // Presses of every virtual key (keyboard keys and mouse buttons, VK_LBUTTON...) while the mouse was captured, since
+    // the last call: key bindings see quick presses between frames (KeyMapping.click).
+    std::array<u16, 256> takePresses() {
+        const std::array<u16, 256> p = presses_;
+        presses_ = {};
+        return p;
+    }
     bool takeResize(u32& w, u32& h) {
         if (!resized_) return false;
         resized_ = false;
@@ -42,7 +55,9 @@ public:
     // UI input, queued in order: key presses / releases, typed characters, mouse buttons and wheel with the cursor.
     struct InputEvent {
         enum Type : u8 { Key, Char, Button, Wheel } type = Key;
-        int code = 0;       // Key: virtual key; Char: code point; Button: 0 left 1 right 2 middle; Wheel: notches
+        // Key: virtual key (left / right specific for Shift, Ctrl and Alt: VK_LSHIFT...); Char: code point;
+        // Button: 0 left 1 right 2 middle 3 / 4 side buttons; Wheel: notches
+        int code = 0;
         bool down = false;  // Key / Button
         bool repeat = false;
         int x = 0, y = 0;  // cursor in client pixels (Button / Wheel)
@@ -76,5 +91,11 @@ private:
     int scriptX_ = 0, scriptY_ = 0;
     wchar_t highSurrogate_ = 0;
     bool cloaked_ = false;
+    std::array<u16, 256> presses_{};
+    bool fullscreen_ = false;
+    WINDOWPLACEMENT windowed_{};  // where the window was before fullscreen
+    void press(int vk) {
+        if (captured_ && vk > 0 && vk < 256) ++presses_[size_t(vk)];
+    }
     void push(InputEvent::Type type, int code, bool down, bool repeat = false);
 };

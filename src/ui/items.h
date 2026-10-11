@@ -84,8 +84,9 @@ public:
     bool isBlockItem(int id) const { return id >= 0 && id < int(blockItem_.size()) && blockItem_[size_t(id)]; }
     Text displayName(const ItemStack& s) const;   // custom name (italic) > item_name > translated name
     Text hoverName(const ItemStack& s) const;     // displayName in the rarity colour
-    // creative: TooltipFlag.isCreative (creative inventory item slots), which ignores tooltip_display's hide_tooltip.
-    std::vector<Text> tooltip(const ItemStack& s, bool creative = false) const;
+    // advanced: TooltipFlag.ADVANCED (F3 + H): durability and the item id. creative: TooltipFlag.isCreative (creative
+    // inventory item slots), which ignores tooltip_display's hide_tooltip.
+    std::vector<Text> tooltip(const ItemStack& s, bool advanced = false, bool creative = false) const;
     bool foil(const ItemStack& s) const { return s.glint >= 0 ? s.glint == 1 : s.enchantments > 0; }
     // ItemCooldowns.getCooldownGroup: the use_cooldown component's group, else the item's name.
     std::string cooldownGroup(const ItemStack& s) const;

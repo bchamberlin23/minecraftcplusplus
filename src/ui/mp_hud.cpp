@@ -504,7 +504,8 @@ void drawPlayerList(UiState& s, Canvas& c) {
     for (const auto& [k, p] : g.players)
         if (p.listed) list.push_back(&p);
     // Hud.extractTabList: held key; a local (singleplayer) server with one player and no list objective shows nothing.
-    const bool held = s.screen == Screen::None && s.window->keyDown(VK_TAB);
+    const int key = s.settings.key(Key::PlayerList);
+    const bool held = s.screen == Screen::None && key && s.window->keyDown(key);
     if (!held || (s.fe->cfg.singleplayer && list.size() <= 1 && !listObj)) {
         if (g.tabVisible) g.health.clear();
         g.tabVisible = false;

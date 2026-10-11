@@ -64,7 +64,7 @@ int vkFromName(std::string n) {
         {"ESC", VK_ESCAPE}, {"ESCAPE", VK_ESCAPE}, {"ENTER", VK_RETURN}, {"RETURN", VK_RETURN}, {"BACKSPACE", VK_BACK},
         {"TAB", VK_TAB},    {"SHIFT", VK_SHIFT},   {"CTRL", VK_CONTROL}, {"CONTROL", VK_CONTROL}, {"SPACE", VK_SPACE},
         {"UP", VK_UP},      {"DOWN", VK_DOWN},     {"LEFT", VK_LEFT},    {"RIGHT", VK_RIGHT},     {"DELETE", VK_DELETE},
-        {"HOME", VK_HOME},  {"END", VK_END},       {"SLASH", VK_OEM_2}};
+        {"HOME", VK_HOME},  {"END", VK_END},       {"SLASH", VK_OEM_2},  {"LSHIFT", VK_LSHIFT}, {"LCTRL", VK_LCONTROL}};
     for (auto [k, v] : names)
         if (n == k) return v;
     return 0;
@@ -72,6 +72,8 @@ int vkFromName(std::string n) {
 }  // namespace
 
 // --- settings ----------------------------------------------------------------------------------------------
+
+const char* const kModelParts[7] = {"cape", "jacket", "left_sleeve", "right_sleeve", "left_pants_leg", "right_pants_leg", "hat"};
 
 fs::path Settings::path() {
     const wchar_t* local = _wgetenv(L"LOCALAPPDATA");
@@ -104,6 +106,25 @@ bool Settings::load() {
         else if (k == "shaderPack") shaderPack = v;
         else if (k == "bobView") bobView = v == "true";
         else if (k == "attackIndicator") attackIndicator = ((std::atoi(v.c_str()) % 3) + 3) % 3;  // ByIdMap WRAP
+        else if (k == "fullscreen") fullscreen = v == "true";
+        else if (k == "toggleCrouch") toggleCrouch = v == "true";
+        else if (k == "toggleSprint") toggleSprint = v == "true";
+        else if (k == "autoJump") autoJump = v == "true";
+        else if (k == "invertXMouse") invertMouseX = v == "true";
+        else if (k == "invertYMouse") invertMouseY = v == "true";
+        else if (k == "discrete_mouse_scroll") discreteMouseScroll = v == "true";
+        else if (k == "mouseWheelSensitivity") mouseWheelSensitivity = std::clamp(std::atof(v.c_str()), 0.01, 10.0);
+        else if (k == "mainHand") mainHand = v == "left" ? 0 : 1;
+        else if (k == "allowServerListing") allowServerListing = v == "true";
+        else if (k == "pauseOnLostFocus") pauseOnLostFocus = v == "true";
+        else if (k == "advancedItemTooltips") advancedItemTooltips = v == "true";
+        else if (k.starts_with("modelPart_")) {
+            for (int i = 0; i < 7; ++i)
+                if (k.substr(10) == kModelParts[i]) modelParts = v == "true" ? modelParts | (1 << i) : modelParts & ~(1 << i);
+        } else if (k.starts_with("key_")) {  // key_key.forward:key.keyboard.w (an unknown key unbinds, like the game)
+            for (size_t i = 0; i < kKeyCount; ++i)
+                if (k.substr(4) == keyDef(Key(i)).name) keys[i] = keyFromName(v);
+        }
     }
     loaded = true;
     return true;
@@ -122,6 +143,22 @@ void Settings::save() const {
       << "\nvsync:" << (video.vsync ? "true" : "false") << "\nmaxFps:" << video.fpsLimit << "\n";
     f << "shaderPack:" << shaderPack << "\n";
     f << "bobView:" << (bobView ? "true" : "false") << "\nattackIndicator:" << attackIndicator << "\n";
+    auto b = [](bool v) { return v ? "true" : "false"; };
+    f << "fullscreen:" << b(fullscreen) << "\ntoggleCrouch:" << b(toggleCrouch) << "\ntoggleSprint:" << b(toggleSprint)
+      << "\nautoJump:" << b(autoJump) << "\ninvertXMouse:" << b(invertMouseX) << "\ninvertYMouse:" << b(invertMouseY)
+      << "\ndiscrete_mouse_scroll:" << b(discreteMouseScroll) << "\nmouseWheelSensitivity:" << mouseWheelSensitivity
+      << "\nmainHand:" << (mainHand == 0 ? "left" : "right") << "\nallowServerListing:" << b(allowServerListing)
+      << "\npauseOnLostFocus:" << b(pauseOnLostFocus) << "\nadvancedItemTooltips:" << b(advancedItemTooltips) << "\n";
+    for (int i = 0; i < 7; ++i) f << "modelPart_" << kModelParts[i] << ":" << b(modelParts & (1 << i)) << "\n";
+    for (size_t i = 0; i < kKeyCount; ++i) f << "key_" << keyDef(Key(i)).name << ":" << keyName(keys[i]) << "\n";
+}
+
+net::Client::Information clientInformation(const Settings& s) {
+    net::Client::Information info;
+    info.modelParts = u8(s.modelParts & 0x7F);
+    info.mainHand = s.mainHand;
+    info.allowListing = s.allowServerListing;
+    return info;
 }
 
 float Settings::radiansPerPixel() const {
@@ -130,6 +167,54 @@ float Settings::radiansPerPixel() const {
 }
 
 // --- state helpers ------------------------------------------------------------------------------------------
+
+void Ui::State::toggleFullscreen() {  // Window.toggleFullScreen, saved as the fullscreen option
+    settings.fullscreen = !window->fullscreen();
+    window->setFullscreen(settings.fullscreen);
+    settings.save();
+}
+
+namespace {
+// Screen.isPauseScreen: everything but chat, inventories / containers, the death screen, sign editing, the bed chat and
+// the game mode switcher (and the front end's own screens, which only the title instance shows).
+bool pausesGame(Screen s) {
+    switch (s) {
+        case Screen::None: case Screen::Chat: case Screen::Inventory: case Screen::Container: case Screen::Creative:
+        case Screen::Death: case Screen::Sign: case Screen::InBed: case Screen::GameModeSwitcher: return false;
+        default: return true;
+    }
+}
+}  // namespace
+
+void Ui::State::updatePause() {
+    // Minecraft.pauseIfInactive: half a second without the focus opens the pause menu (scripted runs drive their own
+    // input and keep playing).
+    if (window->focused() || fe->cfg.menu) lastActiveTime = clock;
+    else if (settings.pauseOnLostFocus && script.empty() && screen == Screen::None && clock - lastActiveTime > 0.5)
+        openScreen(Screen::Pause);
+    // Minecraft.runTick: a singleplayer world that is not open to LAN pauses with a pause screen; the integrated server
+    // stops ticking (here: the local server's tick freeze) and so does the client.
+    const bool pause = fe->cfg.singleplayer && online() && fe->lanOpenPort == 0 && pausesGame(screen);
+    if (pause != paused) {
+        paused = pause;
+        if (fe->cfg.pauseServer) fe->cfg.pauseServer(pause);
+        LOG("ui: game %s", pause ? "paused" : "resumed");
+    }
+    game->paused = paused;
+}
+
+void Ui::State::applyControls() {  // the key bindings and control options the game reads
+    Game::Keys& k = game->keys;
+    k.forward = settings.key(Key::Forward), k.left = settings.key(Key::Left), k.back = settings.key(Key::Back);
+    k.right = settings.key(Key::Right), k.jump = settings.key(Key::Jump), k.sneak = settings.key(Key::Sneak);
+    k.sprint = settings.key(Key::Sprint), k.attack = settings.key(Key::Attack), k.use = settings.key(Key::Use);
+    k.pickItem = settings.key(Key::PickItem), k.perspective = settings.key(Key::TogglePerspective);
+    for (int i = 0; i < 9; ++i) k.hotbar[i] = settings.key(Key(int(Key::Hotbar1) + i));
+    game->toggleCrouch = settings.toggleCrouch, game->toggleSprint = settings.toggleSprint;
+    game->invertMouseX = settings.invertMouseX, game->invertMouseY = settings.invertMouseY;
+    game->discreteScroll = settings.discreteMouseScroll, game->wheelSensitivity = settings.mouseWheelSensitivity;
+    game->player().autoJump = settings.autoJump;
+}
 
 int Ui::State::gameMode() const {
     if (session) return session->gameMode();
@@ -441,6 +526,7 @@ bool Ui::init(const Init& in) {
     // (kept as saved: a launch with a smaller --detail must not overwrite the player's choice)
     if (!s.settings.loaded) s.settings.renderDistance = in.detailChunks;
     in.terrain->setDetailRadius(float(std::min(s.settings.renderDistance, in.detailChunks)) * 16.0f);
+    if (s.settings.fullscreen) s.window->setFullscreen(true);  // options.txt fullscreen
     s.initNativeMods();  // mods_screen.cpp
     frontEndInit(s);     // title.cpp: the title screen in menu mode
     return true;
@@ -448,6 +534,7 @@ bool Ui::init(const Init& in) {
 
 void Ui::registerHandlers(net::Client& client) {
     State* s = s_.get();
+    client.setInformation(clientInformation(s->settings));  // the login sends it
     const Lang* lang = &s->res.lang();
     const Items* items = &s->items;
 
@@ -977,8 +1064,8 @@ void Ui::State::runScript(double) {
             std::string msg;
             for (const auto& w : a) msg += w + " ";
             const Player& p = game->player();
-            LOG("script: %s| pos %.3f %.3f %.3f ground %d health %.1f food %d", msg.c_str(), p.pos[0], p.pos[1], p.pos[2],
-                int(p.onGround), health, food);
+            LOG("script: %s| pos %.3f %.3f %.3f ground %d health %.1f food %d sneak %d slot %d", msg.c_str(), p.pos[0], p.pos[1],
+                p.pos[2], int(p.onGround), health, food, int(p.lastInput.sneak), game->selectedSlot());
         } else if (st.verb == "dump") {  // logs the open menu's slots
             const Menu& m = activeMenu();
             for (size_t i = 0; i < m.slots.size(); ++i)
@@ -988,6 +1075,16 @@ void Ui::State::runScript(double) {
                         m.slots[i].enchantments);
             if (!carried.empty()) LOG("script: carried = %d x %s", carried.count, items.name(carried.item).c_str());
             LOG("script: xp level %d, menu %s data %d %d %d %d", xpLevel, m.typeName.c_str(), m.data[0], m.data[1], m.data[2], m.data[3]);
+        } else if (st.verb == "screen") {  // screen <name>: opens a menu screen directly
+            static const std::pair<const char*, Screen> kScreens[] = {
+                {"pause", Screen::Pause},         {"options", Screen::Options},     {"online", Screen::Online},
+                {"skin", Screen::SkinCustomization}, {"sounds", Screen::Sounds},    {"video", Screen::Video},
+                {"videoextra", Screen::VideoExtra}, {"controls", Screen::Controls}, {"mouse", Screen::MouseSettings},
+                {"keybinds", Screen::KeyBinds},   {"accessibility", Screen::Accessibility}, {"none", Screen::None}};
+            for (auto [n, sc] : kScreens)
+                if (arg(0) == n) sc == Screen::None ? closeScreen() : openScreen(sc);
+        } else if (st.verb == "fullscreen") {
+            toggleFullscreen();
         } else if (st.verb == "quit") {
             quit = true;
         }
@@ -1050,6 +1147,11 @@ void Ui::beginFrame(double dt) {
         }
         if (std::getenv("MCPP_UI_VERBOSE") && e.type == Window::InputEvent::Key && e.down)
             LOG("ui: key %d, screen %d", e.code, int(s.screen));
+        // KeyboardHandler: the fullscreen key works on every screen (not while a key is being bound).
+        if (s.isKey(Key::Fullscreen, e) && !e.repeat && !s.keyCaptureActive) {
+            s.toggleFullscreen();
+            continue;
+        }
         if (s.screen != Screen::None) {
             s.screenInput(e);
             continue;
@@ -1058,50 +1160,48 @@ void Ui::beginFrame(double dt) {
         for (const UiModule& m : uiModules())
             if (!consumed && m.worldKey) consumed = m.worldKey(s, e);
         if (consumed) continue;
-        if (e.type != Window::InputEvent::Key || !e.down) continue;
-        switch (e.code) {
-            case VK_ESCAPE: s.openScreen(Screen::Pause); break;
-            case VK_F1: s.hudHidden = !s.hudHidden; break;
-            case VK_F2: {  // Screenshot: %APPDATA%\minecraftCplusplus\screenshots\<date>.png (the game uses .minecraft)
-                const wchar_t* appdata = _wgetenv(L"APPDATA");
-                const fs::path dir = fs::path(appdata ? appdata : L".") / L"minecraftCplusplus" / L"screenshots";
-                std::error_code ec;
-                fs::create_directories(dir, ec);
-                SYSTEMTIME t;
-                GetLocalTime(&t);
-                char name[64];
-                std::snprintf(name, sizeof(name), "%04u-%02u-%02u_%02u.%02u.%02u.png", t.wYear, t.wMonth, t.wDay, t.wHour,
-                              t.wMinute, t.wSecond);
-                s.shotPath = dir / name;
-                s.shotPending = true;
-                Style link;
-                link.underlined = 1;
-                s.addChat(translatable("screenshot.success", {Text(name, link)}, s.lang()));
-                break;
+        if ((e.type != Window::InputEvent::Key && e.type != Window::InputEvent::Button) || !e.down || e.repeat) continue;
+        // Minecraft.handleKeybinds / KeyboardHandler with the bound keys (Escape always pauses).
+        if (e.type == Window::InputEvent::Key && e.code == VK_ESCAPE) {
+            s.openScreen(Screen::Pause);
+        } else if (s.isKey(Key::ToggleGui, e)) {
+            s.hudHidden = !s.hudHidden;
+        } else if (s.isKey(Key::Screenshot, e)) {  // %APPDATA%\minecraftCplusplus\screenshots\<date>.png (game: .minecraft)
+            const wchar_t* appdata = _wgetenv(L"APPDATA");
+            const fs::path dir = fs::path(appdata ? appdata : L".") / L"minecraftCplusplus" / L"screenshots";
+            std::error_code ec;
+            fs::create_directories(dir, ec);
+            SYSTEMTIME t;
+            GetLocalTime(&t);
+            char name[64];
+            std::snprintf(name, sizeof(name), "%04u-%02u-%02u_%02u.%02u.%02u.png", t.wYear, t.wMonth, t.wDay, t.wHour,
+                          t.wMinute, t.wSecond);
+            s.shotPath = dir / name;
+            s.shotPending = true;
+            Style link;
+            link.underlined = 1;
+            s.addChat(translatable("screenshot.success", {Text(name, link)}, s.lang()));
+        } else if (s.isKey(Key::Inventory, e)) {
+            s.openScreen(s.creative() ? Screen::Creative : Screen::Inventory);
+        } else if (s.isKey(Key::Chat, e) || s.isKey(Key::Command, e)) {
+            const bool command = !s.isKey(Key::Chat, e);
+            s.openScreen(Screen::Chat);
+            if (command) {
+                s.chatInput.value = "/";
+                s.chatInput.cursor = s.chatInput.selection = 1;
             }
-            case 'E':
-                s.openScreen(s.creative() ? Screen::Creative : Screen::Inventory);
-                break;
-            case 'T':
-            case VK_OEM_2:
-                s.openScreen(Screen::Chat);
-                if (e.code == VK_OEM_2) {
-                    s.chatInput.value = "/";
-                    s.chatInput.cursor = s.chatInput.selection = 1;
-                }
-                skipChar = true;
-                break;
-            case 'Q':
-                if (std::getenv("MCPP_UI_VERBOSE")) LOG("ui: drop slot %d", s.game->selectedSlot());
-                s.dropSelected(s.window->keyDown(VK_CONTROL));
-                break;
-            case 'F':
-                s.swapHands();
-                break;
+            skipChar = e.type == Window::InputEvent::Key;
+        } else if (s.isKey(Key::Drop, e)) {
+            if (std::getenv("MCPP_UI_VERBOSE")) LOG("ui: drop slot %d", s.game->selectedSlot());
+            s.dropSelected(s.window->keyDown(VK_CONTROL));
+        } else if (s.isKey(Key::SwapOffhand, e)) {
+            s.swapHands();
         }
     }
     s.game->inputSuspended = s.screen != Screen::None;
     s.game->sensitivity = s.settings.radiansPerPixel();
+    s.applyControls();
+    s.updatePause();
 
     // The open container's player slots are the player's inventory (one Inventory in the game).
     if (s.container) {

@@ -361,7 +361,7 @@ void tick(UiState& s) {  // AdvancementTab.tick: hover and the fade
 }
 
 bool worldKey(UiState& s, const InputEvent& e) {
-    if (e.type != InputEvent::Key || !e.down || e.code != 'L' || !s.online()) return false;
+    if (e.repeat || !s.isKey(Key::Advancements, e) || !s.online()) return false;
     g.returnToPause = false;
     s.openScreen(Screen::Advancements);
     return true;
@@ -574,8 +574,8 @@ void draw(UiState& s, Canvas& c) {
 }
 
 void input(UiState& s, const InputEvent& e) {
-    if (e.type == InputEvent::Key && e.down && (e.code == VK_ESCAPE || e.code == 'L')) {
-        if (e.code == 'L' && !g.returnToPause) return s.closeScreen(false);
+    if ((e.type == InputEvent::Key && e.down && e.code == VK_ESCAPE) || s.isKey(Key::Advancements, e)) {
+        if (s.isKey(Key::Advancements, e) && !g.returnToPause) return s.closeScreen(false);
         return close(s);
     }
     if (s.buttonsInput(e)) return;

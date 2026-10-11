@@ -143,7 +143,7 @@ void Ui::State::buildModsButtons() {
         mods::Manager::get().requestRestart();
         quit = true;
     }, mm.restartNeeded());
-    add(bx + 292, 72, Text(res.translate("gui.done")), [this] { openScreen(fe->cfg.menu ? Screen::Title : Screen::Pause); });
+    add(bx + 292, 72, Text(res.translate("gui.done")), [this] { modsBack(); });
 }
 
 void Ui::State::drawModsScreen(Canvas& c) {
@@ -204,9 +204,15 @@ void Ui::State::drawModsScreen(Canvas& c) {
     }
 }
 
+void Ui::State::modsBack() {
+    const Screen to = modsReturn != Screen::None ? modsReturn : fe->cfg.menu ? Screen::Title : Screen::Pause;
+    modsReturn = Screen::None;
+    openScreen(to);
+}
+
 void Ui::State::modsInput(const Window::InputEvent& e) {
     using E = Window::InputEvent;
-    if (e.type == E::Key && e.down && e.code == VK_ESCAPE) return openScreen(fe->cfg.menu ? Screen::Title : Screen::Pause);
+    if (e.type == E::Key && e.down && e.code == VK_ESCAPE) return modsBack();
     if (e.type == E::Wheel) {
         modsScroll -= e.code > 0 ? 1 : -1;
         buildButtons();

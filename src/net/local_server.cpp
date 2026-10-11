@@ -442,6 +442,7 @@ bool LocalServer::start(const Config& config) {
           << "spawn-protection=0\n"
           << "allow-flight=true\n"
           << "enable-command-block=true\n"
+          << "broadcast-console-to-ops=false\n"  // our console commands (pause: tick freeze) stay out of the chat
           << "max-players=8\n"
           << "gamemode=" << (creating_ ? config.create->gameMode : gameModeName(num("GameType", 0))) << "\n"
           << "difficulty=" << (creating_ ? config.create->difficulty : difficulty) << "\n"
@@ -515,6 +516,9 @@ void LocalServer::readOutput() {
                 const std::string name = s == std::string::npos ? std::string() : line.substr(s + 3, j - s - 3);
                 if (opJoiners_ && !name.empty() && name.find(' ') == std::string::npos) command("op " + name);
                 LOG("server: %s", line.c_str());
+            } else if (line.find("The game is frozen") != std::string::npos ||
+                       line.find("The game is running normally") != std::string::npos) {
+                LOG("server: %s", line.c_str());  // singleplayer pause (tick freeze / unfreeze)
             } else if (line.find("moved too quickly") != std::string::npos || line.find("moved wrongly") != std::string::npos) {
                 LOG("server: %s", line.c_str());  // movement corrections (prediction mismatches)
             } else if ((line.find("ERROR") != std::string::npos || line.find("Exception") != std::string::npos ||

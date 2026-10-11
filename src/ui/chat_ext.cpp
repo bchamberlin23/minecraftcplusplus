@@ -313,7 +313,7 @@ std::vector<Text> hoverLines(UiState& s, const TextEvents& ev) {
         std::string id = ev.hoverId.find(':') == std::string::npos ? "minecraft:" + ev.hoverId : ev.hoverId;
         ItemStack st;
         st.item = s.items.id(id), st.count = std::max(1, ev.hoverCount);
-        if (st.item >= 0) lines = s.items.tooltip(st);
+        if (st.item >= 0) lines = s.items.tooltip(st, s.settings.advancedItemTooltips);
     } else if (ev.hover == "show_entity") {  // HoverEvent.EntityTooltipInfo.getTooltipLines
         if (!ev.hoverText.empty()) lines.push_back(ev.hoverText);
         std::string type = ev.hoverId.find(':') == std::string::npos ? "minecraft:" + ev.hoverId : ev.hoverId;
