@@ -174,9 +174,15 @@ void UiPass::upload(const PassContext& ctx, Atlas& atlas, ID3D12Resource* tex, u
 }
 
 void UiPass::draw(const PassContext& ctx) {
+    // With a separate UI layer the inverting batches (crosshair) wait for the final image (AfterUi); otherwise
+    // everything draws in the Hud stage.
+    const bool afterUi = ctx.stage == PassStage::AfterUi;
+    if (afterUi && !ctx.uiLayer) return;
     u64 used = 0;
-    upload(ctx, gui_, guiTex_.Get(), used);
-    upload(ctx, icons_, iconTex_.Get(), used);
+    if (!afterUi) {
+        upload(ctx, gui_, guiTex_.Get(), used);
+        upload(ctx, icons_, iconTex_.Get(), used);
+    }
 
     const auto& verts = canvas_.vertices();
     if (verts.empty()) return;
@@ -201,6 +207,7 @@ void UiPass::draw(const PassContext& ctx) {
     const D3D12_RECT full{0, 0, LONG(ctx.width), LONG(ctx.height)};
     for (const Canvas::Batch& b : canvas_.batches()) {
         if (!b.count || b.first >= maxVerts) continue;
+        if (ctx.uiLayer && (b.blend == 1) != afterUi) continue;
         D3D12_RECT r = full;
         if (b.clip) {
             r = {LONG(b.scissor[0]), LONG(b.scissor[1]), LONG(b.scissor[2]), LONG(b.scissor[3])};

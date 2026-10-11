@@ -112,7 +112,8 @@ int runStructureTest(BlockRegistry& registry, const fs::path& jar, const fs::pat
     if (!gen.ok()) return 1;
     wg::FeatureSystem features(gen.noise(), registry, gen.biomes(), gen.possibleBiomes());
     wg::StructureSystem structures(gen, &features, registry, seed);
-    features.setStructures(&structures);
+    const bool noStructures = std::getenv("GENTEST_NOSTRUCT") != nullptr;  // baseline: decoration without structures
+    if (!noStructures) features.setStructures(&structures);
     LOG("structtest: generator, features and structures ready in %.1f ms", t.ms());
 
     // Optional area filter for the block comparison: GENTEST_AREA=x0,z0,x1,z1 (chunks).
@@ -340,7 +341,7 @@ int runStructureTest(BlockRegistry& registry, const fs::path& jar, const fs::pat
                 wg::DensityContext ctx;
                 for (size_t k; (k = next++) < list.size();) {
                     const auto [x, z] = list[k];
-                    std::unique_ptr<wg::DensityAddition> beard = structures.beardifier(x, z);
+                    std::unique_ptr<wg::DensityAddition> beard = noStructures ? nullptr : structures.beardifier(x, z);
                     if (beard) ++bearded;
                     gen.generate(x, z, *chunks[{x, z}], ctx, nullptr, beard.get());
                 }

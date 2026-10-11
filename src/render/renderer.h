@@ -33,6 +33,7 @@ struct SpriteVertex {
 
 // Drawing that lives outside the terrain system (entities, UI) plugs in as passes. Each frame they record
 // into the frame's command list with the back buffer and depth bound and the full-screen viewport set.
+enum class PassStage;
 struct PassContext {
     ID3D12GraphicsCommandList* list;
     u32 frame;                  // 0..Renderer::kFrames-1: which per-frame slice of an upload buffer is free
@@ -49,6 +50,8 @@ struct PassContext {
     bool shading = false;
     // StructuredBuffer<uint>: block texture layer -> layer of its current animation frame (see setTextureRemap).
     D3D12_GPU_VIRTUAL_ADDRESS textureRemap = 0;
+    PassStage stage{};  // the stage being drawn (a pass may be registered for several)
+    bool uiLayer = false;  // Hud passes draw into a separate UI layer (composited later), not onto the scene
 };
 class RenderPass {
 public:
@@ -61,6 +64,8 @@ enum class PassStage {
     World,  // after opaque, cutout and model terrain, before translucent terrain (depth test + write)
     Hud,    // after the built-in overlays (crosshair, hotbar)
     AfterTranslucent,  // after translucent terrain, before the overlays (clouds, weather; depth test)
+    AfterUi,           // onto the final back buffer after the UI layer is composited (blends that read the scene,
+                       // like the inverting crosshair); with the vanilla path it follows Hud directly
 };
 
 // Built-in shader pipeline ("shaders"): HDR + AgX tonemap, cascaded sun / moon shadows, lit water with
@@ -264,7 +269,7 @@ private:
     std::vector<u32> active_;
     u32 segBase_[4] = {}, segCap_[4] = {};
 
-    std::vector<RenderPass*> passes_[4];
+    std::vector<RenderPass*> passes_[5];
     float fogColor_[4] = {0.62f, 0.76f, 1.0f, 1.0f};
     float daylight_ = 1.0f;
     u32 descriptorSize_ = 0, descriptorsUsed_ = 1, descriptorCapacity_ = 0;  // 0: block textures

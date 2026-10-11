@@ -931,7 +931,9 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
         draw(psoScreenLines_.Get(), D3D_PRIMITIVE_TOPOLOGY_LINELIST,
              put(screenLines_.data(), screenLines_.size() * sizeof(LineVertex)), u32(screenLines_.size()), 1);
     }
+    pc.uiLayer = shaded && !upscalers_->uiComposedBySwapChain();  // we composite it, then AfterUi draws on top
     runPasses(PassStage::Hud, pc);
+    if (!shaded) runPasses(PassStage::AfterUi, pc);
     if (shaded) {
         upscalers_->beforeUiComposite(list_.Get(), bb);  // frame generation: keep the hudless image
         if (upscalers_->uiComposedBySwapChain()) {       // FSR FG blends the UI layer itself (real + generated frames)
@@ -944,6 +946,7 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
             list_->ResourceBarrier(1, &b);
         } else {
             shading_->compositeUi(list_.Get(), overlayCb, rtv);
+            runPasses(PassStage::AfterUi, pc);
         }
     }
 
@@ -1029,7 +1032,10 @@ bool Renderer::addPass(RenderPass* pass, PassStage stage) {
 }
 
 void Renderer::runPasses(PassStage stage, const PassContext& ctx) {
-    for (RenderPass* p : passes_[int(stage)]) p->draw(ctx);
+    if (passes_[int(stage)].empty()) return;
+    PassContext c = ctx;
+    c.stage = stage;
+    for (RenderPass* p : passes_[int(stage)]) p->draw(c);
 }
 
 u32 Renderer::allocDescriptors(u32 count) {
