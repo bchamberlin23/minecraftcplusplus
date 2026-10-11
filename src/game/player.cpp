@@ -6,16 +6,50 @@
 #include <algorithm>
 #include <cmath>
 
+u8 Physics::specialKind(u16 id) const {
+    if (special_.size() <= id) special_.resize(size_t(id) + 1, 0);
+    if (!special_[id]) {
+        const std::string& n = registry_.name(id);
+        special_[id] = n.starts_with("minecraft:scaffolding") ? 2 : n.starts_with("minecraft:powder_snow") ? 3 : 1;
+    }
+    return special_[id];
+}
+
 void Physics::collisionBoxes(const AABB& area, std::vector<AABB>& out) const {
     out.clear();
     const BlockInfo* infos = registry_.infos();
     const int x0 = int(std::floor(area.min[0])), x1 = int(std::floor(area.max[0]));
     const int y0 = int(std::floor(area.min[1])) - 1, y1 = int(std::floor(area.max[1]));  // -1: tall shapes (fences)
     const int z0 = int(std::floor(area.min[2])), z1 = int(std::floor(area.max[2]));
+    auto add = [&](int x, int y, int z, double x0_, double y0_, double z0_, double x1_, double y1_, double z1_) {
+        const AABB a{{x + x0_, y + y0_, z + z0_}, {x + x1_, y + y1_, z + z1_}};
+        if (a.intersects(area)) out.push_back(a);
+    };
     for (int y = y0; y <= y1; ++y)
         for (int z = z0; z <= z1; ++z)
             for (int x = x0; x <= x1; ++x) {
-                const BlockInfo& b = infos[world_.block(x, y, z)];
+                const u16 id = world_.block(x, y, z);
+                if (context.set && id) {
+                    const u8 kind = specialKind(id);
+                    if (kind == 2) {  // ScaffoldingBlock.getCollisionShape for the player
+                        if (context.feetY > y + 1.0 - 1e-5 && !context.descending) {  // SHAPE_STABLE: top and legs
+                            add(x, y, z, 0, 0.875, 0, 1, 1, 1);
+                            add(x, y, z, 0, 0, 0, 0.125, 1, 0.125), add(x, y, z, 0.875, 0, 0, 1, 1, 0.125);
+                            add(x, y, z, 0, 0, 0.875, 0.125, 1, 1), add(x, y, z, 0.875, 0, 0.875, 1, 1, 1);
+                        } else if (registry_.property(id, "distance") != "0" && registry_.property(id, "bottom") == "true" &&
+                                   context.feetY > y - 1e-5) {
+                            add(x, y, z, 0, 0, 0, 1, 0.125, 1);  // SHAPE_UNSTABLE_BOTTOM
+                        }
+                        continue;
+                    }
+                    if (kind == 3) {  // PowderSnowBlock.getCollisionShape
+                        if (context.fallDistance > 2.5) add(x, y, z, 0, 0, 0, 1, 0.9, 1);
+                        else if (context.powderSnowWalker && context.feetY > y + 1.0 - 1e-5 && !context.descending)
+                            add(x, y, z, 0, 0, 0, 1, 1, 1);
+                        continue;
+                    }
+                }
+                const BlockInfo& b = infos[id];
                 for (u32 i = 0; i < b.collisionCount; ++i) {
                     const Box& s = registry_.box(b.collisionFirst + i);
                     AABB a{{x + s.min[0], y + s.min[1], z + s.min[2]}, {x + s.max[0], y + s.max[1], z + s.max[2]}};
@@ -91,6 +125,8 @@ bool Physics::stuckMultiplier(const AABB& b, double out[3]) const {
                 const std::string_view n = shortBlock(registry_.name(world_.block(x, y, z)));
                 if (n == "cobweb") out[0] = 0.25, out[1] = 0.05, out[2] = 0.25, any = true;
                 else if (n == "sweet_berry_bush" && !any) out[0] = 0.8, out[1] = 0.75, out[2] = 0.8, any = true;
+                else if (n == "powder_snow" && !any && y == int(std::floor(b.min[1] + 1e-5)))  // the block at the feet
+                    out[0] = 0.9, out[1] = 1.5, out[2] = 0.9, any = true;
             }
     return any;
 }
@@ -242,7 +278,7 @@ void Player::move(const Physics& physics, double dx, double dy, double dz) {
     AABB start = box();
     AABB area = start;
     for (int a = 0; a < 3; ++a) (in[a] < 0 ? area.min[a] : area.max[a]) += in[a];
-    area.max[1] += 0.6;  // room for stepping up
+    area.max[1] += attr.stepHeight;  // room for stepping up
     std::vector<AABB> boxes;
     physics.collisionBoxes(area, boxes);
 
@@ -255,7 +291,7 @@ void Player::move(const Physics& physics, double dx, double dy, double dz) {
     if (blockedH && (onGround || (out[1] != dy && dy < 0)) && !flying) {
         double stepOut[3];
         AABB s = start;
-        const double up[3] = {0, 0.6, 0};
+        const double up[3] = {0, attr.stepHeight, 0};
         double upOut[3];
         collide(boxes, s, upOut, up);
         const double h[3] = {dx, 0, dz};
@@ -281,15 +317,51 @@ void Player::move(const Physics& physics, double dx, double dy, double dz) {
     if (out[1] != dy) vel[1] = 0;
 }
 
+// Player.updatePlayerPose: the desired pose (swimming, gliding, crouching with the sneak key) if the body fits,
+// else crouching, else crawling (the swimming pose under a one-block gap).
+void Player::updatePose(const Physics& physics) {
+    auto fits = [&](Pose p) {
+        AABB b = boxAt(pos, p);
+        for (int a = 0; a < 3; ++a) b.min[a] += 1e-7, b.max[a] -= 1e-7;
+        return physics.noCollision(b);
+    };
+    if (noClip) {
+        pose = Pose::Standing;
+        return;
+    }
+    if (!fits(Pose::Swimming)) return;
+    const Pose desired = swimming ? Pose::Swimming : fallFlying ? Pose::FallFlying
+                         : (lastInput.sneak && !flying) ? Pose::Crouching : Pose::Standing;
+    pose = fits(desired) ? desired : fits(Pose::Crouching) ? Pose::Crouching : Pose::Swimming;
+}
+
 void Player::tick(const Physics& physics, const PlayerInput& rawInput) {
     std::copy(pos, pos + 3, prev);
     PlayerInput input = rawInput;
     lastInput = rawInput;
-    sneaking = input.sneak && !flying;
+    const bool jumpPressed = rawInput.jump && !wasJumping_;
+    wasJumping_ = rawInput.jump;
+    // Collision shapes that depend on the player (scaffolding, powder snow).
+    physics.context = {true, pos[1], fallDistance, rawInput.sneak, attr.powderSnowWalker};
+    updatePose(physics);
+    // Player.isMovingSlowly: crouching or crawling walks at the sneaking speed.
+    sneaking = pose == Pose::Crouching && !flying;
+    const bool crawling = pose == Pose::Swimming && !swimming;
+    const bool slow = sneaking || crawling;
     // LocalPlayer.aiStep sprinting: the sprint key starts it while moving forward; it lasts until the forward
     // impulse ends, a wall stops the player, food runs low or the player sneaks.
     const bool forwardImpulse = rawInput.forward > 0;
-    if (!sprinting && rawInput.sprint && forwardImpulse && !sneaking && canSprint) sprinting = true;
+    // Entity.isUnderWater: water at the eyes (1/9 below them, like updateFluidOnEyes).
+    auto waterAt = [&](double x, double y, double z) {
+        const u16 id = physics.world().block(int(std::floor(x)), int(std::floor(y)), int(std::floor(z)));
+        const BlockInfo& b = physics.registry().infos()[id];
+        return b.waterlogged || (b.fluid && physics.registry().name(id).starts_with("minecraft:water")) ||
+               physics.registry().name(id).starts_with("minecraft:bubble_column");
+    };
+    const bool underWater = waterAt(pos[0], pos[1] + eyeHeight() - 0.11111111, pos[2]);
+    if (!sprinting && rawInput.sprint && forwardImpulse && (!slow || underWater) && canSprint && !useBlocksSprint &&
+        (!fallFlying || underWater))
+        sprinting = true;
     bool minorCollision = false;  // LocalPlayer.isHorizontalCollisionMinor: moved within 8 degrees of the input
     {
         const double sy = std::sin(yaw), cy = std::cos(yaw);
@@ -298,15 +370,21 @@ void Player::tick(const Physics& physics, const PlayerInput& rawInput) {
         if (in2 >= 1e-5 && mv2 >= 1e-5)
             minorCollision = std::acos(std::clamp((gx * moved_[0] + gz * moved_[2]) / std::sqrt(in2 * mv2), -1.0, 1.0)) < 0.13962634;
     }
-    if (sprinting && (!forwardImpulse || (horizontalCollision && !minorCollision) || sneaking || !canSprint || inWater))
-        sprinting = false;
+    if (sprinting) {
+        // shouldStopRunSprinting / shouldStopSwimSprinting
+        const bool stop = swimming ? (!canSprint || !inWater || (!forwardImpulse && !onGround && !rawInput.sneak))
+                                   : (!forwardImpulse || (horizontalCollision && !minorCollision) || !canSprint ||
+                                      (inWater && !underWater) || (sneaking && !underWater));
+        if (stop) sprinting = false;
+    }
     input.sprint = sprinting;
-    {  // KeyboardInput (normalized) + LocalPlayer.modifyInput: 0.98, sneaking 0.3, stretched to the unit square
+    {  // KeyboardInput (normalized) + LocalPlayer.modifyInput: 0.98, the use slowdown, the sneaking speed, stretched
+       // to the unit square
         float f = input.forward, s = input.strafe;
         const float len = std::sqrt(f * f + s * s);
         if (len > 0) {
             f /= len, s /= len;
-            float scale = 0.98f * (sneaking ? 0.3f : 1.0f);
+            float scale = 0.98f * useSpeed * (slow ? float(attr.sneakSpeed) : 1.0f);
             const float ax = std::abs(s), ay = std::abs(f);
             const float tan = ay > ax ? ax / ay : ay / ax;
             scale = std::min(scale * std::sqrt(1.0f + tan * tan), 1.0f);
@@ -315,23 +393,63 @@ void Player::tick(const Physics& physics, const PlayerInput& rawInput) {
     }
     inLava = physics.inLava(box());
     inWater = physics.inFluid(box()) && !inLava;
+    // Entity.updateSwimming: sprinting under water starts it, leaving the water or the sprint ends it.
+    if (flying || noClip) swimming = false;
+    else if (swimming) swimming = sprinting && inWater;
+    else swimming = sprinting && underWater && waterAt(pos[0], pos[1], pos[2]);
+    // Gliding ends on the ground, in liquids, on a ladder or without a glider (the server's LivingEntity.updateFallFlying).
+    if (fallFlying && (onGround || inWater || inLava || flying || !attr.canGlide || attr.levitation >= 0)) fallFlying = false;
     const int bx = int(std::floor(pos[0])), by = int(std::floor(pos[1])), bz = int(std::floor(pos[2]));
     const bool onClimbable = !flying && physics.climbable(bx, by, bz);
+    // LocalPlayer.aiStep: jump pressed in mid-air with a glider starts gliding (tryToStartFallFlying).
+    if (jumpPressed && !flying && !onGround && !onClimbable && !fallFlying && attr.canGlide && !inWater && !inLava &&
+        attr.levitation < 0) {
+        fallFlying = true;
+        if (onStartFallFlying) onStartFallFlying();
+    }
     // Entity.getBlockSpeedFactor: the block at the feet, else the one below (soul sand, honey).
     auto blockFactor = [&](float (Physics::*f)(int, int, int) const) {
         const float at = (physics.*f)(bx, by, bz);
         return at != 1.0f || inWater ? at : (physics.*f)(bx, int(std::floor(pos[1] - 0.5000001)), bz);
     };
-    // Entity.move tail: block speed factor, then blocks the player is inside (cobwebs).
+    // Powder snow at the body (Entity.isInPowderSnow) for climbing out with leather boots.
+    bool inPowderSnow = false;
+    {
+        const AABB b = box();
+        for (int y = int(std::floor(b.min[1])); y <= int(std::floor(b.max[1] - 1e-7)) && !inPowderSnow; ++y)
+            for (int z = int(std::floor(b.min[2])); z <= int(std::floor(b.max[2] - 1e-7)) && !inPowderSnow; ++z)
+                for (int x = int(std::floor(b.min[0])); x <= int(std::floor(b.max[0] - 1e-7)) && !inPowderSnow; ++x)
+                    inPowderSnow = physics.registry().name(physics.world().block(x, y, z)).starts_with("minecraft:powder_snow");
+    }
+    // Entity.move tail: block speed factor, then blocks the player is inside (cobwebs, powder snow, bubble columns).
     auto afterMove = [&] {
         const float f = blockFactor(&Physics::speedFactor);
         vel[0] *= f, vel[2] *= f;
         double stuck[3];
         if (physics.stuckMultiplier(box(), stuck)) std::copy(stuck, stuck + 3, stuck_);
+        // BubbleColumnBlock.entityInside: inside the column, or riding its surface (air above).
+        const AABB b = box();
+        for (int y = int(std::floor(b.min[1])); y <= int(std::floor(b.max[1] - 1e-7)); ++y)
+            for (int z = int(std::floor(b.min[2])); z <= int(std::floor(b.max[2] - 1e-7)); ++z)
+                for (int x = int(std::floor(b.min[0])); x <= int(std::floor(b.max[0] - 1e-7)); ++x) {
+                    const u16 id = physics.world().block(x, y, z);
+                    if (!physics.registry().name(id).starts_with("minecraft:bubble_column")) continue;
+                    const bool down = physics.registry().property(id, "drag") == "true";
+                    const u16 above = physics.world().block(x, y + 1, z);
+                    const BlockInfo& a = physics.registry().infos()[above];
+                    if (!a.collisionCount && !a.fluid && !a.waterlogged)  // Entity.onAboveBubbleColumn
+                        vel[1] = down ? std::max(-0.9, vel[1] - 0.03) : std::min(1.8, vel[1] + 0.1);
+                    else  // onInsideBubbleColumn
+                        vel[1] = down ? std::max(-0.3, vel[1] - 0.03) : std::min(0.7, vel[1] + 0.06);
+                    fallDistance = 0;
+                    goto bubbleDone;
+                }
+    bubbleDone:;
     };
     // LivingEntity.handleOnClimbable.
     auto climbClamp = [&] {
         if (!onClimbable) return;
+        fallDistance = 0;
         vel[0] = std::clamp(vel[0], -0.15, 0.15), vel[2] = std::clamp(vel[2], -0.15, 0.15);
         vel[1] = std::max(vel[1], -0.15);
         if (vel[1] < 0 && sneaking && physics.registry().name(physics.world().block(bx, by, bz)).find("scaffolding") == std::string::npos)
@@ -344,6 +462,10 @@ void Player::tick(const Physics& physics, const PlayerInput& rawInput) {
         const double d[3] = {vel[0], vel[1] + 0.6 - pos[1] + startY, vel[2]};
         for (int a = 0; a < 3; ++a) b.min[a] += d[a], b.max[a] += d[a];
         if (physics.noCollision(b) && !physics.containsLiquid(b)) vel[1] = 0.3;
+    };
+    auto trackFall = [&](double startY) {  // Entity.checkFallDamage: the fall distance (powder snow catches big falls)
+        if (onGround || inWater || inLava || flying || attr.slowFalling >= 0 && vel[1] > -0.5) fallDistance = 0;
+        else if (pos[1] < startY) fallDistance += startY - pos[1];
     };
 
     if (noClip) {  // spectators: always flying, no collisions (Entity.noPhysics)
@@ -364,25 +486,85 @@ void Player::tick(const Physics& physics, const PlayerInput& rawInput) {
         moveRelative(input, flySpeed);
         move(physics, vel[0], vel[1], vel[2]);
         vel[0] *= 0.91, vel[2] *= 0.91, vel[1] *= 0.6;
+        fallDistance = 0;
         if (onGround) flying = false;  // landing ends flight, like the game
         return;
     }
+    const double startY = pos[1];
+    // Gravity: Slow Falling caps it while falling, Levitation replaces it (LivingEntity.getEffectiveGravity /
+    // travelInAir).
+    const double gravity = vel[1] <= 0 && attr.slowFalling >= 0 ? std::min(attr.gravity, 0.01) : attr.gravity;
+    // Player.travel: swimming steers up and down with the look.
+    if (swimming) {
+        const double lookY = -std::sin(pitch);
+        const double m = lookY < -0.2 ? 0.085 : 0.06;
+        const u16 above = physics.world().block(bx, int(std::floor(pos[1] + 1.0 - 0.1)), bz);
+        const BlockInfo& a = physics.registry().infos()[above];
+        if (lookY <= 0 || input.jump || a.fluid || a.waterlogged) vel[1] += (lookY - vel[1]) * m;
+    }
     if (inWater || inLava) {  // LivingEntity.travelInWater / travelInLava
-        const double startY = pos[1];
-        if (input.jump) vel[1] += 0.04;
-        moveRelative(input, 0.02);
-        move(physics, vel[0], vel[1], vel[2]);
-        afterMove();
+        if (input.jump) vel[1] += 0.04;  // LivingEntity.jumpInLiquid
         if (inWater) {
+            float slowDown = sprinting ? 0.9f : 0.8f;
+            float speed = 0.02f;
+            float walker = float(attr.waterEfficiency);
+            if (!onGround) walker *= 0.5f;
+            if (walker > 0) {
+                slowDown += (0.54600006f - slowDown) * walker;
+                speed += (float(attr.moveSpeed * (sprinting ? 1.3 : 1.0)) - speed) * walker;
+            }
+            if (attr.dolphinsGrace >= 0) slowDown = 0.96f;
+            moveRelative(input, speed);
+            move(physics, vel[0], vel[1], vel[2]);
+            afterMove();
             if (horizontalCollision && onClimbable) vel[1] = 0.2;
-            const double slow = sprinting ? 0.9 : 0.8;
-            vel[0] *= slow, vel[1] *= 0.8, vel[2] *= slow;
-            vel[1] -= 0.005;  // getFluidFallingAdjustedMovement: gravity / 16
+            vel[0] *= slowDown, vel[1] *= 0.8, vel[2] *= slowDown;
+            // getFluidFallingAdjustedMovement (not while sprint-swimming)
+            if (!sprinting) {
+                const bool falling = vel[1] <= 0;
+                if (falling && std::abs(vel[1] - 0.005) >= 0.003 && std::abs(vel[1] - gravity / 16.0) < 0.003) vel[1] = -0.003;
+                else vel[1] -= gravity / 16.0;
+            }
         } else {
+            moveRelative(input, 0.02);
+            move(physics, vel[0], vel[1], vel[2]);
+            afterMove();
             vel[0] *= 0.5, vel[1] *= 0.5, vel[2] *= 0.5;
-            vel[1] -= 0.02;
+            vel[1] -= gravity / 4.0;
         }
         jumpOut(startY);
+        trackFall(startY);
+        return;
+    }
+    if (fallFlying) {  // LivingEntity.travelFallFlying / updateFallFlyingMovement
+        if (attr.rocketBoost) {  // FireworkRocketEntity.tick: pushes its glider along the look
+            const double lx = -std::sin(yaw) * std::cos(pitch), ly = -std::sin(pitch), lz = std::cos(yaw) * std::cos(pitch);
+            vel[0] += lx * 0.1 + (lx * 1.5 - vel[0]) * 0.5;
+            vel[1] += ly * 0.1 + (ly * 1.5 - vel[1]) * 0.5;
+            vel[2] += lz * 0.1 + (lz * 1.5 - vel[2]) * 0.5;
+        }
+        const double lx = -std::sin(yaw) * std::cos(pitch), ly = -std::sin(pitch), lz = std::cos(yaw) * std::cos(pitch);
+        const double lean = pitch;
+        const double lookHor = std::sqrt(lx * lx + lz * lz), moveHor = std::sqrt(vel[0] * vel[0] + vel[2] * vel[2]);
+        const double lift = std::cos(lean) * std::cos(lean);
+        vel[1] += gravity * (-1.0 + lift * 0.75);
+        if (vel[1] < 0 && lookHor > 0) {
+            const double convert = vel[1] * -0.1 * lift;
+            vel[0] += lx * convert / lookHor, vel[1] += convert, vel[2] += lz * convert / lookHor;
+        }
+        if (lean < 0 && lookHor > 0) {
+            const double convert = moveHor * -std::sin(lean) * 0.04;
+            vel[0] += -lx * convert / lookHor, vel[1] += convert * 3.2, vel[2] += -lz * convert / lookHor;
+        }
+        if (lookHor > 0) {
+            vel[0] += (lx / lookHor * moveHor - vel[0]) * 0.1;
+            vel[2] += (lz / lookHor * moveHor - vel[2]) * 0.1;
+        }
+        vel[0] *= 0.99f, vel[1] *= 0.98f, vel[2] *= 0.99f;
+        move(physics, vel[0], vel[1], vel[2]);
+        afterMove();
+        fallDistance = 0;
+        if (onGround) fallFlying = false;
         return;
     }
     // LivingEntity.travelInAir: block friction (1 in the air) scales the acceleration only above 0.6 (ice,
@@ -391,21 +573,31 @@ void Player::tick(const Physics& physics, const PlayerInput& rawInput) {
                                                              int(std::floor(pos[2])))
                                      : 1.0;
     const double slip = friction * 0.91;
-    if (input.jump && onGround) {
-        vel[1] = 0.42 * blockFactor(&Physics::jumpFactor);
-        if (input.sprint) {
-            vel[0] -= std::sin(yaw) * 0.2;
-            vel[2] += std::cos(yaw) * 0.2;
+    if (input.jump && onGround) {  // LivingEntity.jumpFromGround: jump strength, Jump Boost
+        const double power = attr.jumpStrength * blockFactor(&Physics::jumpFactor) +
+                             (attr.jumpBoost >= 0 ? 0.1 * (attr.jumpBoost + 1) : 0.0);
+        if (power > 1e-5) {
+            vel[1] = std::max(power, vel[1]);
+            if (input.sprint) {
+                vel[0] -= std::sin(yaw) * 0.2;
+                vel[2] += std::cos(yaw) * 0.2;
+            }
         }
     }
-    const double walk = input.sprint && input.forward > 0 ? 0.13 : 0.1;
+    // getSpeed: the movement_speed attribute (with the sprint modifier); in the air Player.getFlyingSpeed.
+    const double walk = attr.moveSpeed * (input.sprint ? 1.3 : 1.0);
     const double speed = onGround ? (friction > 0.6 ? walk * (0.21600002 / (friction * friction * friction)) : walk)
                                   : (input.sprint ? 0.026 : 0.02);
     moveRelative(input, speed);
     climbClamp();
     move(physics, vel[0], vel[1], vel[2]);
     afterMove();
-    if ((horizontalCollision || input.jump) && onClimbable) vel[1] = 0.2;
-    vel[1] = (vel[1] - 0.08) * 0.98;
+    // handleRelativeFrictionAndCalculateMovement: climbing ladders, and powder snow with leather boots.
+    if ((horizontalCollision || input.jump) && (onClimbable || (wasInPowderSnow_ && attr.powderSnowWalker))) vel[1] = 0.2;
+    wasInPowderSnow_ = inPowderSnow;
+    if (attr.levitation >= 0) vel[1] += (0.05 * (attr.levitation + 1) - vel[1]) * 0.2;
+    else vel[1] -= gravity;
+    vel[1] *= 0.98;
     vel[0] *= slip, vel[2] *= slip;
+    trackFall(startY);
 }

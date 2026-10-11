@@ -82,6 +82,18 @@ public:
     // Mesh of an item stack (network item id); flat: gui / ground / fixed contexts (some items select other models).
     // Never null; empty() when the item has nothing to draw.
     const ItemMesh& mesh(int item, i32 dye, bool flat);
+    // Item model properties that follow the holder's item use (ItemModel select / condition / range_dispatch):
+    // minecraft:using_item, use_duration, crossbow/pull, use_cycle and the crossbow's charge_type.
+    struct UseState {
+        bool usingItem = false;
+        float useTicks = 0;       // ticks the item has been used (use_duration)
+        float pull = 0;           // crossbow/pull: use ticks / charge duration
+        float remaining = 0;      // use_cycle: remaining use ticks
+        int charge = 0;           // charge_type: 0 none, 1 arrow, 2 rocket
+    };
+    const ItemMesh& mesh(int item, i32 dye, bool flat, const UseState& use);
+    // Texture of the item's particles (BreakingItemParticle): the model's particle texture, else its first layer.
+    std::string itemParticleTexture(int item);
     const ItemMesh& blockModelMesh(const std::string& model);  // "block/item_frame" (display transforms unused)
     // An entity model layer at its initial pose (worn skulls: CustomHeadLayer draws the skull model directly).
     const ItemMesh& entityLayerMesh(const std::string& layer, const std::string& texture);

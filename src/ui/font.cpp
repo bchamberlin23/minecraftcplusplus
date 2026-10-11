@@ -32,7 +32,7 @@ Font::~Font() {
     if (unihexLoad_.valid()) unihexLoad_.wait();
 }
 
-bool Font::load(const Resources& res, Atlas& atlas) {
+bool Font::load(const Resources& res, Atlas& atlas, const std::string& fontId) {
     atlas_ = &atlas;
     // SpecialGlyphs.MISSING: a 5x8 outline box, advance 6.
     int x, y;
@@ -50,7 +50,7 @@ bool Font::load(const Resources& res, Atlas& atlas) {
         missing_.u0 = float(x) / atlas.width(), missing_.v0 = float(y) / atlas.height();
         missing_.u1 = float(x + 5) / atlas.width(), missing_.v1 = float(y + 8) / atlas.height();
     }
-    if (!loadProviders(res, "minecraft:default", 0)) return false;
+    if (!loadProviders(res, fontId, 0)) return false;
     for (const Provider& p : providers_)
         for (const auto& [cp, g] : p.glyphs)
             if (p.type == Provider::Bitmap && g.visible) byWidth_[int(std::ceil(g.advance))].push_back(cp);

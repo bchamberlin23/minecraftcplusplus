@@ -156,6 +156,8 @@ EntityWorld::EntityWorld(EntityAssets& assets, World& world, BlockRegistry& regi
         d.rotation = id({"DATA_ROTATION"});
         d.painting = id({"DATA_PAINTING_VARIANT_ID"});
         d.nameVisible = id({"DATA_CUSTOM_NAME_VISIBLE"});
+        d.livingFlags = id({"DATA_LIVING_ENTITY_FLAGS"});
+        d.attachedTo = id({"DATA_ATTACHED_TO_TARGET"});
         categories_[i] = categoryFor(t.name);
         // Synched data only carries values that differ from the default: start registry variants at the
         // default each entity defines (VariantUtils.getDefaultOrAny(..., DEFAULT)).
@@ -716,6 +718,7 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
                 }
                 if (n) std::copy(steps[n - 1].pos, steps[n - 1].pos + 3, e.codecBase);
             }
+            if (e.id == localControl_) break;  // our own vehicle: the client moves it
             e.onGround = ev.b != 0;
             if (n || ev.hasRot) startInterpolation(e, steps, n, ev.f[0], ev.f[1], ev.hasRot);
             break;
@@ -723,6 +726,7 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
         case EventType::PositionSync: {
             const Step& last = q.steps[ev.first + ev.count - 1];
             std::copy(last.pos, last.pos + 3, e.codecBase);
+            if (e.id == localControl_) break;
             const double dx = last.pos[0] - e.pos[0], dy = last.pos[1] - e.pos[1], dz = last.pos[2] - e.pos[2];
             if (dx * dx + dy * dy + dz * dz > 4096.0) {
                 std::copy(last.pos, last.pos + 3, e.pos);
@@ -743,13 +747,16 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
             for (int a = 0; a < 3; ++a) s.pos[a] = (ev.a & (1 << a)) ? e.pos[a] + ev.d[a] : ev.d[a];
             const float yaw = (ev.a & 8) ? e.yaw + ev.f[0] : ev.f[0];
             const float pitch = (ev.a & 16) ? e.pitch + ev.f[1] : ev.f[1];
-            for (int a = 0; a < 3; ++a) e.vel[a] = (ev.a & (32 << a)) ? e.vel[a] + ev.d[3 + a] : ev.d[3 + a];
             std::copy(s.pos, s.pos + 3, e.codecBase);
+            if (e.id == localControl_) break;
+            for (int a = 0; a < 3; ++a) e.vel[a] = (ev.a & (32 << a)) ? e.vel[a] + ev.d[3 + a] : ev.d[3 + a];
             startInterpolation(e, &s, 1, yaw, pitch, true);
             e.onGround = ev.flag;
             break;
         }
-        case EventType::Motion: std::copy(ev.d, ev.d + 3, e.vel); break;
+        case EventType::Motion:
+            if (e.id != localControl_) std::copy(ev.d, ev.d + 3, e.vel);
+            break;
         case EventType::HeadRot:
             e.lerpHeadYaw = ev.f[0];
             e.lerpHeadSteps = 3;
@@ -833,7 +840,12 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
         } else if (idx == d.hurt) e.vehicleHurt = int(v.i);
         else if (idx == d.hurtDir) e.vehicleHurtDir = int(v.i);
         else if (idx == d.damage) e.vehicleDamage = v.f[0];
-        else if (idx == d.mainGene) e.variant = int(v.i);
+        else if (idx == d.attachedTo && v.serializer == 19) e.attachedTo = v.i > 0 ? int(v.i - 1) : -1;
+        else if (idx == d.livingFlags && v.serializer == 0) {
+            if (verbose_) LOG("entities: %d %s living flags %d", e.id, name.c_str(), int(v.i));
+            if (!(v.i & 1)) e.useTicks = 0;
+            e.livingFlags = u8(v.i);
+        } else if (idx == d.mainGene) e.variant = int(v.i);
         else if (idx == d.hiddenGene) e.variant2 = int(v.i);
     }
 }
@@ -863,9 +875,12 @@ void EntityWorld::tickEntity(Entity& e) {
     if (e.vehicleDamage > 0) e.vehicleDamage = std::max(0.0f, e.vehicleDamage - 1.0f);
     if (e.dying && e.deathTime < 20) ++e.deathTime;
     if (e.swingTime >= 0 && ++e.swingTime >= e.swingDuration) e.swingTime = -1;
+    if (e.livingFlags & 1) ++e.useTicks;
 
-    // Interpolation.
-    if (e.stepCount) {
+    // Interpolation (a vehicle the local player drives moves itself).
+    if (e.id == localControl_ && localTick_) {
+        localTick_(e);
+    } else if (e.stepCount) {
         const int interval = std::max(1, e.info ? e.info->updateInterval : 3);
         // getNewPositionAndRotation
         bool placed = false;

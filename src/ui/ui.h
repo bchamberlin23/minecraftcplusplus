@@ -21,6 +21,9 @@ namespace net {
 class Client;
 class Session;
 }  // namespace net
+namespace ent {
+class EntityWorld;
+}
 
 namespace ui {
 
@@ -110,6 +113,8 @@ public:
     // F3 biome name at a block position (local worlds with the generator); unset: not shown.
     void setBiomeLookup(std::function<std::string(int x, int y, int z)> fn);
     Settings& settings();
+    // Entity models, skins and entities (inventory previews, mounts); after init().
+    void setEntities(ent::EntityWorld* entities);
     // Player inventory menu slot (5-8 armour, 36-44 hotbar, 45 offhand); nullptr when empty.
     const ItemStack* playerSlot(int slot) const;
 

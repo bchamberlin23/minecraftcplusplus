@@ -40,18 +40,100 @@ Game::Game(World& world, BlockRegistry& registry, Terrain& terrain, Renderer& re
 
 CameraState Game::camera() const {
     CameraState c;
+    double eye[3];
+    if (riding() && rideEye && rideEye(eye)) {  // the seat of the vehicle as it is drawn
+        c.x = eye[0], c.y = eye[1], c.z = eye[2];
+        c.yaw = player_.yaw, c.pitch = player_.pitch;
+        return c;
+    }
     const double t = alpha_;
     c.x = player_.prev[0] + (player_.pos[0] - player_.prev[0]) * t;
-    c.y = player_.prev[1] + (player_.pos[1] - player_.prev[1]) * t + player_.eyeHeight();
+    c.y = player_.prev[1] + (player_.pos[1] - player_.prev[1]) * t + (eyeHeightOld_ + (eyeHeight_ - eyeHeightOld_) * t);
     c.z = player_.prev[2] + (player_.pos[2] - player_.prev[2]) * t;
     c.yaw = player_.yaw;
     c.pitch = player_.pitch;
     return c;
 }
 
-CameraState Game::viewCamera() const {
+// GameRenderer.renderLevel: bobHurt then bobView multiply the projection (P * Hurt * Bob * View). As a view basis:
+// rows R * (right, up, back) and the camera moved by the view-space translation.
+static CameraState applyBob(const Game& g, CameraState c) {
+    const float pt = g.partialTick();
+    constexpr float kPi = 3.14159265f, kDeg = kPi / 180.0f;
+    struct M3 {
+        float m[3][3];
+    };
+    auto mul = [](const M3& a, const M3& b) {
+        M3 r{};
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j) r.m[i][j] = a.m[i][0] * b.m[0][j] + a.m[i][1] * b.m[1][j] + a.m[i][2] * b.m[2][j];
+        return r;
+    };
+    auto rotX = [](float a) { return M3{{{1, 0, 0}, {0, std::cos(a), -std::sin(a)}, {0, std::sin(a), std::cos(a)}}}; };
+    auto rotY = [](float a) { return M3{{{std::cos(a), 0, std::sin(a)}, {0, 1, 0}, {-std::sin(a), 0, std::cos(a)}}}; };
+    auto rotZ = [](float a) { return M3{{{std::cos(a), -std::sin(a), 0}, {std::sin(a), std::cos(a), 0}, {0, 0, 1}}}; };
+    M3 rot{{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}};
+    float t[3] = {0, 0, 0};
+    bool any = false;
+    if (g.dead) {  // bobHurt: the death roll
+        const float duration = std::min(float(g.deathTime) + pt, 20.0f);
+        rot = mul(rot, rotZ((40.0f - 8000.0f / (duration + 200.0f)) * kDeg));
+        any = true;
+    }
+    if (g.hurtTime > 0) {
+        float hurt = (float(g.hurtTime) - pt) / float(g.hurtDuration);
+        hurt = std::sin(hurt * hurt * hurt * hurt * kPi);
+        rot = mul(rot, rotY(-g.hurtDir * kDeg));
+        rot = mul(rot, rotZ(-hurt * 14.0f * kDeg));
+        rot = mul(rot, rotY(g.hurtDir * kDeg));
+        any = true;
+    }
+    if (g.bobView) {
+        const float wd = -(g.walkDist + (g.walkDist - g.walkDistO) * pt);
+        const float b = g.bobO + (g.bob - g.bobO) * pt;
+        if (b != 0) {
+            const float tx = std::sin(wd * kPi) * b * 0.5f, ty = -std::abs(std::cos(wd * kPi) * b);
+            const float tr[3] = {tx, ty, 0};
+            for (int i = 0; i < 3; ++i) t[i] = rot.m[i][0] * tr[0] + rot.m[i][1] * tr[1] + rot.m[i][2] * tr[2];
+            rot = mul(rot, rotZ(std::sin(wd * kPi) * b * 3.0f * kDeg));
+            rot = mul(rot, rotX(std::abs(std::cos(wd * kPi - 0.2f) * b) * 5.0f * kDeg));
+            any = true;
+        }
+    }
+    if (!any) return c;
+    const float cy = std::cos(c.yaw), sy = std::sin(c.yaw), cp = std::cos(c.pitch), sp = std::sin(c.pitch);
+    const float fwd[3] = {-sy * cp, -sp, cy * cp};
+    float right[3] = {fwd[1] * 0 - fwd[2] * 1, fwd[2] * 0 - fwd[0] * 0, fwd[0] * 1 - fwd[1] * 0};  // fwd x (0, 1, 0)
+    const float rl = std::sqrt(right[0] * right[0] + right[1] * right[1] + right[2] * right[2]);
+    for (float& v : right) v /= std::max(rl, 1e-6f);
+    const float up[3] = {right[1] * fwd[2] - right[2] * fwd[1], right[2] * fwd[0] - right[0] * fwd[2], right[0] * fwd[1] - right[1] * fwd[0]};
+    const float back[3] = {-fwd[0], -fwd[1], -fwd[2]};
+    const float* rows[3] = {right, up, back};
+    float out[3][3];
+    for (int i = 0; i < 3; ++i)
+        for (int k = 0; k < 3; ++k) out[i][k] = rot.m[i][0] * rows[0][k] + rot.m[i][1] * rows[1][k] + rot.m[i][2] * rows[2][k];
+    c.basisSet = true;
+    for (int k = 0; k < 3; ++k) c.right[k] = out[0][k], c.up[k] = out[1][k], c.fwd[k] = -out[2][k];
+    // Camera offset: c' = c - (t.x * right' + t.y * up' + t.z * back')
+    c.x -= t[0] * out[0][0] + t[1] * out[1][0] + t[2] * out[2][0];
+    c.y -= t[0] * out[0][1] + t[1] * out[1][1] + t[2] * out[2][1];
+    c.z -= t[0] * out[0][2] + t[1] * out[1][2] + t[2] * out[2][2];
+    return c;
+}
+
+CameraState Game::handCamera() const {
     CameraState c = camera();
     if (cameraMode == 0) return c;
+    if (cameraMode == 2) c.yaw += float(kPi), c.pitch = -c.pitch;
+    return c;
+}
+
+CameraState Game::viewCamera() const {
+    CameraState c = camera();
+    if (cameraMode == 0) {
+        if (viewCameraOverride) viewCameraOverride(c);
+        return applyBob(*this, c);
+    }
     if (cameraMode == 2) c.yaw += float(kPi), c.pitch = -c.pitch;
     const double cp = std::cos(c.pitch);
     const double back[3] = {std::sin(c.yaw) * cp, std::sin(c.pitch), -std::cos(c.yaw) * cp};
@@ -65,7 +147,7 @@ CameraState Game::viewCamera() const {
         dist = std::min(dist, std::sqrt(dx * dx + dy * dy + dz * dz));
     }
     c.x += back[0] * dist, c.y += back[1] * dist, c.z += back[2] * dist;
-    return c;
+    return applyBob(*this, c);
 }
 
 PlayerInput Game::readInput(Window& w) {
@@ -101,7 +183,7 @@ void Game::frame(Window& w, double dt) {
     // Double-tapping jump toggles flight, like creative mode.
     const bool jump = !inputSuspended && w.mouseCaptured() && w.keyDown(VK_SPACE);
     if (jump && !jumpWasDown_) {
-        if (clock_ - lastJumpPress_ < 0.3 && player_.mayFly && !player_.noClip) {
+        if (clock_ - lastJumpPress_ < 0.3 && player_.mayFly && !player_.noClip && !riding()) {
             player_.flying = !player_.flying;
             player_.vel[1] = 0;
             lastJumpPress_ = -1;
@@ -112,16 +194,44 @@ void Game::frame(Window& w, double dt) {
     jumpWasDown_ = jump;
 
     const PlayerInput input = inputSuspended ? PlayerInput{} : readInput(w);
+    const Window::MouseEvents ev = w.takeMouseEvents();
+    if (inputSuspended) pendingAttacks_ = 0;
+    else pendingAttacks_ = std::min(pendingAttacks_ + ev.left, 4);
+    const bool attackDown = !inputSuspended && w.mouseCaptured() && w.keyDown(VK_LBUTTON);
     tickAccumulator_ += std::min(dt, 0.25);
     while (tickAccumulator_ >= kTick) {
-        player_.tick(physics_, input);
+        // Minecraft.tick: the keybinds (attack / digging) with a fresh pick, then the player.
+        ++ticks_;
+        alpha_ = 1.0;
+        retarget();
+        if (inputSuspended) missTime_ = 10000;
+        else tickAttack(attackDown);
+        // LivingEntity.updatingUsingItem, then LocalPlayer.modifyInput / sprinting with the use's slowdown.
+        if (use.active) {
+            if (onUseTick) onUseTick();
+            if (use.active && use.remaining > 0) --use.remaining;
+        }
+        player_.useSpeed = use.active ? use.speed : 1.0f;
+        player_.useBlocksSprint = use.active && !use.canSprint;
+        eyeHeightOld_ = eyeHeight_;
+        eyeHeight_ += (player_.eyeHeight() - eyeHeight_) * 0.5;
+        if (riding()) {  // a passenger does not move itself (LocalPlayer.rideTick)
+            player_.lastInput = input;
+            rideTick(input);
+        } else {
+            player_.tick(physics_, input);
+        }
+        tickCameraFeedback();
         if (onPlayerTick) onPlayerTick();
         tickAccumulator_ -= kTick;
     }
     alpha_ = tickAccumulator_ / kTick;
+    if (ticks_ % 20 == 0)  // LevelRenderer.tick: cracks nobody updated for 400 ticks go away
+        for (auto it = destructions_.begin(); it != destructions_.end();)
+            it = ticks_ > it->second.tick + 400 ? destructions_.erase(it) : std::next(it);
 
     retarget();
-    handleClicks(w, dt);
+    handleClicks(w, dt, ev.right, ev.middle, ev.wheel);
     buildOverlay();
 }
 
@@ -142,16 +252,19 @@ void Game::simulate(const PlayerInput& input, int ticks) {
     retarget();
 }
 
-void Game::handleClicks(Window& w, double dt) {
-    const Window::MouseEvents ev = w.takeMouseEvents();
+void Game::handleClicks(Window& w, double dt, int rightPresses, int middlePresses, int wheel) {
+    struct {
+        int right, middle, wheel;
+    } ev{rightPresses, middlePresses, wheel};
     if (inputSuspended) return;
-    if (ev.left > 0 && onSwing) onSwing();  // Minecraft.startAttack swings on every press
     selected_ = ((selected_ - ev.wheel) % 9 + 9) % 9;
-    const bool leftHeld = w.mouseCaptured() && w.keyDown(VK_LBUTTON);
     const bool rightHeld = w.mouseCaptured() && w.keyDown(VK_RBUTTON);
     repeatTimer_ -= dt;
-    const bool doBreak = ev.left > 0 || (leftHeld && repeatTimer_ <= 0);
-    const bool doPlace = ev.right > 0 || (rightHeld && repeatTimer_ <= 0);
+    // Breaking runs in tickAttack; Minecraft.startUseItem does nothing while a block is being destroyed or the hands
+    // are busy (paddling).
+    // Held: Minecraft.handleKeybinds repeats startUseItem every 4 ticks (rightClickDelay), not while an item is in use.
+    const bool doPlace = (ev.right > 0 || (rightHeld && repeatTimer_ <= 0 && !use.active)) && !dig_.active && !handsBusy;
+    if (doPlace) repeatTimer_ = ev.right > 0 ? 0.3 : 0.2;
     if (ev.middle && target_.hit) {
         if (onPickBlock) onPickBlock(target_.x, target_.y, target_.z);
         else hotbar_[selected_] = world_.block(target_.x, target_.y, target_.z);
@@ -159,26 +272,28 @@ void Game::handleClicks(Window& w, double dt) {
     // An entity in front of the targeted block takes the click (attack / use only on a press, like the game).
     if (usingItem_ && !rightHeld) {  // Minecraft.handleKeybinds: releaseUsingItem
         usingItem_ = false;
+        use.active = false;  // Player.releaseUsingItem: the client stops at once
         if (onReleaseUseItem) onReleaseUseItem();
     }
-    if ((doBreak || doPlace) && onEntityClick &&
-        onEntityClick(ev.left > 0, ev.left == 0 && ev.right > 0, target_.hit ? target_.distance : -1.0)) {
+    if (doPlace && onEntityClick && onEntityClick(false, ev.right > 0, target_.hit ? target_.distance : -1.0)) {
         repeatTimer_ = 0.3;
-        if (ev.left == 0 && ev.right > 0 && !usingItem_ && onUseItem) {  // e.g. a shield raised facing a mob
+        if (ev.right > 0 && !usingItem_ && onUseItem) {  // e.g. a shield raised facing a mob
             onUseItem(nullptr, true);
+            if (predictUse) predictUse(nullptr, true);
             usingItem_ = true;
         }
         return;
     }
     useConsumed_ = false;
-    if (target_.hit && (doBreak || doPlace)) {
-        repeatTimer_ = (ev.left || ev.right) ? 0.3 : 0.2;  // the game repeats every 4 ticks while held
-        useTarget(!doBreak);
+    if (target_.hit && doPlace) {
+        repeatTimer_ = ev.right ? 0.3 : 0.2;  // the game repeats every 4 ticks while held
+        useTarget(true);
     }
-    if (ev.left > 0 && onPunch) onPunch();
-    // Minecraft.startUseItem: a press that neither placed a block nor used the targeted one uses the held item.
-    if (ev.right > 0 && !doBreak && !useConsumed_ && !usingItem_ && onUseItem) {
+    // Minecraft.startUseItem: a press that neither placed a block nor used the targeted one uses the held item; held,
+    // it repeats every 4 ticks once the last use has ended (eating the next piece of food).
+    if ((ev.right > 0 ? !usingItem_ : (doPlace && rightHeld)) && !dig_.active && !useConsumed_ && !use.active && onUseItem) {
         onUseItem(target_.hit ? &target_ : nullptr, false);
+        if (predictUse) predictUse(target_.hit ? &target_ : nullptr, false);
         usingItem_ = true;
     }
 }
@@ -225,6 +340,189 @@ bool Game::useTarget(bool place) {
     if (onBlockChanged) onBlockChanged(true, t[0], t[1], t[2], id);
     if (onSwing) onSwing();
     return true;
+}
+
+float Game::useFovModifier() const {
+    if (!use.active || use.anim != 4) return 1.0f;  // ItemRules::Anim::Bow
+    const float scale = std::min(float(use.ticksUsing()) / 20.0f, 1.0f);
+    return 1.0f - scale * scale * 0.15f;
+}
+
+bool Game::scoping() const { return use.active && use.anim == 7; }  // ItemRules::Anim::Spyglass
+
+void Game::tickCameraFeedback() {
+    // LocalPlayer.move -> addWalkedDistance; AbstractClientPlayer.updateBob (resetBob while riding).
+    walkDistO = walkDist;
+    const double dx = player_.pos[0] - player_.prev[0], dz = player_.pos[2] - player_.prev[2];
+    if (!riding()) walkDist += float(std::sqrt(dx * dx + dz * dz)) * 0.6f;
+    bobO = bob;
+    if (riding()) {
+        bob = 0;
+    } else {
+        const float tBob = player_.onGround && !dead && !player_.swimming && !player_.flying
+                               ? std::min(0.1f, float(std::sqrt(player_.vel[0] * player_.vel[0] + player_.vel[2] * player_.vel[2])))
+                               : 0.0f;
+        bob += (tBob - bob) * 0.4f;
+    }
+    if (hurtTime > 0) --hurtTime;
+    if (dead && deathTime < 20) ++deathTime;
+    if (!dead) deathTime = 0;
+    ++attackStrengthTicker;  // Player.tick
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Mining (Minecraft.startAttack / continueAttack, MultiPlayerGameMode)
+
+void Game::destroyBlockProgress(int id, int x, int y, int z, int stage) {
+    if (stage >= 0 && stage < 10) destructions_[id] = {x, y, z, stage, ticks_};
+    else destructions_.erase(id);
+}
+
+float Game::progressAt(int x, int y, int z, u16 state) const {
+    return destroyProgress ? destroyProgress(x, y, z, state) : 1.0f;
+}
+
+void Game::sendDig(int action, int x, int y, int z, int face, bool predicted) {
+    if (!onEdit) return;
+    EditAction a;
+    a.place = false;
+    a.x = a.at[0] = x, a.y = a.at[1] = y, a.z = a.at[2] = z;
+    a.face = face;
+    std::copy(target_.point, target_.point + 3, a.hit);
+    a.action = action;
+    a.predicted = predicted;
+    onEdit(a);
+}
+
+bool Game::destroyBlock(int x, int y, int z) {
+    const u16 old = world_.block(x, y, z);
+    if (!old) return false;
+    if (instabuild && canDestroyInCreative && !canDestroyInCreative()) return false;
+    const BlockInfo& b = registry_.infos()[old];
+    edit(x, y, z, b.waterlogged ? registry_.waterId() : 0);  // FluidState.createLegacyBlock
+    if (onBlockChanged) onBlockChanged(false, x, y, z, old);
+    return true;
+}
+
+// MultiPlayerGameMode.startDestroyBlock (the packet goes out after the prediction, like startPrediction).
+bool Game::startDestroyBlock(int x, int y, int z, int face) {
+    if (gameMode == 2 || gameMode == 3) return false;  // blockActionRestricted (adventure without can_break)
+    if (instabuild) {
+        const bool breaks = !(canDestroyInCreative && !canDestroyInCreative()) && world_.block(x, y, z) != 0;
+        sendDig(kStartDestroy, x, y, z, face, breaks);
+        if (breaks) destroyBlock(x, y, z);
+        destroyDelay_ = 5;
+        return true;
+    }
+    const u64 held = heldIdentity ? heldIdentity() : 0;
+    if (!dig_.active || !(dig_.x == x && dig_.y == y && dig_.z == z && dig_.held == held)) {
+        if (dig_.active) sendDig(kAbortDestroy, dig_.x, dig_.y, dig_.z, face, false);
+        const u16 state = world_.block(x, y, z);
+        const bool notAir = state != 0;
+        if (notAir && progressAt(x, y, z, state) >= 1.0f) {
+            sendDig(kStartDestroy, x, y, z, face, true);
+            destroyBlock(x, y, z);
+        } else {
+            sendDig(kStartDestroy, x, y, z, face, false);
+            if (dig_.active) destroyBlockProgress(kLocalBreaker, dig_.x, dig_.y, dig_.z, -1);
+            dig_ = {true, x, y, z, face, held, 0.0f, 0};
+            if (onBreakingEffects) onBreakingEffects(x, y, z, face, true);
+        }
+    }
+    return true;
+}
+
+void Game::stopDestroyBlock() {
+    if (!dig_.active) return;
+    sendDig(kAbortDestroy, dig_.x, dig_.y, dig_.z, 0, false);  // Direction.DOWN
+    dig_.active = false;
+    dig_.progress = 0;
+    destroyBlockProgress(kLocalBreaker, dig_.x, dig_.y, dig_.z, -1);
+    attackStrengthTicker = 0;
+}
+
+bool Game::continueDestroyBlock(int x, int y, int z, int face) {
+    if (destroyDelay_ > 0) {
+        --destroyDelay_;
+        return true;
+    }
+    if (instabuild) {
+        destroyDelay_ = 5;
+        const bool breaks = !(canDestroyInCreative && !canDestroyInCreative()) && world_.block(x, y, z) != 0;
+        sendDig(kStartDestroy, x, y, z, face, breaks);
+        if (breaks) destroyBlock(x, y, z);
+        return true;
+    }
+    const u64 held = heldIdentity ? heldIdentity() : 0;
+    if (!(dig_.active && dig_.x == x && dig_.y == y && dig_.z == z && dig_.held == held)) return startDestroyBlock(x, y, z, face);
+    const u16 state = world_.block(x, y, z);
+    if (!state) {
+        dig_.active = false;
+        return false;
+    }
+    dig_.progress += progressAt(x, y, z, state);
+    ++dig_.ticks;
+    if (dig_.progress >= 1.0f) {
+        dig_.active = false;
+        sendDig(kStopDestroy, x, y, z, face, true);
+        destroyBlock(x, y, z);
+        dig_.face = -1;
+        dig_.progress = 0;
+        dig_.ticks = 0;
+        destroyDelay_ = 5;
+    } else if (dig_.face != face) {
+        dig_.face = face;
+        sendDig(kChangeDestroyDirection, x, y, z, face, false);
+    }
+    // getDestroyStage: (int) (progress * 10) once there is progress, else none.
+    destroyBlockProgress(kLocalBreaker, dig_.x, dig_.y, dig_.z, dig_.progress > 0 ? int(dig_.progress * 10.0f) : -1);
+    return true;
+}
+
+bool Game::startAttack() {
+    if (missTime_ > 0 || handsBusy) return false;
+    if (gameMode == 3) return true;  // spectators: no attack, no digging
+    // An entity in front of the targeted block takes the press (the attack packet carries its own punch).
+    if (onEntityClick && onEntityClick(true, false, target_.hit ? target_.distance : -1.0)) {
+        attackStrengthTicker = 0;  // MultiPlayerGameMode.attack -> resetAttackStrengthTicker
+        if (onSwing) onSwing();
+        return false;
+    }
+    bool endAttack = false;
+    if (target_.hit && world_.block(target_.x, target_.y, target_.z) != 0) {
+        startDestroyBlock(target_.x, target_.y, target_.z, target_.face);
+        endAttack = world_.block(target_.x, target_.y, target_.z) == 0;
+    } else {
+        if (!instabuild) missTime_ = 10;  // MultiPlayerGameMode.hasMissTime: survival-like modes
+        attackStrengthTicker = 0;         // resetAttackStrengthTicker
+    }
+    if (onSwing) onSwing();
+    if (onPunch) onPunch();
+    return endAttack;
+}
+
+void Game::continueAttack(bool down) {
+    if (!down) missTime_ = 0;
+    if (missTime_ > 0 || use.active) return;
+    if (down && target_.hit && world_.block(target_.x, target_.y, target_.z) != 0) {
+        if (continueDestroyBlock(target_.x, target_.y, target_.z, target_.face)) {
+            if (onSwing) onSwing();
+            if (onPunch) onPunch();
+        }
+    } else {
+        stopDestroyBlock();
+    }
+}
+
+void Game::tickAttack(bool down) {
+    bool instantAttack = false;
+    if (use.active) {
+        pendingAttacks_ = 0;  // Minecraft.handleKeybinds: clicks are consumed while an item is in use
+    } else {
+        for (; pendingAttacks_ > 0; --pendingAttacks_) instantAttack |= startAttack();
+    }
+    continueAttack(down && !instantAttack);
+    if (missTime_ > 0) --missTime_;
 }
 
 // Adapts a held block state to how it is placed (axis, facing, top/bottom halves, wall torches),

@@ -94,6 +94,10 @@ public:
         std::string items[4];                       // campfire / shelf items by slot (item names)
         bool alignBottom = false;                   // shelf
     };
+    // The UI (sign editor): the last renderer created, and the data of the block entity at a position (main thread;
+    // nullptr when none is known).
+    static const BlockEntityRenderer* instance();
+    const Data* dataAt(int x, int y, int z) const;
 
 private:
     struct BlockDef {

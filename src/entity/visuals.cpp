@@ -7,6 +7,7 @@
 #include "entity/entities.h"
 #include "entity/entity_render.h"
 #include "game/game.h"
+#include "game/item_rules.h"
 #include "net/client.h"
 #include "render/pack_sink.h"
 #include "ui/font.h"
@@ -28,6 +29,7 @@
 #include "VisualsShadowPS.h"
 #include "VisualsShadowVS.h"
 #include "VisualsGlintPS.h"
+#include "VisualsCrumblingPS.h"
 #include "VisualsTextPS.h"
 #include "VisualsTranslucentPS.h"
 #include "VisualsVS.h"
@@ -157,6 +159,8 @@ struct Visuals::Impl {
     ComPtr<ID3D12PipelineState> psoCut, psoTr, psoGlint, psoTextSee, psoText, psoPartCut, psoPartTr;
     // Shader pipeline: with the motion target (World / AfterTranslucent stages) and shadow casters.
     ComPtr<ID3D12PipelineState> psoCutMv, psoTrMv, psoGlintMv, psoPartCutMv, psoShadow;
+    // Block cracks: multiplied into the colour; with the shader pipeline alpha blended into the entity layer.
+    ComPtr<ID3D12PipelineState> psoCrumble, psoCrumbleMv;
     ComPtr<ID3D12Resource> store, upload, itemTex, fontTex;
     u8* mapped = nullptr;
     u32 descTable = UINT32_MAX;  // items, font
@@ -182,6 +186,10 @@ struct Visuals::Impl {
     bool prevHandValid = false;
     float prevHandVp[16] = {};  // last frame's hand projection (unjittered) when the hand was in the World stage
     List tagSee, tagNormal;
+    List cracks;  // block destruction overlays (LevelRenderer crumbling), drawn after the World stage's translucent list
+    bool crackDraw = false;
+    int crackRects[2][10] = {{-2, -2, -2, -2, -2, -2, -2, -2, -2, -2}, {-2, -2, -2, -2, -2, -2, -2, -2, -2, -2}};
+    void buildCracks(const PassContext& ctx);
     double lastTime = 0;
     float partial = 0;
     int glintRect = -1;
@@ -264,6 +272,7 @@ struct Visuals::Impl {
     const Tag& tag(const std::string& name);
     const PaintingInfo* painting(int id);
     void heldStack(int slot, int& item, i32& dye, bool& foil) const;
+    int chargeOf(int menuSlot) const;
 
     // --- shader packs (PassContext::pack): lists and particles as vanilla-style vertices -----------------
     std::vector<MeshQuad> cpuStore;  // CPU copy of the static quad store (packs pull quads on the CPU)
@@ -338,6 +347,19 @@ void Visuals::setPlayer(Game& game, ui::Ui& ui, const std::string& name, std::fu
             m.particles->blockDestroyed(x, y, z, state);
         }
     };
+    game.onItemParticle = [&m](int item, const double pos[3], const double vel[3]) {  // eating: item shards
+        if (!m.particles) return;
+        std::shared_lock lock(m.world.world().mutex());
+        m.particles->itemShard(item, pos[0], pos[1], pos[2], vel[0], vel[1], vel[2]);
+    };
+    // ClientLevel.addBreakingBlockEffects when the player starts breaking a block: a shard off the hit face.
+    game.onBreakingEffects = [&m, prev = std::move(game.onBreakingEffects)](int x, int y, int z, int face, bool sound) {
+        if (prev) prev(x, y, z, face, sound);
+        if (m.particles) {
+            std::shared_lock lock(m.world.world().mutex());
+            m.particles->blockCrack(x, y, z, face);
+        }
+    };
 }
 
 bool StagePass::create(Renderer& r) { return impl->createGpu(r); }
@@ -385,6 +407,10 @@ void StagePass::draw(const PassContext& ctx) {
                 m.packList(*ctx.pack, m.worldLists.cut, PackRole::Entities, PackBlend::Opaque);
                 m.packList(*ctx.pack, m.worldLists.tr, PackRole::EntitiesTranslucent, PackBlend::Translucent);
                 m.packList(*ctx.pack, m.worldLists.glint, PackRole::ArmorGlint, PackBlend::Glint, true);
+                m.cracks.clear();
+                m.buildCracks(ctx);
+                m.uploadPending(ctx);
+                m.packList(*ctx.pack, m.cracks, PackRole::EntitiesTranslucent, PackBlend::Translucent);
                 m.hudLists.clear();
                 float vp[16];
                 m.buildHand(ctx, vp);
@@ -406,6 +432,7 @@ void StagePass::draw(const PassContext& ctx) {
             if (m.worldDraw[0]) m.drawList(ctx, (mv ? m.psoCutMv : m.psoCut).Get(), m.worldLists.cut, 0);
             if (m.worldDraw[1]) m.drawList(ctx, (mv ? m.psoTrMv : m.psoTr).Get(), m.worldLists.tr, 0);
             if (m.worldDraw[2]) m.drawList(ctx, (mv ? m.psoGlintMv : m.psoGlint).Get(), m.worldLists.glint, 0);
+            if (m.crackDraw) m.drawList(ctx, (mv ? m.psoCrumbleMv : m.psoCrumble).Get(), m.cracks, 0);
             if (m.handWorldFrame == m.frameCounter && mv) {
                 // First-person hand as part of the scene (lit, anti-aliased, motion vectors for TAA / upscalers /
                 // frame generation): own depth range in front of the world, like the Hud stage below.
@@ -554,7 +581,7 @@ bool Visuals::Impl::createGpu(Renderer& r) {
     if (!check(device->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(), IID_PPV_ARGS(&rootSig)),
                "CreateRootSignature"))
         return false;
-    enum Blend { Opaque, Alpha, Glint };
+    enum Blend { Opaque, Alpha, Glint, Crumble };
     // targets: 1 colour; 2 colour + motion (written); 3 colour + motion (kept); 0 shadow map (depth only)
     auto pso = [&](const void* vs, size_t vsSize, const void* ps, size_t psSize, Blend blend, bool depthTest, bool depthWrite,
                    ComPtr<ID3D12PipelineState>& out, int targets = 1) {
@@ -571,6 +598,11 @@ bool Visuals::Impl::createGpu(Renderer& r) {
         } else if (blend == Glint) {  // GLINT_TRANSPARENCY: src colour * src colour + dst (alpha untouched)
             rt.BlendEnable = TRUE;
             rt.SrcBlend = D3D12_BLEND_SRC_COLOR, rt.DestBlend = D3D12_BLEND_ONE, rt.BlendOp = D3D12_BLEND_OP_ADD;
+            rt.SrcBlendAlpha = D3D12_BLEND_ZERO, rt.DestBlendAlpha = D3D12_BLEND_ONE, rt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+            rt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_RED | D3D12_COLOR_WRITE_ENABLE_GREEN | D3D12_COLOR_WRITE_ENABLE_BLUE;
+        } else if (blend == Crumble) {  // CRUMBLING: dst colour * src + src colour * dst (alpha untouched)
+            rt.BlendEnable = TRUE;
+            rt.SrcBlend = D3D12_BLEND_DEST_COLOR, rt.DestBlend = D3D12_BLEND_SRC_COLOR, rt.BlendOp = D3D12_BLEND_OP_ADD;
             rt.SrcBlendAlpha = D3D12_BLEND_ZERO, rt.DestBlendAlpha = D3D12_BLEND_ONE, rt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
             rt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_RED | D3D12_COLOR_WRITE_ENABLE_GREEN | D3D12_COLOR_WRITE_ENABLE_BLUE;
         }
@@ -610,6 +642,8 @@ bool Visuals::Impl::createGpu(Renderer& r) {
         !pso(SH(VisualsVS), SH(VisualsCutoutMvPS), Opaque, true, true, psoCutMv, 2) ||
         !pso(SH(VisualsVS), SH(VisualsTranslucentPS), Alpha, true, false, psoTrMv, 3) ||
         !pso(SH(VisualsVS), SH(VisualsGlintPS), Glint, true, false, psoGlintMv, 3) ||
+        !pso(SH(VisualsVS), SH(VisualsCrumblingPS), Crumble, true, false, psoCrumble) ||
+        !pso(SH(VisualsVS), SH(VisualsCrumblingPS), Alpha, true, false, psoCrumbleMv, 3) ||
         !pso(SH(ParticleVS), SH(ParticleCutoutMvPS), Opaque, true, true, psoPartCutMv, 2) ||
         !pso(SH(VisualsShadowVS), SH(VisualsShadowPS), Opaque, true, true, psoShadow, 0))
         return false;
@@ -789,8 +823,9 @@ void Visuals::Impl::writeCb(int slot, const PassContext& ctx, const float* viewP
 void Visuals::Impl::prepareWorld(const PassContext& ctx) {
     preparedFrame = frameCounter;
     frameCam[0] = ctx.camX, frameCam[1] = ctx.camY, frameCam[2] = ctx.camZ;
-    worldLists.clear(), shadowLists.clear();
+    worldLists.clear(), shadowLists.clear(), cracks.clear();
     buildWorld(ctx);
+    buildCracks(ctx);
     const bool handInWorld = ctx.shading && ctx.prevViewProj;
     float handVp[16], handPlain[16];
     if (handInWorld) {
@@ -800,6 +835,7 @@ void Visuals::Impl::prepareWorld(const PassContext& ctx) {
     uploadPending(ctx);
     writeCb(0, ctx, ctx.viewProj, ctx.shading, false);
     worldDraw[0] = flush(worldLists.cut), worldDraw[1] = flush(worldLists.tr), worldDraw[2] = flush(worldLists.glint);
+    crackDraw = flush(cracks);
     shadowDraw[0] = flush(shadowLists.cut), shadowDraw[1] = flush(shadowLists.tr);
     if (handInWorld && !(hudLists.cut.v.empty() && hudLists.tr.v.empty())) {
         writeCb(2, ctx, handVp, true, true, prevHandValid ? prevHandVp : handPlain);
@@ -1067,10 +1103,15 @@ void Visuals::Impl::tickLocal() {
     const float speed = nextMain >= 0 ? models.handInfo(nextMain).attackSpeed : 4.0f;
     const float delay = 20.0f / std::max(speed, 0.01f);
     const float swap = std::clamp((float(itemSwapTicker) + 1.0f) / delay, 0.0f, 1.0f);
-    const float mainTarget = (mainHand.item != nextMain || mainHand.dye != dyeMain) ? 0.0f : swap * swap * swap;
-    const float offTarget = (offHand.item != nextOff || offHand.dye != dyeOff) ? 0.0f : 1.0f;
-    mainHand.height += std::clamp(mainTarget - mainHand.height, -0.4f, 0.4f);
-    offHand.height += std::clamp(offTarget - offHand.height, -0.4f, 0.4f);
+    if (game->handsBusy) {  // FirstPersonHandsAndItems.tick: busy hands (paddling) go down
+        mainHand.height = std::clamp(mainHand.height - 0.4f, 0.0f, 1.0f);
+        offHand.height = std::clamp(offHand.height - 0.4f, 0.0f, 1.0f);
+    } else {
+        const float mainTarget = (mainHand.item != nextMain || mainHand.dye != dyeMain) ? 0.0f : swap * swap * swap;
+        const float offTarget = (offHand.item != nextOff || offHand.dye != dyeOff) ? 0.0f : 1.0f;
+        mainHand.height += std::clamp(mainTarget - mainHand.height, -0.4f, 0.4f);
+        offHand.height += std::clamp(offTarget - offHand.height, -0.4f, 0.4f);
+    }
     if (mainHand.height < 0.1f) mainHand.item = nextMain, mainHand.dye = dyeMain, mainHand.foil = foilMain;
     if (offHand.height < 0.1f) offHand.item = nextOff, offHand.dye = dyeOff, offHand.foil = foilOff;
 
@@ -1123,7 +1164,13 @@ void Visuals::Impl::update() {
         e.yaw = e.prevYaw = p.yaw / kDeg;
         e.headYaw = e.prevHeadYaw = e.yaw;
         e.pitch = e.prevPitch = p.pitch / kDeg;
-        e.pose = p.sneaking ? 5 : 0;
+        // Pose: crouching 5, swimming / crawling 3, gliding 1 (net.minecraft.world.entity.Pose).
+        e.pose = p.pose == Player::Pose::Crouching ? 5 : p.pose == Player::Pose::Swimming ? 3 : p.pose == Player::Pose::FallFlying ? 1 : 0;
+        e.vehicle = game->vehicleId;  // the sitting pose
+        // The item use (third-person arm poses): LivingEntity flags and ticks using the item.
+        e.livingFlags = game->use.active ? u8(1 | (game->use.hand ? 2 : 0)) : 0;
+        e.useTicks = game->use.ticksUsing();
+        e.chargedCrossbow = u8((chargeOf(36 + game->selectedSlot()) ? 1 : 0) | (chargeOf(45) ? 2 : 0));
         e.swingTime = swinging ? std::max(swingTime, 0) : -1;
         e.swingDuration = 6;
         if (const PlayerInfo* info = world.playerNamed(playerName)) e.skin = info->skin, e.slim = info->slim;
@@ -1406,7 +1453,7 @@ void Visuals::Impl::buildHand(const PassContext& ctx, float viewProj[16], bool j
     if (!game || !ui || game->cameraMode != 0 || !avatarReady) return;
     if (gameMode && gameMode() == 3) return;  // spectators have no hands
     if (ui->hudHidden()) return;               // GameRenderer.renderItemInHand: F1 hides them too
-    const CameraState cam = game->viewCamera();
+    const CameraState cam = game->handCamera();  // the hand bobs by itself (bobView below), not with the world
     // Projection like the renderer's, without jitter.
     const float cy = std::cos(cam.yaw), sy = std::sin(cam.yaw), cp = std::cos(cam.pitch), sp = std::sin(cam.pitch);
     const Vec3 fwd{-sy * cp, -sp, cy * cp};
@@ -1431,14 +1478,28 @@ void Visuals::Impl::buildHand(const PassContext& ctx, float viewProj[16], bool j
     const u32 light = lightAt(cam.x, cam.y, cam.z);
     lock.unlock();
 
-    // GameRenderer.bobView (bobHurt: no damage tilt here).
+    // GameRenderer.renderItemInHand: bobHurt, then bobView (the game's walk distance and bob).
     Xf pose = view;
     {
-        const float wd = -(walkDist + (walkDist - walkDistO) * pt);
-        const float b = bobO + (bob - bobO) * pt;
-        pose = xfMul(pose, xfTranslate(std::sin(wd * kPi) * b * 0.5f, -std::abs(std::cos(wd * kPi) * b), 0));
-        pose = xfMul(pose, xfRotZ(std::sin(wd * kPi) * b * 3.0f * kDeg));
-        pose = xfMul(pose, xfRotX(std::abs(std::cos(wd * kPi - 0.2f) * b) * 5.0f * kDeg));
+        const float gpt = game->partialTick();
+        if (game->dead) {
+            const float duration = std::min(float(game->deathTime) + gpt, 20.0f);
+            pose = xfMul(pose, xfRotZ((40.0f - 8000.0f / (duration + 200.0f)) * kDeg));
+        }
+        if (game->hurtTime > 0) {
+            float hurt = (float(game->hurtTime) - gpt) / float(game->hurtDuration);
+            hurt = std::sin(hurt * hurt * hurt * hurt * kPi);
+            pose = xfMul(pose, xfRotY(-game->hurtDir * kDeg));
+            pose = xfMul(pose, xfRotZ(-hurt * 14.0f * kDeg));
+            pose = xfMul(pose, xfRotY(game->hurtDir * kDeg));
+        }
+        if (game->bobView) {
+            const float wd = -(game->walkDist + (game->walkDist - game->walkDistO) * gpt);
+            const float b = game->bobO + (game->bob - game->bobO) * gpt;
+            pose = xfMul(pose, xfTranslate(std::sin(wd * kPi) * b * 0.5f, -std::abs(std::cos(wd * kPi) * b), 0));
+            pose = xfMul(pose, xfRotZ(std::sin(wd * kPi) * b * 3.0f * kDeg));
+            pose = xfMul(pose, xfRotX(std::abs(std::cos(wd * kPi - 0.2f) * b) * 5.0f * kDeg));
+        }
     }
     // submitHandsWithItems: sway against the lagging view.
     const float viewX = p.pitch / kDeg, viewY = p.yaw / kDeg;
@@ -1511,29 +1572,256 @@ void Visuals::Impl::buildHand(const PassContext& ctx, float viewProj[16], bool j
         }
         hudLists.cut.add(ps, first, u32(dyn.size()) - first, light, 0xFFFFFFFF, 1, hudLists.next());
     };
-    auto renderItem = [&](Xf ps, const HandState& h, float inverseArmHeight, float att, bool rightArm, bool swingThis) {
-        const int inv = rightArm ? 1 : -1;
-        ps = xfMul(ps, xfTranslate(float(inv) * 0.56f, -0.52f + inverseArmHeight * -0.6f, -0.72f));  // applyItemArmTransform
-        if (swingThis) {  // swingArm
-            const float sq = std::sqrt(att);
-            ps = xfMul(ps, xfTranslate(float(inv) * -0.4f * std::sin(sq * kPi), 0.2f * std::sin(sq * kPi * 2), -0.2f * std::sin(att * kPi)));
-            const float ySwing = std::sin(att * att * kPi);
-            ps = xfMul(ps, xfRotY(float(inv) * (45.0f + ySwing * -20.0f) * kDeg));
-            const float xz = std::sin(sq * kPi);
-            ps = xfMul(ps, xfRotZ(float(inv) * xz * -20.0f * kDeg));
-            ps = xfMul(ps, xfRotX(xz * -80.0f * kDeg));
-            ps = xfMul(ps, xfRotY(float(inv) * -45.0f * kDeg));
-        }
-        pushItem(hudLists, models.mesh(h.item, h.dye, false), rightArm ? Display::FirstRight : Display::FirstLeft, ps, light, h.foil);
+    // FirstPersonHandsAndItemsRenderer.submitArmWithItem: the item use animations (eat / drink, bow, crossbow,
+    // trident, brush, blocking with other items), else the attack swing of the swinging hand.
+    const Game::ItemUse& use = game->use;
+    auto applyItemArm = [&](Xf& ps, int inv, float inverseArmHeight) {  // applyItemArmTransform
+        ps = xfMul(ps, xfTranslate(float(inv) * 0.56f, -0.52f + inverseArmHeight * -0.6f, -0.72f));
     };
+    auto swingArm = [&](Xf& ps, int inv, float att) {  // swingArm + applyItemArmAttackTransform
+        const float sq = std::sqrt(att);
+        ps = xfMul(ps, xfTranslate(float(inv) * -0.4f * std::sin(sq * kPi), 0.2f * std::sin(sq * kPi * 2), -0.2f * std::sin(att * kPi)));
+        const float ySwing = std::sin(att * att * kPi);
+        ps = xfMul(ps, xfRotY(float(inv) * (45.0f + ySwing * -20.0f) * kDeg));
+        const float xz = std::sin(sq * kPi);
+        ps = xfMul(ps, xfRotZ(float(inv) * xz * -20.0f * kDeg));
+        ps = xfMul(ps, xfRotX(xz * -80.0f * kDeg));
+        ps = xfMul(ps, xfRotY(float(inv) * -45.0f * kDeg));
+    };
+    // Bow / crossbow / trident pull: the drawn-back shake and stretch (rotate(Axis.YN, invert * 45) at the end).
+    auto pullTransform = [&](Xf& ps, int inv, float power, float timeHeld, float zPush) {
+        if (power > 0.1f) {
+            const float shake = std::sin((timeHeld - 0.1f) * 1.3f) * (power - 0.1f);
+            ps = xfMul(ps, xfTranslate(0, shake * 0.004f, 0));
+        }
+        ps = xfMul(ps, xfTranslate(0, 0, power * zPush));
+        ps = xfMul(ps, xfScale(1.0f, 1.0f, 1.0f + power * 0.2f));
+        ps = xfMul(ps, xfRotY(-float(inv) * 45.0f * kDeg));
+    };
+    auto renderItem = [&](Xf ps, const HandState& h, float inverseArmHeight, float att, bool rightArm, int hand) {
+        const int inv = rightArm ? 1 : -1;
+        const std::string name = models.itemName(h.item);
+        const int charge = chargeOf(hand == 0 ? 36 + game->selectedSlot() : 45);
+        // isUsingItem && useItemRemainingTicks > 0 && the use is this hand's
+        const bool usingThis = use.active && use.remaining > 0 && use.hand == hand && use.item == h.item;
+        const float remaining = float(use.remaining), duration = float(use.duration);
+        ItemModels::UseState us;  // the item model's using_item / use_duration / crossbow/pull / use_cycle
+        if (use.active && use.hand == hand && use.item == h.item) {
+            us.usingItem = true;
+            us.useTicks = float(use.ticksUsing());
+            us.pull = us.useTicks / 25.0f;  // CrossbowItem.getChargeDuration (no Quick Charge)
+            us.remaining = remaining;
+        }
+        us.charge = charge;
+        if (name == "crossbow") {
+            applyItemArm(ps, inv, inverseArmHeight);
+            if (usingThis && !charge) {
+                ps = xfMul(ps, xfTranslate(float(inv) * -0.4785682f, -0.094387f, 0.05731531f));
+                ps = xfMul(ps, xfRotX(-11.935f * kDeg));
+                ps = xfMul(ps, xfRotY(float(inv) * 65.3f * kDeg));
+                ps = xfMul(ps, xfRotZ(float(inv) * -9.785f * kDeg));
+                const float timeHeld = duration - (remaining - pt + 1.0f);
+                pullTransform(ps, inv, std::min(timeHeld / 25.0f, 1.0f), timeHeld, 0.04f);
+            } else {
+                swingArm(ps, inv, att);
+                if (charge && att < 0.001f && hand == 0) {
+                    ps = xfMul(ps, xfTranslate(float(inv) * -0.641864f, 0, 0));
+                    ps = xfMul(ps, xfRotY(float(inv) * 10.0f * kDeg));
+                }
+            }
+        } else if (usingThis) {
+            const auto anim = ItemRules::Anim(use.anim);
+            const bool customArm = anim == ItemRules::Anim::Eat || anim == ItemRules::Anim::Drink || anim == ItemRules::Anim::Spear;
+            if (!customArm) applyItemArm(ps, inv, inverseArmHeight);
+            switch (anim) {
+                case ItemRules::Anim::Eat:
+                case ItemRules::Anim::Drink: {  // applyEatTransform
+                    const float curr = remaining - pt + 1.0f, scaled = curr / std::max(duration, 1.0f);
+                    if (scaled < 0.8f) ps = xfMul(ps, xfTranslate(0, std::abs(std::cos(curr / 4.0f * kPi) * 0.1f), 0));
+                    const float jiggle = 1.0f - std::pow(scaled, 27.0f);
+                    ps = xfMul(ps, xfTranslate(jiggle * 0.6f * float(inv), jiggle * -0.5f, 0));
+                    ps = xfMul(ps, xfRotY(float(inv) * jiggle * 90.0f * kDeg));
+                    ps = xfMul(ps, xfRotX(jiggle * 10.0f * kDeg));
+                    ps = xfMul(ps, xfRotZ(float(inv) * jiggle * 30.0f * kDeg));
+                    applyItemArm(ps, inv, inverseArmHeight);
+                    break;
+                }
+                case ItemRules::Anim::Block:
+                    if (name != "shield") {
+                        ps = xfMul(ps, xfTranslate(float(inv) * -0.14142136f, 0.08f, 0.14142136f));
+                        ps = xfMul(ps, xfRotX(-102.25f * kDeg));
+                        ps = xfMul(ps, xfRotY(float(inv) * 13.365f * kDeg));
+                        ps = xfMul(ps, xfRotZ(float(inv) * 78.05f * kDeg));
+                    }
+                    break;
+                case ItemRules::Anim::Bow: {
+                    ps = xfMul(ps, xfTranslate(float(inv) * -0.2785682f, 0.18344387f, 0.15731531f));
+                    ps = xfMul(ps, xfRotX(-13.935f * kDeg));
+                    ps = xfMul(ps, xfRotY(float(inv) * 35.3f * kDeg));
+                    ps = xfMul(ps, xfRotZ(float(inv) * -9.785f * kDeg));
+                    const float timeHeld = duration - (remaining - pt + 1.0f);
+                    float power = timeHeld / 20.0f;
+                    power = std::min((power * power + power * 2.0f) / 3.0f, 1.0f);
+                    pullTransform(ps, inv, power, timeHeld, 0.04f);
+                    break;
+                }
+                case ItemRules::Anim::Trident: {
+                    ps = xfMul(ps, xfTranslate(float(inv) * -0.5f, 0.7f, 0.1f));
+                    ps = xfMul(ps, xfRotX(-55.0f * kDeg));
+                    ps = xfMul(ps, xfRotY(float(inv) * 35.3f * kDeg));
+                    ps = xfMul(ps, xfRotZ(float(inv) * -9.785f * kDeg));
+                    const float timeHeld = duration - (remaining - pt + 1.0f);
+                    pullTransform(ps, inv, std::min(timeHeld / 10.0f, 1.0f), timeHeld, 0.2f);
+                    break;
+                }
+                case ItemRules::Anim::Brush: {  // applyBrushTransform
+                    const float delta = std::fmod(remaining, 10.0f) - pt + 1.0f;
+                    const float swipe = -15.0f + 75.0f * std::cos((1.0f - delta / 10.0f) * 2.0f * kPi);
+                    if (!rightArm) {
+                        ps = xfMul(ps, xfTranslate(0.1f, 0.83f, 0.35f));
+                        ps = xfMul(ps, xfRotX(-80.0f * kDeg));
+                        ps = xfMul(ps, xfRotY(-90.0f * kDeg));
+                        ps = xfMul(ps, xfRotX(swipe * kDeg));
+                        ps = xfMul(ps, xfTranslate(-0.3f, 0.22f, 0.35f));
+                    } else {
+                        ps = xfMul(ps, xfTranslate(-0.25f, 0.22f, 0.35f));
+                        ps = xfMul(ps, xfRotX(-80.0f * kDeg));
+                        ps = xfMul(ps, xfRotY(90.0f * kDeg));
+                        ps = xfMul(ps, xfRotX(swipe * kDeg));
+                    }
+                    break;
+                }
+                case ItemRules::Anim::Bundle: swingArm(ps, inv, att); break;
+                case ItemRules::Anim::Spear: ps = xfMul(ps, xfTranslate(float(inv) * 0.56f, -0.52f, -0.72f)); break;
+                default: break;
+            }
+        } else {
+            applyItemArm(ps, inv, inverseArmHeight);
+            if (att > 0) swingArm(ps, inv, att);
+        }
+        pushItem(hudLists, models.mesh(h.item, h.dye, false, us), rightArm ? Display::FirstRight : Display::FirstLeft, ps, light,
+                 h.foil);
+    };
+    // LocalPlayer.isScoping: the spyglass overlay replaces the hands.
+    if (use.active && ItemRules::Anim(use.anim) == ItemRules::Anim::Spyglass) return;
+    // evaluateWhichHandsToRender: a bow or crossbow in use is drawn alone; a charged crossbow hides the other hand.
+    bool drawMain = true, drawOff = true;
+    {
+        const std::string mainName = mainHand.item >= 0 ? models.itemName(mainHand.item) : "";
+        const std::string offName = offHand.item >= 0 ? models.itemName(offHand.item) : "";
+        const bool bowOrCrossbow = mainName == "bow" || offName == "bow" || mainName == "crossbow" || offName == "crossbow";
+        const bool mainCharged = mainName == "crossbow" && chargeOf(36 + game->selectedSlot());
+        const bool offCharged = offName == "crossbow" && chargeOf(45);
+        if (bowOrCrossbow) {
+            if (!use.active) {
+                drawOff = !mainCharged;
+            } else {
+                const std::string used = models.itemName(use.item);
+                if (used != "bow" && used != "crossbow") drawOff = !(use.hand == 0 && offCharged);
+                else drawMain = use.hand == 0, drawOff = use.hand == 1;
+            }
+        }
+    }
     // Main hand (right arm), then the off hand.
     const float mainSwap = mainHand.item >= 0 ? models.handInfo(mainHand.item).swapScale : 1.0f;
     const float offSwap = offHand.item >= 0 ? models.handInfo(offHand.item).swapScale : 1.0f;
     const float mainInv = mainSwap * (1.0f - (mainHand.oHeight + (mainHand.height - mainHand.oHeight) * pt));
     const float offInv = offSwap * (1.0f - (offHand.oHeight + (offHand.height - offHand.oHeight) * pt));
-    if (mainHand.item < 0) renderArm(pose, mainInv, attack, true);
-    else renderItem(pose, mainHand, mainInv, attack, true, true);
-    if (offHand.item >= 0) renderItem(pose, offHand, offInv, 0.0f, false, false);
+    if (drawMain) {
+        if (mainHand.item < 0) renderArm(pose, mainInv, attack, true);
+        else renderItem(pose, mainHand, mainInv, attack, true, 0);
+    }
+    if (drawOff && offHand.item >= 0) renderItem(pose, offHand, offInv, 0.0f, false, 1);
+}
+
+// CrossbowItem.isCharged / the charge_type property of a player inventory menu slot: 0 none, 1 arrow, 2 rocket.
+int Visuals::Impl::chargeOf(int menuSlot) const {
+    const ui::ItemStack* s = ui ? ui->playerSlot(menuSlot) : nullptr;
+    if (!s || !items) return 0;
+    static int type = -2;
+    if (type == -2) type = items->componentType("charged_projectiles");
+    for (const auto& c : s->added) {
+        if (c.type != type) continue;
+        net::Reader r(reinterpret_cast<const u8*>(c.data.data()), c.data.size());
+        if (r.varInt() <= 0) return 0;
+        r.varInt();
+        const int item = r.varInt();
+        return r.ok && items->name(item) == "minecraft:firework_rocket" ? 2 : 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Block destruction overlays (LevelRenderer: the block's model drawn with the crumbling render type and the
+// destroy stage texture projected onto each face, SheetedDecalTextureGenerator), multiplied into the colour like the
+// CRUMBLING pipeline. Shader packs and the shader pipeline blend translucently: the OIT variant of the textures
+// (the same look with alpha).
+
+void Visuals::Impl::buildCracks(const PassContext& ctx) {
+    if (!game || game->destructions().empty()) return;
+    // One overlay per block: the furthest stage of everyone breaking it (the progress set's last entry).
+    std::unordered_map<u64, const Game::Destruction*> byPos;
+    for (const auto& [id, d] : game->destructions()) {
+        const double dx = d.x + 0.5 - ctx.camX, dy = d.y + 0.5 - ctx.camY, dz = d.z + 0.5 - ctx.camZ;
+        if (dx * dx + dy * dy + dz * dz > 1024.0) continue;
+        const u64 key = (u64(u32(d.x)) << 40) ^ (u64(u32(d.y) & 0xFFF) << 28) ^ u64(u32(d.z) & 0xFFFFFFF);
+        auto [it, added] = byPos.emplace(key, &d);
+        if (!added && it->second->stage < d.stage) it->second = &d;
+    }
+    BlockRegistry& reg = world.registry();
+    std::shared_lock lock(world.world().mutex());
+    for (const auto& [key, d] : byPos) {
+        const bool oit = ctx.pack != nullptr || ctx.shading;
+        int& rect = crackRects[oit][std::clamp(d->stage, 0, 9)];
+        if (rect == -2)
+            rect = models.texture(std::string(oit ? "block/destroy_oit_stage_" : "block/destroy_stage_") +
+                                  std::to_string(std::clamp(d->stage, 0, 9)));
+        if (rect < 0) continue;
+        const ItemModels::Rect& r = models.rect(rect);
+        const u16 block = world.world().block(d->x, d->y, d->z);
+        const BlockInfo& b = reg.infos()[block];
+        if (b.kind == KindAir || (b.fluid && !b.waterlogged)) continue;
+        const u32 first = u32(dyn.size());
+        auto quad = [&](const float (&p)[4][3]) {  // corners in order around the quad
+            if (dyn.size() >= kMaxDynamic) return;
+            float e1[3], e2[3], n[3];
+            for (int a = 0; a < 3; ++a) e1[a] = p[1][a] - p[0][a], e2[a] = p[2][a] - p[0][a];
+            n[0] = e1[1] * e2[2] - e1[2] * e2[1], n[1] = e1[2] * e2[0] - e1[0] * e2[2], n[2] = e1[0] * e2[1] - e1[1] * e2[0];
+            const float len = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+            if (len < 1e-9f) return;
+            for (float& c : n) c /= len;
+            const int axis = std::abs(n[1]) >= std::abs(n[0]) && std::abs(n[1]) >= std::abs(n[2]) ? 1
+                             : std::abs(n[2]) >= std::abs(n[0])                                   ? 2
+                                                                                                  : 0;
+            MeshQuad q{};
+            for (int k = 0; k < 4; ++k) {
+                for (int a = 0; a < 3; ++a) q.pos[k][a] = p[k][a] + n[a] * 0.002f;  // polygon offset
+                const float x = std::clamp(p[k][0], 0.0f, 1.0f), y = std::clamp(p[k][1], 0.0f, 1.0f),
+                            z = std::clamp(p[k][2], 0.0f, 1.0f);
+                const float u = axis == 1 ? x : axis == 2 ? x : z, v = axis == 1 ? z : 1.0f - y;
+                q.uv[k][0] = r.u0 + u * r.du, q.uv[k][1] = r.v0 + v * r.dv;
+            }
+            q.normal = packNormal(n[0], n[1], n[2]);
+            q.color = 0xFFFFFFFF, q.tex = kTexItems, q.flags = kQuadNoShade;
+            dyn.push_back(q);
+        };
+        if (b.kind == KindCube) {
+            static constexpr float kFaces[6][4][3] = {
+                {{0, 0, 0}, {1, 0, 0}, {1, 0, 1}, {0, 0, 1}}, {{0, 1, 0}, {0, 1, 1}, {1, 1, 1}, {1, 1, 0}},
+                {{0, 0, 0}, {0, 1, 0}, {1, 1, 0}, {1, 0, 0}}, {{0, 0, 1}, {1, 0, 1}, {1, 1, 1}, {0, 1, 1}},
+                {{0, 0, 0}, {0, 0, 1}, {0, 1, 1}, {0, 1, 0}}, {{1, 0, 0}, {1, 1, 0}, {1, 1, 1}, {1, 0, 1}}};
+            for (const auto& f : kFaces) quad(f);
+        } else {
+            for (u32 i = b.quadFirst; i < b.quadFirst + b.quadCount; ++i) {
+                const ModelQuad& mq = reg.modelQuad(i);
+                const float p[4][3] = {{mq.pos[0][0], mq.pos[0][1], mq.pos[0][2]}, {mq.pos[1][0], mq.pos[1][1], mq.pos[1][2]},
+                                       {mq.pos[3][0], mq.pos[3][1], mq.pos[3][2]}, {mq.pos[2][0], mq.pos[2][1], mq.pos[2][2]}};
+                quad(p);  // "Z" order (0 1 2 / 2 1 3) -> around (0 1 3 2)
+            }
+        }
+        const Xf m = xfTranslate(float(d->x - ctx.camX), float(d->y - ctx.camY), float(d->z - ctx.camZ));
+        cracks.add(m, first, u32(dyn.size()) - first, 256 | 512, 0xFFFFFFFF, 1);
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------

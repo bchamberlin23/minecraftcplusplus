@@ -2,7 +2,9 @@
 // logic), the creative item list, pause and options menus, chat input.
 #include "audio/audio.h"
 #include "render/renderer.h"
+#include "ui/entity_preview.h"
 #include "ui/frontend.h"
+#include "ui/mp_hud.h"
 #include "ui/ui_state.h"
 #include "world/terrain.h"
 
@@ -12,7 +14,6 @@ namespace ui {
 
 namespace {
 constexpr u32 kLabel = 0xFF404040;
-constexpr int kCreativeCols = 9, kCreativeRows = 5;
 
 std::string shortName(const std::string& n) { return n.substr(n.find(':') + 1); }
 
@@ -46,6 +47,11 @@ bool isFuel(const std::string& n) {
 Layout layoutFor(const Menu& m) {
     Layout l;
     const std::string& t = m.typeName;
+    if (m.type >= 0)  // a station screen (modules.h)
+        if (const StationDef* d = stationFor(t); d && d->layout) {
+            d->layout(m, l);
+            return l;
+        }
     if (m.type < 0) {
         l.background = "gui/container/inventory";
         l.slots.push_back({154, 28});
@@ -112,6 +118,7 @@ struct Sim {
     Menu& m;
     ItemStack& carried;
     bool creative;
+    const StationDef* station = nullptr;  // modules.h
     int resultSlot = -1;          // crafting / furnace output
     std::vector<int> craftGrid;   // consumed when the result is taken
 
@@ -119,6 +126,7 @@ struct Sim {
     std::string name(const ItemStack& st) const { return shortName(s.items.name(st.item)); }
     bool mayPlace(int slot, const ItemStack& st) const {
         if (slot == resultSlot) return false;
+        if (station && station->mayPlace && slot < int(m.slots.size()) - 36 && !station->mayPlace(s, m, slot, st)) return false;
         if (m.type < 0 && slot >= 5 && slot <= 8) return equipmentSlot(name(st)) == slot;
         return true;
     }
@@ -209,8 +217,15 @@ struct Sim {
                 if (!ok) ok = index < 30 ? moveTo(st, 30, 39, false) : moveTo(st, 3, 30, false);
             } else ok = moveTo(st, 3, 39, false);
         } else {
-            const int own = n - 36;
-            ok = index < own ? moveTo(st, own, n, true) : moveTo(st, 0, own, false);
+            int r = -1;
+            if (station && station->quickMove)
+                r = station->quickMove(s, m, index, clicked, [&](int a, int b, bool back) { return moveTo(st, a, b, back); });
+            if (r >= 0) {
+                ok = r == 1;
+            } else {
+                const int own = n - 36;
+                ok = index < own ? moveTo(st, own, n, true) : moveTo(st, 0, own, false);
+            }
         }
         if (!ok) return {};
         at(index) = st;
@@ -227,6 +242,9 @@ struct Sim {
 }  // namespace
 
 static int qcStatus = 0, qcType = 0;
+static int deathScreenTick = 0;  // DeathScreen.delayTicker start (guiTicks)
+void openAdvancementsFromPause(UiState& s);  // advancements.cpp
+void openStatsFromPause(UiState& s);          // stats.cpp
 static std::vector<int> qcSlots;
 
 void Ui::State::containerClick(int slot, int button, int input) {
@@ -237,6 +255,8 @@ void Ui::State::containerClick(int slot, int button, int input) {
     if (m.type < 0) sim.resultSlot = 0, sim.craftGrid = {1, 2, 3, 4};
     else if (m.typeName == "crafting") sim.resultSlot = 0, sim.craftGrid = {1, 2, 3, 4, 5, 6, 7, 8, 9};
     else if (m.typeName == "furnace" || m.typeName == "smoker" || m.typeName == "blast_furnace") sim.resultSlot = 2;
+    if (m.type >= 0)
+        if (const StationDef* d = stationFor(m.typeName)) sim.station = d, sim.resultSlot = d->resultSlot;
     const int n = int(m.slots.size());
     auto valid = [&](int i) { return i >= 0 && i < n; };
 
@@ -387,24 +407,6 @@ void Ui::State::creativeSetSlot(int menuSlot, const ItemStack& st) {
     client->sendPlay("set_creative_mode_slot", w);
 }
 
-void Ui::State::updateCreativeFilter() {
-    creativeFiltered.clear();
-    std::string q;
-    for (char ch : search.value) q += char(std::tolower(u8(ch)));
-    for (int i = 0; i < int(creativeItems.size()); ++i) {
-        const ItemStack& st = creativeItems[size_t(i)];
-        const std::string name = shortName(items.name(st.item));
-        if (name == "air") continue;
-        if (!q.empty()) {
-            std::string display = items.displayName(st).plain();
-            for (char& ch : display) ch = char(std::tolower(u8(ch)));
-            if (display.find(q) == std::string::npos && name.find(q) == std::string::npos) continue;
-        }
-        creativeFiltered.push_back(i);
-    }
-    creativeScroll = 0;
-}
-
 // --- buttons ------------------------------------------------------------------------------------------------
 
 void Ui::State::buildButtons() {
@@ -417,6 +419,7 @@ void Ui::State::buildButtons() {
     if (screen == Screen::Video) return buildVideoButtons();  // video_screen.cpp
     if (screen == Screen::PackOptions) return buildPackButtons();  // render/packs/pack_screen.cpp
     if (frontEndScreen()) return buildFrontEndButtons();     // title.cpp
+    if (const ScreenDef* d = screenDef(screen); d && d->build) return d->build(*this);  // modules.h
     if (screen == Screen::Pause) {
         const int gridW = 212, gridH = 50 + 20 + 4 * 24;
         const int left = (W - gridW) / 2, top = int(float(H - gridH) * 0.25f);
@@ -434,8 +437,8 @@ void Ui::State::buildButtons() {
         int y = top + 50;
         full(y, tr("menu.returnToGame"), [this] { closeScreen(); });
         y += 24;
-        half(0, y, tr("gui.advancements"), nullptr, false);
-        half(1, y, tr("gui.stats"), nullptr, false);
+        half(0, y, tr("gui.advancements"), [this] { openAdvancementsFromPause(*this); });  // advancements.cpp
+        half(1, y, tr("gui.stats"), [this] { openStatsFromPause(*this); });  // stats.cpp
         y += 24;
         full(y, Text("Mods & Packs"), [this] { openScreen(Screen::Mods); });  // mods_screen.cpp
         y += 24;
@@ -450,21 +453,28 @@ void Ui::State::buildButtons() {
             fe->titleRequested = true;
             quit = true;
         });
-    } else if (screen == Screen::Death) {  // DeathScreen
+    } else if (screen == Screen::Death) {  // DeathScreen: the buttons wake up after 20 ticks (init resets the delay)
+        deathScreenTick = guiTicks;
         Button respawn;
-        respawn.x = float(W / 2 - 100), respawn.y = float(H / 4 + 72), respawn.label = tr("deathScreen.respawn");
-        respawn.onPress = [this] {
+        respawn.x = float(W / 2 - 100), respawn.y = float(H / 4 + 72);
+        respawn.label = tr(hardcore ? "deathScreen.spectate" : "deathScreen.respawn");
+        respawn.active = false;
+        respawn.onPress = [this] {  // the screen closes when the server's respawn arrives (ui.cpp)
             if (online()) {
                 net::Writer w;
                 w.varInt(0);  // ServerboundClientCommandPacket.Action.PERFORM_RESPAWN
                 client->sendPlay("client_command", w);
+                deathScreenTick = INT32_MAX;  // pressed: stays inactive
+                buttons[0].active = false;
+            } else {
+                deathMessage = Text();
+                closeScreen();
             }
-            deathMessage = Text();
-            closeScreen();
         };
         buttons.push_back(std::move(respawn));
         Button title;
         title.x = float(W / 2 - 100), title.y = float(H / 4 + 96), title.label = tr("deathScreen.titleScreen");
+        title.active = false;
         title.onPress = [this] {
             fe->titleRequested = true;
             quit = true;
@@ -597,11 +607,13 @@ void Ui::State::drawScreen(Canvas& c) {
         if (b.onSlide) b.onSlide(b.value);
     }
     if (frontEndScreen()) return drawFrontEnd(c);  // title.cpp
+    if (const ScreenDef* d = screenDef(screen); d && d->draw) return d->draw(*this, c);  // modules.h
     switch (screen) {
         case Screen::Chat: {
             drawChat(c, true);
             c.fill(2, float(H - 14), float(W - 2), float(H - 2), withAlpha(0, 0.5f));
             drawTextField(c, chatInput, 4, float(H - 12 + 2), float(W - 8), 0xFFE0E0E0, true, true);
+            chatExtDraw(*this, c);  // mp_hud.h: command suggestions, hovered chat components
             return;
         }
         case Screen::Mods: drawModsScreen(c); return;  // mods_screen.cpp
@@ -609,9 +621,13 @@ void Ui::State::drawScreen(Canvas& c) {
         case Screen::PackOptions: drawPackScreen(c); return;  // render/packs/pack_screen.cpp
         case Screen::Death: {
             c.gradient(0, 0, float(W), float(H), 0x60500000, 0xA0803030);
+            if (guiTicks - deathScreenTick >= 20 && deathScreenTick != INT32_MAX)
+                for (Button& b : buttons) b.active = true;
+            else if (deathScreenTick == INT32_MAX && buttons.size() > 1)
+                buttons[1].active = true;
             c.push();
             c.scaleBy(2);
-            drawCentered(c, Text(res.translate("deathScreen.title")), float(W / 2 / 2), 30, 0xFFFFFFFF);
+            drawCentered(c, Text(res.translate(hardcore ? "deathScreen.title.hardcore" : "deathScreen.title")), float(W / 2 / 2), 30, 0xFFFFFFFF);
             c.pop();
             if (!deathMessage.plain().empty()) drawCentered(c, deathMessage, float(W / 2), 85, 0xFFFFFFFF);
             drawCentered(c, translatable("deathScreen.score.value", {Text(std::to_string(xpTotal), colorStyle(0xFFFF55))}, lang()),
@@ -631,66 +647,22 @@ void Ui::State::drawScreen(Canvas& c) {
     }
     c.gradient(0, 0, float(W), float(H), 0xC0101010, 0xD0101010);
 
-    if (screen == Screen::Creative) {
-        const int iw = 195, ih = 136;
-        const float left = float((W - iw) / 2), top = float((H - ih) / 2);
-        // Selected search tab (top row, column 6 aligned right) behind the panel edge.
-        const float tabX = left + float(iw - 27 * (7 - 6) + 1), tabY = top - 28;
-        blitSprite(c, sprites.sprite("container/creative_inventory/tab_top_selected_7"), tabX, tabY, 26, 32);
-        blitTexture(c, sprites.texture("gui/container/creative_inventory/tab_item_search"), left, top, 0, 0, float(iw), float(ih), 256, 256);
-        {
-            ItemStack compass;
-            compass.item = items.id("compass"), compass.count = 1;
-            drawItem(c, compass, tabX + 5, tabY + 9, false);
-        }
-        drawText(c, Text(res.translate("itemGroup.search")), left + 8, top + 6, kLabel, false);
-        drawTextField(c, search, left + 82, top + 6, 80, 0xFFFFFFFF, true, true);
-        const int total = int(creativeFiltered.size());
-        const int rowsTotal = (total + kCreativeCols - 1) / kCreativeCols;
-        const int maxRow = std::max(0, rowsTotal - kCreativeRows);
-        const int firstRow = int(std::lround(creativeScroll * float(maxRow)));
-        hoveredSlot = -1;
-        int hoveredCreative = -1;
-        for (int r = 0; r < kCreativeRows; ++r)
-            for (int col = 0; col < kCreativeCols; ++col) {
-                const int idx = (firstRow + r) * kCreativeCols + col;
-                if (idx >= total) continue;
-                const float sx = left + 9 + float(col * 18), sy = top + 18 + float(r * 18);
-                const bool hover = mouseX >= sx - 1 && mouseX < sx + 17 && mouseY >= sy - 1 && mouseY < sy + 17;
-                if (hover) hoveredCreative = idx, blitSprite(c, sprites.sprite("container/slot_highlight_back"), sx - 4, sy - 4, 24, 24);
-                drawItem(c, creativeItems[size_t(creativeFiltered[size_t(idx)])], sx, sy);
-                if (hover) blitSprite(c, sprites.sprite("container/slot_highlight_front"), sx - 4, sy - 4, 24, 24);
-            }
-        for (int i = 0; i < 9; ++i) {
-            const float sx = left + 9 + float(i * 18), sy = top + 112;
-            const bool hover = mouseX >= sx - 1 && mouseX < sx + 17 && mouseY >= sy - 1 && mouseY < sy + 17;
-            if (hover) hoveredSlot = 36 + i, blitSprite(c, sprites.sprite("container/slot_highlight_back"), sx - 4, sy - 4, 24, 24);
-            drawItem(c, inventory.slots[size_t(36 + i)], sx, sy);
-            if (hover) blitSprite(c, sprites.sprite("container/slot_highlight_front"), sx - 4, sy - 4, 24, 24);
-        }
-        const float sx = left + 175, sy0 = top + 18;
-        if (scrolling && leftDown) creativeScroll = std::clamp((mouseY - sy0 - 7.5f) / (112 - 15), 0.f, 1.f);
-        blitSprite(c, sprites.sprite(maxRow > 0 ? "container/creative_inventory/scroller" : "container/creative_inventory/scroller_disabled"),
-                   sx, sy0 + float(int(float(112 - 17) * creativeScroll)), 12, 15);
-        if (!carried.empty()) drawItem(c, carried, mouseX - 8, mouseY - 8);
-        else if (hoveredCreative >= 0) drawTooltip(c, items.tooltip(creativeItems[size_t(creativeFiltered[size_t(hoveredCreative)])]), mouseX, mouseY);
-        else if (hoveredSlot >= 0 && !inventory.slots[size_t(hoveredSlot)].empty())
-            drawTooltip(c, items.tooltip(inventory.slots[size_t(hoveredSlot)]), mouseX, mouseY);
-        return;
-    }
+    // The creative inventory is creative.cpp (a registered screen).
 
     // Inventory / container.
     Menu& m = activeMenu();
     const Layout l = layoutFor(m);
     if (m.slots.size() < l.slots.size()) m.slots.resize(l.slots.size());
     const float left = float((W - l.width) / 2), top = float((H - l.height) / 2);
-    const Sprite* bg = sprites.texture(l.background);
-    if (l.chestRows) {
+    const Sprite* bg = l.background.empty() ? nullptr : sprites.texture(l.background);
+    if (!bg) {
+    } else if (l.chestRows) {
         blitTexture(c, bg, left, top, 0, 0, float(l.width), float(l.rows * 18 + 17), 256, 256);
         blitTexture(c, bg, left, top + float(l.rows * 18 + 17), 0, 126, float(l.width), 96, 256, 256);
     } else {
-        blitTexture(c, bg, left, top, 0, 0, float(l.width), float(l.height), 256, 256);
+        blitTexture(c, bg, left, top, 0, 0, float(l.width), float(l.height), l.texW, l.texH);
     }
+    const StationDef* station = m.type >= 0 ? stationFor(m.typeName) : nullptr;  // modules.h
     if (m.typeName == "furnace" || m.typeName == "smoker" || m.typeName == "blast_furnace") {
         const std::string dir = "container/" + m.typeName + "/";
         const int litTime = m.data[0], litDuration = m.data[1], progress = m.data[2], total = m.data[3];
@@ -703,6 +675,12 @@ void Ui::State::drawScreen(Canvas& c) {
         const int w = int(std::ceil(burn * 24.0f));
         blitSpriteRegion(c, sprites.sprite(dir + "burn_progress"), 24, 16, 0, 0, left + 79, top + 34, float(w), 16);
     }
+    if (m.type < 0) {  // InventoryScreen: the player follows the mouse
+        PreviewEntity pe;
+        if (previewLocalPlayer(*this, pe))
+            drawEntityFollowsMouse(*this, c, pe, int(left) + 26, int(top) + 8, int(left) + 75, int(top) + 78, 30, 0.0625f, mouseX, mouseY);
+    }
+    if (station && station->drawBg) station->drawBg(*this, c, m, l, left, top);
     // Slots.
     hoveredSlot = -1;
     for (size_t i = 0; i < l.slots.size(); ++i) {
@@ -751,8 +729,9 @@ void Ui::State::drawScreen(Canvas& c) {
     // Labels.
     const Text title = m.type < 0 ? Text(res.translate("container.crafting")) : m.title;
     const float tx = l.titleX >= 0 ? float(l.titleX) : float((l.width - font.width(title)) / 2);
-    drawText(c, title, left + tx, top + float(l.titleY), kLabel, false);
+    if (l.titleY > -1000) drawText(c, title, left + tx, top + float(l.titleY), kLabel, false);
     if (l.invLabelY > -1000) drawText(c, Text(res.translate("container.inventory")), left + float(l.invLabelX), top + float(l.invLabelY), kLabel, false);
+    if (station && station->drawFg) station->drawFg(*this, c, m, l, left, top);
     // Carried item, then the tooltip.
     if (!carried.empty()) {
         std::string remaining;
@@ -769,6 +748,7 @@ void Ui::State::drawScreen(Canvas& c) {
     } else if (hoveredSlot >= 0 && size_t(hoveredSlot) < m.slots.size() && !m.slots[size_t(hoveredSlot)].empty()) {
         drawTooltip(c, items.tooltip(m.slots[size_t(hoveredSlot)]), mouseX, mouseY);
     }
+    if (station && station->drawTop) station->drawTop(*this, c, m, l, left, top);
 }
 
 // --- screen input -------------------------------------------------------------------------------------------
@@ -776,7 +756,9 @@ void Ui::State::drawScreen(Canvas& c) {
 void Ui::State::screenInput(const Window::InputEvent& e) {
     using E = Window::InputEvent;
     const bool shift = window->keyDown(VK_SHIFT);
+    if (const ScreenDef* d = screenDef(screen); d && d->input) return d->input(*this, e);  // modules.h
     if (screen == Screen::Chat) {
+        if (chatExtInput(*this, e)) return;  // mp_hud.h: suggestions list, chat clicks
         if (e.type == E::Key && e.down) {
             if (e.code == VK_ESCAPE) return closeScreen();
             if (e.code == VK_RETURN) {
@@ -827,119 +809,12 @@ void Ui::State::screenInput(const Window::InputEvent& e) {
         return;
     }
 
-    if (screen == Screen::Creative) {
-        const int iw = 195, ih = 136;
-        const float left = float((guiW() - iw) / 2), top = float((guiH() - ih) / 2);
-        if (e.type == E::Key && e.down && e.code == VK_ESCAPE) return closeScreen();
-        if (e.type == E::Wheel) {
-            const int rows = (int(creativeFiltered.size()) + kCreativeCols - 1) / kCreativeCols - kCreativeRows;
-            if (rows > 0) creativeScroll = std::clamp(creativeScroll - float(e.code) / float(rows), 0.f, 1.f);
-            return;
-        }
-        if (e.type == E::Char || (e.type == E::Key && e.down && e.code != VK_ESCAPE && e.code != 'E')) {
-            const std::string before = search.value;
-            textFieldKey(search, e);
-            if (search.value != before) updateCreativeFilter();
-            return;
-        }
-        if (e.type == E::Key && e.down && e.code == 'E' && search.value.empty()) return closeScreen();
-        if (e.type == E::Key && e.down && e.code == 'E') {
-            textFieldKey(search, e);
-            return;
-        }
-        if (e.type != E::Button) return;
-        // Scroll bar.
-        const float sx = left + 175, sy0 = top + 18;
-        if (e.code == 0 && !e.down) scrolling = false;
-        if (e.code == 0 && e.down && mouseX >= sx && mouseX < sx + 12 && mouseY >= sy0 && mouseY < sy0 + 112) {
-            scrolling = true;
-            creativeScroll = std::clamp((mouseY - sy0 - 7.5f) / (112 - 15), 0.f, 1.f);
-            return;
-        }
-        if (!e.down) return;
-        const int button = e.code;
-        hoveredSlot = -1;  // from the cursor now (the drawn frame may be older)
-        for (int i = 0; i < 9; ++i) {
-            const float hx = left + 9 + float(i * 18), hy = top + 112;
-            if (mouseX >= hx - 1 && mouseX < hx + 17 && mouseY >= hy - 1 && mouseY < hy + 17) hoveredSlot = 36 + i;
-        }
-        // Hotbar slots: normal clicks on the player's inventory, mirrored to the server slot by slot.
-        if (hoveredSlot >= 36 && hoveredSlot < 45) {
-            ItemStack& slot = inventory.slots[size_t(hoveredSlot)];
-            if (button == 2) {
-                if (carried.empty() && !slot.empty()) carried = slot.withCount(items.maxStack(slot));
-            } else if (shift) {
-                creativeSetSlot(hoveredSlot, ItemStack{});
-            } else if (carried.empty()) {
-                if (!slot.empty()) {
-                    const int take = button == 0 ? slot.count : (slot.count + 1) / 2;
-                    carried = slot.withCount(take);
-                    creativeSetSlot(hoveredSlot, slot.withCount(slot.count - take));
-                }
-            } else if (slot.empty() || !slot.sameItemSameComponents(carried)) {
-                if (button == 1 && slot.empty()) {
-                    creativeSetSlot(hoveredSlot, carried.withCount(1));
-                    carried = carried.withCount(carried.count - 1);
-                } else {
-                    const ItemStack old = slot;
-                    creativeSetSlot(hoveredSlot, carried);
-                    carried = old;
-                }
-            } else {
-                const int room = items.maxStack(slot) - slot.count, n = std::min(room, button == 0 ? carried.count : 1);
-                creativeSetSlot(hoveredSlot, slot.withCount(slot.count + n));
-                carried = carried.withCount(carried.count - n);
-            }
-            return;
-        }
-        // Item list.
-        const int total = int(creativeFiltered.size());
-        const int maxRow = std::max(0, (total + kCreativeCols - 1) / kCreativeCols - kCreativeRows);
-        const int firstRow = int(std::lround(creativeScroll * float(maxRow)));
-        const float gx = mouseX - (left + 9) + 1, gy = mouseY - (top + 18) + 1;
-        if (gx >= 0 && gy >= 0 && gx < 18 * kCreativeCols && gy < 18 * kCreativeRows) {
-            const int idx = (firstRow + int(gy / 18)) * kCreativeCols + int(gx / 18);
-            const ItemStack clicked = idx < total ? creativeItems[size_t(creativeFiltered[size_t(idx)])] : ItemStack{};
-            if (button == 2) {
-                if (carried.empty() && !clicked.empty()) carried = clicked.withCount(items.maxStack(clicked));
-            } else if (!carried.empty() && !clicked.empty() && carried.sameItemSameComponents(clicked)) {
-                if (button == 0) carried = carried.withCount(shift ? items.maxStack(carried) : std::min(items.maxStack(carried), carried.count + 1));
-                else carried = carried.withCount(carried.count - 1);
-            } else if (!clicked.empty() && carried.empty()) {
-                if (shift) {  // straight to the hotbar like a quick move
-                    int target = -1;
-                    for (int i = 0; i < 9 && target < 0; ++i)
-                        if (inventory.slots[size_t(36 + i)].empty()) target = 36 + i;
-                    creativeSetSlot(target >= 0 ? target : 36 + game->selectedSlot(), clicked.withCount(items.maxStack(clicked)));
-                } else {
-                    carried = clicked.withCount(1);
-                }
-            } else if (button == 0) {
-                carried = ItemStack{};
-            } else if (!carried.empty()) {
-                carried = carried.withCount(carried.count - 1);
-            }
-            return;
-        }
-        // Outside the panel: drop what is carried.
-        const bool outside = mouseX < left || mouseY < top || mouseX >= left + iw || mouseY >= top + ih;
-        if (outside && !carried.empty()) {
-            const ItemStack drop = button == 0 ? carried : carried.withCount(1);
-            if (online()) {
-                net::Writer w;
-                w.u16v(u16(i16(-1)));
-                items.write(w, drop, true);
-                client->sendPlay("set_creative_mode_slot", w);
-            }
-            carried = button == 0 ? ItemStack{} : carried.withCount(carried.count - 1);
-        }
-        return;
-    }
-
     // Inventory / containers (AbstractContainerScreen).
     Menu& m = activeMenu();
     const Layout l = layoutFor(m);
     const float left = float((guiW() - l.width) / 2), top = float((guiH() - l.height) / 2);
+    if (m.type >= 0)  // station widgets first (text fields take E)
+        if (const StationDef* d = stationFor(m.typeName); d && d->input && d->input(*this, e, m, l, left, top)) return;
     auto slotAt = [&](float x, float y) {
         for (size_t i = 0; i < l.slots.size(); ++i) {
             const float sx = left + float(l.slots[i].x), sy = top + float(l.slots[i].y);

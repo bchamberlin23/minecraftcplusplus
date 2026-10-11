@@ -3,6 +3,7 @@
 #include "assets/assets.h"
 #include "assets/game_reports.h"
 #include "ui/frontend.h"
+#include "ui/signs_books.h"
 #include "ui/ui_state.h"
 #include "world/terrain.h"
 
@@ -142,6 +143,8 @@ int Ui::State::guiScale() const {
 
 void Ui::State::openScreen(Screen s) {
     const bool wasNone = screen == Screen::None;
+    if (screen != s)
+        if (const ScreenDef* d = screenDef(screen); d && d->closed) d->closed(*this);
     screen = s;
     buttons.clear();
     draggingSlider = -1;
@@ -153,7 +156,6 @@ void Ui::State::openScreen(Screen s) {
         historyPos = -1;
         chatScroll = 0;
     }
-    if (s == Screen::Creative) updateCreativeFilter();
     buildButtons();
     if (wasNone) {
         window->setMouseCaptured(false);
@@ -164,6 +166,7 @@ void Ui::State::openScreen(Screen s) {
 
 void Ui::State::closeScreen(bool sendClose) {
     const Screen old = screen;
+    if (const ScreenDef* d = screenDef(old); d && d->closed) d->closed(*this);
     if ((old == Screen::Inventory || old == Screen::Container) && online()) {
         // Carried items go back (the server does the same on close); tell it the menu closed.
         if (sendClose) {
@@ -304,6 +307,7 @@ int Ui::State::menuSlotForInventory(const Menu& m, int idx) const {
         return -1;
     }
     const int start = layoutFor(m).playerStart;
+    if (start < 0) return -1;  // no player inventory (lectern)
     if (idx >= 0 && idx < 9) return start + 27 + idx;
     if (idx >= 9 && idx < 36) return start + idx - 9;
     return -1;
@@ -374,12 +378,6 @@ bool Ui::init(const Init& in) {
 
     s.inventory.slots.assign(46, ItemStack{});
     s.inventory.title = Text(s.res.translate("container.crafting"));
-    for (int i = 0; i < s.items.count(); ++i)
-        if (s.items.name(i) != "minecraft:air") {
-            ItemStack st;
-            st.item = i, st.count = 1;
-            s.creativeItems.push_back(st);
-        }
     // Local worlds: start from the game's hotbar.
     for (int i = 0; i < 9; ++i) {
         const u16 b = in.game->hotbarBlock(i);
@@ -646,6 +644,7 @@ void Ui::registerHandlers(net::Client& client) {
             const Layout l = layoutFor(*s->container);
             s->container->slots.assign(l.slots.size(), ItemStack{});
             s->openScreen(Screen::Container);
+            if (const StationDef* d = stationFor(s->container->typeName); d && d->opened) d->opened(*s, *s->container);
         });
     });
     client.onPlay("set_cursor_item", [s, items](net::Reader& r) {
@@ -778,6 +777,8 @@ void Ui::registerHandlers(net::Client& client) {
             if (reset) s->titleFadeIn = 10, s->titleStay = 70, s->titleFadeOut = 20;
         });
     });
+    for (const UiModule& m : uiModules())  // modules.h
+        if (m.registerHandlers) m.registerHandlers(*s, client);
 }
 
 void Ui::attachSession(net::Client* client, net::Session* session) {
@@ -791,6 +792,8 @@ void Ui::attachSession(net::Client* client, net::Session* session) {
     s.carried = ItemStack{};
     s.container.reset();
     if (s.screen != Screen::None && s.screen != Screen::Chat) s.closeScreen(false);
+    for (const UiModule& m : uiModules())
+        if (m.attached) m.attached(s);
     if (!session) return;
     // Minecraft.startUseItem: the main hand first, then the off hand when the main hand's use passes. The client
     // cannot simulate item uses, so the off hand gets its turn when the main hand holds nothing, a block or a
@@ -804,12 +807,16 @@ void Ui::attachSession(net::Client* client, net::Session* session) {
         const bool mainPasses = main.empty() || s.items.isBlockItem(main.item) || mainName.ends_with("_sword") ||
                                 mainName.ends_with("_pickaxe");
         if (afterEntity && !mainPasses) return;
+        if (!afterEntity) openWritableBook(s, 0);  // signs_books.cpp: book and quill (opened client side)
         session->useItem(0);
         if (off.empty() || !mainPasses) return;
+        if (!afterEntity) openWritableBook(s, 1);
         if (hit) session->useItemOn(1, *hit);
         session->useItem(1);
     };
 }
+
+void Ui::setEntities(ent::EntityWorld* entities) { s_->entities = entities; }
 
 const ItemStack* Ui::playerSlot(int slot) const {
     const auto& slots = s_->inventory.slots;
@@ -920,8 +927,11 @@ void Ui::State::runScript(double) {
             const Menu& m = activeMenu();
             for (size_t i = 0; i < m.slots.size(); ++i)
                 if (!m.slots[i].empty())
-                    LOG("script: slot %zu = %d x %s", i, m.slots[i].count, items.name(m.slots[i].item).c_str());
+                    LOG("script: slot %zu = %d x %s%s%s ench %d", i, m.slots[i].count, items.name(m.slots[i].item).c_str(),
+                        m.slots[i].hasCustomName ? " named " : "", m.slots[i].hasCustomName ? m.slots[i].customName.plain().c_str() : "",
+                        m.slots[i].enchantments);
             if (!carried.empty()) LOG("script: carried = %d x %s", carried.count, items.name(carried.item).c_str());
+            LOG("script: xp level %d, menu %s data %d %d %d %d", xpLevel, m.typeName.c_str(), m.data[0], m.data[1], m.data[2], m.data[3]);
         } else if (st.verb == "quit") {
             quit = true;
         }
@@ -985,11 +995,14 @@ void Ui::beginFrame(double dt) {
             s.screenInput(e);
             continue;
         }
+        bool consumed = false;  // modules.h: keys of registered features (player list, advancements...)
+        for (const UiModule& m : uiModules())
+            if (!consumed && m.worldKey) consumed = m.worldKey(s, e);
+        if (consumed) continue;
         if (e.type != Window::InputEvent::Key || !e.down) continue;
         switch (e.code) {
             case VK_ESCAPE: s.openScreen(Screen::Pause); break;
             case VK_F1: s.hudHidden = !s.hudHidden; break;
-            case VK_F3: s.debug = !s.debug; break;
             case 'E':
                 s.openScreen(s.creative() ? Screen::Creative : Screen::Inventory);
                 break;
@@ -1017,7 +1030,7 @@ void Ui::beginFrame(double dt) {
     // The open container's player slots are the player's inventory (one Inventory in the game).
     if (s.container) {
         const int start = layoutFor(*s.container).playerStart;
-        for (int i = 0; i < 36 && size_t(start + i) < s.container->slots.size(); ++i)
+        for (int i = 0; start >= 0 && i < 36 && size_t(start + i) < s.container->slots.size(); ++i)
             s.inventory.slots[size_t(i < 27 ? 9 + i : 36 + i - 27)] = s.container->slots[size_t(start + i)];
     }
     s.syncHotbarToGame();

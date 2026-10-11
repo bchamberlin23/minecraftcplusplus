@@ -1,5 +1,6 @@
 // HUD (Hud.java), chat (ChatComponent / ChatScreen input), F3 debug overlay, item slots and tooltips.
 #include "assets/assets.h"
+#include "ui/gameplay_hud.h"
 #include "render/renderer.h"
 #include "ui/ui_state.h"
 #include "world/terrain.h"
@@ -96,8 +97,12 @@ void Ui::State::tickHud() {
         if (e.name == "slowness") speed *= std::max(0.0f, 1.0f - 0.15f * float(e.amplifier + 1));
     }
     target *= (speed + 1.0f) / 2.0f;
+    target *= game->useFovModifier();                         // bow drawing (game/game.h)
+    if (game->scoping() && game->cameraMode == 0) target = 0.1f;  // spyglass
     oldFovModifier = fovModifier;
     fovModifier = std::clamp(fovModifier + (target - fovModifier) * 0.5f, 0.1f, 1.5f);
+    for (const UiModule& m : uiModules())  // modules.h
+        if (m.tick) m.tick(*this);
 }
 
 // --- items --------------------------------------------------------------------------------------------------
@@ -150,11 +155,13 @@ void Ui::State::drawTooltip(Canvas& c, const std::vector<Text>& lines, float mx,
 void Ui::State::drawHud(Canvas& c) {
     const float W = float(c.guiWidth()), H = float(c.guiHeight());
     const int gw = c.guiWidth(), gh = c.guiHeight();
+    drawCameraOverlays(*this, c);  // gameplay_hud.cpp: spyglass scope
     // Crosshair (inverting blend), first person only (Hud.extractCrosshair).
     if (!spectator() && screen == Screen::None && game->cameraMode == 0) {
         c.setInvert(true);
         blitSprite(c, sprites.sprite("hud/crosshair"), float((gw - 15) / 2), float((gh - 15) / 2), 15, 15);
         c.setInvert(false);
+        if (survivalLike() || creative()) drawAttackIndicator(*this, c);  // gameplay_hud.cpp
     }
     // Hotbar.
     const int center = gw / 2;
@@ -242,8 +249,9 @@ void Ui::State::drawHud(Canvas& c) {
             if (blink && halves < displayHealth) heart(heartType, halves + 1 == displayHealth, true);
             if (halves < current) heart(heartType, halves + 1 == current, false);
         }
-        // Food.
-        for (int i = 0; i < 10; ++i) {
+        // Food (a ridden mount shows its hearts instead: gameplay_hud.cpp).
+        const int mountHearts = drawVehicleHealth(*this, c, xRight, yBase);
+        for (int i = 0; i < 10 && mountHearts == 0; ++i) {
             int yo = yBase;
             if (saturation <= 0 && guiTicks % (food * 3 + 1) == 0) yo += rnd.nextInt(3) - 1;
             const float xo = float(xRight - i * 8 - 9);
@@ -271,9 +279,11 @@ void Ui::State::drawHud(Canvas& c) {
         }
         // Experience bar and level.
         const int left = (gw - 182) / 2, top = gh - 24 - 5;
-        blitSprite(c, sprites.sprite("hud/experience_bar_background"), float(left), float(top), 182, 5);
-        const int progress = int(xpProgress * 183.0f);
-        if (progress > 0) blitSpriteRegion(c, sprites.sprite("hud/experience_bar_progress"), 182, 5, 0, 0, float(left), float(top), float(progress), 5);
+        if (!drawJumpBar(*this, c, left, top)) {  // a jumping mount's charge bar (gameplay_hud.cpp)
+            blitSprite(c, sprites.sprite("hud/experience_bar_background"), float(left), float(top), 182, 5);
+            const int progress = int(xpProgress * 183.0f);
+            if (progress > 0) blitSpriteRegion(c, sprites.sprite("hud/experience_bar_progress"), 182, 5, 0, 0, float(left), float(top), float(progress), 5);
+        }
         if (xpLevel > 0) {
             const Text lv = translatable("gui.experience.level", {Text(std::to_string(xpLevel))}, lang());
             const float x = float((gw - font.width(lv)) / 2), y = float(gh - 24 - 9 - 2);
@@ -325,7 +335,11 @@ void Ui::State::drawHud(Canvas& c) {
             c.pop();
         }
     }
+    for (const UiModule& m : uiModules())  // modules.h: boss bars, scoreboard...
+        if (m.drawHud) m.drawHud(*this, c);
     if (screen != Screen::Chat) drawChat(c, false);
+    for (const UiModule& m : uiModules())  // over the chat: player list
+        if (m.drawHudTop) m.drawHudTop(*this, c);
     (void)W;
 }
 

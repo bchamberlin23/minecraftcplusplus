@@ -1,5 +1,7 @@
 #include "fx/particles.h"
 
+#include "audio/audio.h"
+
 #include "assets/assets.h"
 #include "assets/game_reports.h"
 #include "entity/item_models.h"
@@ -175,9 +177,35 @@ void Particles::attach(net::Client& client) {
         int x, y, z;
         r.blockPos(x, y, z);
         const int data = r.i32v();
-        if (!r.ok || type != 2001) return;
+        if (!r.ok || (type != 2001 && type != 2019 && type != 2020)) return;
         std::lock_guard lock(netMutex_);
-        netBreaks_.push_back({x, y, z, data});
+        if (type == 2001) netBreaks_.push_back({x, y, z, data});
+        else netBreaks_.push_back({x, y, z, 0, std::clamp(data, 0, 5)});  // LevelEventHandler: Direction by ordinal
+    });
+    // ClientboundExplodePacket: the explosion particle and sound (ClientPacketListener.handleExplosion).
+    client.onPlay("explode", [this](net::Reader& r) {
+        NetExplosion e{};
+        for (double& c : e.pos) c = r.f64();
+        r.f32();   // radius
+        r.i32v();  // block count
+        if (r.boolean()) r.f64(), r.f64(), r.f64();  // knockback (handled by the UI)
+        e.particle = r.varInt();
+        if (!r.ok || !skipOptions(&r, e.particle)) return;
+        const int holder = r.varInt();  // Holder<SoundEvent>: 0 inline (name + optional range), else id + 1
+        e.soundId = holder - 1;
+        if (holder == 0) {
+            e.soundName = std::string(r.str());
+            if (r.boolean()) r.f32();
+        }
+        const i32 n = r.varInt();  // block particles: WeightedList<ExplosionParticleInfo>
+        for (i32 i = 0; i < n && r.ok && i < 64; ++i) {
+            if (!skipOptions(&r, r.varInt())) return;
+            r.f32(), r.f32(), r.varInt();  // scaling, speed, weight
+        }
+        e.playSound = r.boolean();
+        if (!r.ok) return;
+        std::lock_guard lock(netMutex_);
+        netExplosions_.push_back(std::move(e));
     });
     client.onPlayPeek("game_event", [this](net::Reader& r) {
         const int type = r.u8v();
@@ -186,6 +214,26 @@ void Particles::attach(net::Client& client) {
         std::lock_guard lock(netMutex_);
         netWeather_.push_back({type, param});
     });
+}
+
+bool Particles::skipOptions(void* reader, int type) const {
+    net::Reader& r = *static_cast<net::Reader*>(reader);
+    if (type < 0 || size_t(type) >= types_.size()) return false;
+    switch (types_[size_t(type)].opt) {
+        case Opt::None: break;
+        case Opt::Block: r.varInt(); break;
+        case Opt::Dust: r.i32v(), r.f32(); break;
+        case Opt::DustTransition: r.i32v(), r.i32v(), r.f32(); break;
+        case Opt::Spell: r.i32v(), r.f32(); break;
+        case Opt::Color: r.i32v(); break;
+        case Opt::Float: r.f32(); break;
+        case Opt::VarInt: r.varInt(); break;
+        case Opt::Int: r.i32v(); break;
+        case Opt::IntFloat: r.i32v(), r.f32(); break;
+        case Opt::Trail: r.f64(), r.f64(), r.f64(), r.i32v(), r.varInt(); break;
+        case Opt::Unsupported: return false;
+    }
+    return r.ok;
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -669,6 +717,90 @@ void Particles::blockDestroyed(int x, int y, int z, u16 block) {
     }
 }
 
+void Particles::blockCrack(int x, int y, int z, int face) {
+    const u16 block = world_.block(x, y, z);
+    if (!block) return;
+    static int terrain = -2;
+    if (terrain == -2) terrain = typeId("block");
+    const BlockInfo& b = registry_.infos()[block];
+    if (b.kind == KindAir || (b.fluid && !b.waterlogged)) return;
+    u32 tint;
+    const int sprite = blockSprite(block, tint);
+    if (sprite < 0 || live_.size() + spawnQueue_.size() >= kMaxParticles) return;
+    // The outline shape's bounds; a point 0.1 inside them, pushed 0.1 out of the hit face.
+    Box s{{1, 1, 1}, {0, 0, 0}};
+    for (u32 i = 0; i < b.selectionCount; ++i) {
+        const Box& o = registry_.box(b.selectionFirst + i);
+        for (int a = 0; a < 3; ++a) s.min[a] = std::min(s.min[a], o.min[a]), s.max[a] = std::max(s.max[a], o.max[a]);
+    }
+    if (!b.selectionCount) s = {{0, 0, 0}, {1, 1, 1}};
+    auto coord = [&](int a) { return double(randf()) * (s.max[a] - s.min[a] - 0.2f) + 0.1f + s.min[a]; };
+    double px = x + coord(0), py = y + coord(1), pz = z + coord(2);
+    switch (face) {
+        case 0: py = y + s.min[1] - 0.1f; break;
+        case 1: py = y + s.max[1] + 0.1f; break;
+        case 2: pz = z + s.min[2] - 0.1f; break;
+        case 3: pz = z + s.max[2] + 0.1f; break;
+        case 4: px = x + s.min[0] - 0.1f; break;
+        case 5: px = x + s.max[0] + 0.1f; break;
+    }
+    // new TerrainParticle(level, x, y, z, 0, 0, 0, state, pos).setPower(0.2F).scale(0.6F)
+    Particle p{};
+    p.type = u16(std::max(terrain, 0));
+    p.a = 1;
+    p.flags = Physics;
+    p.x = p.xo = px, p.y = p.yo = py, p.z = p.zo = pz;
+    p.lifetime = int(4.0f / (randf() * 0.9f + 0.1f));
+    p.xd = (randf() * 2.0f - 1.0f) * 0.4f, p.yd = (randf() * 2.0f - 1.0f) * 0.4f, p.zd = (randf() * 2.0f - 1.0f) * 0.4f;
+    const double speed = (randf() + randf() + 1.0f) * 0.15f;
+    const double dd = std::max(std::sqrt(p.xd * p.xd + p.yd * p.yd + p.zd * p.zd), 1e-9);
+    p.xd = p.xd / dd * speed * 0.4f, p.yd = p.yd / dd * speed * 0.4f + 0.1f, p.zd = p.zd / dd * speed * 0.4f;
+    p.xd *= 0.2f, p.yd = (p.yd - 0.1f) * 0.2f + 0.1f, p.zd *= 0.2f;  // setPower(0.2)
+    p.quadSize = 0.1f * (randf() * 0.5f + 0.5f) * 2.0f / 2.0f * 0.6f;  // scale(0.6)
+    p.gravity = 1.0f, p.friction = 0.98f;
+    p.r = 0.6f * float((tint >> 16) & 255) / 255.0f, p.g = 0.6f * float((tint >> 8) & 255) / 255.0f;
+    p.b = 0.6f * float(tint & 255) / 255.0f;
+    p.sprite = sprite;
+    p.uo = randf() * 3.0f, p.vo = randf() * 3.0f;
+    if (items_.rect(sprite).translucent) p.flags |= Translucent;
+    p.light = lightAt(px, py, pz);
+    spawnQueue_.push_back(p);
+    ++stats_.spawned;
+}
+
+void Particles::itemShard(int item, double x, double y, double z, double xa, double ya, double za) {
+    static int itemType = -2;  // ticked like terrain shards (same motion as BreakingItemParticle)
+    if (itemType == -2) itemType = typeId("block");
+    if (live_.size() + spawnQueue_.size() >= kMaxParticles) return;
+    int& sprite = itemSprites_[item];  // 0 unresolved, -1 none, else rect + 1
+    if (sprite == 0) {
+        const std::string tex = items_.itemParticleTexture(item);
+        const int rect = tex.empty() ? -1 : items_.texture(tex);
+        sprite = rect >= 0 ? rect + 1 : -1;
+    }
+    if (sprite < 0) return;
+    Particle p{};
+    p.type = u16(std::max(itemType, 0));
+    p.a = 1, p.r = p.g = p.b = 1;
+    p.flags = Physics;
+    p.x = p.xo = x, p.y = p.yo = y, p.z = p.zo = z;
+    p.lifetime = int(4.0f / (randf() * 0.9f + 0.1f));
+    // Particle(level, x, y, z, 0, 0, 0): a random push, then BreakingItemParticle keeps a tenth of it plus (xa, ya, za).
+    p.xd = (randf() * 2.0f - 1.0f) * 0.4f, p.yd = (randf() * 2.0f - 1.0f) * 0.4f, p.zd = (randf() * 2.0f - 1.0f) * 0.4f;
+    const double speed = (randf() + randf() + 1.0f) * 0.15f;
+    const double dd = std::max(std::sqrt(p.xd * p.xd + p.yd * p.yd + p.zd * p.zd), 1e-9);
+    p.xd = p.xd / dd * speed * 0.4f, p.yd = p.yd / dd * speed * 0.4f + 0.1f, p.zd = p.zd / dd * speed * 0.4f;
+    p.xd = p.xd * 0.1f + xa, p.yd = p.yd * 0.1f + ya, p.zd = p.zd * 0.1f + za;
+    p.quadSize = 0.1f * (randf() * 0.5f + 0.5f) * 2.0f / 2.0f;
+    p.gravity = 1.0f, p.friction = 0.98f;
+    p.sprite = sprite - 1;
+    p.uo = randf() * 3.0f, p.vo = randf() * 3.0f;
+    if (items_.rect(p.sprite).translucent) p.flags |= Translucent;
+    p.light = lightAt(x, y, z);
+    spawnQueue_.push_back(p);
+    ++stats_.spawned;
+}
+
 // ---------------------------------------------------------------------------------------------------------
 // Simulation
 
@@ -1042,16 +1174,32 @@ void Particles::frame(double dt, const double cam[3]) {
     std::vector<NetSpawn>& spawns = spawnsLocal_;
     std::vector<NetBreak>& breaks = breaksLocal_;
     spawns.clear(), breaks.clear();
+    std::vector<NetExplosion> explosions;
     {
         std::lock_guard lock(netMutex_);
         spawns.swap(netSpawns_);
         breaks.swap(netBreaks_);
         weatherQueue_.insert(weatherQueue_.end(), netWeather_.begin(), netWeather_.end());
         netWeather_.clear();
+        explosions.swap(netExplosions_);
+    }
+    for (const NetExplosion& e : explosions) {
+        // level.playLocalSound(center, sound, BLOCKS, 4, (1 + (r - r) * 0.2) * 0.7); addParticle(particle, center, 1, 0, 0)
+        if (e.playSound)
+            if (audio::AudioSystem* a = audio::instance())
+                a->playNetwork(e.soundId, e.soundName, audio::Category::Block, e.pos, 4.0f, (1.0f + (randf() - randf()) * 0.2f) * 0.7f);
+        NetSpawn s{};
+        s.type = e.particle, s.alwaysShow = true;
+        s.x = e.pos[0], s.y = e.pos[1], s.z = e.pos[2];
+        s.dx = 1, s.sx = 1, s.count = 0;
+        spawns.push_back(s);
     }
     std::shared_lock lock(world_.mutex());
     for (CachedBlock& c : blockCache2_) c.y = INT32_MIN;  // the world may have changed since the last frame
-    for (const NetBreak& b : breaks) blockDestroyed(b.x, b.y, b.z, localBlock(b.state));
+    for (const NetBreak& b : breaks) {
+        if (b.face >= 0) blockCrack(b.x, b.y, b.z, b.face);
+        else blockDestroyed(b.x, b.y, b.z, localBlock(b.state));
+    }
     for (const NetSpawn& s : spawns) {
         const double dx = s.x - cam[0], dy = s.y - cam[1], dz = s.z - cam[2];
         if (!s.alwaysShow && dx * dx + dy * dy + dz * dz > 1024.0) continue;

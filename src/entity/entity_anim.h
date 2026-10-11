@@ -6,6 +6,8 @@
 namespace ent {
 
 enum class Anim : u8 { None, Head, Humanoid, Zombie, Skeleton, Quadruped, Chicken, Creeper, Spider, IronGolem, Villager, ArmorStand };
+// HumanoidModel.ArmPose.
+enum class ArmPose : u8 { Empty, Item, Block, BowAndArrow, ThrowTrident, CrossbowCharge, CrossbowHold, Spyglass, TootHorn, Brush, Spear };
 
 struct AnimState {
     float walkPos = 0, walkSpeed = 0;  // WalkAnimationState position / speed (interpolated)
@@ -16,6 +18,12 @@ struct AnimState {
     bool baby = false, crouching = false, riding = false, aggressive = false;
     bool rightItem = false, leftItem = false;  // something held in the right / left hand
     bool swingLeft = false;
+    // Arm poses (AvatarRenderer.getArmPose); without them rightItem / leftItem give ITEM / EMPTY.
+    bool havePoses = false;
+    ArmPose rightPose = ArmPose::Empty, leftPose = ArmPose::Empty;
+    bool usingItem = false, useRight = true;  // isUsingItem, and the arm of the used hand
+    float useTicks = 0;                       // ticksUsingItem (+ partial tick)
+    float crossbowCharge = 25;                // maxCrossbowChargeDuration
     int standFlags = 0;                // armor stand: 4 arms, 8 no base plate
     const float (*standPose)[3] = nullptr;  // armor stand head, body, left arm, right arm, left leg, right leg (degrees)
     int skinParts = 0x7F;              // player model customisation bits

@@ -18,7 +18,7 @@ constexpr double kTick = 0.05;
 constexpr double kPi = 3.14159265358979;
 constexpr int kChunksPerFrame = 8;       // like generated chunks in main.cpp
 constexpr double kChunkBudgetMs = 4.0;   // ...but never more than this per frame
-constexpr int kStartDestroy = 0, kStopDestroy = 3, kReleaseUseItem = 6;
+constexpr int kReleaseUseItem = 6;
 
 u64 posKey(int x, int y, int z) { return (u64(x & 0x3FFFFFF) << 38) | (u64(z & 0x3FFFFFF) << 12) | u64(y & 0xFFF); }
 void unpackPos(u64 k, int& x, int& y, int& z) {
@@ -136,6 +136,8 @@ void Session::frame(double dt) {
         loadedSent_ = true;
     }
     syncHotbar();
+    game_->instabuild = instabuild_;  // MultiPlayerGameMode: creative digging
+    game_->gameMode = gameMode_;
     tickClock_ = std::min(tickClock_ + dt, 0.25);
     while (tickClock_ >= kTick) {
         tickClock_ -= kTick;
@@ -282,6 +284,9 @@ void Session::applyBlocks(const std::vector<BlockChange>& changes) {
             auto it = predictions_.find(posKey(c.x, c.y, c.z));
             if (it != predictions_.end()) {  // our own edit is pending: remember, apply on ack
                 it->second.state = c.id;
+                if (verbose_)
+                    LOG("net: [%.3f] server block %d %d %d = %s (our edit pending, sequence %d)", nowSeconds(), c.x, c.y, c.z,
+                        registry_.name(c.id).c_str(), it->second.sequence);
                 continue;
             }
             setBlock(c.x, c.y, c.z, c.id, dirty);
@@ -296,6 +301,7 @@ void Session::applyBlocks(const std::vector<BlockChange>& changes) {
 
 void Session::acknowledge(int sequence) {
     std::unordered_set<u64> dirty;
+    if (verbose_) LOG("net: [%.3f] block_changed_ack %d", nowSeconds(), sequence);
     {
         std::unique_lock lock(world_.mutex());
         ++acks_;
@@ -393,6 +399,13 @@ void Session::sendPosition() {
     const bool horizontal = std::any_of(boxes.begin(), boxes.end(), [&](const AABB& b) { return b.intersects(area); });
     std::copy(p.pos, p.pos + 3, sentPos_);
     sentRot_[0] = float(p.yaw * 180.0 / kPi), sentRot_[1] = float(p.pitch * 180.0 / kPi);
+    if (game_->riding()) {  // LocalPlayer.sendChanges: a passenger only reports its rotation (the vehicle moves it)
+        Writer w;
+        w.f32(sentRot_[0]), w.f32(sentRot_[1]);
+        w.u8v(u8((p.onGround ? 1 : 0) | (horizontal ? 2 : 0)));
+        client_.sendPlay("move_player_rot", w);
+        return;
+    }
     client_.sendMove(p.pos, sentRot_[0], sentRot_[1], p.onGround, horizontal);
 }
 
@@ -432,23 +445,30 @@ void Session::onEdit(const Game::EditAction& a) {
     if (!std::equal(p.pos, p.pos + 3, sentPos_) || float(p.yaw * 180.0 / kPi) != sentRot_[0] ||
         float(p.pitch * 180.0 / kPi) != sentRot_[1])
         tick();
+    static constexpr const char* kActions[] = {"start_destroy", "change_destroy_direction", "abort_destroy", "stop_destroy"};
+    // ABORT / CHANGE_DESTROY_DIRECTION: plain packets (no prediction sequence).
+    if (!a.place && (a.action == Game::kAbortDestroy || a.action == Game::kChangeDestroyDirection)) {
+        client_.sendPlayerAction(a.action, a.x, a.y, a.z, a.face, 0);
+        if (verbose_)
+            LOG("net: [%.3f] player_action %s %d %d %d face %d", nowSeconds(), kActions[a.action], a.x, a.y, a.z, a.face);
+        return;
+    }
     const int sequence = ++sequence_;
     ++edits_;
     if (verbose_)
-        LOG("net: %s %d %d %d face %d -> cell %d %d %d %s (sequence %d)", a.place ? "use_item_on" : "player_action break",
-            a.x, a.y, a.z, a.face, a.at[0], a.at[1], a.at[2], a.place ? registry_.name(a.block).c_str() : "", sequence);
+        LOG("net: [%.3f] %s %d %d %d face %d -> cell %d %d %d %s (sequence %d%s)", nowSeconds(),
+            a.place ? "use_item_on" : (std::string("player_action ") + kActions[a.action & 3]).c_str(), a.x, a.y, a.z, a.face,
+            a.at[0], a.at[1], a.at[2], a.place ? registry_.name(a.block).c_str() : "", sequence,
+            !a.place && a.predicted ? ", predicted break" : "");
     // Remember what the server last said about the changing cell until it acknowledges the edit.
-    const u64 key = posKey(a.at[0], a.at[1], a.at[2]);
-    auto it = predictions_.find(key);
-    if (it != predictions_.end()) it->second.sequence = sequence;
-    else predictions_[key] = {sequence, world_.block(a.at[0], a.at[1], a.at[2])};
-    if (!a.place) {
-        client_.sendPlayerAction(kStartDestroy, a.x, a.y, a.z, a.face, sequence);
-        if (!instabuild_) {  // survival: report the break as finished right away (no mining time yet)
-            const int stop = ++sequence_;
-            predictions_[key].sequence = stop;
-            client_.sendPlayerAction(kStopDestroy, a.x, a.y, a.z, a.face, stop);
-        }
+    if (a.place || a.predicted) {
+        const u64 key = posKey(a.at[0], a.at[1], a.at[2]);
+        auto it = predictions_.find(key);
+        if (it != predictions_.end()) it->second.sequence = sequence;
+        else predictions_[key] = {sequence, world_.block(a.at[0], a.at[1], a.at[2])};
+    }
+    if (!a.place) {  // MultiPlayerGameMode.startPrediction: START / STOP_DESTROY_BLOCK with the sequence
+        client_.sendPlayerAction(a.action, a.x, a.y, a.z, a.face, sequence);
         return;
     }
     const float cursor[3] = {float(a.hit[0] - a.x), float(a.hit[1] - a.y), float(a.hit[2] - a.z)};

@@ -185,6 +185,9 @@ struct ItemModels::Impl {
     std::unordered_map<std::string, std::shared_ptr<JModel>> models;
     std::unordered_map<u64, ItemMesh> meshes;
     std::unordered_map<std::string, ItemMesh> namedMeshes;
+    std::unordered_map<std::string, ItemMesh> useMeshes;  // mesh(item, dye, flat, use): by the selected models
+    std::unordered_map<int, std::string> itemParticles;
+    const ItemModels::UseState* use = nullptr;  // evaluate(): the holder's item use (null: not in use)
     std::unordered_map<int, Equippable> equippables;
     std::unordered_map<std::string, std::vector<EquipmentLayer>> equipLayers;
     std::unordered_map<std::string, std::string> particleTextures;
@@ -524,10 +527,24 @@ struct ItemModels::Impl {
             if (n.contains("models"))
                 for (const json& m : n["models"]) evaluate(m, dye, flat, here, out, depth + 1);
         } else if (type == "condition") {
-            evaluate(n.value("on_false", json()), dye, flat, here, out, depth + 1);
+            const bool on = use && strip(n.value("property", "")) == "using_item" && use->usingItem;
+            evaluate(n.value(on ? "on_true" : "on_false", json()), dye, flat, here, out, depth + 1);
         } else if (type == "select") {
             const std::string prop = strip(n.value("property", ""));
             const json* pick = nullptr;
+            if (prop == "charge_type" && use && use->charge && n.contains("cases")) {
+                for (const json& c : n["cases"]) {
+                    const json& when = c.value("when", json());
+                    const char* want = use->charge == 2 ? "rocket" : "arrow";
+                    bool hit = when.is_string() && when.get<std::string>() == want;
+                    if (when.is_array())
+                        for (const json& w : when) hit |= w.is_string() && w.get<std::string>() == want;
+                    if (hit) {
+                        pick = &at(c, "model");
+                        break;
+                    }
+                }
+            }
             if (prop == "display_context" && n.contains("cases")) {
                 for (const json& c : n["cases"]) {
                     const json& when = c.value("when", json());
@@ -550,10 +567,22 @@ struct ItemModels::Impl {
         } else if (type == "range_dispatch") {
             const json* best = nullptr;
             float bestT = -1e30f;
+            // The property's value (0 without a use): RangeSelectItemModel picks the last threshold <= value.
+            float value = 0;
+            if (use) {
+                const std::string prop = strip(n.value("property", ""));
+                if (prop == "use_duration") value = use->usingItem ? use->useTicks : 0.0f;
+                else if (prop == "crossbow/pull") value = use->usingItem ? use->pull : 0.0f;
+                else if (prop == "use_cycle") {
+                    const float period = num(n.value("period", json()), 1.0f);
+                    value = use->usingItem && period > 0 ? std::fmod(use->remaining, period) : 0.0f;
+                }
+                value *= num(n.value("scale", json()), 1.0f);
+            }
             if (n.contains("entries"))
                 for (const json& e : n["entries"]) {
                     const float t = num(e.value("threshold", json()), 0);
-                    if (t <= 0 && t >= bestT) bestT = t, best = &e;
+                    if (t <= value && t >= bestT) bestT = t, best = &e;
                 }
             if (best) evaluate((*best).value("model", json()), dye, flat, here, out, depth + 1);
             else if (n.contains("fallback")) evaluate(n["fallback"], dye, flat, here, out, depth + 1);
@@ -711,6 +740,50 @@ const ItemMesh& ItemModels::mesh(int item, i32 dye, bool flat) {
         LOG("visuals: item model of %s: %s", name.c_str(), ex.what());
     }
     return impl_->meshes.emplace(key, mesh).first->second;
+}
+
+const ItemMesh& ItemModels::mesh(int item, i32 dye, bool flat, const UseState& use) {
+    if (item < 0 || size_t(item) >= impl_->itemNames.size()) return impl_->emptyMesh;
+    const std::string name = strip(impl_->itemNames[size_t(item)]);
+    std::vector<Impl::Part> parts;
+    try {
+        const json& def = impl_->jsonAt("assets/minecraft/items/" + name + ".json");
+        impl_->use = &use;
+        if (def.is_object()) impl_->evaluate(def.value("model", json()), dye, flat, Xf{}, parts, 0);
+        impl_->use = nullptr;
+    } catch (const std::exception&) {
+        impl_->use = nullptr;
+        return mesh(item, dye, flat);
+    }
+    std::string key = std::to_string(item) + "|" + std::to_string(dye) + (flat ? "|f" : "|h");
+    for (const Impl::Part& p : parts) key += "|" + p.model + "#" + p.special;
+    auto it = impl_->useMeshes.find(key);
+    if (it != impl_->useMeshes.end()) return it->second;
+    ItemMesh m;
+    try {
+        m = impl_->build(parts);
+    } catch (const std::exception& ex) {
+        LOG("visuals: item model of %s: %s", name.c_str(), ex.what());
+    }
+    return impl_->useMeshes.emplace(key, m).first->second;
+}
+
+std::string ItemModels::itemParticleTexture(int item) {
+    if (item < 0 || size_t(item) >= impl_->itemNames.size()) return {};
+    auto it = impl_->itemParticles.find(item);
+    if (it != impl_->itemParticles.end()) return it->second;
+    std::string result;
+    try {
+        const json& def = impl_->jsonAt("assets/minecraft/items/" + strip(impl_->itemNames[size_t(item)]) + ".json");
+        std::vector<Impl::Part> parts;
+        if (def.is_object()) impl_->evaluate(def.value("model", json()), -1, true, Xf{}, parts, 0);
+        if (!parts.empty() && !parts[0].model.empty()) {
+            const auto m = impl_->model(parts[0].model);
+            result = strip(!m->particle.empty() ? m->particle : m->layers.empty() ? std::string() : m->layers[0]);
+        }
+    } catch (const std::exception&) {
+    }
+    return impl_->itemParticles.emplace(item, result).first->second;
 }
 
 const ItemMesh& ItemModels::blockModelMesh(const std::string& model) {

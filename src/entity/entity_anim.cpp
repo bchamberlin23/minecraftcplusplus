@@ -48,10 +48,78 @@ void humanoid(const Parts& P, const AnimState& s) {
         if (rl) rl->xRot = -1.4137167f, rl->yRot = kPi / 10, rl->zRot = 0.07853982f;
         if (ll) ll->xRot = -1.4137167f, ll->yRot = -kPi / 10, ll->zRot = -0.07853982f;
     }
-    if (ra) ra->yRot = 0;
-    if (la) la->yRot = 0;
-    if (ra && s.rightItem) ra->xRot = ra->xRot * 0.5f - kPi / 10;
-    if (la && s.leftItem) la->xRot = la->xRot * 0.5f - kPi / 10;
+    if (!s.havePoses) {
+        if (ra) ra->yRot = 0;
+        if (la) la->yRot = 0;
+        if (ra && s.rightItem) ra->xRot = ra->xRot * 0.5f - kPi / 10;
+        if (la && s.leftItem) la->xRot = la->xRot * 0.5f - kPi / 10;
+    } else if (ra && la && h) {
+        // HumanoidModel.poseRightArm / poseLeftArm, the prioritised arm first (the using one, else the main arm when
+        // the off hand's pose is two-handed); a pose that affects the other hand skips it.
+        auto twoHanded = [](ArmPose p) {
+            return p == ArmPose::BowAndArrow || p == ArmPose::CrossbowCharge || p == ArmPose::CrossbowHold;
+        };
+        auto affectsOther = [&](ArmPose p) { return twoHanded(p) || p == ArmPose::ThrowTrident; };
+        auto pose = [&](bool right) {
+            PartPose* arm = right ? ra : la;
+            const float sign = right ? 1.0f : -1.0f;
+            switch (right ? s.rightPose : s.leftPose) {
+                case ArmPose::Empty: arm->yRot = 0; break;
+                case ArmPose::Item: arm->xRot = arm->xRot * 0.5f - kPi / 10, arm->yRot = 0; break;
+                case ArmPose::Block:  // poseBlockingArm
+                    arm->xRot = arm->xRot * 0.5f - 0.9424779f + std::clamp(h->xRot, -kPi * 4.0f / 9.0f, 0.43633232f);
+                    arm->yRot = (right ? -30.0f : 30.0f) * kDeg + std::clamp(h->yRot, -kPi / 6, kPi / 6);
+                    break;
+                case ArmPose::BowAndArrow:
+                    if (right) ra->yRot = -0.1f + h->yRot, la->yRot = 0.1f + h->yRot + 0.4f;
+                    else ra->yRot = -0.1f + h->yRot - 0.4f, la->yRot = 0.1f + h->yRot;
+                    ra->xRot = -kPi / 2 + h->xRot, la->xRot = -kPi / 2 + h->xRot;
+                    break;
+                case ArmPose::ThrowTrident: arm->xRot = arm->xRot * 0.5f - kPi, arm->yRot = 0; break;
+                case ArmPose::CrossbowCharge: {  // AnimationUtils.animateCrossbowCharge
+                    PartPose* holding = arm;
+                    PartPose* pulling = right ? la : ra;
+                    holding->yRot = right ? -0.8f : 0.8f;
+                    holding->xRot = -0.97079635f;
+                    pulling->xRot = holding->xRot;
+                    const float a = std::clamp(s.useTicks, 0.0f, s.crossbowCharge) / std::max(s.crossbowCharge, 1.0f);
+                    pulling->yRot = (0.4f + (0.85f - 0.4f) * a) * sign;
+                    pulling->xRot = pulling->xRot + (-kPi / 2 - pulling->xRot) * a;
+                    break;
+                }
+                case ArmPose::CrossbowHold: {  // AnimationUtils.animateCrossbowHold
+                    PartPose* holding = arm;
+                    PartPose* shooting = right ? la : ra;
+                    holding->yRot = (right ? -0.3f : 0.3f) + h->yRot;
+                    shooting->yRot = (right ? 0.6f : -0.6f) + h->yRot;
+                    holding->xRot = -kPi / 2 + h->xRot + 0.1f;
+                    shooting->xRot = -1.5f + h->xRot;
+                    break;
+                }
+                case ArmPose::Spyglass:
+                    arm->xRot = std::clamp(h->xRot - 1.9198622f - (s.crouching ? kPi / 12 : 0.0f), -2.4f, 3.3f);
+                    arm->yRot = h->yRot - sign * kPi / 12;
+                    break;
+                case ArmPose::TootHorn:
+                    arm->xRot = std::clamp(h->xRot, -1.2f, 1.2f) - 1.4835298f;
+                    arm->yRot = h->yRot - sign * kPi / 6;
+                    break;
+                case ArmPose::Brush: arm->xRot = arm->xRot * 0.5f - kPi / 5, arm->yRot = 0; break;
+                case ArmPose::Spear: arm->xRot = arm->xRot * 0.5f - kPi / 10, arm->yRot = 0; break;  // simplified
+            }
+        };
+        // The off hand is the left arm for right-handed players (s.swingLeft marks left-handed ones).
+        const bool offIsLeft = !s.swingLeft;
+        const ArmPose offPose = offIsLeft ? s.leftPose : s.rightPose;
+        const bool prioritiseRight = s.usingItem ? s.useRight : (twoHanded(offPose) ? offIsLeft : !offIsLeft);
+        if (prioritiseRight) {
+            pose(true);
+            if (!affectsOther(s.rightPose)) pose(false);
+        } else {
+            pose(false);
+            if (!affectsOther(s.leftPose)) pose(true);
+        }
+    }
     // setupAttackAnimation (WHACK swing).
     if (s.swing > 0 && body && ra && la) {
         float by = std::sin(std::sqrt(s.swing) * kPi * 2.0f) * 0.2f;
@@ -76,8 +144,8 @@ void humanoid(const Parts& P, const AnimState& s) {
         if (ll) ll->z += 4.0f;
         if (h) h->y += 4.2f;
     }
-    bob(ra, s.age, 1.0f);
-    bob(la, s.age, -1.0f);
+    if (!s.havePoses || s.rightPose != ArmPose::Spyglass) bob(ra, s.age, 1.0f);
+    if (!s.havePoses || s.leftPose != ArmPose::Spyglass) bob(la, s.age, -1.0f);
 }
 
 // AnimationUtils.animateZombieArms.

@@ -739,6 +739,11 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     Vec3 fwd{-sy * cp, -sp, cy * cp};
     Vec3 right = normalize(cross(fwd, {0, 1, 0}));
     Vec3 up = cross(right, fwd);
+    if (cam.basisSet) {  // view bobbing / hurt tilt (game/game.cpp viewCamera)
+        fwd = normalize(Vec3{cam.fwd[0], cam.fwd[1], cam.fwd[2]});
+        right = normalize(Vec3{cam.right[0], cam.right[1], cam.right[2]});
+        up = normalize(Vec3{cam.up[0], cam.up[1], cam.up[2]});
+    }
     Mat4 proj = perspectiveReverseZ(cam.fovY, float(width_) / float(std::max(height_, 1u)), 0.05f);
     const Mat4 view = viewFromBasis(right, up, fwd);
     const Mat4 vpNoJitter = proj * view;

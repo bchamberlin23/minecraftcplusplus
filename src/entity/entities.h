@@ -6,6 +6,7 @@
 #include "core/common.h"
 #include "entity/entity_assets.h"
 
+#include <functional>
 #include <mutex>
 #include <unordered_map>
 
@@ -139,6 +140,10 @@ struct Entity {
     float bobOffset = 0;
     int vehicle = -1;
     bool dying = false;
+    u8 livingFlags = 0;   // LivingEntity DATA_LIVING_ENTITY_FLAGS: 1 using an item, 2 with the off hand, 4 spin attack
+    int useTicks = 0;     // ticks the current item use has lasted (getTicksUsingItem)
+    u8 chargedCrossbow = 0;  // bit 0: the main hand holds a charged crossbow, bit 1: the off hand (local player only)
+    int attachedTo = -1;     // firework rocket: the entity it is attached to (DATA_ATTACHED_TO_TARGET), -1 none
     int unloadedTicks = 0;  // ticks spent outside the loaded world
     // Player skin (default skins chosen from the UUID like the game).
     bool slim = false;
@@ -184,6 +189,18 @@ public:
     bool use(int id, const double hit[3], bool sneaking);
 
     const std::unordered_map<int, Entity>& entities() const { return entities_; }
+    Entity* entity(int id) {
+        auto it = entities_.find(id);
+        return it == entities_.end() ? nullptr : &it->second;
+    }
+    // A vehicle the local player controls (Entity.isLocalInstanceAuthoritative): the server's moves for it are ignored
+    // and `tick` moves it every entity tick instead of the interpolation (prevPos is already the old position).
+    // id < 0: none.
+    void setLocalControl(int id, std::function<void(Entity&)> tick) {
+        localControl_ = id;
+        localTick_ = std::move(tick);
+    }
+    int localControl() const { return localControl_; }
     float partialTick() const { return float(tickAccumulator_ / 0.05); }
     const EntityAssets& assets() const { return assets_; }
     World& world() const { return world_; }
@@ -207,7 +224,7 @@ public:
            swellDir = -1, powered = -1, mainHand = -1, skinParts = -1, horseVariant = -1, villagerData = -1,
            tameFlags = -1, collar = -1, anger = -1, standFlags = -1, standPose = -1, hurt = -1, hurtDir = -1,
            damage = -1, mainGene = -1, hiddenGene = -1, mobFlags = -1, noGravity = 5, inGround = -1, rotation = -1,
-           painting = -1, nameVisible = 3;
+           painting = -1, nameVisible = 3, livingFlags = -1, attachedTo = -1;
     };
 
 private:
@@ -240,6 +257,8 @@ private:
     std::unordered_map<int, u16> blockCache_;
     std::vector<std::string> villagerTypes_, professions_;
     int entityEffectParticle_ = -1;
+    int localControl_ = -1;
+    std::function<void(Entity&)> localTick_;
     double tickAccumulator_ = 0;
     u64 ticks_ = 0;
     Stats stats_;

@@ -65,6 +65,8 @@ public:
              bool relative = false, bool looping = false, float* soundVolume = nullptr);
     // SimpleSoundInstance.forUI: not positioned, UI category.
     u32 playUi(std::string_view event, float pitch = 1.0f, float volume = 0.25f);
+    // A sound the server named by Holder<SoundEvent>: registry id (>= 0), else the inline name.
+    u32 playNetwork(int registryId, std::string_view name, Category category, const double pos[3], float volume, float pitch);
     void stop(u32 handle);
 
     // Category volumes 0..1 (the game's sound options), saved to the settings file.
@@ -84,7 +86,7 @@ private:
         bool air = false, water = false;
     };
     struct NetSound {
-        enum Type : u8 { Sound, EntitySound, Stop, BlockBreak } type;
+        enum Type : u8 { Sound, EntitySound, Stop, BlockBreak, BlockHit } type;
         int event = -1, category = -1, entity = 0;  // BlockBreak: event = sound type
         double pos[3] = {};
         float volume = 1, pitch = 1;
@@ -107,6 +109,7 @@ private:
     BlockSound blockAt(int x, int y, int z, u16* idOut = nullptr);
     void playerSound(int event, float volume, float pitch);
     void onBlockChanged(bool place, int x, int y, int z, u16 state);
+    void blockHit(int x, int y, int z);  // ClientLevel.playBreakingSound
     void onPlayerTick();
     void stepSound(int x, int y, int z, const BlockSound& on);
     void tick();

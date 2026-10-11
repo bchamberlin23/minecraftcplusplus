@@ -129,6 +129,14 @@ void AudioSystem::saveSettings() const {
 
 // ---- playing ----------------------------------------------------------------------------------
 
+u32 AudioSystem::playNetwork(int registryId, std::string_view name, Category category, const double pos[3], float volume,
+                             float pitch) {
+    if (!ready()) return 0;
+    const int event = registryId >= 0 ? (registryId < int(protocolEvents_.size()) ? protocolEvents_[size_t(registryId)] : -1)
+                                      : bank_.eventId(name);
+    return play(event, category, pos, volume, pitch, rng_.nextLong());
+}
+
 u32 AudioSystem::play(int event, Category category, const double pos[3], float volume, float pitch, i64 seed, bool linear,
                       bool relative, bool looping, float* soundVolume) {
     if (!ready() || event < 0) return 0;
@@ -213,6 +221,16 @@ void AudioSystem::onBlockChanged(bool place, int x, int y, int z, u16 state) {
     play(place ? t.place : t.breakSound, Category::Block, pos, (t.volume + 1.0f) / 2.0f, t.pitch * 0.8f, rng_.nextLong());
 }
 
+void AudioSystem::blockHit(int x, int y, int z) {
+    if (!ready() || !haveGameSounds_ || !world_) return;
+    const BlockSound& b = blockSound(world_->block(x, y, z));
+    if (b.air) return;
+    const BlockSoundType& t = game_.type(b.type);
+    // SimpleSoundInstance(hit sound, BLOCKS, (volume + 1) / 8, pitch * 0.5, unseeded random, pos): at the centre.
+    const double pos[3] = {x + 0.5, y + 0.5, z + 0.5};
+    play(t.hit, Category::Block, pos, (t.volume + 1.0f) / 8.0f, t.pitch * 0.5f, rng_.nextLong());
+}
+
 void AudioSystem::attachGame(Game& game, World& world, BlockRegistry& registry) {
     gameRef_ = &game;
     world_ = &world;
@@ -222,6 +240,10 @@ void AudioSystem::attachGame(Game& game, World& world, BlockRegistry& registry) 
         onBlockChanged(place, x, y, z, state);
     };
     game.onPlayerTick = [this] { onPlayerTick(); };
+    game.onBreakingEffects = [this, prev = std::move(game.onBreakingEffects)](int x, int y, int z, int face, bool sound) {
+        if (prev) prev(x, y, z, face, sound);
+        if (sound) blockHit(x, y, z);
+    };
 }
 
 // ---- player movement sounds -----------------------------------------------------------------
@@ -383,7 +405,8 @@ void AudioSystem::attachNet(net::Client& client) {
         std::lock_guard lock(netMutex_);
         netQueue_.push_back(s);
     });
-    // Another player's block break (LevelEventHandler 2001); the breaking player plays its own.
+    // Another player's block break (LevelEventHandler 2001); the breaking player plays its own. 2020: the hit sound
+    // of a block being broken (the server plays it every 4 ticks of a dig, for the digging player too).
     client.onPlay("level_event", [this](net::Reader& r) {
         if (!ready()) return;
         const int type = r.i32v();
@@ -391,6 +414,13 @@ void AudioSystem::attachNet(net::Client& client) {
         int x, y, z;
         r.blockPos(x, y, z);
         const int data = r.i32v();
+        if (r.ok && type == 2020) {
+            s.type = NetSound::BlockHit;
+            s.pos[0] = x, s.pos[1] = y, s.pos[2] = z;
+            std::lock_guard lock(netMutex_);
+            netQueue_.push_back(s);
+            return;
+        }
         if (!r.ok || type != 2001 || data < 0 || data >= int(stateSoundTypes_.size()) || stateSoundTypes_[data] < 0) return;
         s.event = stateSoundTypes_[data];
         s.pos[0] = x + 0.5, s.pos[1] = y + 0.5, s.pos[2] = z + 0.5;
@@ -429,6 +459,9 @@ void AudioSystem::handleNet(const NetSound& s) {
         play(t.breakSound, Category::Block, s.pos, (t.volume + 1.0f) / 2.0f, t.pitch * 0.8f, rng_.nextLong());
         break;
     }
+    case NetSound::BlockHit:
+        blockHit(int(s.pos[0]), int(s.pos[1]), int(s.pos[2]));
+        break;
     case NetSound::Stop:  // SoundManager.stop(name, source)
         if (!s.anyEvent && s.event < 0) break;  // a sound this client does not know is not playing
         if (engine_.capturing()) engine_.mark("stop_sound");

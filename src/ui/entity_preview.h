@@ -1,0 +1,36 @@
+#pragma once
+// InventoryScreen.extractEntityInInventoryFollowsMouse on the GUI canvas: an entity model (the game's baked model
+// layers, entity/entity_assets.h) posed by its animation, projected orthographically like the game's
+// picture-in-picture entity renderer, back faces culled and faces painter-sorted, lit like ENTITY_IN_UI.
+#include "entity/entity_anim.h"
+#include "ui/modules.h"
+
+#include <string>
+#include <vector>
+
+namespace ui {
+
+struct PreviewLayer {
+    int model = -1;       // EntityAssets model index
+    std::string texture;  // texture below textures/ ("entity/player/wide/steve")
+    u32 color = 0xFFFFFFFF;
+};
+
+struct PreviewEntity {
+    std::vector<PreviewLayer> layers;  // the base model first; same-model layers (markings, overlays) after it
+    ent::Anim anim = ent::Anim::Head;
+    ent::AnimState state;              // headYaw / pitch are set from the mouse
+    float height = 1.8f;               // bounding box height (blocks)
+    float modelScale = 1.0f;           // the renderer's own scale (players 0.9375)
+};
+
+// The local player (skin from the player list, default skin otherwise). false: no entity models.
+bool previewLocalPlayer(UiState& s, PreviewEntity& out);
+// An entity of the world by network id (horses, llamas, camels...). false: unknown / no model.
+bool previewEntity(UiState& s, int entityId, PreviewEntity& out);
+
+// x0..y1: the GUI box (clipped to it); size: GUI pixels per block; offsetY: blocks below the box centre.
+void drawEntityFollowsMouse(UiState& s, Canvas& c, const PreviewEntity& e, int x0, int y0, int x1, int y1, float size,
+                            float offsetY, float mouseX, float mouseY);
+
+}  // namespace ui

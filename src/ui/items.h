@@ -65,6 +65,7 @@ public:
     bool read(net::Reader& r, ItemStack& out) const;
     void write(net::Writer& w, const ItemStack& s, bool delimited) const;
     void writeHashed(net::Writer& w, const ItemStack& s) const;  // HashedStack (component hashes unknown: 0)
+    bool readTemplate(net::Reader& r, ItemStack& out) const;     // ItemStackTemplate (item, count, patch)
 
 private:
     bool readPatch(net::Reader& r, ItemStack& out, int depth) const;

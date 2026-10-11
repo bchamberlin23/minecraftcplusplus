@@ -27,7 +27,7 @@ public:
     static constexpr int kLineHeight = 9;
 
     ~Font();
-    bool load(const Resources& res, Atlas& atlas);
+    bool load(const Resources& res, Atlas& atlas, const std::string& fontId = "minecraft:default");  // "minecraft:alt"
 
     const Glyph& glyph(u32 cp);
     // Calls fn(position, style, codepoint) for every visible code point, applying legacy codes.

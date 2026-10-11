@@ -282,6 +282,17 @@ bool Items::readPatch(net::Reader& r, ItemStack& out, int depth) const {
     return r.ok;
 }
 
+bool Items::readTemplate(net::Reader& r, ItemStack& out) const {
+    out = ItemStack{};
+    out.item = r.varInt();
+    out.count = r.varInt();
+    if (!readPatch(r, out, 0)) {
+        out.componentsKnown = false;
+        return false;
+    }
+    return r.ok;
+}
+
 bool Items::read(net::Reader& r, ItemStack& out) const {
     out = ItemStack{};
     const i32 count = r.varInt();

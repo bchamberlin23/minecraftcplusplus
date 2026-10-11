@@ -10,6 +10,7 @@
 #include "entity/entity_render.h"
 #include "entity/visuals.h"
 #include "game/game.h"
+#include "game/gameplay.h"
 #include "mods/mod_manager.h"
 #include "net/local_server.h"
 #include "net/session.h"
@@ -397,6 +398,14 @@ int wmain(int argc, wchar_t** argv) {
     ent::EntityRenderer entityRenderer(entities);  // declared before the renderer: destroyed after it
     // Hands, held / worn items, item frames, paintings, name tags, particles (same lifetime rule).
     ent::Visuals visuals(entities, entityRenderer);
+    // Local player gameplay rules and server state (mining speed, effects, attributes, cracks of others).
+    Gameplay gameplay(world, registry, reports);
+    auto gameplayTask = std::async(std::launch::async, [&] {
+        return !menu && haveReports &&
+               gameplay.load(mc, version, fs::path(local ? local : L".") / "minecraftCplusplus" / "shapes",
+                             fs::path(local ? local : L".") / "minecraftCplusplus" / "reports" / version / "reports" /
+                                 "minecraft" / "components" / "item");
+    });
     if (haveEntities)
         visuals.load(jar, mc, reports,
                      fs::path(local ? local : L".") / "minecraftCplusplus" / "reports" / version / "reports" / "minecraft" /
@@ -416,6 +425,7 @@ int wmain(int argc, wchar_t** argv) {
         netClient = std::make_unique<net::Client>(reports, registry);
         audio.attachNet(*netClient);
         if (haveEntities) entities.attach(*netClient), blockEntityRenderer.attach(*netClient), visuals.attach(*netClient);
+        gameplay.attach(*netClient);
         sky.attach(*netClient, haveReports ? &reports : nullptr);
         packs::attachNetwork(*netClient);  // shader pack uniforms (isElytraFlying, heavyFog)
         ui.registerHandlers(*netClient);
@@ -667,6 +677,10 @@ int wmain(int argc, wchar_t** argv) {
     std::string lastDimension;  // temporal history (TAA / upscalers / frame generation) resets on dimension change
     audio.attachGame(game, world, registry);
     if (haveEntities) visuals.setPlayer(game, ui, opt.name, [&] { return session ? session->gameMode() : 1; });
+    gameplayTask.get();
+    if (haveEntities) gameplay.setEntities(&entities);
+    gameplay.setPlayer(game, ui);
+    if (haveEntities) ui.setEntities(&entities);  // inventory / mount previews, player list heads
     game.onEntityClick = [&](bool attack, bool use, double blockDistance) {  // attack / use entities first
         if (!session || !haveEntities) return false;
         const CameraState c = game.camera();
@@ -742,6 +756,7 @@ int wmain(int argc, wchar_t** argv) {
             netClient = std::make_unique<net::Client>(reports, registry);
             audio.attachNet(*netClient);
             if (haveEntities) entities.attach(*netClient), blockEntityRenderer.attach(*netClient), visuals.attach(*netClient);
+            gameplay.attach(*netClient);
             sky.attach(*netClient, haveReports ? &reports : nullptr);
             packs::attachNetwork(*netClient);
             ui.registerHandlers(*netClient);
@@ -774,6 +789,7 @@ int wmain(int argc, wchar_t** argv) {
         if (session) {
             const Timer t;
             session->frame(dt);  // multiplayer: apply what the server sent, send movement
+            gameplay.frame();
             netMs = t.ms();
         }
         if (session && session->dimension().name != lastDimension) {

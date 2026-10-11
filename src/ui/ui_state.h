@@ -10,6 +10,7 @@
 #include "ui/font.h"
 #include "ui/icons.h"
 #include "ui/items.h"
+#include "ui/modules.h"
 #include "ui/resources.h"
 #include "ui/sprites.h"
 #include "ui/text.h"
@@ -26,6 +27,10 @@ class World;
 class BlockRegistry;
 class Terrain;
 class GameReports;
+
+namespace ent {
+class EntityWorld;
+}
 
 namespace packs {
 class PackOptionsModel;  // render/packs/pack_options.h
@@ -55,8 +60,8 @@ struct Layout {
     int width = 176, height = 166;
     int texW = 256, texH = 256;
     std::vector<SlotPos> slots;
-    int playerStart = 0;  // first slot of the player inventory (27 main + 9 hotbar)
-    int titleX = 8, titleY = 6, invLabelX = 8, invLabelY = 72;
+    int playerStart = 0;  // first slot of the player inventory (27 main + 9 hotbar); -1: none (lectern)
+    int titleX = 8, titleY = 6, invLabelX = 8, invLabelY = 72;  // titleX -1: centred; Y <= -1000: not drawn
     bool chestRows = false;  // generic_9xN: background drawn in two parts
     int rows = 0;
 };
@@ -82,6 +87,8 @@ struct Button {
 
 enum class Screen {
     None, Chat, Inventory, Container, Creative, Pause, Options, Death, Mods, Video, PackOptions,
+    // Registered screens (modules.h ScreenDef): signs and books, advancements, statistics, game mode switcher, bed
+    Sign, BookEdit, BookView, Advancements, Stats, GameModeSwitcher, InBed,
     // Front end (frontend.h)
     Title, Worlds, CreateWorld, EditWorld, Confirm, Servers, EditServer, DirectConnect, Loading, Message, OpenToLan
 };
@@ -96,6 +103,7 @@ struct Ui::State {
     BlockRegistry* registry = nullptr;
     Terrain* terrain = nullptr;
     const GameReports* reports = nullptr;
+    ent::EntityWorld* entities = nullptr;  // entity models / skins / the mount (Ui::setEntities); may be null
     net::Client* client = nullptr;
     net::Session* session = nullptr;
     bool online() const { return client != nullptr && session != nullptr; }
@@ -141,7 +149,6 @@ struct Ui::State {
     Menu inventory;                   // 46 slots, container 0
     std::unique_ptr<Menu> container;  // open server container
     ItemStack carried;
-    std::vector<ItemStack> creativeItems;  // all items in registry order
     int hotbarSynced[9] = {-2, -2, -2, -2, -2, -2, -2, -2, -2};
 
     // HUD
@@ -205,10 +212,6 @@ struct Ui::State {
     double lastClickTime = 0;
     int lastClickButton = -1;
     ItemStack lastQuickMoved;
-    // Creative screen.
-    float creativeScroll = 0;  // 0..1
-    std::vector<int> creativeFiltered;
-    bool scrolling = false;
 
     // Network events decoded on the network thread, applied on the main thread.
     std::mutex mutex;
@@ -267,7 +270,6 @@ struct Ui::State {
     Menu& activeMenu() { return container ? *container : inventory; }
     void containerClick(int slot, int button, int input);  // simulates locally and sends container_click
     void creativeSetSlot(int menuSlot, const ItemStack& s);
-    void updateCreativeFilter();
     void dropSelected(bool all);
     void swapHands();
     int menuSlotForInventory(const Menu& m, int inventoryIndex) const;  // Inventory index (0-8 hotbar, 40 offhand)

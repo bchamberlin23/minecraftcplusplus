@@ -793,6 +793,35 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         s.rightItem = rightHanded ? e.equipment[0] >= 0 : e.equipment[1] >= 0;
         s.leftItem = rightHanded ? e.equipment[1] >= 0 : e.equipment[0] >= 0;
         s.swingLeft = !rightHanded;
+        if (e.category == Category::Player && items_) {
+            // AvatarRenderer.getArmPose: the use animation of the hand in use, a charged crossbow, else ITEM / EMPTY.
+            auto poseFor = [&](int slot) {
+                const int item = e.equipment[slot];
+                if (item < 0) return ArmPose::Empty;
+                const std::string n = items_->itemName(item);
+                if (n == "crossbow" && (e.chargedCrossbow >> slot) & 1 && e.swingTime < 0) return ArmPose::CrossbowHold;
+                if ((e.livingFlags & 1) && ((e.livingFlags & 2) ? 1 : 0) == slot) {
+                    if (n == "shield") return ArmPose::Block;
+                    if (n == "bow") return ArmPose::BowAndArrow;
+                    if (n == "trident") return ArmPose::ThrowTrident;
+                    if (n == "crossbow") return ArmPose::CrossbowCharge;
+                    if (n == "spyglass") return ArmPose::Spyglass;
+                    if (n == "goat_horn") return ArmPose::TootHorn;
+                    if (n == "brush") return ArmPose::Brush;
+                    if (n.ends_with("_spear")) return ArmPose::Spear;
+                }
+                return ArmPose::Item;
+            };
+            ArmPose mainPose = poseFor(0), offPose = poseFor(1);
+            if (mainPose == ArmPose::BowAndArrow || mainPose == ArmPose::CrossbowCharge || mainPose == ArmPose::CrossbowHold)
+                offPose = e.equipment[1] < 0 ? ArmPose::Empty : ArmPose::Item;
+            s.havePoses = true;
+            s.rightPose = rightHanded ? mainPose : offPose;
+            s.leftPose = rightHanded ? offPose : mainPose;
+            s.usingItem = (e.livingFlags & 1) != 0;
+            s.useRight = ((e.livingFlags & 2) != 0) != rightHanded;
+            s.useTicks = float(e.useTicks) + (s.usingItem ? pt : 0.0f);
+        }
         s.standFlags = e.standFlags;
         s.standPose = e.standPose;
         s.skinParts = e.category == Category::Player ? e.skinParts : 0x7F;

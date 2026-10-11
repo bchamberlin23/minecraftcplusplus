@@ -16,6 +16,11 @@ struct Node {
     std::string text, key, fallback;
     std::vector<Node> with, extra;
     Style style;
+    // click_event / hover_event / insertion (turned into Style::events when flattened)
+    std::string click, clickValue, hover, hoverId, hoverUuid, insertion;
+    int hoverCount = 1;
+    bool hasEvents = false, hasInsertion = false;
+    std::vector<Node> hoverValue;  // show_text value / show_entity name (0 or 1)
 };
 
 std::string numberText(double v, bool integral) {
@@ -114,6 +119,43 @@ Node parseNbt(NbtReader& r, u8 tag, int depth) {
             n.style.strikethrough = flag(r, t);
         } else if (name == "obfuscated") {
             n.style.obfuscated = flag(r, t);
+        } else if (name == "insertion" && t == TagString) {
+            n.insertion = r.str(), n.hasInsertion = n.hasEvents = true;
+        } else if ((name == "click_event" || name == "hover_event") && t == TagCompound) {
+            const bool click = name == "click_event";
+            u8 et;
+            std::string_view en;
+            while (r.field(et, en)) {
+                if (en == "action" && et == TagString) {
+                    (click ? n.click : n.hover) = r.str();
+                } else if (click && (en == "url" || en == "command" || en == "value" || en == "path") && et == TagString) {
+                    n.clickValue = r.str();
+                } else if (click && en == "page" && et != TagCompound && et != TagList) {
+                    n.clickValue = parseNbt(r, et, depth + 1).text;
+                } else if (!click && (en == "value" || en == "name")) {
+                    n.hoverValue.clear();
+                    n.hoverValue.push_back(parseNbt(r, et, depth + 1));
+                } else if (!click && en == "id" && et == TagString) {
+                    n.hoverId = r.str();
+                } else if (!click && en == "count" && et == TagInt) {
+                    n.hoverCount = r.i32v();
+                } else if (!click && en == "uuid" && et == TagIntArray) {
+                    const i32 cnt = r.i32v();
+                    std::string hex;
+                    for (i32 i = 0; i < cnt && r.ok; ++i) {
+                        char b[9];
+                        std::snprintf(b, sizeof(b), "%08x", u32(r.i32v()));
+                        hex += b;
+                    }
+                    if (hex.size() == 32)
+                        n.hoverUuid = hex.substr(0, 8) + "-" + hex.substr(8, 4) + "-" + hex.substr(12, 4) + "-" + hex.substr(16, 4) + "-" + hex.substr(20);
+                } else if (!click && en == "uuid" && et == TagString) {
+                    n.hoverUuid = r.str();
+                } else {
+                    r.skip(et);
+                }
+            }
+            n.hasEvents = true;
         } else {
             r.skip(t);
         }
@@ -164,6 +206,25 @@ Node parseJson(const nlohmann::json& j, int depth) {
     n.style.underlined = jflag(j, "underlined");
     n.style.strikethrough = jflag(j, "strikethrough");
     n.style.obfuscated = jflag(j, "obfuscated");
+    if (j.contains("insertion") && j["insertion"].is_string()) n.insertion = j["insertion"].get<std::string>(), n.hasInsertion = n.hasEvents = true;
+    if (j.contains("click_event") && j["click_event"].is_object()) {
+        const auto& e = j["click_event"];
+        n.click = e.value("action", "");
+        for (const char* k : {"url", "command", "value", "path"})
+            if (e.contains(k) && e[k].is_string()) n.clickValue = e[k].get<std::string>();
+        if (e.contains("page") && e["page"].is_number_integer()) n.clickValue = std::to_string(e["page"].get<int>());
+        n.hasEvents = true;
+    }
+    if (j.contains("hover_event") && j["hover_event"].is_object()) {
+        const auto& e = j["hover_event"];
+        n.hover = e.value("action", "");
+        if (e.contains("value")) n.hoverValue.push_back(parseJson(e["value"], depth + 1));
+        else if (e.contains("name")) n.hoverValue.push_back(parseJson(e["name"], depth + 1));
+        if (e.contains("id") && e["id"].is_string()) n.hoverId = e["id"].get<std::string>();
+        if (e.contains("count") && e["count"].is_number_integer()) n.hoverCount = e["count"].get<int>();
+        if (e.contains("uuid") && e["uuid"].is_string()) n.hoverUuid = e["uuid"].get<std::string>();
+        n.hasEvents = true;
+    }
     return n;
 }
 
@@ -215,7 +276,19 @@ void translate(const Node& n, const Style& style, const Lang* lang, Text& out, i
 
 void flatten(const Node& n, const Style& parent, const Lang* lang, Text& out, int depth) {
     if (depth > 64) return;
-    const Style style = n.style.over(parent);
+    Style own = n.style;
+    if (n.hasEvents) {  // Style.applyTo: unset click / hover / insertion come from the parent
+        auto ev = std::make_shared<TextEvents>(parent.events ? *parent.events : TextEvents{});
+        if (!n.click.empty()) ev->click = n.click, ev->clickValue = n.clickValue;
+        if (!n.hover.empty()) {
+            ev->hover = n.hover, ev->hoverId = n.hoverId, ev->hoverCount = n.hoverCount, ev->hoverUuid = n.hoverUuid;
+            ev->hoverText = Text();
+            if (!n.hoverValue.empty()) flatten(n.hoverValue[0], Style{}, lang, ev->hoverText, depth + 1);
+        }
+        if (n.hasInsertion) ev->insertion = n.insertion, ev->hasInsertion = true;
+        own.events = std::move(ev);
+    }
+    const Style style = own.over(parent);
     if (n.kind == Node::Translate) {
         translate(n, style, lang, out, depth);
     } else if (n.kind == Node::Keybind) {
@@ -239,6 +312,7 @@ Style Style::over(const Style& p) const {
     if (s.underlined < 0) s.underlined = p.underlined;
     if (s.strikethrough < 0) s.strikethrough = p.strikethrough;
     if (s.obfuscated < 0) s.obfuscated = p.obfuscated;
+    if (!s.events) s.events = p.events;
     return s;
 }
 

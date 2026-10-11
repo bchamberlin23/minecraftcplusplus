@@ -138,6 +138,7 @@ void posOf(u64 k, int& x, int& y, int& z) {
     y = int(i64(k << 52) >> 52);
 }
 u64 sectionKey(int cx, int sy, int cz) { return posKey(cx, sy, cz); }
+BlockEntityRenderer* gInstance = nullptr;  // BlockEntityRenderer::instance()
 
 std::string_view stripNs(std::string_view s) {
     const size_t c = s.find(':');
@@ -170,6 +171,7 @@ std::string readId(NbtReader& r, u8 tag) {
 BlockEntityRenderer::BlockEntityRenderer(World& world, BlockRegistry& registry, const GameReports& reports,
                                          const ent::EntityAssets& assets, const ent::EntityRenderer& entityRenderer)
     : world_(world), registry_(registry), reports_(reports), assets_(assets), entityRenderer_(entityRenderer) {
+    gInstance = this;
     initAssets();
     const std::time_t now = std::time(nullptr);  // SpecialDates.isExtendedChristmas: Dec 24-26
     std::tm tm{};
@@ -177,7 +179,19 @@ BlockEntityRenderer::BlockEntityRenderer(World& world, BlockRegistry& registry, 
     xmas_ = tm.tm_mon == 11 && tm.tm_mday >= 24 && tm.tm_mday <= 26;
 }
 
+const BlockEntityRenderer* BlockEntityRenderer::instance() { return gInstance; }
+
+const BlockEntityRenderer::Data* BlockEntityRenderer::dataAt(int x, int y, int z) const {
+    auto it = sections_.find(sectionKey(x >> 4, y >> 4, z >> 4));
+    if (it == sections_.end()) return nullptr;
+    for (const Instance& in : it->second.list)
+        if (in.x == x && in.y == y && in.z == z)
+            return in.data >= 0 && size_t(in.data) < it->second.data.size() ? &it->second.data[size_t(in.data)] : nullptr;
+    return nullptr;
+}
+
 BlockEntityRenderer::~BlockEntityRenderer() {
+    if (gInstance == this) gInstance = nullptr;
     world_.trackBlockChanges(false);
     if (!frames_) return;
     const u32 n = u32(std::min<u64>(frames_, kHistory));

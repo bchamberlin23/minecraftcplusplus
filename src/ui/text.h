@@ -5,9 +5,12 @@
 
 #include <json/json.hpp>
 
+#include <memory>
 #include <unordered_map>
 
 namespace ui {
+
+struct TextEvents;  // click / hover events of a component (below)
 
 using Lang = std::unordered_map<std::string, std::string>;
 
@@ -15,6 +18,7 @@ struct Style {
     i32 color = -1;   // 0xRRGGBB, -1: not set
     i64 shadow = -1;  // 0xAARRGGBB shadow colour override, -1: not set
     i8 bold = -1, italic = -1, underlined = -1, strikethrough = -1, obfuscated = -1;  // -1: not set
+    std::shared_ptr<const TextEvents> events;  // click_event / hover_event / insertion (inherited); null: none
 
     bool isBold() const { return bold == 1; }
     bool isItalic() const { return italic == 1; }
@@ -47,6 +51,19 @@ struct Text {
     }
     Text withStyle(const Style& base) const;  // `base` under every run's own style
     bool operator==(const Text&) const;
+};
+
+// Style click_event / hover_event / insertion (ClickEvent, HoverEvent).
+struct TextEvents {
+    std::string click;       // "open_url", "run_command", "suggest_command", "copy_to_clipboard", "change_page"...; "" none
+    std::string clickValue;  // url / command / value / page number
+    std::string hover;       // "show_text", "show_item", "show_entity"; "" none
+    Text hoverText;          // show_text value; show_entity name
+    std::string hoverId;     // show_item item id / show_entity type id
+    int hoverCount = 1;      // show_item count
+    std::string hoverUuid;   // show_entity
+    bool hasInsertion = false;
+    std::string insertion;   // shift-click inserts into the chat input
 };
 
 // The 16 named colours (ChatFormatting) by legacy code index 0..15.

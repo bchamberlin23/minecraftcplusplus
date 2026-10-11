@@ -61,6 +61,10 @@ public:
     void frame(double dt, const double cam[3]);
     // Local actions.
     void blockDestroyed(int x, int y, int z, u16 block);
+    // ClientLevel.addBreakingParticles: one shard on the hit face of the block being broken (world lock held).
+    void blockCrack(int x, int y, int z, int face);
+    // BreakingItemParticle (ParticleTypes.ITEM): a shard of an item's texture (eating, items breaking).
+    void itemShard(int item, double x, double y, double z, double xa, double ya, double za);
     void spawn(std::string_view type, double x, double y, double z, double vx, double vy, double vz);
 
     // Billboards for this frame: opaque ones first (count `opaque`), then translucent ones.
@@ -109,6 +113,7 @@ private:
     std::vector<i32> blockSprites_;            // registry id -> rect + 1 (0 unresolved, -1 none)
     std::vector<u32> blockTints_;
     std::vector<u8> blockKinds_;               // registry id -> ambient kind + 1 (0 unresolved)
+    std::unordered_map<int, int> itemSprites_;  // item id -> item atlas rect + 1 (-1 none)
     struct CachedBlock {
         i32 x = 0, y = INT32_MIN, z = 0;
         u16 id = 0;
@@ -136,11 +141,21 @@ private:
     };
     struct NetBreak {
         int x, y, z, state;
+        int face = -1;  // level event 2019 / 2020 (destroy progress): the hit face; -1: 2001 (block destroyed)
     };
     std::mutex netMutex_;
     std::vector<NetSpawn> netSpawns_, spawnsLocal_;  // network thread / main thread (swapped, capacity kept)
     std::vector<NetBreak> netBreaks_, breaksLocal_;
     std::vector<std::pair<int, float>> netWeather_;
+    struct NetExplosion {  // ClientboundExplodePacket
+        double pos[3];
+        int particle;
+        int soundId;  // registry id, -1: inline name
+        std::string soundName;
+        bool playSound;
+    };
+    std::vector<NetExplosion> netExplosions_;
+    bool skipOptions(void* reader, int type) const;  // net::Reader*: the particle's options (false: unreadable)
     std::vector<std::pair<int, float>> weatherQueue_;  // main thread
     const ui::Resources* res_ = nullptr;
     Stats stats_;

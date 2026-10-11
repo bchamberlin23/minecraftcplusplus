@@ -227,6 +227,22 @@ float4 VisualsGlintPS(VSOut i) : SV_Target {
     return float4(g * (1.0 - i.fog), 1);
 }
 
+// Block cracks (RenderPipelines.CRUMBLING): the destroy stage texture multiplied in twice (blend dst * src +
+// src * dst), colour only; fog fades it to the neutral 0.5. Shader pipeline: the terrain is lit later from the
+// G-buffer, so the OIT stage texture goes into the entity layer alpha blended, its alpha as the cover the deferred
+// pass lerps the lit terrain by (black at 1/2 = the multiply's halving). The light texels (a slight brightening with
+// the multiply) are left out: a lerp towards white would overexpose shaded faces.
+float4 VisualsCrumblingPS(VSOut i) : SV_Target {
+    float4 c = sampleTex(i) * i.tint;
+    if (gFogParams.w > 0.5) {
+        clip(c.a - 0.004);
+        clip(0.5 - c.r);
+        return float4(c.rgb, c.a * 0.49);
+    }
+    clip(c.a - 0.1);
+    return float4(lerp(c.rgb, 0.5, i.fog), 1);
+}
+
 float4 ParticleCutoutPS(VSOut i) : SV_Target { return shade(i, 0.1, false); }
 MvOut ParticleCutoutMvPS(VSOut i) {
     MvOut o;

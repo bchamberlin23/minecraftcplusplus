@@ -19,6 +19,10 @@ struct CameraState {
     double x = 0, y = 0, z = 0;
     float yaw = 0, pitch = 0;  // radians, Minecraft convention (yaw 0 = +Z, pitch > 0 = down)
     float fovY = 1.2f;
+    // Optional view basis replacing the one from yaw / pitch (world-space right, up, forward): the view bobbing and
+    // hurt tilt (GameRenderer.bobView / bobHurt) roll and nod the world view; yaw / pitch stay the unbobbed look.
+    bool basisSet = false;
+    float right[3] = {}, up[3] = {}, fwd[3] = {};
 };
 
 struct LineVertex {
