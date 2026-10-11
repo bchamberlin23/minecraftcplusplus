@@ -23,7 +23,8 @@ enum class Kind : u8 {
     None, Generic, Terrain, Crumble, DustPillar, FallingDust, Rain, Splash, Poof, Explosion, ExplosionSeed, Smoke,
     LargeSmoke, WhiteSmoke, Flame, SmallFlame, Crit, DamageIndicator, EnchantedHit, Heart, AngryVillager, Bubble,
     BubblePop, CherryLeaves, PaleLeaves, TintedLeaves, Portal, Enchant, CampfireCosy, CampfireSignal, Spell, Witch,
-    Suspended, HappyVillager, Lava, Dust, DustTransition, Note, Cloud, Snowflake, Item, Vibration
+    Suspended, HappyVillager, Lava, Dust, DustTransition, Note, Cloud, Snowflake, Item, Vibration, Drip, Spark, Flash,
+    Totem, EndRod, Gust, GustSeed, Rising, SculkCharge, SculkChargePop, Shriek, Firefly, Glow
 };
 enum class Opt : u8 { None, Block, Dust, DustTransition, Spell, Color, Float, VarInt, Int, IntFloat, Trail, Item, Vibration };
 enum SizeMode : u8 { SizeConst, SizeGrow, SizeFlame, SizePortal, SizeLava };
@@ -47,7 +48,51 @@ const std::pair<const char*, Kind> kKinds[] = {
     {"composter", Kind::HappyVillager}, {"egg_crack", Kind::HappyVillager}, {"dolphin", Kind::Suspended},
     {"lava", Kind::Lava}, {"dust", Kind::Dust}, {"dust_color_transition", Kind::DustTransition}, {"note", Kind::Note},
     {"cloud", Kind::Cloud}, {"sneeze", Kind::Cloud}, {"snowflake", Kind::Snowflake}, {"item", Kind::Item},
-    {"item_slime", Kind::Item}, {"item_snowball", Kind::Item}, {"item_cobweb", Kind::Item}, {"vibration", Kind::Vibration}};
+    {"item_slime", Kind::Item}, {"item_snowball", Kind::Item}, {"item_cobweb", Kind::Item}, {"vibration", Kind::Vibration},
+    {"firework", Kind::Spark}, {"flash", Kind::Flash}, {"totem_of_undying", Kind::Totem}, {"end_rod", Kind::EndRod},
+    {"gust", Kind::Gust}, {"small_gust", Kind::Gust}, {"gust_emitter_large", Kind::GustSeed},
+    {"gust_emitter_small", Kind::GustSeed}, {"sonic_boom", Kind::Explosion}, {"soul", Kind::Rising},
+    {"sculk_soul", Kind::Rising}, {"sculk_charge", Kind::SculkCharge}, {"sculk_charge_pop", Kind::SculkChargePop},
+    {"shriek", Kind::Shriek}, {"firefly", Kind::Firefly}, {"glow", Kind::Glow}, {"wax_on", Kind::Glow},
+    {"wax_off", Kind::Glow}, {"electric_spark", Kind::Glow}, {"scrape", Kind::Glow}};
+
+// DripParticle and its providers: the hanging drop falls into the next type, which lands as another one.
+enum DripStage : u8 { DripHang, DripCoolingHang, DripFall, DripFallLand, DripDripstoneFallLand, DripHoneyFallLand, DripLand };
+struct DripDef {
+    const char* name;
+    DripStage stage;
+    u8 fluid;  // 0 none, 1 water, 2 lava: the drop ends inside that fluid
+    float r, g, b, gravity;
+    float life;  // > 0: lifetime; < 0: (int)(-life / (random * 0.8 + 0.2))
+    bool glow;
+    const char* next;  // the falling / landing particle
+};
+constexpr float kTear[3] = {0.51171875f, 0.03125f, 0.890625f};
+const DripDef kDrips[] = {
+    {"dripping_water", DripHang, 1, 0.2f, 0.3f, 1.0f, 0.06f * 0.02f, 40, false, "falling_water"},
+    {"falling_water", DripFallLand, 1, 0.2f, 0.3f, 1.0f, 0.06f, -64, false, "splash"},
+    {"dripping_lava", DripCoolingHang, 2, 1, 1, 1, 0.06f * 0.02f, 40, false, "falling_lava"},
+    {"falling_lava", DripFallLand, 2, 1.0f, 0.2857143f, 0.083333336f, 0.06f, -64, false, "landing_lava"},
+    {"landing_lava", DripLand, 2, 1.0f, 0.2857143f, 0.083333336f, 0.06f, -16, false, nullptr},
+    {"dripping_honey", DripHang, 0, 0.622f, 0.508f, 0.082f, 0.06f * 0.02f * 0.01f, 100, false, "falling_honey"},
+    {"falling_honey", DripHoneyFallLand, 0, 0.582f, 0.448f, 0.082f, 0.01f, -64, false, "landing_honey"},
+    {"landing_honey", DripLand, 0, 0.522f, 0.408f, 0.082f, 0.06f, -128, false, nullptr},
+    {"falling_nectar", DripFall, 0, 0.92f, 0.782f, 0.72f, 0.007f, -16, false, nullptr},
+    {"dripping_obsidian_tear", DripHang, 0, kTear[0], kTear[1], kTear[2], 0.06f * 0.02f * 0.01f, 100, true, "falling_obsidian_tear"},
+    {"falling_obsidian_tear", DripFallLand, 0, kTear[0], kTear[1], kTear[2], 0.01f, -64, true, "landing_obsidian_tear"},
+    {"landing_obsidian_tear", DripLand, 0, kTear[0], kTear[1], kTear[2], 0.06f, -28, true, nullptr},
+    {"falling_spore_blossom", DripFall, 0, 0.32f, 0.5f, 0.22f, 0.005f, -64, false, nullptr},
+    {"dripping_dripstone_water", DripHang, 1, 0.2f, 0.3f, 1.0f, 0.06f * 0.02f, 40, false, "falling_dripstone_water"},
+    {"falling_dripstone_water", DripDripstoneFallLand, 1, 0.2f, 0.3f, 1.0f, 0.06f, -64, false, "splash"},
+    {"dripping_dripstone_lava", DripCoolingHang, 2, 1, 1, 1, 0.06f * 0.02f, 40, false, "falling_dripstone_lava"},
+    {"falling_dripstone_lava", DripDripstoneFallLand, 2, 1.0f, 0.2857143f, 0.083333336f, 0.06f, -64, false, "landing_lava"},
+};
+
+// FireflyParticle.getFadeAmount.
+float fadeAmount(float progress, float fadeIn, float fadeOut) {
+    if (progress >= 1.0f - fadeIn) return (1.0f - progress) / fadeIn;
+    return progress <= fadeOut ? progress / fadeOut : 1.0f;
+}
 
 const std::pair<const char*, Opt> kOptions[] = {
     {"block", Opt::Block}, {"block_marker", Opt::Block}, {"falling_dust", Opt::Block}, {"dust_pillar", Opt::Block},
@@ -79,6 +124,8 @@ struct Particles::Type {
     Kind kind = Kind::None;
     Opt opt = Opt::None;
     std::vector<int> sprites;  // item atlas rects
+    int drip = -1;             // kDrips index
+    int next = -2;             // drips: the particle type they turn into (-2 unresolved)
 };
 
 struct Particles::Particle {
@@ -122,6 +169,8 @@ bool Particles::init(const ui::Resources& res) {
             if (t.name == n) t.kind = k;
         for (auto [n, o] : kOptions)
             if (t.name == n) t.opt = o;
+        for (size_t d = 0; d < std::size(kDrips); ++d)
+            if (t.name == kDrips[d].name) t.kind = Kind::Drip, t.drip = int(d);
     }
     for (const auto& [key, id] : reports_.stateIds()) {
         if (id < 0) continue;
@@ -137,6 +186,11 @@ bool Particles::init(const ui::Resources& res) {
 int Particles::typeId(std::string_view name) const {
     auto it = typeIds_.find(std::string(name));
     return it == typeIds_.end() ? -1 : it->second;
+}
+
+int Particles::dripNext(Type& t) {
+    if (t.next == -2) t.next = t.drip >= 0 && kDrips[size_t(t.drip)].next ? typeId(kDrips[size_t(t.drip)].next) : -1;
+    return t.next;
 }
 
 u16 Particles::localBlock(int state) {
@@ -233,8 +287,8 @@ bool Particles::readOptions(void* reader, int type, Options& o) const {
             break;
         case Opt::Spell: o.color = u32(r.i32v()), o.power = r.f32(), o.hasColor = true; break;
         case Opt::Color: o.color = u32(r.i32v()), o.hasColor = true; break;
-        case Opt::Float: r.f32(); break;
-        case Opt::VarInt: r.varInt(); break;
+        case Opt::Float: o.scale = r.f32(); break;  // sculk_charge: the roll
+        case Opt::VarInt: o.delay = r.varInt(); break;  // shriek: the delay
         case Opt::Int: r.i32v(); break;
         case Opt::IntFloat: r.i32v(), r.f32(); break;
         case Opt::Trail: r.f64(), r.f64(), r.f64(), r.i32v(), r.varInt(); break;
@@ -341,7 +395,7 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
         return nullptr;
     }
     if (t.sprites.empty() && t.kind != Kind::Terrain && t.kind != Kind::Crumble && t.kind != Kind::DustPillar &&
-        t.kind != Kind::ExplosionSeed) {
+        t.kind != Kind::ExplosionSeed && t.kind != Kind::GustSeed) {
         // Sprite set from assets/minecraft/particles/<type>.json (loaded on first use).
         const nlohmann::json j = res_ ? res_->json("assets/minecraft/particles/" + t.name + ".json") : nlohmann::json();
         if (j.is_object() && j.contains("textures") && j["textures"].is_array())
@@ -450,6 +504,7 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
             p.r = p.g = p.b = c;
             p.quadSize = 2.0f * (1.0f - float(xa) * 0.5f);
             p.emissive = 255;
+            if (t.name == "sonic_boom") p.lifetime = 16, p.quadSize = 1.5f;  // SonicBoomParticle
             ageSprite();
             break;
         }
@@ -681,6 +736,7 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
             p.quadSize *= 1.875f;
             p.lifetime = std::max(int(8.0 / (randf() * 0.8 + 0.3) * 2.5), 1);
             p.sizeMode = SizeGrow;
+            if (t.name == "sneeze") p.r = 0.22f, p.g = 1.0f, p.b = 0.53f, p.a = 0.4f, p.flags |= Translucent;  // SneezeProvider
             ageSprite();
             break;
         case Kind::Vibration: {  // VibrationSignalParticle: flies to its destination, arriving after `arrival` ticks
@@ -701,6 +757,157 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
                 p.e1 = p.e2 = float(std::atan2(dy, std::sqrt(dx * dx + dz * dz)));   // pitch, pitchO
             }
             randomSprite();
+            break;
+        }
+        case Kind::Drip: {  // DripParticle: position constructor, then the provider's colour / gravity / lifetime
+            const DripDef& d = kDrips[size_t(t.drip)];
+            base(x, y, z);
+            p.r = d.r, p.g = d.g, p.b = d.b;
+            p.gravity = d.gravity;
+            if (d.life > 0) p.lifetime = int(d.life);
+            else if (t.name == "falling_spore_blossom") p.lifetime = int(64.0f / (0.1f + randf() * 0.8f));
+            else p.lifetime = int(-d.life / (randf() * 0.8f + 0.2f));
+            if (d.glow) p.emissive = 15;
+            randomSprite();
+            break;
+        }
+        case Kind::Spark:
+        case Kind::Totem:
+        case Kind::EndRod: {  // SimpleAnimatedParticle: friction 0.91, fading out over the second half, full bright
+            base(x, y, z);
+            p.friction = 0.91f;
+            p.xd = xa, p.yd = ya, p.zd = za;
+            p.quadSize *= 0.75f;
+            p.flags |= Translucent;
+            p.emissive = 255;
+            if (t.kind == Kind::Spark) {  // FireworkParticles.SparkParticle
+                p.gravity = 0.1f;
+                p.lifetime = 48 + int(rng_() % 12);
+                p.a = 0.99f;
+                if (opt && opt->spark) {  // the firework starter's colours and flags
+                    color(opt->color);
+                    p.e0 = float(opt->spark);
+                    if (opt->spark & kSparkFade)
+                        p.e1 = float((opt->color2 >> 16) & 255) / 255.0f, p.e2 = float((opt->color2 >> 8) & 255) / 255.0f,
+                        p.e3 = float(opt->color2 & 255) / 255.0f;
+                }
+            } else if (t.kind == Kind::Totem) {  // TotemParticle
+                p.gravity = 1.25f, p.friction = 0.6f;
+                p.lifetime = 60 + int(rng_() % 12);
+                if (rng_() % 4 == 0) p.r = 0.6f + randf() * 0.2f, p.g = 0.6f + randf() * 0.3f, p.b = randf() * 0.2f;
+                else p.r = 0.1f + randf() * 0.2f, p.g = 0.4f + randf() * 0.3f, p.b = randf() * 0.2f;
+            } else {  // EndRodParticle: no collisions, fades to #F2DEC9
+                p.gravity = 0.0125f;
+                p.lifetime = 60 + int(rng_() % 12);
+                p.flags &= u8(~Physics);
+                p.e0 = float(kSparkFade);
+                p.e1 = 0xF2 / 255.0f, p.e2 = 0xDE / 255.0f, p.e3 = 0xC9 / 255.0f;
+            }
+            ageSprite();
+            break;
+        }
+        case Kind::Flash:  // FireworkParticles.OverlayParticle: a big flash for four ticks (size / alpha in build)
+            base(x, y, z);
+            p.lifetime = 4;
+            p.flags |= Translucent;
+            if (opt && opt->hasColor) color(opt->color), p.a = float(opt->color >> 24) / 255.0f;
+            randomSprite();
+            break;
+        case Kind::Gust:  // GustParticle: still, full bright, animated over 12-15 ticks
+            base(x, y, z);
+            p.lifetime = 12 + int(rng_() % 4);
+            p.quadSize = t.name == "small_gust" ? 0.15f : 1.0f;
+            p.emissive = 255;
+            p.flags &= u8(~Physics);
+            ageSprite();
+            break;
+        case Kind::GustSeed: {  // GustSeedParticle: emits gusts (scale, lifetime, ticks in between)
+            base(x, y, z);
+            const bool large = t.name == "gust_emitter_large";
+            p.e0 = large ? 3.0f : 1.0f;
+            p.lifetime = large ? 7 : 3;
+            p.e1 = large ? 0.0f : 2.0f;
+            p.flags |= NoRender;
+            break;
+        }
+        case Kind::Rising:  // EmissiveRisingParticle (RisingParticle): soul / sculk_soul
+            baseVel(x, y, z, xa, ya, za);
+            p.friction = 0.96f;
+            p.xd = p.xd * 0.01f + xa, p.yd = p.yd * 0.01f + ya, p.zd = p.zd * 0.01f + za;
+            p.x += (randf() - randf()) * 0.05f, p.y += (randf() - randf()) * 0.05f, p.z += (randf() - randf()) * 0.05f;
+            p.xo = p.x, p.yo = p.y, p.zo = p.z;
+            p.lifetime = int(8.0 / (randf() * 0.8 + 0.2)) + 4;
+            p.quadSize *= 1.5f;
+            p.flags |= Translucent;
+            if (t.name == "sculk_soul") p.emissive = 15;
+            ageSprite();
+            break;
+        case Kind::SculkCharge:
+        case Kind::SculkChargePop:  // no collisions, glowing, flying at the given speed
+            baseVel(x, y, z, xa, ya, za);
+            p.friction = 0.96f;
+            p.xd = xa, p.yd = ya, p.zd = za;
+            p.flags &= u8(~Physics);
+            p.flags |= Translucent;
+            p.emissive = 15;
+            if (t.kind == Kind::SculkCharge) {
+                p.quadSize *= 1.5f;
+                p.roll = p.oRoll = opt ? opt->scale : 0.0f;
+                p.lifetime = int(rng_() % 12) + 8;
+            } else {
+                p.lifetime = int(rng_() % 4) + 6;
+            }
+            ageSprite();
+            break;
+        case Kind::Shriek:  // ShriekParticle: two tilted rings rising after a delay
+            base(x, y, z);
+            p.quadSize = 0.85f;
+            p.e0 = float(opt ? opt->delay : 0);
+            p.lifetime = 30;
+            p.xd = 0, p.yd = 0.1, p.zd = 0;
+            p.flags |= Translucent;
+            p.emissive = 15;
+            randomSprite();
+            break;
+        case Kind::Firefly:  // FireflyParticle: wanders, fading in and out, glowing with its own light
+            baseVel(x, y, z, 0.5 - randf(), rng_() & 1 ? ya : -ya, 0.5 - randf());
+            p.flags |= SpeedUp | Translucent;
+            p.friction = 0.96f;
+            p.quadSize *= 0.75f * 1.5f;
+            p.xd *= 0.8f, p.yd *= 0.8f, p.zd *= 0.8f;
+            p.lifetime = 200 + int(rng_() % 101);
+            p.a = 0;
+            randomSprite();
+            break;
+        case Kind::Glow: {  // GlowParticle providers: glow squid, wax on / off, electric spark, scrape
+            const bool squid = t.name == "glow";
+            baseVel(x, y, z, squid ? 0.5 - randf() : 0.0, squid ? ya : 0.0, squid ? 0.5 - randf() : 0.0);
+            p.friction = 0.96f;
+            p.flags |= SpeedUp;
+            p.flags &= u8(~Physics);
+            p.quadSize *= 0.75f;
+            if (squid) {
+                if (rng_() & 1) p.r = 0.6f, p.g = 1.0f, p.b = 0.8f;
+                else p.r = 0.08f, p.g = 0.4f, p.b = 0.4f;
+                p.yd *= 0.2f;
+                if (xa == 0.0 && za == 0.0) p.xd *= 0.1f, p.zd *= 0.1f;
+                p.lifetime = int(8.0 / (randf() * 0.8 + 0.2));
+            } else if (t.name == "electric_spark") {
+                p.r = 1.0f, p.g = 0.9f, p.b = 1.0f;
+                p.xd = xa * 0.25, p.yd = ya * 0.25, p.zd = za * 0.25;
+                p.lifetime = int(rng_() % 2) + 2;
+            } else if (t.name == "scrape") {
+                if (rng_() & 1) p.r = 0.29f, p.g = 0.58f, p.b = 0.51f;
+                else p.r = 0.43f, p.g = 0.77f, p.b = 0.62f;
+                p.xd = xa * 0.01, p.yd = ya * 0.01, p.zd = za * 0.01;
+                p.lifetime = int(rng_() % 30) + 10;
+            } else {  // wax_on / wax_off
+                if (t.name == "wax_on") p.r = 0.91f, p.g = 0.55f, p.b = 0.08f;
+                else p.r = 1.0f, p.g = 0.9f, p.b = 1.0f;
+                p.xd = xa * 0.01 / 2.0, p.yd = ya * 0.01, p.zd = za * 0.01 / 2.0;
+                p.lifetime = int(rng_() % 30) + 10;
+            }
+            ageSprite();
             break;
         }
         case Kind::Snowflake:
@@ -729,6 +936,124 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
 
 void Particles::spawn(std::string_view type, double x, double y, double z, double vx, double vy, double vz) {
     add(typeId(type), x, y, z, vx, vy, vz);
+}
+
+void Particles::fireworks(const double pos[3], const double vel[3], const std::string& component, bool sound) {
+    // Fireworks.STREAM_CODEC: flight duration, then the FireworkExplosion list.
+    Starter s{{pos[0], pos[1], pos[2]}, {vel[0], vel[1], vel[2]}};
+    s.sound = sound;
+    net::Reader r(reinterpret_cast<const u8*>(component.data()), component.size());
+    if (!component.empty()) {
+        r.varInt();
+        const i32 n = r.varInt();
+        for (i32 i = 0; i < n && i < 256 && r.ok; ++i) {
+            Explosion e;
+            e.shape = std::clamp(r.varInt(), 0, 4);
+            for (std::vector<u32>* list : {&e.colors, &e.fades}) {
+                const i32 c = r.varInt();
+                for (i32 k = 0; k < c && k < 256 && r.ok; ++k) list->push_back(u32(r.i32v()) & 0xFFFFFF);
+            }
+            e.trail = r.boolean(), e.twinkle = r.boolean();
+            if (r.ok) s.explosions.push_back(std::move(e));
+        }
+    }
+    if (s.explosions.empty()) {  // no explosions: a few poofs
+        static int poof = -2;
+        if (poof == -2) poof = typeId("poof");
+        for (int i = 0, n = int(rng_() % 3) + 2; i < n; ++i) add(poof, pos[0], pos[1], pos[2], gauss() * 0.05, 0.005, gauss() * 0.05);
+        return;
+    }
+    s.lifetime = int(s.explosions.size()) * 2 - 1;
+    for (const Explosion& e : s.explosions)
+        if (e.twinkle) {
+            s.twinkleDelay = true;
+            s.lifetime += 15;
+            break;
+        }
+    starters_.push_back(std::move(s));
+}
+
+void Particles::tickStarter(Starter& s) {
+    static int spark = -2, flash = -2;
+    if (spark == -2) spark = typeId("firework"), flash = typeId("flash");
+    const double dx = s.pos[0] - cam_[0], dy = s.pos[1] - cam_[1], dz = s.pos[2] - cam_[2];
+    const bool distant = dx * dx + dy * dy + dz * dz >= 256.0;
+    auto play = [&](const char* name, float pitch) {
+        if (audio::AudioSystem* a = audio::instance()) a->playNetwork(-1, name, audio::Category::Ambient, s.pos, 20.0f, pitch);
+    };
+    if (s.life == 0 && s.sound) {
+        bool large = s.explosions.size() >= 3;
+        for (const Explosion& e : s.explosions) large |= e.shape == 1;
+        play(large ? (distant ? "minecraft:entity.firework_rocket.large_blast_far" : "minecraft:entity.firework_rocket.large_blast")
+                   : (distant ? "minecraft:entity.firework_rocket.blast_far" : "minecraft:entity.firework_rocket.blast"),
+             0.95f + randf() * 0.1f);
+    }
+    if (s.life % 2 == 0 && size_t(s.life / 2) < s.explosions.size()) {
+        const Explosion& e = s.explosions[size_t(s.life / 2)];
+        const std::vector<u32> black = {0x1E1B1B};  // DyeColor.BLACK firework colour
+        const std::vector<u32>& colors = e.colors.empty() ? black : e.colors;
+        auto one = [&](double xa, double ya, double za) {  // Starter.createParticle
+            Options o;
+            o.spark = kSparkSet | (e.trail ? kSparkTrail : 0) | (e.twinkle ? kSparkTwinkle : 0) | (e.fades.empty() ? 0 : kSparkFade);
+            o.color = colors[rng_() % colors.size()];
+            if (!e.fades.empty()) o.color2 = e.fades[rng_() % e.fades.size()];
+            add(spark, s.pos[0], s.pos[1], s.pos[2], xa, ya, za, &o);
+        };
+        auto ball = [&](double speed, int steps) {
+            for (int y = -steps; y <= steps; ++y)
+                for (int x = -steps; x <= steps; ++x)
+                    for (int z = -steps; z <= steps; ++z) {
+                        const double xa = x + (randf() - randf()) * 0.5, ya = y + (randf() - randf()) * 0.5, za = z + (randf() - randf()) * 0.5;
+                        const double len = std::sqrt(xa * xa + ya * ya + za * za) / speed + gauss() * 0.05;
+                        one(xa / len, ya / len, za / len);
+                        if (y != -steps && y != steps && x != -steps && x != steps) z += steps * 2 - 1;
+                    }
+        };
+        auto shape = [&](double speed, const double (*coords)[2], int count, bool flat) {
+            one(coords[0][0] * speed, coords[0][1] * speed, 0);
+            const float baseAngle = randf() * kPi;
+            const double mod = flat ? 0.034 : 0.34;
+            for (int step = 0; step < 3; ++step) {
+                const double angle = baseAngle + step * kPi * mod;
+                double ox = coords[0][0], oy = coords[0][1];
+                for (int c = 1; c < count; ++c) {
+                    const double tx = coords[c][0], ty = coords[c][1];
+                    for (double sub = 0.25; sub <= 1.0; sub += 0.25) {
+                        double xa = (ox + (tx - ox) * sub) * speed;
+                        const double ya = (oy + (ty - oy) * sub) * speed;
+                        const double za = xa * std::sin(angle);
+                        xa *= std::cos(angle);
+                        for (double flip = -1.0; flip <= 1.0; flip += 2.0) one(xa * flip, ya, za * flip);
+                    }
+                    ox = tx, oy = ty;
+                }
+            }
+        };
+        static const double kCreeper[][2] = {{0.0, 0.2}, {0.2, 0.2}, {0.2, 0.6}, {0.6, 0.6}, {0.6, 0.2}, {0.2, 0.2},
+                                             {0.2, 0.0}, {0.4, 0.0}, {0.4, -0.6}, {0.2, -0.6}, {0.2, -0.4}, {0.0, -0.4}};
+        static const double kStar[][2] = {{0.0, 1.0}, {0.3455, 0.309}, {0.9511, 0.309}, {0.3795918367346939, -0.12653061224489795},
+                                          {0.6122448979591837, -0.8040816326530612}, {0.0, -0.35918367346938773}};
+        switch (e.shape) {
+            case 0: ball(0.25, 2); break;
+            case 1: ball(0.5, 4); break;
+            case 2: shape(0.5, kStar, 6, false); break;
+            case 3: shape(0.5, kCreeper, 12, true); break;
+            default: {  // burst
+                const double offX = gauss() * 0.05, offZ = gauss() * 0.05;
+                for (int i = 0; i < 70; ++i)
+                    one(s.vel[0] * 0.5 + gauss() * 0.15 + offX, s.vel[1] * 0.5 + randf() * 0.5, s.vel[2] * 0.5 + gauss() * 0.15 + offZ);
+            }
+        }
+        Options o;  // ColorParticleOption.create(FLASH, colour): the flash takes the first colour
+        o.hasColor = true;
+        o.color = colors[0];
+        add(flash, s.pos[0], s.pos[1], s.pos[2], 0, 0, 0, &o);
+    }
+    if (++s.life > s.lifetime) {
+        if (s.twinkleDelay && s.sound)
+            play(distant ? "minecraft:entity.firework_rocket.twinkle_far" : "minecraft:entity.firework_rocket.twinkle", 0.9f + randf() * 0.15f);
+        s.life = -1;  // done
+    }
 }
 
 // ClientLevel.addDestroyBlockEffect: a grid of shards over the block's shape boxes.
@@ -1064,6 +1389,105 @@ void Particles::tickOne(Particle& p) {
             p.e2 = p.e1, p.e1 = float(std::atan2(dy, std::sqrt(dx * dx + dz * dz)));
             break;
         }
+        case Kind::Drip: {
+            const DripDef& d = kDrips[size_t(t.drip)];
+            if (d.stage == DripCoolingHang)  // CoolingDripHangParticle: lava drops cool from white to orange
+                p.r = 1.0f, p.g = 16.0f / float(40 - p.lifetime + 16), p.b = 4.0f / float(40 - p.lifetime + 8);
+            if (p.lifetime-- <= 0) {  // preMoveUpdate: a hanging drop lets go
+                remove();
+                if (d.stage == DripHang || d.stage == DripCoolingHang) add(dripNext(types_[p.type]), p.x, p.y, p.z, p.xd, p.yd, p.zd);
+                return;
+            }
+            p.yd -= p.gravity;
+            move(p, p.xd, p.yd, p.zd);
+            if (d.stage == DripHang || d.stage == DripCoolingHang) {
+                p.xd *= 0.02, p.yd *= 0.02, p.zd *= 0.02;
+            } else if (d.stage != DripLand && (p.flags & OnGround)) {  // postMoveUpdate on the ground
+                remove();
+                if (d.stage != DripFall) add(dripNext(types_[p.type]), p.x, p.y, p.z, 0, 0, 0);
+                const char* sound = d.stage == DripHoneyFallLand ? "minecraft:block.beehive.drip"
+                                    : d.stage != DripDripstoneFallLand ? nullptr
+                                    : d.fluid == 2 ? "minecraft:block.pointed_dripstone.drip_lava"
+                                                   : "minecraft:block.pointed_dripstone.drip_water";
+                if (sound)
+                    if (audio::AudioSystem* a = audio::instance()) {
+                        const double pos[3] = {p.x, p.y, p.z};
+                        a->playNetwork(-1, sound, audio::Category::Block, pos, 0.3f + randf() * 0.7f, 1.0f);
+                    }
+                return;
+            }
+            p.xd *= 0.98f, p.yd *= 0.98f, p.zd *= 0.98f;
+            if (d.fluid) {  // into its own fluid: gone
+                const int bx = int(std::floor(p.x)), by = int(std::floor(p.y)), bz = int(std::floor(p.z));
+                const u16 id = blockAt(bx, by, bz);
+                const BlockInfo& b = registry_.infos()[id];
+                const bool lava = registry_.name(id).starts_with("minecraft:lava");
+                if ((d.fluid == 2 ? lava : (b.fluid || b.waterlogged) && !lava) && p.y < by + 0.875) remove();
+            }
+            break;
+        }
+        case Kind::Spark:
+        case Kind::Totem:
+        case Kind::EndRod: {
+            defaultTick();
+            ageSprite();
+            if (p.age > p.lifetime / 2) {  // SimpleAnimatedParticle.tick: fade out, towards the fade colour
+                p.a = 1.0f - (float(p.age) - float(p.lifetime / 2)) / float(p.lifetime);
+                if (int(p.e0) & kSparkFade)
+                    p.r += (p.e1 - p.r) * 0.2f, p.g += (p.e2 - p.g) * 0.2f, p.b += (p.e3 - p.b) * 0.2f;
+            }
+            // SparkParticle.tick: a trail of sparks over the first half
+            if (t.kind == Kind::Spark && (int(p.e0) & kSparkTrail) && p.age < p.lifetime / 2 && (p.age + p.lifetime) % 2 == 0) {
+                Options o;
+                o.spark = (int(p.e0) & ~kSparkTrail) | kSparkSet;
+                o.color = (u32(p.r * 255.0f) << 16) | (u32(p.g * 255.0f) << 8) | u32(p.b * 255.0f);
+                o.color2 = (u32(p.e1 * 255.0f) << 16) | (u32(p.e2 * 255.0f) << 8) | u32(p.e3 * 255.0f);
+                if (Particle* q = add(p.type, p.x, p.y, p.z, 0, 0, 0, &o)) q->age = q->lifetime / 2, q->r = p.r, q->g = p.g, q->b = p.b;
+            }
+            break;
+        }
+        case Kind::Flash:
+            defaultTick();
+            break;
+        case Kind::Gust:
+            if (p.age++ >= p.lifetime) return remove();
+            ageSprite();
+            break;
+        case Kind::GustSeed: {
+            static int gust = -2;
+            if (gust == -2) gust = typeId("gust");
+            const float scale = p.e0;
+            if (p.age % (int(p.e1) + 1) == 0)
+                for (int i = 0; i < 3; ++i)
+                    add(gust, p.x + (randf() - randf()) * scale, p.y + (randf() - randf()) * scale, p.z + (randf() - randf()) * scale,
+                        float(p.age) / float(p.lifetime), 0, 0);
+            if (p.age++ == p.lifetime) remove();
+            break;
+        }
+        case Kind::Rising:
+        case Kind::SculkCharge:
+        case Kind::SculkChargePop:
+        case Kind::Glow:
+            defaultTick();
+            ageSprite();
+            break;
+        case Kind::Shriek:
+            if (p.e0 > 0) {
+                p.e0 -= 1;
+                p.xo = p.x, p.yo = p.y, p.zo = p.z;
+            } else {
+                defaultTick();
+            }
+            break;
+        case Kind::Firefly: {
+            defaultTick();
+            if (p.flags & Removed) break;
+            if (registry_.infos()[blockAt(int(std::floor(p.x)), int(std::floor(p.y)), int(std::floor(p.z)))].kind != KindAir) return remove();
+            p.a = fadeAmount(std::clamp(float(p.age) / float(p.lifetime), 0.0f, 1.0f), 0.3f, 0.5f);
+            if (randf() > 0.95f || p.age == 1)
+                p.xd = -0.05f + 0.1f * randf(), p.yd = -0.05f + 0.1f * randf(), p.zd = -0.05f + 0.1f * randf();
+            break;
+        }
         case Kind::DustTransition: {
             defaultTick();
             ageSprite();
@@ -1091,14 +1515,14 @@ void Particles::tickOne(Particle& p) {
 void Particles::ambient(const double cam[3]) {
     // ClientLevel.animateTick: random blocks around the camera run their animateTick.
     const int cx = int(std::floor(cam[0])), cy = int(std::floor(cam[1])), cz = int(std::floor(cam[2]));
-    static int ids[8] = {-2};
+    static int ids[10] = {-2};
     if (ids[0] == -2) {
-        const char* names[8] = {"flame", "smoke", "soul_fire_flame", "tinted_leaves", "cherry_leaves", "pale_oak_leaves",
-                                "lava", "campfire_cosy_smoke"};
-        for (int i = 0; i < 8; ++i) ids[i] = typeId(names[i]);
+        const char* names[10] = {"flame", "smoke", "soul_fire_flame", "tinted_leaves", "cherry_leaves", "pale_oak_leaves",
+                                 "lava", "campfire_cosy_smoke", "dripping_water", "dripping_lava"};
+        for (int i = 0; i < 10; ++i) ids[i] = typeId(names[i]);
     }
     enum Amb : u8 { AmbNone, AmbTorch, AmbWallTorch, AmbSoulTorch, AmbSoulWallTorch, AmbTinted, AmbCherry, AmbPale, AmbLava,
-                    AmbCampfire, AmbFurnace };
+                    AmbCampfire, AmbFurnace, AmbWater };
     auto classify = [&](u16 id) -> u8 {
         if (blockKinds_.size() <= id) blockKinds_.resize(size_t(id) + 1, 0);
         if (!blockKinds_[id]) {
@@ -1115,6 +1539,8 @@ void Particles::ambient(const double cam[3]) {
                      n.starts_with("minecraft:dark_oak_leaves") || n.starts_with("minecraft:mangrove_leaves"))
                 k = AmbTinted;
             else if (n.starts_with("minecraft:lava")) k = AmbLava;
+            else if (n.starts_with("minecraft:water") || n.starts_with("minecraft:bubble_column") || registry_.infos()[id].waterlogged)
+                k = AmbWater;
             else if ((n.starts_with("minecraft:campfire") || n.starts_with("minecraft:soul_campfire")) && n.find("lit=true") != std::string::npos)
                 k = AmbCampfire;
             else if ((n.starts_with("minecraft:furnace") || n.starts_with("minecraft:smoker") || n.starts_with("minecraft:blast_furnace")) &&
@@ -1169,6 +1595,10 @@ void Particles::ambient(const double cam[3]) {
                 case AmbLava:
                     if (rng_() % 100 == 0 && blockAt(x, y + 1, z) == 0)
                         add(ids[6], x + double(randf()), y + 1.0, z + double(randf()), 0, 0, 0);
+                    if (rng_() % 10 == 0) fluidDrip(id, x, y, z, ids[9]);
+                    break;
+                case AmbWater:
+                    if (rng_() % 10 == 0) fluidDrip(id, x, y, z, ids[8]);
                     break;
                 case AmbCampfire:  // BlockPos.asLong
                     campfires_.insert((u64(x & 0x3FFFFFF) << 38) | (u64(z & 0x3FFFFFF) << 12) | u64(y & 0xFFF));
@@ -1186,6 +1616,47 @@ void Particles::ambient(const double cam[3]) {
                 default: break;
             }
         }
+}
+
+// ClientLevel.trySpawnDripParticles: a fluid drips through the ceiling block below it into the air under that.
+void Particles::fluidDrip(u16 fluidBlock, int x, int y, int z, int drip) {
+    auto shape = [&](u16 id, Box& out) {  // the collision shape's bounds; false: empty
+        const BlockInfo& b = registry_.infos()[id];
+        if (!b.collisionCount) return false;
+        out = {{1, 1, 1}, {0, 0, 0}};
+        for (u32 i = 0; i < b.collisionCount; ++i) {
+            const Box& c = registry_.box(b.collisionFirst + i);
+            for (int a = 0; a < 3; ++a) out.min[a] = std::min(out.min[a], c.min[a]), out.max[a] = std::max(out.max[a], c.max[a]);
+        }
+        return true;
+    };
+    auto hasFluid = [&](u16 id) {
+        const BlockInfo& b = registry_.infos()[id];
+        return b.fluid || b.waterlogged || registry_.name(id).starts_with("minecraft:bubble_column");
+    };
+    auto spawn = [&](double x0, double x1, double z0, double z1, double py) {
+        add(drip, x0 + (x1 - x0) * double(randf()), py, z0 + (z1 - z0) * double(randf()), 0, 0, 0);
+    };
+    const u16 below = blockAt(x, y - 1, z);
+    if (hasFluid(below)) return;
+    Box s;
+    if (!shape(below, s) || s.max[1] < 1.0f) {
+        // isFaceSturdy(DOWN) of the fluid's own block (a waterlogged one): a full bottom face
+        Box f;
+        if (shape(fluidBlock, f) && f.min[1] <= 0.0f && f.min[0] <= 0.0f && f.min[2] <= 0.0f && f.max[0] >= 1.0f && f.max[2] >= 1.0f)
+            spawn(x, x + 1, z, z + 1, y - 1 + 1 - 0.05);
+        return;
+    }
+    const std::string& name = registry_.name(below);  // BlockTags.IMPERMEABLE: glass
+    if ((name.find("glass") != std::string::npos && name.find("pane") == std::string::npos) || name == "minecraft:barrier") return;
+    if (s.min[1] > 0.0f) {
+        spawn(x + s.min[0], x + s.max[0], z + s.min[2], z + s.max[2], y - 1 + s.min[1] - 0.05);
+        return;
+    }
+    const u16 under = blockAt(x, y - 2, z);
+    Box u;
+    if ((!shape(under, u) || u.max[1] < 1.0f) && !hasFluid(under))
+        spawn(x + s.min[0], x + s.max[0], z + s.min[2], z + s.max[2], y - 1 - 0.05);
 }
 
 void Particles::weather(const double cam[3]) {
@@ -1288,6 +1759,8 @@ void Particles::tick() {
     }
     live_.erase(std::remove_if(live_.begin(), live_.end(), [](const Particle& p) { return (p.flags & Removed) != 0; }),
                 live_.end());
+    for (Starter& s : starters_) tickStarter(s);
+    starters_.erase(std::remove_if(starters_.begin(), starters_.end(), [](const Starter& s) { return s.life < 0; }), starters_.end());
     ambient(cam_);
     weather(cam_);
     // CampfireBlockEntity.particleTick for campfires the sampler found (forgotten when broken or far away).
@@ -1395,6 +1868,10 @@ u32 Particles::build(GpuParticle* out, u32 max, const double cam[3], u32& opaque
     for (const Particle& p : live_) {
         if (p.flags & (NoRender | Removed)) continue;
         if (p.sprite < 0 || n >= back) continue;
+        const Kind kind = types_[p.type].kind;
+        if (kind == Kind::Shriek && p.e0 > 0) continue;  // still waiting for its delay
+        if (kind == Kind::Spark && (int(p.e0) & kSparkTwinkle) && p.age >= p.lifetime / 3 && (p.age + p.lifetime) / 3 % 2 != 0)
+            continue;  // twinkling: hidden every other three ticks
         const bool tr = (p.flags & Translucent) != 0;
         GpuParticle& g = tr ? buf[--back] : buf[n++];
         g.pos[0] = float(p.xo + (p.x - p.xo) * pt - cam[0]);
@@ -1409,6 +1886,14 @@ u32 Particles::build(GpuParticle* out, u32 max, const double cam[3], u32& opaque
             case SizeLava: size *= 1.0f - s * s; break;
             default: break;
         }
+        float alpha = p.a;
+        if (kind == Kind::Flash) {  // OverlayParticle: grows and fades
+            const float t = float(p.age) + pt - 1.0f;
+            size = 7.1f * std::sin(t * 0.25f * kPi), alpha = 0.6f - t * 0.25f * 0.5f;
+        } else if (kind == Kind::Shriek) {
+            const float t = (float(p.age) + pt) / float(p.lifetime);
+            size *= std::clamp(t * 0.75f, 0.0f, 1.0f), alpha = 1.0f - std::clamp(t, 0.0f, 1.0f);
+        }
         g.size = size;
         const ent::ItemModels::Rect& r = items_.rect(p.sprite);
         if (p.uo >= 0) {  // TerrainParticle: a quarter of the sprite, mirrored
@@ -1417,9 +1902,14 @@ u32 Particles::build(GpuParticle* out, u32 max, const double cam[3], u32& opaque
         } else {
             g.uv[0] = r.u0, g.uv[1] = r.v0, g.uv[2] = r.u0 + r.du, g.uv[3] = r.v0 + r.dv;
         }
-        g.color = abgrF(p.r, p.g, p.b, p.a);
+        g.color = abgrF(p.r, p.g, p.b, alpha);
         u32 light = p.light;
-        if (p.emissive == 255) light = 256;
+        if (kind == Kind::Firefly) {  // its own light only: block light by the fade
+            light = u32(int(255.0f * fadeAmount(std::clamp((float(p.age) + pt) / float(p.lifetime), 0.0f, 1.0f), 0.1f, 0.3f)) >> 4);
+        } else if (kind == Kind::Glow) {  // LightCoordsUtil.addSmoothBlockEmission over the lifetime
+            const u32 add = u32(std::clamp((float(p.age) + pt) / float(p.lifetime), 0.0f, 1.0f) * 15.0f);
+            light = (light & 0xF0) | std::min<u32>(15, (light & 15) + add);
+        } else if (p.emissive == 255) light = 256;
         else if (p.emissive) light = (light & 0xF0) | std::max<u32>(light & 15, p.emissive);
         else if (types_[p.type].kind == Kind::Portal || types_[p.type].kind == Kind::Enchant) {
             float b = s * s;
@@ -1432,7 +1922,16 @@ u32 Particles::build(GpuParticle* out, u32 max, const double cam[3], u32& opaque
         // Moved since the last frame: the tick velocity over the frame's length (motion vectors).
         g.motion[0] = float(p.x - p.xo) * frameTicks_, g.motion[1] = float(p.y - p.yo) * frameTicks_;
         g.motion[2] = float(p.z - p.zo) * frameTicks_, g.orient = 0;
-        if (types_[p.type].kind == Kind::Vibration) {  // two quads along the path, swaying (VibrationSignalParticle.extract)
+        if (kind == Kind::Shriek) {  // rotationX(-1.0472) and rotationYXZ(-pi, 1.0472, 0)
+            g.roll = 0;
+            g.orient = orientedQuad(0, -1.0472f, 0);
+            if (n < back) {
+                GpuParticle& g2 = buf[--back];
+                g2 = g;
+                g2.orient = orientedQuad(-kPi, 1.0472f, 0);
+            }
+        }
+        if (kind == Kind::Vibration) {  // two quads along the path, swaying (VibrationSignalParticle.extract)
             const float sway = std::sin((float(p.age) + pt - 2.0f * kPi) * 0.05f) * 2.0f;
             const float rot = p.oRoll + (p.roll - p.oRoll) * pt, pitch = p.e2 + (p.e1 - p.e2) * pt + kPi / 2.0f;
             g.roll = 0;

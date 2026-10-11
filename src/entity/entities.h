@@ -144,6 +144,8 @@ struct Entity {
     int useTicks = 0;     // ticks the current item use has lasted (getTicksUsingItem)
     u8 chargedCrossbow = 0;  // bit 0: the main hand holds a charged crossbow, bit 1: the off hand (local player only)
     int attachedTo = -1;     // firework rocket: the entity it is attached to (DATA_ATTACHED_TO_TARGET), -1 none
+    std::string fireworks;   // firework rocket: its item's "fireworks" component (encoded), "" without one
+    bool silent = false;     // DATA_SILENT
     int unloadedTicks = 0;  // ticks spent outside the loaded world
     // Pose animation (ticked by tickPoseAnimation): LivingEntity swimAmount / fallFlyTicks, ElytraAnimationState,
     // the delta movement of this and the previous tick (fall-flying body turn), the bed (SLEEPING_POS_ID).
@@ -210,6 +212,8 @@ public:
     // A vehicle the local player controls (Entity.isLocalInstanceAuthoritative): the server's moves for it are ignored
     // and `tick` moves it every entity tick instead of the interpolation (prevPos is already the old position).
     // id < 0: none.
+    // Entity events (ClientboundEntityEventPacket) after they are applied: id 17 makes a firework rocket explode.
+    std::function<void(const Entity& e, int event)> onEntityEvent;
     void setLocalControl(int id, std::function<void(Entity&)> tick) {
         localControl_ = id;
         localTick_ = std::move(tick);
@@ -240,7 +244,7 @@ public:
            tameFlags = -1, collar = -1, anger = -1, standFlags = -1, standPose = -1, hurt = -1, hurtDir = -1,
            damage = -1, mainGene = -1, hiddenGene = -1, mobFlags = -1, noGravity = 5, inGround = -1, rotation = -1,
            painting = -1, nameVisible = 3, livingFlags = -1, attachedTo = -1, sleepPos = -1, ticksFrozen = -1,
-           paddleLeft = -1, paddleRight = -1, chest = -1;
+           paddleLeft = -1, paddleRight = -1, chest = -1, fireworksItem = -1, silent = 4;
     };
 
 private:

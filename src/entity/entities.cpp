@@ -71,7 +71,8 @@ const ui::Items* gItems = nullptr;  // EntityWorld::setItemDecoder
 
 // ItemStack.OPTIONAL_STREAM_CODEC. Component patches are not length-prefixed: without the item registry a stack
 // with added components cannot be skipped and returns false (after reading the item id); the caller stops there.
-bool readItemStack(net::Reader& r, i64& item, int& count, i32* dye = nullptr, bool* foil = nullptr) {
+bool readItemStack(net::Reader& r, i64& item, int& count, i32* dye = nullptr, bool* foil = nullptr,
+                   std::string* fireworks = nullptr) {
     if (dye) *dye = -1;
     if (foil) *foil = false;
     if (gItems) {
@@ -81,6 +82,11 @@ bool readItemStack(net::Reader& r, i64& item, int& count, i32* dye = nullptr, bo
         count = st.count;
         if (dye) *dye = st.dyedColor >= 0 ? i32(st.dyedColor & 0xFFFFFF) : -1;
         if (foil) *foil = gItems->foil(st);
+        if (fireworks) {
+            static const int type = gItems->componentType("fireworks");
+            for (const auto& c : st.added)
+                if (c.type == type) *fireworks = c.data;
+        }
         return ok && r.ok;
     }
     count = r.varInt();
@@ -198,6 +204,7 @@ EntityWorld::EntityWorld(EntityAssets& assets, World& world, BlockRegistry& regi
         d.paddleLeft = id({"DATA_ID_PADDLE_LEFT"});
         d.paddleRight = id({"DATA_ID_PADDLE_RIGHT"});
         d.chest = id({"DATA_ID_CHEST"});
+        d.fireworksItem = id({"DATA_ID_FIREWORKS_ITEM"});
         categories_[i] = categoryFor(t.name);
         // Synched data only carries values that differ from the default: start registry variants at the
         // default each entity defines (VariantUtils.getDefaultOrAny(..., DEFAULT)).
@@ -299,8 +306,10 @@ void readEntityData(net::Reader& r, EventQueue& q, int entityEffect) {
                 int count = 0;
                 i32 dye = -1;
                 bool foil = false;
-                const bool complete = readItemStack(r, v.i, count, &dye, &foil);
+                std::string fireworks;
+                const bool complete = readItemStack(r, v.i, count, &dye, &foil, &fireworks);
                 v.f[0] = float(count), v.f[1] = float(dye), v.f[2] = foil ? 1.0f : 0.0f;
+                if (!fireworks.empty()) q.strings.push_back(std::move(fireworks)), v.str = i32(q.strings.size() - 1);
                 stop = !complete;
                 break;
             }
@@ -823,6 +832,7 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
         case EventType::EntityEvent:
             if (ev.a == 3 && e.category == Category::Living) e.dying = true;  // death
             if (ev.a == 2) e.hurtTime = 10;                                     // legacy hurt
+            if (onEntityEvent) onEntityEvent(e, ev.a);
             break;
         case EventType::Passengers:
             for (auto& [id, other] : entities_)
@@ -843,6 +853,8 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
         const MetaValue& v = values[i];
         const int idx = v.index;
         if (idx == d.flags) e.sharedFlags = u8(v.i);
+        else if (idx == d.silent && v.serializer == 8) e.silent = v.i != 0;
+        else if (idx == d.fireworksItem && v.serializer == 7) e.fireworks = v.str >= 0 ? q.strings[size_t(v.str)] : std::string();
         else if (idx == d.mobFlags) e.mobFlags = u8(v.i);
         else if (idx == d.noGravity) e.noGravity = v.i != 0;
         else if (idx == d.inGround) e.inGround = v.i != 0;

@@ -70,6 +70,8 @@ public:
     // BreakingItemParticle (ParticleTypes.ITEM): a shard of an item's texture (eating, items breaking).
     void itemShard(int item, double x, double y, double z, double xa, double ya, double za);
     void spawn(std::string_view type, double x, double y, double z, double vx, double vy, double vz);
+    // ClientLevel.createFireworks: a firework's explosions (its encoded "fireworks" item component; empty: a poof).
+    void fireworks(const double pos[3], const double vel[3], const std::string& component, bool sound);
 
     // Billboards for this frame: opaque ones first (count `opaque`), then translucent ones.
     u32 build(GpuParticle* out, u32 max, const double cam[3], u32& opaque);
@@ -93,9 +95,11 @@ private:
     struct Options {
         int block = 0;        // network block state (block, falling_dust, ...)
         u32 color = 0;        // ARGB (dust, entity_effect, tinted_leaves, effect)
-        float scale = 1, power = 1;
+        float scale = 1, power = 1;  // scale: dust size, sculk_charge roll
         bool hasColor = false;
         u32 color2 = 0;       // dust_color_transition: the colour it fades to (ARGB)
+        int delay = 0;        // shriek
+        int spark = 0;        // firework sparks: kSpark* flags (colour in color, fade colour in color2)
         int item = -1;        // item: network item id
         // vibration: the destination (a block's centre, or entity >= 0 with a y offset) and the travel time
         int entity = -1;
@@ -106,6 +110,7 @@ private:
     void tick();
     void ambient(const double cam[3]);
     void weather(const double cam[3]);
+    void fluidDrip(u16 fluidBlock, int x, int y, int z, int drip);
     Particle* add(int type, double x, double y, double z, double xa, double ya, double za, const Options* opt = nullptr);
     void tickOne(Particle& p);
     void move(Particle& p, double xa, double ya, double za);
@@ -113,6 +118,7 @@ private:
     u8 lightAt(double x, double y, double z) const;
     int typeId(std::string_view name) const;
     u16 localBlock(int networkState);
+    int dripNext(Type& t);  // the particle type a drip turns into
     // BreakingItemParticle with an item atlas rect: scaled keeps a tenth of the random push plus (xa, ya, za).
     void shard(int rect, double x, double y, double z, double xa, double ya, double za, bool scaled);
     bool vibrationTarget(const Particle& p, double out[3]);
@@ -188,9 +194,23 @@ private:
     bool skipOptions(void* reader, int type) const;  // net::Reader*: the particle's options (false: unreadable)
     bool readOptions(void* reader, int type, Options& out) const;
     std::vector<std::pair<int, float>> weatherQueue_;  // main thread
+    struct Explosion {  // FireworkExplosion
+        int shape = 0;  // small ball, large ball, star, creeper, burst
+        std::vector<u32> colors, fades;
+        bool trail = false, twinkle = false;
+    };
+    struct Starter {  // FireworkParticles.Starter
+        double pos[3], vel[3];
+        std::vector<Explosion> explosions;
+        int life = 0, lifetime = 0;
+        bool sound = true, twinkleDelay = false;
+    };
+    std::vector<Starter> starters_;
+    void tickStarter(Starter& s);
     const ui::Resources* res_ = nullptr;
     Stats stats_;
     static constexpr u32 kMaxParticles = 16384;
+    static constexpr int kSparkSet = 1, kSparkTrail = 2, kSparkTwinkle = 4, kSparkFade = 8;
 };
 
 }  // namespace fx
