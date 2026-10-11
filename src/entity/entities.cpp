@@ -207,6 +207,9 @@ EntityWorld::EntityWorld(EntityAssets& assets, World& world, BlockRegistry& regi
         d.paddleLeft = id({"DATA_ID_PADDLE_LEFT"});
         d.paddleRight = id({"DATA_ID_PADDLE_RIGHT"});
         d.chest = id({"DATA_ID_CHEST"});
+        d.color = id({"DATA_COLOR", "DATA_COLOR_ID"});
+        d.attachFace = id({"DATA_ATTACH_FACE_ID"});
+        d.peek = id({"DATA_PEEK_ID"});
         if (t.name == "minecraft:block_display" || t.name == "minecraft:item_display" || t.name == "minecraft:text_display") {
             d.dStart = id({"DATA_TRANSFORMATION_INTERPOLATION_START_DELTA_TICKS_ID"});
             d.dDuration = id({"DATA_TRANSFORMATION_INTERPOLATION_DURATION_ID"});
@@ -274,7 +277,7 @@ Category EntityWorld::categoryFor(const std::string& n) const {
         if (n == std::string("minecraft:") + p) return Category::Projectile;
     static const char* kOther[] = {"area_effect_cloud", "marker", "interaction", "block_display", "item_display",
                                    "text_display", "lightning_bolt", "item_frame", "glow_item_frame", "painting",
-                                   "leash_knot", "evoker_fangs", "end_crystal", "ominous_item_spawner"};
+                                   "leash_knot", "evoker_fangs", "end_crystal", "ominous_item_spawner", "cushion"};
     for (const char* p : kOther)
         if (n == std::string("minecraft:") + p) return Category::Other;
     return Category::Living;
@@ -920,6 +923,9 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
         else if (idx == d.paddleLeft && v.serializer == 8) { if (e.id != localControl_) e.paddle[0] = v.i != 0; }
         else if (idx == d.paddleRight && v.serializer == 8) { if (e.id != localControl_) e.paddle[1] = v.i != 0; }
         else if (idx == d.chest && v.serializer == 8) e.hasChest = v.i != 0;
+        else if (idx == d.color) e.dyeColor = int(v.i);
+        else if (idx == d.attachFace) e.attachFace = int(v.i);
+        else if (idx == d.peek) e.peekRaw = int(v.i);
         else if (idx == d.mainGene) e.variant = int(v.i);
         else if (idx == d.hiddenGene) e.variant2 = int(v.i);
     }
@@ -1248,6 +1254,14 @@ void EntityWorld::tickEntity(Entity& e) {
         e.flapping *= 0.9f;
         e.flap += e.flapping * 2.0f;
     }
+    // Shulker.updatePeekAmount: the lid follows the synched peek by 0.05 per tick.
+    if (n == "minecraft:shulker") {
+        e.bodyYaw = e.prevBodyYaw = 0;  // the body never turns (Shulker.recreateFromPacket, ShulkerBodyRotationControl)
+        e.peekO = e.peek;
+        const float target = float(e.peekRaw) * 0.01f;
+        if (e.peek > target) e.peek = std::clamp(e.peek - 0.05f, target, 1.0f);
+        else if (e.peek < target) e.peek = std::clamp(e.peek + 0.05f, 0.0f, target);
+    }
     // Creeper swelling (Creeper.tick).
     if (n == "minecraft:creeper") {
         e.oldSwell = e.swell;
@@ -1267,7 +1281,7 @@ PickResult EntityWorld::pick(const double o[3], const double dir[3], double maxD
         bool pickable = e.category == Category::Living || e.category == Category::Player ||
                         e.category == Category::Vehicle || e.category == Category::Block;
         const std::string& n = e.info->name;
-        if (n == "minecraft:item_frame" || n == "minecraft:glow_item_frame" || n == "minecraft:painting" ||
+        if (n == "minecraft:item_frame" || n == "minecraft:glow_item_frame" || n == "minecraft:painting" || n == "minecraft:cushion" ||
             n == "minecraft:leash_knot" || n == "minecraft:end_crystal" || n == "minecraft:interaction" ||
             n == "minecraft:shulker_bullet" || n == "minecraft:fireball" || n == "minecraft:small_fireball" ||
             n == "minecraft:wind_charge" || n == "minecraft:breeze_wind_charge")
