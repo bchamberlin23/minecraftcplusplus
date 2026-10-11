@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <thread>
 
 namespace {
 
@@ -84,6 +85,83 @@ namespace {
 
 constexpr u32 kViewport = 0;  // DLSS-G expects viewport id 0
 
+// The device-independent part of the start-up: verify and load sl.interposer.dll, slInit (plugin signature checks,
+// ~0.7 s). Runs on the preinit thread while the game loads its assets. "" = ok, else why DLSS is unavailable.
+std::string bootStreamline() {
+    std::wstring path;
+    if (!exeDirFile(L"sl.interposer.dll", path)) return "sl.interposer.dll missing (tools/fetch_sdks.ps1)";
+    if (!sl::security::verifyEmbeddedSignature(path.c_str())) return "sl.interposer.dll is not signed by NVIDIA";
+    g_sl.module = LoadLibraryW(path.c_str());
+    if (!g_sl.module) return "sl.interposer.dll failed to load";
+    auto get = [](auto& fn, const char* name) {
+        fn = reinterpret_cast<std::remove_reference_t<decltype(fn)>>(GetProcAddress(g_sl.module, name));
+        return fn != nullptr;
+    };
+    if (!(get(g_sl.init, "slInit") && get(g_sl.shutdown, "slShutdown") &&
+          get(g_sl.isFeatureSupported, "slIsFeatureSupported") && get(g_sl.setFeatureLoaded, "slSetFeatureLoaded") &&
+          get(g_sl.setTagForFrame, "slSetTagForFrame") && get(g_sl.setConstants, "slSetConstants") &&
+          get(g_sl.evaluateFeature, "slEvaluateFeature") && get(g_sl.upgradeInterface, "slUpgradeInterface") &&
+          get(g_sl.getNativeInterface, "slGetNativeInterface") && get(g_sl.getFeatureFunction, "slGetFeatureFunction") &&
+          get(g_sl.getNewFrameToken, "slGetNewFrameToken") && get(g_sl.setD3DDevice, "slSetD3DDevice") &&
+          get(g_sl.getFeatureVersion, "slGetFeatureVersion") && get(g_sl.freeResources, "slFreeResources")))
+        return "sl.interposer.dll exports missing";
+
+    std::wstring dir = fs::path(path).parent_path().wstring();
+    const wchar_t* paths[] = {dir.c_str()};
+    const sl::Feature features[] = {sl::kFeatureDLSS, sl::kFeatureDLSS_G, sl::kFeatureReflex, sl::kFeaturePCL};
+    sl::Preferences pref{};
+    pref.showConsole = false;
+    pref.logLevel = std::getenv("MCPP_SL_VERBOSE") ? sl::LogLevel::eVerbose : sl::LogLevel::eDefault;
+    pref.pathsToPlugins = paths;
+    pref.numPathsToPlugins = 1;
+    pref.pathToLogsAndData = nullptr;
+    pref.logMessageCallback = slLog;
+    // Manual hooking, frame-based tagging; no over-the-air plugin downloads (the shipped, verified DLLs only).
+    pref.flags = sl::PreferenceFlags::eDisableCLStateTracking | sl::PreferenceFlags::eUseManualHooking |
+                 sl::PreferenceFlags::eUseFrameBasedResourceTagging;
+    pref.featuresToLoad = features;
+    pref.numFeaturesToLoad = u32(std::size(features));
+    pref.engine = sl::EngineType::eCustom;
+    pref.engineVersion = "minecraftCplusplus 1.0";
+    pref.projectId = "6c1f7a2e-9d43-4b6e-8a2d-3f5b9c0e71a4";
+    pref.renderAPI = sl::RenderAPI::eD3D12;
+    if (sl::Result res = g_sl.init(pref, sl::kSDKVersion); res != sl::Result::eOk)
+        return std::string("slInit: ") + slResultName(res);
+    return {};
+}
+
+struct Boot {
+    std::thread thread;
+    std::string result;
+    bool started = false;
+    ~Boot() {
+        if (thread.joinable()) thread.join();  // a run that never created the renderer
+    }
+} g_boot;
+
+bool hasNvidiaAdapter() {
+    ComPtr<IDXGIFactory1> f;
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&f)))) return false;
+    ComPtr<IDXGIAdapter1> a;
+    for (UINT i = 0; f->EnumAdapters1(i, &a) != DXGI_ERROR_NOT_FOUND; ++i) {
+        DXGI_ADAPTER_DESC1 d{};
+        a->GetDesc1(&d);
+        if (d.VendorId == 0x10DE && !(d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) return true;
+    }
+    return false;
+}
+
+// Joins the preinit thread, or boots now when there was none.
+std::string finishBoot() {
+    if (!g_boot.started) {
+        g_boot.started = true;
+        g_boot.result = bootStreamline();
+    } else if (g_boot.thread.joinable()) {
+        g_boot.thread.join();
+    }
+    return g_boot.result;
+}
+
 class Dlss final : public Backend, public ::Upscaler {
 public:
     explicit Dlss(Upscalers& hub) : Backend(hub) {}
@@ -91,46 +169,12 @@ public:
     // ---- init ----
     void initDevice(IDXGIAdapter1*, Caps& caps) override {
         auto fail = [&](const std::string& why) { caps.why[int(UpscalerKind::Dlss)] = why; };
-        if (hub.vendorId() != 0x10DE) return fail("not an NVIDIA GPU");
-        std::wstring path;
-        if (!exeDirFile(L"sl.interposer.dll", path)) return fail("sl.interposer.dll missing (tools/fetch_sdks.ps1)");
-        if (!sl::security::verifyEmbeddedSignature(path.c_str())) return fail("sl.interposer.dll is not signed by NVIDIA");
-        g_sl.module = LoadLibraryW(path.c_str());
-        if (!g_sl.module) return fail("sl.interposer.dll failed to load");
-        auto get = [](auto& fn, const char* name) {
-            fn = reinterpret_cast<std::remove_reference_t<decltype(fn)>>(GetProcAddress(g_sl.module, name));
-            return fn != nullptr;
-        };
-        if (!(get(g_sl.init, "slInit") && get(g_sl.shutdown, "slShutdown") &&
-              get(g_sl.isFeatureSupported, "slIsFeatureSupported") && get(g_sl.setFeatureLoaded, "slSetFeatureLoaded") &&
-              get(g_sl.setTagForFrame, "slSetTagForFrame") && get(g_sl.setConstants, "slSetConstants") &&
-              get(g_sl.evaluateFeature, "slEvaluateFeature") && get(g_sl.upgradeInterface, "slUpgradeInterface") &&
-              get(g_sl.getNativeInterface, "slGetNativeInterface") && get(g_sl.getFeatureFunction, "slGetFeatureFunction") &&
-              get(g_sl.getNewFrameToken, "slGetNewFrameToken") && get(g_sl.setD3DDevice, "slSetD3DDevice") &&
-              get(g_sl.getFeatureVersion, "slGetFeatureVersion") && get(g_sl.freeResources, "slFreeResources")))
-            return fail("sl.interposer.dll exports missing");
-
-        std::wstring dir = fs::path(path).parent_path().wstring();
-        const wchar_t* paths[] = {dir.c_str()};
-        const sl::Feature features[] = {sl::kFeatureDLSS, sl::kFeatureDLSS_G, sl::kFeatureReflex, sl::kFeaturePCL};
-        sl::Preferences pref{};
-        pref.showConsole = false;
-        pref.logLevel = std::getenv("MCPP_SL_VERBOSE") ? sl::LogLevel::eVerbose : sl::LogLevel::eDefault;
-        pref.pathsToPlugins = paths;
-        pref.numPathsToPlugins = 1;
-        pref.pathToLogsAndData = nullptr;
-        pref.logMessageCallback = slLog;
-        // Manual hooking, frame-based tagging; no over-the-air plugin downloads (the shipped, verified DLLs only).
-        pref.flags = sl::PreferenceFlags::eDisableCLStateTracking | sl::PreferenceFlags::eUseManualHooking |
-                     sl::PreferenceFlags::eUseFrameBasedResourceTagging;
-        pref.featuresToLoad = features;
-        pref.numFeaturesToLoad = u32(std::size(features));
-        pref.engine = sl::EngineType::eCustom;
-        pref.engineVersion = "minecraftCplusplus 1.0";
-        pref.projectId = "6c1f7a2e-9d43-4b6e-8a2d-3f5b9c0e71a4";
-        pref.renderAPI = sl::RenderAPI::eD3D12;
-        if (sl::Result res = g_sl.init(pref, sl::kSDKVersion); res != sl::Result::eOk)
-            return fail(std::string("slInit: ") + slResultName(res));
+        const std::string booted = finishBoot();  // slInit, usually already done on the preinit thread
+        if (hub.vendorId() != 0x10DE) {
+            if (booted.empty() && g_sl.shutdown) g_sl.shutdown();
+            return fail("not an NVIDIA GPU");
+        }
+        if (!booted.empty()) return fail(booted);
         initialized_ = true;
         if (sl::Result res = g_sl.setD3DDevice(hub.device()); res != sl::Result::eOk)
             return fail(std::string("slSetD3DDevice: ") + slResultName(res));
@@ -492,6 +536,13 @@ private:
 };
 
 }  // namespace
+
+void preinit() {
+    g_boot.started = true;
+    g_boot.thread = std::thread([] {
+        g_boot.result = hasNvidiaAdapter() ? bootStreamline() : std::string("not an NVIDIA GPU");
+    });
+}
 
 std::unique_ptr<Backend> makeDlss(Upscalers& hub) { return std::make_unique<Dlss>(hub); }
 

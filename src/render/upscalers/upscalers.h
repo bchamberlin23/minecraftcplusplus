@@ -55,6 +55,10 @@ struct FrameGenInputs {
 
 class Backend;  // one per vendor SDK (dlss.cpp / fsr.cpp / xess.cpp)
 
+// First thing in main: starts the device-independent part of the SDK start-up (Streamline's slInit, ~0.7 s) on a
+// thread, so it overlaps the asset loading; Renderer::init waits for it.
+void preinit();
+
 // What this machine offers (filled at device creation).
 struct Caps {
     bool upscaler[int(UpscalerKind::Count)] = {true, false, false, false};

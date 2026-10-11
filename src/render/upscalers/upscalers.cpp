@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <thread>
 
 #include "ReactiveCS.h"
 
@@ -160,7 +161,17 @@ void Upscalers::initDevice(IDXGIAdapter1* adapter) {
     DXGI_ADAPTER_DESC1 desc{};
     if (adapter) adapter->GetDesc1(&desc);
     vendorId_ = desc.VendorId, luid_ = desc.AdapterLuid;
-    for (Backend* b : {dlss_.get(), fsr_.get(), xess_.get()}) b->initDevice(adapter, caps_);
+    // XeSS (~0.15 s) initialises on its own thread while Streamline attaches to the device (~0.9 s).
+    const Timer timer;
+    upscale::Caps xessCaps;
+    std::thread xessInit([&] { xess_->initDevice(adapter, xessCaps); });
+    dlss_->initDevice(adapter, caps_);
+    fsr_->initDevice(adapter, caps_);
+    xessInit.join();
+    constexpr int x = int(UpscalerKind::Xess), xf = int(FrameGenKind::Xess);
+    caps_.upscaler[x] = xessCaps.upscaler[x], caps_.version[x] = xessCaps.version[x], caps_.why[x] = xessCaps.why[x];
+    caps_.frameGen[xf] = xessCaps.frameGen[xf], caps_.maxMultiplier[xf] = xessCaps.maxMultiplier[xf];
+    if (!caps_.lowLatency[1] && xessCaps.lowLatencyName[0]) caps_.lowLatencyName = xessCaps.lowLatencyName;
     std::string line = "upscalers:";
     for (int k = 1; k < int(UpscalerKind::Count); ++k)
         line += std::string(" ") + upscalerName(UpscalerKind(k)) + " " +
@@ -170,6 +181,7 @@ void Upscalers::initDevice(IDXGIAdapter1* adapter) {
         if (caps_.frameGen[k]) line += std::string(" ") + frameGenName(FrameGenKind(k)) + " (up to " +
                                        std::to_string(caps_.maxMultiplier[k]) + "x)";
     if (caps_.lowLatency[1]) line += std::string(" | low latency: ") + caps_.lowLatencyName;
+    line += " | " + std::to_string(int(timer.ms())) + " ms";
     LOG("%s", line.c_str());
 
     // Reactive mask pass: own root signature (t0 table, u0 table, 4 constants).

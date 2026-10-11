@@ -278,6 +278,7 @@ int wmain(int argc, wchar_t** argv) {
             ownership.reason.c_str());
         return 1;
     }
+    if (opt.gentestDir.empty() && !opt.audioTest) upscale::preinit();  // Streamline's slInit, beside the loading
     const fs::path saves = opt.savesDir.empty() ? mc / "saves" : opt.savesDir;
     // The title screen's panorama is a world of its own, generated once into a cache (seed and spot picked at
     // random, ui::writeTitleWorld) and loaded from it afterwards: detailed from the first frame.
