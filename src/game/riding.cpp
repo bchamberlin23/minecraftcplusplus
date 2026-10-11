@@ -249,7 +249,7 @@ void Riding::sendVehicleMove(const ent::Entity& e) {
 
 // Entity.move for a vehicle's bounding box: Y, then the larger horizontal axis first; step up like Entity.collide.
 void Riding::collideMove(ent::Entity& e, double width, double height, double step, double d[3], bool& onGround,
-                         bool& hCollision) {
+                         bool& hCollision, double gravity, bool living) {
     const Physics physics(gameplay_.world(), gameplay_.registry());
     auto boxAt = [&](const double p[3]) {
         return AABB{{p[0] - width / 2, p[1], p[2] - width / 2}, {p[0] + width / 2, p[1] + height, p[2] + width / 2}};
@@ -278,6 +278,8 @@ void Riding::collideMove(ent::Entity& e, double width, double height, double ste
     area.max[1] += step;
     std::vector<AABB> boxes;
     physics.collisionBoxes(area, boxes);
+    for (const AABB& x : extraBoxes_)
+        if (x.intersects(area)) boxes.push_back(x);
     double out[3];
     AABB b = start;
     collide(boxes, b, d, out);
@@ -301,7 +303,19 @@ void Riding::collideMove(ent::Entity& e, double width, double height, double ste
     hCollision = out[0] != d[0] || out[2] != d[2];
     if (out[0] != d[0]) e.vel[0] = 0;
     if (out[2] != d[2]) e.vel[2] = 0;
-    if (out[1] != d[1]) e.vel[1] = 0;  // Block.updateEntityMovementAfterFallOn
+    if (out[1] != d[1]) {  // Entity.restituteMovementAfterCollisions: blocked, or a bounce off the block below
+        double restitution = 0;
+        if (onGround && -e.vel[1] > gravity) {
+            const int bx = int(std::floor(e.pos[0])), by = int(std::floor(e.pos[1] - 0.2)), bz = int(std::floor(e.pos[2]));
+            if (!physics.suppressesBounce(bx, by, bz)) restitution = physics.bounceRestitution(bx, by, bz) * (living ? 1.0 : double(0.8f));
+        }
+        double next = 0;
+        if (restitution > 0) {
+            const double portion = out[1] / e.vel[1];
+            next = (portion * gravity - e.vel[1]) * (1.0 + portion * (double(0.98f) - 1.0)) * restitution;
+        }
+        e.vel[1] = next;
+    }
     std::copy(out, out + 3, d);
 }
 
@@ -486,7 +500,7 @@ void Riding::boatTick(ent::Entity& e) {
     }
     // move (no step: boats cannot climb)
     double d[3] = {e.vel[0], e.vel[1], e.vel[2]};
-    collideMove(e, width, height, 0.0, d, vehicleOnGround_, vehicleHCollision_);
+    collideMove(e, width, height, 0.0, d, vehicleOnGround_, vehicleHCollision_, gravity, false);
     lastYd_ = e.vel[1];
     e.bodyYaw = e.headYaw = e.yaw;
     // positionRider: the rider turns with the boat, its look kept within 105 degrees of the boat's heading.
@@ -537,8 +551,13 @@ void Riding::livingTick(ent::Entity& e) {
             e.vel[1] += 1.4285 * pendingJump_ * jumpStrength;
             dashCooldown_ = 55;
         } else if (pendingJump_ > 0) {
+            // getJumpPower: jump_strength x the scale x the block jump factor (honey halves it)
             const double jumpStrength = gameplay_.entityAttribute(vehicle_, "jump_strength", 0.7);
-            e.vel[1] = jumpStrength * pendingJump_;
+            const int bx = int(std::floor(e.pos[0])), bz = int(std::floor(e.pos[2]));
+            const Physics ph(gameplay_.world(), gameplay_.registry());
+            const float here = ph.jumpFactor(bx, int(std::floor(e.pos[1])), bz);
+            const float factor = here == 1.0f ? ph.jumpFactor(bx, int(std::floor(e.pos[1] - 0.500001)), bz) : here;
+            e.vel[1] = jumpStrength * pendingJump_ * factor;
             if (forward > 0) {
                 e.vel[0] += -0.4 * std::sin(e.yaw * kDegf) * pendingJump_;
                 e.vel[2] += 0.4 * std::cos(e.yaw * kDegf) * pendingJump_;
@@ -561,13 +580,51 @@ void Riding::livingTick(ent::Entity& e) {
     };
     const Physics physics(gameplay_.world(), gameplay_.registry());
     const AABB body{{e.pos[0] - width / 2, e.pos[1], e.pos[2] - width / 2}, {e.pos[0] + width / 2, e.pos[1] + height, e.pos[2] + width / 2}};
-    if (physics.inFluid(body)) {  // travelInFluid, simplified: swim up with jump
-        if (input_.jump) e.vel[1] += 0.04;
+    // The fluid heights over the vehicle's feet (EntityFluidInteraction, box shrunk by 0.001).
+    double waterH = 0, lavaH = 0;
+    for (int x = int(std::floor(body.min[0] + 0.001)); x <= int(std::ceil(body.max[0] - 0.001)) - 1; ++x)
+        for (int y = int(std::floor(body.min[1] + 0.001)); y <= int(std::ceil(body.max[1] - 0.001)) - 1; ++y)
+            for (int z = int(std::floor(body.min[2] + 0.001)); z <= int(std::ceil(body.max[2] - 0.001)) - 1; ++z) {
+                const Physics::Fluid f = physics.fluid(x, y, z);
+                const double top = y + (f.type ? physics.fluidHeight(x, y, z, f) : 0.0);
+                if (!f.type || top < body.min[1] + 0.001) continue;
+                double& h = f.type == 1 ? waterH : lavaH;
+                h = std::max(h, top - body.min[1]);
+            }
+    const bool strider = n == "strider";
+    extraBoxes_.clear();
+    if (strider) {  // LiquidBlock.getCollisionShape for a strider: the lava's lower half is solid from above
+        for (int x = int(std::floor(body.min[0])); x <= int(std::floor(body.max[0])); ++x)
+            for (int y = int(std::floor(body.min[1])) - 1; y <= int(std::floor(body.min[1])); ++y)
+                for (int z = int(std::floor(body.min[2])); z <= int(std::floor(body.max[2])); ++z)
+                    if (physics.fluid(x, y, z).type == 2 && physics.fluid(x, y + 1, z).type != 2 && e.pos[1] > y + 0.5 - 1e-5)
+                        extraBoxes_.push_back({{double(x), double(y), double(z)}, {x + 1.0, y + 0.5, z + 1.0}});
+    }
+    // LivingEntity.travelInFluid (not for a strider on lava: canStandOnFluid), with floatInLiquidWhileRidden for horses
+    // and camels.
+    if ((waterH > 0 || lavaH > 0) && !(strider && lavaH > 0 && waterH == 0)) {
+        const bool falling = e.vel[1] <= 0;
+        const double oldY = e.pos[1];
         moveRelative(0.02);
         double d[3] = {e.vel[0], e.vel[1], e.vel[2]};
-        collideMove(e, width, height, step, d, vehicleOnGround_, vehicleHCollision_);
-        e.vel[0] *= 0.8, e.vel[1] *= 0.8, e.vel[2] *= 0.8;
-        e.vel[1] -= gravity / 16.0;
+        collideMove(e, width, height, step, d, vehicleOnGround_, vehicleHCollision_, gravity, true);
+        if (waterH > 0) {
+            e.vel[0] *= double(0.8f), e.vel[1] *= double(0.8f), e.vel[2] *= double(0.8f);
+            if (falling && std::abs(e.vel[1] - 0.005) >= 0.003 && std::abs(e.vel[1] - gravity / 16.0) < 0.003) e.vel[1] = -0.003;
+            else e.vel[1] -= gravity / 16.0;
+        } else {
+            for (double& v : e.vel) v *= 0.5;
+            e.vel[1] -= gravity / 4.0;
+        }
+        if (vehicleHCollision_) {  // jumpOutOfFluid
+            AABB moved{{e.pos[0] - width / 2, e.pos[1], e.pos[2] - width / 2}, {e.pos[0] + width / 2, e.pos[1] + height, e.pos[2] + width / 2}};
+            const double dd[3] = {e.vel[0], e.vel[1] + 0.6 - e.pos[1] + oldY, e.vel[2]};
+            for (int a = 0; a < 3; ++a) moved.min[a] += dd[a], moved.max[a] += dd[a];
+            if (physics.noCollision(moved) && !physics.containsLiquid(moved)) e.vel[1] = 0.3;
+        }
+        // CAN_FLOAT_WHILE_RIDDEN: deeper than the jump threshold (0.4), the vehicle floats up.
+        const bool floats = horse || isCamel(n);
+        if (floats && std::max(waterH, lavaH) > (dims && dims->eye < 0.4 ? 0.0 : 0.4)) e.vel[1] += double(0.04f);
         return;
     }
     // travelInAir
@@ -578,9 +635,13 @@ void Riding::livingTick(ent::Entity& e) {
                                        : speed * 0.1;  // getFlyingSpeed with a player in control
     moveRelative(sp);
     double d[3] = {e.vel[0], e.vel[1], e.vel[2]};
-    collideMove(e, width, height, step, d, vehicleOnGround_, vehicleHCollision_);
+    collideMove(e, width, height, step, d, vehicleOnGround_, vehicleHCollision_, gravity, true);
     e.vel[1] = (e.vel[1] - gravity) * 0.98;
     e.vel[0] *= double(friction) * 0.91, e.vel[2] *= double(friction) * 0.91;
+    if (strider && lavaH > 0) {  // Strider.floatStrider: on the lava surface, else bob up
+        if (!vehicleOnGround_ && extraBoxes_.empty()) e.vel[0] *= 0.5, e.vel[1] = e.vel[1] * 0.5 + 0.05, e.vel[2] *= 0.5;
+        else vehicleOnGround_ = true;
+    }
     e.onGround = vehicleOnGround_;
 }
 
