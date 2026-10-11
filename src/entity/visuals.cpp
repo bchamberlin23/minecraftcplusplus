@@ -19,10 +19,14 @@
 #include <cmath>
 #include <shared_mutex>
 
+#include "ParticleCutoutMvPS.h"
 #include "ParticleCutoutPS.h"
 #include "ParticleTranslucentPS.h"
 #include "ParticleVS.h"
+#include "VisualsCutoutMvPS.h"
 #include "VisualsCutoutPS.h"
+#include "VisualsShadowPS.h"
+#include "VisualsShadowVS.h"
 #include "VisualsGlintPS.h"
 #include "VisualsTextPS.h"
 #include "VisualsTranslucentPS.h"
@@ -37,9 +41,9 @@ constexpr float kDeg = kPi / 180.0f;
 
 // Per-frame upload slice: three constant buffers, instances, dynamic quads, particles, staging for copies.
 constexpr u32 kMaxInstances = 1 << 14, kMaxDynamic = 1 << 13, kMaxParticles = 16384;
-constexpr u64 kCbBytes = 256;
+constexpr u64 kCbBytes = 1024;
 constexpr u64 kInstOffset = kCbBytes * 3;
-constexpr u64 kDynOffset = kInstOffset + u64(kMaxInstances) * 80;
+constexpr u64 kDynOffset = kInstOffset + u64(kMaxInstances) * 128;
 constexpr u64 kParticleOffset = kDynOffset + u64(kMaxDynamic) * sizeof(MeshQuad);
 constexpr u64 kStageOffset = (kParticleOffset + u64(kMaxParticles) * sizeof(fx::GpuParticle) + 511) & ~u64(511);
 constexpr u64 kStageBytes = u64(12) << 20;
@@ -48,8 +52,9 @@ constexpr u64 kFrameBytes = (kStageOffset + kStageBytes + 65535) & ~u64(65535);
 struct GpuInst {
     float m[12];
     u32 color, light, overlay, flags, first, count, prefix, pad;
+    float prev[12];  // last frame's transform (motion vectors; = m when unknown)
 };
-static_assert(sizeof(GpuInst) == 80);
+static_assert(sizeof(GpuInst) == 128);
 
 struct FrameCb {
     float viewProj[16];
@@ -60,6 +65,9 @@ struct FrameCb {
     float glintRect[4];
     float glint[4];
     float lightmap[3][4];
+    float prevViewProj[16];  // shader pipeline: this frame's camera-relative position -> previous clip (unjittered)
+    float motion[4];         // PassContext::motionScale
+    float shadowMat[4][16];  // shadow cascades
 };
 static_assert(sizeof(FrameCb) <= kCbBytes);
 
@@ -85,21 +93,31 @@ float wrapDegrees(float d) {
 }
 
 // Instance list of one draw (contiguous in the upload slice after copying).
+// key: identifies the instance across frames (motion vectors: Impl::flush finds last frame's transform), 0 = none.
 struct List {
     std::vector<GpuInst> v;
+    std::vector<u64> keys;
     u32 base = 0, quads = 0;
-    void clear() { v.clear(), base = 0, quads = 0; }
-    void add(const Xf& m, u32 first, u32 count, u32 light, u32 color = 0xFFFFFFFF, u32 flags = 0) {
+    u8 tag = 0;
+    void clear() { v.clear(), keys.clear(), base = 0, quads = 0; }
+    void add(const Xf& m, u32 first, u32 count, u32 light, u32 color = 0xFFFFFFFF, u32 flags = 0, u64 key = 0) {
         if (!count) return;
         GpuInst g;
         std::memcpy(g.m, m.m, sizeof(g.m));
         g.color = color, g.light = light, g.overlay = 0, g.flags = flags, g.first = first, g.count = count, g.prefix = 0, g.pad = 0;
+        std::memcpy(g.prev, m.m, sizeof(g.prev));
         v.push_back(g);
+        keys.push_back(key ? key * 4 + tag : 0);
     }
 };
 struct Lists {
     List cut, tr, glint;
+    u64 key = 0;  // instance keys of the pushes that follow (begin): key << 8 | push sequence
+    u32 seq = 0;
+    Lists() { tr.tag = 1, glint.tag = 2; }
     void clear() { cut.clear(), tr.clear(), glint.clear(); }
+    void begin(u64 k) { key = k, seq = 0; }
+    u64 next() { return key ? (key << 8) | (++seq & 255) : 0; }
 };
 
 }  // namespace
@@ -109,6 +127,8 @@ struct StagePass : RenderPass {
     int stage = 0;  // 0 update (Sky), 1 World, 2 AfterTranslucent, 3 Hud
     bool create(Renderer& r) override;
     void draw(const PassContext& ctx) override;
+    void prepare(const PassContext& ctx) override;
+    void drawShadow(const ShadowContext& sc) override;
 };
 
 struct Visuals::Impl {
@@ -135,6 +155,8 @@ struct Visuals::Impl {
     bool gpuTried = false, gpuOk = false;
     ComPtr<ID3D12RootSignature> rootSig;
     ComPtr<ID3D12PipelineState> psoCut, psoTr, psoGlint, psoTextSee, psoText, psoPartCut, psoPartTr;
+    // Shader pipeline: with the motion target (World / AfterTranslucent stages) and shadow casters.
+    ComPtr<ID3D12PipelineState> psoCutMv, psoTrMv, psoGlintMv, psoPartCutMv, psoShadow;
     ComPtr<ID3D12Resource> store, upload, itemTex, fontTex;
     u8* mapped = nullptr;
     u32 descTable = UINT32_MAX;  // items, font
@@ -147,7 +169,18 @@ struct Visuals::Impl {
     u64 stageUsed = 0;
     u32 instUsed = 0, dynUsed = 0;
     std::vector<MeshQuad> dyn;
-    Lists worldLists, hudLists;
+    Lists worldLists, hudLists, shadowLists;  // shadowLists: casters outside the view (shadow maps only)
+    u64 updatedFrame = ~u64(0), preparedFrame = ~u64(0), handWorldFrame = ~u64(0);
+    // Motion vectors: last frame's transform of each keyed instance (camera-relative to that frame's camera).
+    struct PrevInst {
+        u64 frame;
+        float m[12];
+        double cam[3];
+    };
+    std::unordered_map<u64, PrevInst> prevInst;
+    double frameCam[3] = {};
+    bool prevHandValid = false;
+    float prevHandVp[16] = {};  // last frame's hand projection (unjittered) when the hand was in the World stage
     List tagSee, tagNormal;
     double lastTime = 0;
     float partial = 0;
@@ -208,8 +241,12 @@ struct Visuals::Impl {
     bool createGpu(Renderer& r);
     void uploadPending(const PassContext& ctx);
     void beginFrame(const PassContext& ctx);
-    void writeCb(int slot, const PassContext& ctx, const float* viewProj, bool pipeline, bool hand);
-    bool flush(List& l);
+    void writeCb(int slot, const PassContext& ctx, const float* viewProj, bool pipeline, bool hand,
+                 const float* prevViewProj = nullptr);
+    bool flush(List& l, bool hand = false);  // hand: camera-attached (no camera translation between frames)
+    void prepareWorld(const PassContext& ctx);  // World stage lists (+ the hand with the pipeline), uploaded
+    bool worldDraw[3] = {}, handDraw[3] = {}, shadowDraw[2] = {};
+    void drawShadow(const ShadowContext& sc);
     void bindCommon(const PassContext& ctx);
     void drawList(const PassContext& ctx, ID3D12PipelineState* pso, const List& l, int cb);
 
@@ -218,7 +255,8 @@ struct Visuals::Impl {
     void tickLocal();
     void buildWorld(const PassContext& ctx);
     void buildTags(const PassContext& ctx);
-    void buildHand(const PassContext& ctx, float viewProj[16]);
+    // jittered: drawn in the World stage (shader pipeline: the projection jitter; noJitter receives the plain one).
+    void buildHand(const PassContext& ctx, float viewProj[16], bool jittered = false, float* noJitter = nullptr);
     void pushItem(Lists& L, const ItemMesh& mesh, Display d, const Xf& m, u32 light, bool foil);
     void pushRaw(Lists& L, const ItemMesh& mesh, const Xf& m, u32 light, u32 color = 0xFFFFFFFF);
     u32 lightAt(double x, double y, double z) const;
@@ -231,7 +269,8 @@ struct Visuals::Impl {
     std::vector<MeshQuad> cpuStore;  // CPU copy of the static quad store (packs pull quads on the CPU)
     std::vector<fx::GpuParticle> packParticleBuf;
     u64 packHandFrame = ~u64(0);     // frame whose first-person hand went to the pack (the Hud pass skips it)
-    void packList(PackSink& pack, const List& l, PackRole role, PackBlend blend);
+    // glint: the item glint texture with the vanilla glint transform of the mesh-space position (PackBlend::Glint).
+    void packList(PackSink& pack, const List& l, PackRole role, PackBlend blend, bool glint = false, bool hand = false);
     void packParticles(PackSink& pack, const PassContext& ctx, const fx::GpuParticle* pts, u32 count, bool translucent);
 };
 
@@ -303,6 +342,25 @@ void Visuals::setPlayer(Game& game, ui::Ui& ui, const std::string& name, std::fu
 
 bool StagePass::create(Renderer& r) { return impl->createGpu(r); }
 
+void StagePass::prepare(const PassContext& ctx) {
+    Visuals::Impl& m = *impl;
+    if (!m.gpuOk || ctx.pack) return;  // shader packs: everything in draw
+    m.beginFrame(ctx);
+    Timer t;
+    if (stage == 0) {
+        m.update();
+        m.updatedFrame = m.frameCounter;
+        m.stats().updateMs = t.ms();
+    } else if (stage == 1) {
+        m.prepareWorld(ctx);
+    }
+    m.frameMs += t.ms();
+}
+
+void StagePass::drawShadow(const ShadowContext& sc) {
+    if (stage == 1 && impl->gpuOk) impl->drawShadow(sc);
+}
+
 void StagePass::draw(const PassContext& ctx) {
     Visuals::Impl& m = *impl;
     if (!m.gpuOk) return;
@@ -315,32 +373,51 @@ void StagePass::draw(const PassContext& ctx) {
     } acc{m, t};
     switch (stage) {
         case 0:
+            if (m.updatedFrame == m.frameCounter) break;  // done in prepare
             m.update();
             m.stats().updateMs = t.ms();
             break;
         case 1: {
-            m.worldLists.clear();
-            m.buildWorld(ctx);
-            m.uploadPending(ctx);
             if (ctx.pack) {  // shader pack: items through gbuffers_entities, the first-person hand through gbuffers_hand
+                m.worldLists.clear(), m.shadowLists.clear();
+                m.buildWorld(ctx);
+                m.uploadPending(ctx);
                 m.packList(*ctx.pack, m.worldLists.cut, PackRole::Entities, PackBlend::Opaque);
                 m.packList(*ctx.pack, m.worldLists.tr, PackRole::EntitiesTranslucent, PackBlend::Translucent);
+                m.packList(*ctx.pack, m.worldLists.glint, PackRole::ArmorGlint, PackBlend::Glint, true);
                 m.hudLists.clear();
                 float vp[16];
                 m.buildHand(ctx, vp);
                 m.uploadPending(ctx);
                 m.packList(*ctx.pack, m.hudLists.cut, PackRole::Hand, PackBlend::Opaque);
                 m.packList(*ctx.pack, m.hudLists.tr, PackRole::HandTranslucent, PackBlend::Translucent);
+                m.packList(*ctx.pack, m.hudLists.glint, PackRole::ArmorGlint, PackBlend::Glint, true, true);
                 m.packHandFrame = m.frameCounter;
                 m.stats().worldMs = t.ms();
                 break;
             }
-            m.writeCb(0, ctx, ctx.viewProj, ctx.shading, false);
-            const bool a = m.flush(m.worldLists.cut), b = m.flush(m.worldLists.tr), c = m.flush(m.worldLists.glint);
+            if (m.preparedFrame != m.frameCounter) m.prepareWorld(ctx);
             m.bindCommon(ctx);
-            if (a) m.drawList(ctx, m.psoCut.Get(), m.worldLists.cut, 0);
-            if (b) m.drawList(ctx, m.psoTr.Get(), m.worldLists.tr, 0);
-            if (c) m.drawList(ctx, m.psoGlint.Get(), m.worldLists.glint, 0);
+            const bool mv = ctx.motionRtv.ptr != 0;  // shader pipeline: motion vectors into the second target
+            if (mv) {
+                const D3D12_CPU_DESCRIPTOR_HANDLE rts[2] = {ctx.colorRtv, ctx.motionRtv};
+                ctx.list->OMSetRenderTargets(2, rts, FALSE, &ctx.dsv);
+            }
+            if (m.worldDraw[0]) m.drawList(ctx, (mv ? m.psoCutMv : m.psoCut).Get(), m.worldLists.cut, 0);
+            if (m.worldDraw[1]) m.drawList(ctx, (mv ? m.psoTrMv : m.psoTr).Get(), m.worldLists.tr, 0);
+            if (m.worldDraw[2]) m.drawList(ctx, (mv ? m.psoGlintMv : m.psoGlint).Get(), m.worldLists.glint, 0);
+            if (m.handWorldFrame == m.frameCounter && mv) {
+                // First-person hand as part of the scene (lit, anti-aliased, motion vectors for TAA / upscalers /
+                // frame generation): own depth range in front of the world, like the Hud stage below.
+                D3D12_VIEWPORT vpHand{0, 0, float(ctx.width), float(ctx.height), 0.9f, 1.0f};
+                ctx.list->RSSetViewports(1, &vpHand);
+                if (m.handDraw[0]) m.drawList(ctx, m.psoCutMv.Get(), m.hudLists.cut, 2);
+                if (m.handDraw[1]) m.drawList(ctx, m.psoTrMv.Get(), m.hudLists.tr, 2);
+                if (m.handDraw[2]) m.drawList(ctx, m.psoGlintMv.Get(), m.hudLists.glint, 2);
+                D3D12_VIEWPORT full{0, 0, float(ctx.width), float(ctx.height), 0.0f, 1.0f};
+                ctx.list->RSSetViewports(1, &full);
+            }
+            if (mv) ctx.list->OMSetRenderTargets(1, &ctx.colorRtv, FALSE, &ctx.dsv);
             m.stats().worldMs = t.ms();
             break;
         }
@@ -376,7 +453,14 @@ void StagePass::draw(const PassContext& ctx) {
                 list->SetGraphicsRoot32BitConstants(1, 4, c, 0);
                 list->DrawInstanced(count * 6, 1, 0, 0);
             };
-            particleDraw(m.psoPartCut.Get(), 0, opaque);
+            if (ctx.motionRtv.ptr) {  // shader pipeline: opaque particles write their motion
+                const D3D12_CPU_DESCRIPTOR_HANDLE rts[2] = {ctx.colorRtv, ctx.motionRtv};
+                list->OMSetRenderTargets(2, rts, FALSE, &ctx.dsv);
+                particleDraw(m.psoPartCutMv.Get(), 0, opaque);
+                list->OMSetRenderTargets(1, &ctx.colorRtv, FALSE, &ctx.dsv);
+            } else {
+                particleDraw(m.psoPartCut.Get(), 0, opaque);
+            }
             particleDraw(m.psoPartTr.Get(), opaque, total - opaque);
             if (a) m.drawList(ctx, m.psoTextSee.Get(), m.tagSee, 1);
             if (b) m.drawList(ctx, m.psoText.Get(), m.tagNormal, 1);
@@ -385,7 +469,7 @@ void StagePass::draw(const PassContext& ctx) {
             break;
         }
         case 3: {
-            if (m.packHandFrame == m.frameCounter) {  // drawn by the shader pack (World stage)
+            if (m.packHandFrame == m.frameCounter || m.handWorldFrame == m.frameCounter) {  // drawn in the World stage
                 m.stats().hudMs = t.ms();
                 break;
             }
@@ -471,8 +555,9 @@ bool Visuals::Impl::createGpu(Renderer& r) {
                "CreateRootSignature"))
         return false;
     enum Blend { Opaque, Alpha, Glint };
+    // targets: 1 colour; 2 colour + motion (written); 3 colour + motion (kept); 0 shadow map (depth only)
     auto pso = [&](const void* vs, size_t vsSize, const void* ps, size_t psSize, Blend blend, bool depthTest, bool depthWrite,
-                   ComPtr<ID3D12PipelineState>& out) {
+                   ComPtr<ID3D12PipelineState>& out, int targets = 1) {
         D3D12_GRAPHICS_PIPELINE_STATE_DESC d{};
         d.pRootSignature = rootSig.Get();
         d.VS = {vs, vsSize};
@@ -497,8 +582,19 @@ bool Visuals::Impl::createGpu(Renderer& r) {
         d.DepthStencilState.DepthWriteMask = depthWrite ? D3D12_DEPTH_WRITE_MASK_ALL : D3D12_DEPTH_WRITE_MASK_ZERO;
         d.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_GREATER_EQUAL;  // reversed Z
         d.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-        d.NumRenderTargets = 1;
-        d.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+        d.NumRenderTargets = targets == 0 ? 0 : targets == 1 ? 1 : 2;
+        d.RTVFormats[0] = targets ? DXGI_FORMAT_R8G8B8A8_UNORM : DXGI_FORMAT_UNKNOWN;
+        if (targets >= 2) {
+            d.RTVFormats[1] = RenderPass::kMotionFormat;
+            d.BlendState.IndependentBlendEnable = TRUE;
+            d.BlendState.RenderTarget[1].RenderTargetWriteMask = targets == 2 ? D3D12_COLOR_WRITE_ENABLE_ALL : 0;
+        }
+        if (targets == 0) {  // shadow caster: depth only, no depth clip, slope bias (thin quads, no culling)
+            d.BlendState.RenderTarget[0].RenderTargetWriteMask = 0;
+            d.RasterizerState.DepthClipEnable = FALSE;
+            d.RasterizerState.SlopeScaledDepthBias = 1.5f;
+            d.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+        }
         d.DSVFormat = DXGI_FORMAT_D32_FLOAT;
         d.SampleDesc.Count = 1;
         return check(device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&out)), "CreateGraphicsPipelineState");
@@ -510,7 +606,12 @@ bool Visuals::Impl::createGpu(Renderer& r) {
         !pso(SH(VisualsVS), SH(VisualsTextPS), Alpha, false, false, psoTextSee) ||
         !pso(SH(VisualsVS), SH(VisualsTextPS), Alpha, true, false, psoText) ||
         !pso(SH(ParticleVS), SH(ParticleCutoutPS), Opaque, true, true, psoPartCut) ||
-        !pso(SH(ParticleVS), SH(ParticleTranslucentPS), Alpha, true, false, psoPartTr))
+        !pso(SH(ParticleVS), SH(ParticleTranslucentPS), Alpha, true, false, psoPartTr) ||
+        !pso(SH(VisualsVS), SH(VisualsCutoutMvPS), Opaque, true, true, psoCutMv, 2) ||
+        !pso(SH(VisualsVS), SH(VisualsTranslucentPS), Alpha, true, false, psoTrMv, 3) ||
+        !pso(SH(VisualsVS), SH(VisualsGlintPS), Glint, true, false, psoGlintMv, 3) ||
+        !pso(SH(ParticleVS), SH(ParticleCutoutMvPS), Opaque, true, true, psoPartCutMv, 2) ||
+        !pso(SH(VisualsShadowVS), SH(VisualsShadowPS), Opaque, true, true, psoShadow, 0))
         return false;
 #undef SH
     auto buffer = [&](u64 size, D3D12_HEAP_TYPE heap, D3D12_RESOURCE_STATES state, ComPtr<ID3D12Resource>& out) {
@@ -561,7 +662,8 @@ bool Visuals::Impl::createGpu(Renderer& r) {
     device->CreateShaderResourceView(itemTex.Get(), &sd, r.cpuDescriptor(descTable));
     device->CreateShaderResourceView(fontTex.Get(), &sd, r.cpuDescriptor(descTable + 1));
     dyn.reserve(kMaxDynamic);
-    for (List* l : {&worldLists.cut, &worldLists.tr, &worldLists.glint, &hudLists.cut, &hudLists.tr, &hudLists.glint, &tagSee, &tagNormal})
+    for (List* l : {&worldLists.cut, &worldLists.tr, &worldLists.glint, &hudLists.cut, &hudLists.tr, &hudLists.glint, &tagSee, &tagNormal,
+                    &shadowLists.cut, &shadowLists.tr})
         l->v.reserve(1024);
     gpuOk = true;
     er.setItemEntitiesExternal(true);  // dropped items as 3D item models from now on
@@ -649,8 +751,12 @@ void Visuals::Impl::uploadPending(const PassContext& ctx) {
     rows(fontAtlas, fontTex.Get());
 }
 
-void Visuals::Impl::writeCb(int slot, const PassContext& ctx, const float* viewProj, bool pipeline, bool hand) {
+void Visuals::Impl::writeCb(int slot, const PassContext& ctx, const float* viewProj, bool pipeline, bool hand,
+                            const float* prevViewProj) {
     FrameCb k{};
+    if (const float* pv = prevViewProj ? prevViewProj : ctx.prevViewProj) std::memcpy(k.prevViewProj, pv, sizeof(k.prevViewProj));
+    std::memcpy(k.motion, ctx.motionScale, sizeof(k.motion));
+    if (ctx.shadowMats) std::memcpy(k.shadowMat, ctx.shadowMats, sizeof(k.shadowMat));
     std::memcpy(k.viewProj, viewProj, sizeof(k.viewProj));
     std::memcpy(k.lightmap, ctx.lightmap, sizeof(k.lightmap));
     std::memcpy(k.fogColor, ctx.fogColor, sizeof(k.fogColor));
@@ -678,12 +784,78 @@ void Visuals::Impl::writeCb(int slot, const PassContext& ctx, const float* viewP
     std::memcpy(frameBase + kCbBytes * u64(slot), &k, sizeof(k));
 }
 
+// World stage lists (items, frames, paintings, held items), their shadow-only casters and, with the shader pipeline,
+// the first-person hand; instances and dynamic quads uploaded (prepare, so the shadow maps can use them).
+void Visuals::Impl::prepareWorld(const PassContext& ctx) {
+    preparedFrame = frameCounter;
+    frameCam[0] = ctx.camX, frameCam[1] = ctx.camY, frameCam[2] = ctx.camZ;
+    worldLists.clear(), shadowLists.clear();
+    buildWorld(ctx);
+    const bool handInWorld = ctx.shading && ctx.prevViewProj;
+    float handVp[16], handPlain[16];
+    if (handInWorld) {
+        hudLists.clear();
+        buildHand(ctx, handVp, true, handPlain);
+    }
+    uploadPending(ctx);
+    writeCb(0, ctx, ctx.viewProj, ctx.shading, false);
+    worldDraw[0] = flush(worldLists.cut), worldDraw[1] = flush(worldLists.tr), worldDraw[2] = flush(worldLists.glint);
+    shadowDraw[0] = flush(shadowLists.cut), shadowDraw[1] = flush(shadowLists.tr);
+    if (handInWorld && !(hudLists.cut.v.empty() && hudLists.tr.v.empty())) {
+        writeCb(2, ctx, handVp, true, true, prevHandValid ? prevHandVp : handPlain);
+        handDraw[0] = flush(hudLists.cut, true), handDraw[1] = flush(hudLists.tr, true), handDraw[2] = flush(hudLists.glint, true);
+        handWorldFrame = frameCounter;
+        std::memcpy(prevHandVp, handPlain, sizeof(prevHandVp));
+        prevHandValid = true;
+    } else {
+        prevHandValid = false;
+    }
+    if (frameCounter % 256 == 0)  // forget instances not drawn for a while
+        for (auto it = prevInst.begin(); it != prevInst.end();) it = it->second.frame + 8 < frameCounter ? prevInst.erase(it) : std::next(it);
+}
+
+// Shadow casters: items, frames, paintings, held items (World lists and the shadow-only ones), alpha-tested.
+void Visuals::Impl::drawShadow(const ShadowContext& sc) {
+    if (preparedFrame != frameCounter) return;
+    const List* lists[4] = {&worldLists.cut, &worldLists.tr, &shadowLists.cut, &shadowLists.tr};
+    const bool ok[4] = {worldDraw[0], worldDraw[1], shadowDraw[0], shadowDraw[1]};
+    if (!ok[0] && !ok[1] && !ok[2] && !ok[3]) return;
+    PassContext pc{};
+    pc.list = sc.list, pc.frame = sc.frame, pc.blockTextures = sc.blockTextures;
+    bindCommon(pc);
+    ID3D12GraphicsCommandList* list = sc.list;
+    const D3D12_GPU_VIRTUAL_ADDRESS va = upload->GetGPUVirtualAddress() + u64(sc.frame) * kFrameBytes;
+    list->SetGraphicsRootConstantBufferView(0, va);
+    list->SetPipelineState(psoShadow.Get());
+    for (int i = 0; i < 4; ++i) {
+        if (!ok[i]) continue;
+        const u32 c[4] = {lists[i]->base, u32(lists[i]->v.size()), 0, sc.cascade};
+        list->SetGraphicsRoot32BitConstants(1, 4, c, 0);
+        list->DrawInstanced(lists[i]->quads * 6, 1, 0, 0);
+    }
+}
+
 // Copies a list into the slice's instance array with prefix sums; false when empty or out of room.
-bool Visuals::Impl::flush(List& l) {
+bool Visuals::Impl::flush(List& l, bool hand) {
     if (l.v.empty()) return false;
     if (instUsed + l.v.size() > kMaxInstances) return false;
     u32 prefix = 0;
-    for (GpuInst& g : l.v) g.prefix = prefix, prefix += g.count;
+    for (size_t i = 0; i < l.v.size(); ++i) {
+        GpuInst& g = l.v[i];
+        g.prefix = prefix, prefix += g.count;
+        // Last frame's transform of the same instance, moved into this frame's camera space (motion vectors).
+        if (const u64 key = i < l.keys.size() ? l.keys[i] : 0) {
+            PrevInst& pi = prevInst[key];
+            if (pi.frame + 1 == frameCounter) {
+                std::memcpy(g.prev, pi.m, sizeof(g.prev));
+                if (!hand)
+                    for (int a = 0; a < 3; ++a) g.prev[a * 4 + 3] += float(pi.cam[a] - frameCam[a]);
+            }
+            pi.frame = frameCounter;
+            std::memcpy(pi.m, g.m, sizeof(pi.m));
+            std::copy(frameCam, frameCam + 3, pi.cam);
+        }
+    }
     l.base = instUsed;
     l.quads = prefix;
     std::memcpy(frameBase + kInstOffset + u64(instUsed) * sizeof(GpuInst), l.v.data(), l.v.size() * sizeof(GpuInst));
@@ -751,9 +923,10 @@ void Visuals::Impl::pushItem(Lists& L, const ItemMesh& mesh, Display d, const Xf
     for (int i = 0; i < mesh.partCount; ++i) {
         const ItemMesh::Part& p = mesh.parts[i];
         const Xf x = xfMul(m, p.display[size_t(d)]);
-        L.cut.add(x, p.first, p.count, light);
-        L.tr.add(x, p.tfirst, p.tcount, light);
-        if (foil) L.glint.add(x, p.first, p.count, light), L.glint.add(x, p.tfirst, p.tcount, light);
+        const u64 k = L.next();
+        L.cut.add(x, p.first, p.count, light, 0xFFFFFFFF, 0, k);
+        L.tr.add(x, p.tfirst, p.tcount, light, 0xFFFFFFFF, 0, k);
+        if (foil) L.glint.add(x, p.first, p.count, light, 0xFFFFFFFF, 0, k), L.glint.add(x, p.tfirst, p.tcount, light, 0xFFFFFFFF, 0, k ? k ^ 128 : 0);
     }
     ++self.stats_.items;
 }
@@ -761,8 +934,9 @@ void Visuals::Impl::pushItem(Lists& L, const ItemMesh& mesh, Display d, const Xf
 void Visuals::Impl::pushRaw(Lists& L, const ItemMesh& mesh, const Xf& m, u32 light, u32 color) {
     for (int i = 0; i < mesh.partCount; ++i) {
         const ItemMesh::Part& p = mesh.parts[i];
-        L.cut.add(m, p.first, p.count, light, color);
-        L.tr.add(m, p.tfirst, p.tcount, light, color);
+        const u64 k = L.next();
+        L.cut.add(m, p.first, p.count, light, color, 0, k);
+        L.tr.add(m, p.tfirst, p.tcount, light, color, 0, k);
     }
 }
 
@@ -964,6 +1138,7 @@ void Visuals::Impl::update() {
         equip(5, 5), equip(4, 6), equip(3, 7), equip(2, 8);
         const bool spectator = gameMode && gameMode() == 3;
         er.setLocalPlayer(avatarReady && game->cameraMode != 0 && !spectator ? &avatar : nullptr);
+        er.setLocalPlayerShadow(avatarReady && game->cameraMode == 0 && !spectator ? &avatar : nullptr);  // first person
     }
     if (particles) {
         const CameraState c = game ? game->viewCamera() : CameraState{};
@@ -987,6 +1162,7 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
         if (a.entity == EntityRenderer::kLocalPlayerId) e = &avatar;
         else if (auto it = entities.find(a.entity); it != entities.end()) e = &it->second;
         if (!e) continue;
+        Lists& L = a.shadowOnly ? shadowLists : worldLists;  // shadow-only casters (first-person player, outside the view)
         const bool rightHanded = e->mainArm != 0;
         for (int k = 0; k < 2; ++k) {
             if (!(a.valid & (1 << k))) continue;
@@ -999,7 +1175,8 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
             m = xfMul(m, xfRotY(180.0f * kDeg));
             const float ox = a.babyOffset ? 0.0f : 1.0f, oy = a.babyOffset ? 1.0f : 2.0f, oz = a.babyOffset ? -4.5f : -10.0f;
             m = xfMul(m, xfTranslate((k == 1 ? -1.0f : 1.0f) * ox / 16.0f, oy / 16.0f, oz / 16.0f));
-            pushItem(worldLists, models.mesh(item, e->equipDye[slot], false), k == 0 ? Display::ThirdRight : Display::ThirdLeft,
+            L.begin((u64(u32(a.entity)) << 4 | u64(k)) + 1);
+            pushItem(L, models.mesh(item, e->equipDye[slot], false), k == 0 ? Display::ThirdRight : Display::ThirdLeft,
                      m, a.light, (e->equipFoil >> slot) & 1);
         }
         const int head = e->equipment[5];
@@ -1008,6 +1185,7 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
             if (eq.asset.empty()) {  // armour is drawn as a model layer
                 Xf m;
                 std::memcpy(m.m, a.head, sizeof(m.m));
+                L.begin((u64(u32(a.entity)) << 4 | 2) + 1);
                 if (isSkull(head)) {  // wornHeadType: the skull model, scaled 1.1875
                     if (skullMeshes.size() <= size_t(head)) skullMeshes.resize(size_t(head) + 1, nullptr);
                     if (!skullMeshes[size_t(head)]) {
@@ -1016,12 +1194,12 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
                         skullMeshes[size_t(head)] = &models.entityLayerMesh(layer, tex);
                     }
                     m = xfMul(m, xfScale(1.1875f, 1.1875f, 1.1875f));
-                    pushRaw(worldLists, *skullMeshes[size_t(head)], m, a.light);
+                    pushRaw(L, *skullMeshes[size_t(head)], m, a.light);
                 } else {  // translateToHead
                     m = xfMul(m, xfTranslate(0, -0.25f, 0));
                     m = xfMul(m, xfRotY(180.0f * kDeg));
                     m = xfMul(m, xfScale(0.625f, -0.625f, -0.625f));
-                    pushItem(worldLists, models.mesh(head, e->equipDye[5], false), Display::Head, m, a.light, (e->equipFoil >> 5) & 1);
+                    pushItem(L, models.mesh(head, e->equipDye[5], false), Display::Head, m, a.light, (e->equipFoil >> 5) & 1);
                 }
             }
         }
@@ -1047,6 +1225,22 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
         }
         return true;
     };
+    // Shadow casters outside the view (shader pipeline): inside a cascade drawn this frame.
+    auto inShadow = [&](float x, float y, float z, float r) {
+        if (ctx.pack || !ctx.shadowMats) return false;
+        for (u32 c = 0; c < 4; ++c) {
+            if (!((ctx.shadowMask >> c) & 1)) continue;
+            const float* m = ctx.shadowMats[c];
+            bool in = true;
+            for (int row = 0; row < 3 && in; ++row) {
+                const float v = m[row] * x + m[4 + row] * y + m[8 + row] * z + m[12 + row];
+                const float len = std::sqrt(m[row] * m[row] + m[4 + row] * m[4 + row] + m[8 + row] * m[8 + row]);
+                in = row < 2 ? std::abs(v) <= 1 + r * len : v <= 1 + r * len;
+            }
+            if (in) return true;
+        }
+        return false;
+    };
     static const int kStep[6][3] = {{0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}};
     for (const auto& [id, e] : entities) {
         const bool frame = e.type == frameType || e.type == glowFrameType;
@@ -1054,7 +1248,14 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
         double p[3];
         for (int a = 0; a < 3; ++a) p[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt;
         const float rx = float(p[0] - cam[0]), ry = float(p[1] - cam[1]), rz = float(p[2] - cam[2]);
-        if (!visible(rx, ry, rz, e.type == paintingType ? 4.0f : 1.0f)) continue;
+        const float radius = e.type == paintingType ? 4.0f : 1.0f;
+        Lists* target = &worldLists;
+        if (!visible(rx, ry, rz, radius)) {
+            if (!inShadow(rx, ry, rz, radius)) continue;
+            target = &shadowLists;
+        }
+        Lists& L = *target;
+        L.begin(u64(u32(id)) << 4 | 3);
         const u32 light = lightAt(p[0], p[1], p[2]);
         if (frame) {  // ItemFrameRenderer
             const int dir = std::clamp(e.direction, 0, 5);
@@ -1080,13 +1281,13 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
             if (!invisible) {
                 const ItemMesh*& fm = frameMeshes[(glow ? 2 : 0) + (map ? 1 : 0)];
                 if (!fm) fm = &models.blockModelMesh(std::string("block/") + (glow ? "glow_item_frame" : "item_frame") + (map ? "_map" : ""));
-                pushRaw(worldLists, *fm, xfMul(m, xfTranslate(-0.5f, -0.5f, -0.5f)), frameLight);
+                pushRaw(L, *fm, xfMul(m, xfTranslate(-0.5f, -0.5f, -0.5f)), frameLight);
             }
             if (e.itemId >= 0) {
                 Xf im = xfMul(m, xfTranslate(0, 0, invisible ? 0.5f : 0.4375f));
                 im = xfMul(im, xfRotZ(float(e.rotation % 8) * 45.0f * kDeg));
                 im = xfMul(im, xfScale(0.5f, 0.5f, 0.5f));
-                pushItem(worldLists, models.mesh(e.itemId, e.itemDye, true), Display::Fixed, im, glow ? 0xFFu : light, e.itemFoil);
+                pushItem(L, models.mesh(e.itemId, e.itemDye, true), Display::Fixed, im, glow ? 0xFFu : light, e.itemFoil);
             }
             continue;
         }
@@ -1097,7 +1298,7 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
             static const int k2d[6] = {0, 0, 2, 0, 1, 3};  // 3D data value -> 2D data value (S W N E)
             const int d2 = k2d[std::clamp(e.direction, 0, 5)];
             Xf m = xfMul(xfTranslate(rx, ry, rz), xfRotY(float(180 - d2 * 90) * kDeg));
-            pushRaw(worldLists, *info->mesh, m, light);
+            pushRaw(L, *info->mesh, m, light);
             continue;
         }
         // ItemEntityRenderer: bob, spin and several copies for larger stacks (GROUND display).
@@ -1117,17 +1318,17 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
             return float(rng >> 8) / float(1 << 24) * 2.0f - 1.0f;
         };
         if (mesh.groundDepth > 0.0625f) {
-            pushItem(worldLists, mesh, Display::Ground, m, light, e.itemFoil);
+            pushItem(L, mesh, Display::Ground, m, light, e.itemFoil);
             for (int i = 1; i < amount; ++i)
-                pushItem(worldLists, mesh, Display::Ground, xfMul(m, xfTranslate(rnd() * 0.15f, rnd() * 0.15f, rnd() * 0.15f)), light,
+                pushItem(L, mesh, Display::Ground, xfMul(m, xfTranslate(rnd() * 0.15f, rnd() * 0.15f, rnd() * 0.15f)), light,
                          e.itemFoil);
         } else {
             const float offsetZ = mesh.groundDepth * 1.5f;
             m = xfMul(m, xfTranslate(0, 0, -(offsetZ * float(amount - 1) / 2.0f)));
-            pushItem(worldLists, mesh, Display::Ground, m, light, e.itemFoil);
+            pushItem(L, mesh, Display::Ground, m, light, e.itemFoil);
             m = xfMul(m, xfTranslate(0, 0, offsetZ));
             for (int i = 1; i < amount; ++i) {
-                pushItem(worldLists, mesh, Display::Ground, xfMul(m, xfTranslate(rnd() * 0.075f, rnd() * 0.075f, 0)), light, e.itemFoil);
+                pushItem(L, mesh, Display::Ground, xfMul(m, xfTranslate(rnd() * 0.075f, rnd() * 0.075f, 0)), light, e.itemFoil);
                 m = xfMul(m, xfTranslate(0, 0, offsetZ));
             }
         }
@@ -1201,7 +1402,7 @@ void Visuals::Impl::buildTags(const PassContext& ctx) {
 // ---------------------------------------------------------------------------------------------------------
 // First-person hands (HUD stage)
 
-void Visuals::Impl::buildHand(const PassContext& ctx, float viewProj[16]) {
+void Visuals::Impl::buildHand(const PassContext& ctx, float viewProj[16], bool jittered, float* noJitter) {
     if (!game || !ui || game->cameraMode != 0 || !avatarReady) return;
     if (gameMode && gameMode() == 3) return;  // spectators have no hands
     const CameraState cam = game->viewCamera();
@@ -1210,9 +1411,12 @@ void Visuals::Impl::buildHand(const PassContext& ctx, float viewProj[16]) {
     const Vec3 fwd{-sy * cp, -sp, cy * cp};
     const Vec3 right = normalize(cross(fwd, {0, 1, 0}));
     const Vec3 up = cross(right, fwd);
-    const Mat4 proj = perspectiveReverseZ(ui->fovRadians(), float(ctx.width) / float(std::max(ctx.height, 1u)), 0.05f);
+    Mat4 proj = perspectiveReverseZ(ui->fovRadians(), float(ctx.width) / float(std::max(ctx.height, 1u)), 0.05f);
+    if (noJitter) std::memcpy(noJitter, (proj * viewFromBasis(right, up, fwd)).m, sizeof(float) * 16);
+    if (jittered) proj(0, 2) = ctx.jitter[0], proj(1, 2) = ctx.jitter[1];
     const Mat4 vpm = proj * viewFromBasis(right, up, fwd);
     std::memcpy(viewProj, vpm.m, sizeof(float) * 16);
+    hudLists.begin(u64(1) << 40);  // instance keys (motion vectors)
     // Vanilla view space (x right, y up, -z forward) -> camera-relative world.
     Xf view;
     const Vec3 back = fwd * -1.0f;
@@ -1304,7 +1508,7 @@ void Visuals::Impl::buildHand(const PassContext& ctx, float viewProj[16]) {
                 dyn.push_back(mq);
             }
         }
-        hudLists.cut.add(ps, first, u32(dyn.size()) - first, light, 0xFFFFFFFF, 1);
+        hudLists.cut.add(ps, first, u32(dyn.size()) - first, light, 0xFFFFFFFF, 1, hudLists.next());
     };
     auto renderItem = [&](Xf ps, const HandState& h, float inverseArmHeight, float att, bool rightArm, bool swingThis) {
         const int inv = rightArm ? 1 : -1;
@@ -1334,9 +1538,15 @@ void Visuals::Impl::buildHand(const PassContext& ctx, float viewProj[16]) {
 // ---------------------------------------------------------------------------------------------------------
 // Shader packs
 
-void Visuals::Impl::packList(PackSink& pack, const List& l, PackRole role, PackBlend blend) {
-    // [texture]: 0 items atlas, 1 font, 2 solid (white), 3 entity atlas, 4 block texture (block atlas)
+void Visuals::Impl::packList(PackSink& pack, const List& l, PackRole role, PackBlend blend, bool glint, bool hand) {
+    // [texture]: 0 items atlas, 1 font, 2 solid (white), 3 entity atlas, 4 block texture (block atlas); glint: 0
     static thread_local std::vector<PackVertex> verts[5];
+    if (glint && (l.v.empty() || !pack.glintTexture(true))) return;
+    float scroll[2] = {};
+    if (glint) {  // TextureTransform.setupGlintTexturing (glint speed 0.5), as writeCb
+        const double ms = nowSeconds() * 1000.0 * 8.0 * 0.5;
+        scroll[0] = -float(std::fmod(ms, 110000.0) / 110000.0), scroll[1] = float(std::fmod(ms, 30000.0) / 30000.0);
+    }
     auto unpack = [](u32 v, int shift) { return float(i8((v >> shift) & 255)) / 127.0f; };
     for (const GpuInst& g : l.v) {
         const bool dynamic = (g.flags & 1) != 0;
@@ -1347,7 +1557,7 @@ void Visuals::Impl::packList(PackSink& pack, const List& l, PackRole role, PackB
             const MeshQuad* q = dynamic ? (index < dyn.size() ? &dyn[index] : nullptr)
                                         : (index < cpuStore.size() ? &cpuStore[index] : nullptr);
             if (!q) break;
-            const int t = q->tex == kTexItems ? 0 : q->tex == kTexFont ? 1 : q->tex == kTexSolid ? 2 : q->tex == kTexEntity ? 3 : 4;
+            const int t = glint ? 0 : q->tex == kTexItems ? 0 : q->tex == kTexFont ? 1 : q->tex == kTexSolid ? 2 : q->tex == kTexEntity ? 3 : 4;
             PackVertex v{};
             u32 color = 0;
             for (int c = 0; c < 4; ++c)
@@ -1365,7 +1575,13 @@ void Visuals::Impl::packList(PackSink& pack, const List& l, PackRole role, PackB
             for (int c = 0; c < 4; ++c) {
                 uv[c][0] = q->uv[c][0], uv[c][1] = q->uv[c][1];
                 if (t == 4 && !pack.atlasUv(q->tex & 0xFFFF, q->uv[c][0], q->uv[c][1], uv[c])) uv[c][0] = uv[c][1] = 0;
+                if (glint) {  // visuals.hlsl VisualsVS: item-space position, rotated 10 degrees, scrolled
+                    const float gx = q->pos[c][0] * 0.5f + q->pos[c][2] * 0.25f, gy = q->pos[c][1] * 0.5f + q->pos[c][2] * 0.25f;
+                    const float gc = 0.98480775f, gs = 0.17364818f;
+                    uv[c][0] = gx * gc - gy * gs + scroll[0], uv[c][1] = gx * gs + gy * gc + scroll[1];
+                }
             }
+            if (glint) v.color = 0xBFFFFFFF, v.light = 240 | (240u << 16);  // alpha: glint strength 0.75 (option default)
             v.midUv[0] = (uv[0][0] + uv[2][0]) * 0.5f, v.midUv[1] = (uv[0][1] + uv[2][1]) * 0.5f;
             for (int c = 0; c < 4; ++c) {
                 for (int r = 0; r < 3; ++r)
@@ -1383,6 +1599,7 @@ void Visuals::Impl::packList(PackSink& pack, const List& l, PackRole role, PackB
         d.cull = blend == PackBlend::Opaque;
         d.blockAtlas = t == 4;
         d.texture = t == 0 ? itemTex.Get() : t == 1 ? fontTex.Get() : t == 3 ? er.atlasTexture() : nullptr;
+        if (glint) d.texture = pack.glintTexture(true), d.depthWrite = false, d.depthEqual = true, d.hand = hand, d.cull = true;
         d.vertices = v.data(), d.vertexCount = u32(v.size());
         pack.draw(d);
         v.clear();

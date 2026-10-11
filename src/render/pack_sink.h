@@ -41,6 +41,8 @@ struct PackDraw {
     PackBlend blend = PackBlend::Opaque;
     u8 renderStage = 0;                 // Iris renderStage uniform (MC_RENDER_STAGE_*), 0 = from the role
     bool depthTest = true, depthWrite = true, cull = true;
+    bool depthEqual = false;            // only on the geometry drawn just before (glint: vanilla EQUAL), no write
+    bool hand = false;                  // drawn with the first-person hand (its projection and pass), any role
     bool quads = true;                  // 4 vertices per quad (else a triangle list)
     bool blockAtlas = false;            // texture = the block atlas (uv via atlasUv)
     ID3D12Resource* texture = nullptr;  // Texture2D (RGBA8) when not the block atlas; nullptr = white
@@ -61,4 +63,7 @@ public:
     virtual int itemId(std::string_view item) const = 0;          // "minecraft:diamond_sword"
     virtual int blockId(u16 blockState) const = 0;                // BlockRegistry state id
     virtual bool vanillaClouds() const = 0;  // the pack draws the game's clouds (shaders.properties clouds != off)
+    // Enchantment glint texture (entity / armour glint, item glint) for PackRole::ArmorGlint draws with
+    // PackBlend::Glint; uv = the vanilla glint texture transform applied on the CPU (it wraps). nullptr: none.
+    virtual ID3D12Resource* glintTexture(bool item) const { (void)item; return nullptr; }
 };

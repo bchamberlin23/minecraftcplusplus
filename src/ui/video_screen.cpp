@@ -201,9 +201,9 @@ void Ui::State::drawVideoScreen(Canvas& c) {
         const auto st = packs::packStatus(*init.renderer);
         if (!st.loading.empty()) line("Shader pack: loading " + st.loading + "...", 0xFFFFD060);
         else if (!st.error.empty()) line("Shader pack error (built-in pipeline in use): " + st.error, 0xFFFF6060);
-        else if (!st.active.empty()) line("Shader pack: " + st.active + " (upscalers and frame generation off)", 0xFFA0FFA0);
+        // Packs render at the upscaler's render size (render/packs: Pipe::scaled); turn the pack's own TAA off with one.
+        else if (!st.active.empty()) line("Shader pack: " + st.active + " (with DLSS / FSR / XeSS: turn the pack's TAA off)", 0xFFA0FFA0);
         if (!packMessage.empty()) line(packMessage, 0xFFFF6060);
-        if (!st.active.empty()) return;  // the upscaler lines below do not apply to a pack
     }
     {  // the status line, wrapped at its " | " separators
         const std::string st = up.status();

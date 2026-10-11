@@ -15,7 +15,7 @@ cbuffer McppFrame : register(b2) {
     float4 mcppDepth;      // x = near, y = (F - n) / F, z = F / (F - n), w = output height (final pass flip)
     float4 mcppAtlas;      // xy = one tile in atlas UV, z = tiles per row, w = 1 when gl_Color carries AO in alpha
     float4 mcppScreen;     // xy = viewport size, zw = 1 / size
-    uint4 mcppMisc;        // x = layer table size
+    uint4 mcppMisc;        // x = layer table size, yz = gbuffers jitter (asfloat, GL NDC)
 };
 struct McppDrawConstants {
     uint quadOffset;
@@ -269,6 +269,7 @@ McppVertex mcppPull(uint vid) {
 // reversed (hand: keeps the pack's depth range), 2 GL [-1, 1] -> D3D [0, 1] (shadow maps, no reversal), 3 no depth.
 // flipY: GL window y up -> render target rows (memory layout matches GL: row 0 = GL bottom row).
 float4 mcppClip(float4 c, int mode, bool flipY) {
+    if (mode <= 1) c.xy += asfloat(mcppMisc.yz) * c.w;  // temporal upscaling: this frame's jitter (GL NDC; 0 = none)
     if (flipY) c.y = -c.y;
     if (mode == 0) c.z = mcppDepth.x;
     else if (mode == 1) c.z = c.w - (0.5 * c.z + 0.5 * c.w) * mcppDepth.y;

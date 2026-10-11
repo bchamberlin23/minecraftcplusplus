@@ -37,7 +37,8 @@ constexpr u32 kQuadIndexCapacity = 65536;
 constexpr DXGI_FORMAT kHdr = DXGI_FORMAT_R16G16B16A16_FLOAT;
 constexpr DXGI_FORMAT kLdr = DXGI_FORMAT_R8G8B8A8_UNORM;
 constexpr float kCaveScale = 0.45f, kCaveScaleNoSun = 1.7f;  // vanilla light level 0 (linear) -> HDR minimum light
-constexpr DXGI_FORMAT kAlbedo = DXGI_FORMAT_R8G8B8A8_UNORM;  // sRGB-encoded values, decoded by the deferred pass
+constexpr DXGI_FORMAT kAlbedo = DXGI_FORMAT_R8G8B8A8_UNORM;
+constexpr float kNoMotion = 32768.0f;  // motion target clear: no pass wrote object motion here (MotionCS)  // sRGB-encoded values, decoded by the deferred pass
 constexpr D3D12_RESOURCE_STATES kSrv = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
 constexpr D3D12_RESOURCE_STATES kUav = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 constexpr D3D12_RESOURCE_STATES kRt = D3D12_RESOURCE_STATE_RENDER_TARGET;
@@ -415,7 +416,12 @@ bool Renderer::Shading::createTargets() {
         r.device_->CreateDepthStencilView(sceneDepth_.Get(), &d,
                                           {dsvHeap_->GetCPUDescriptorHandleForHeapStart().ptr + size_t(4) * dsvStride_});
     }
-    motion_ = texture(DXGI_FORMAT_R16G16_FLOAT, w, h, 1, ua, kSrv, nullptr);
+    {
+        D3D12_CLEAR_VALUE none{};  // motion target clear: kNoMotion (deferred.hlsl MotionCS)
+        none.Format = DXGI_FORMAT_R16G16_FLOAT;
+        none.Color[0] = none.Color[1] = kNoMotion;
+        motion_ = texture(DXGI_FORMAT_R16G16_FLOAT, w, h, 1, ua | rt, kSrv, &none);
+    }
     exposureTex_ = texture(DXGI_FORMAT_R32_FLOAT, 1, 1, 1, ua, kSrv, nullptr);
     {
         D3D12_CLEAR_VALUE zeroUi{};
@@ -470,8 +476,8 @@ bool Renderer::Shading::createTargets() {
     uav(RwHist1, hist_[1].Get(), kHdr);
     for (u32 i = 0; i < kBloomLevels; ++i) uav(RwBloom0 + i, bloom_[i].Get(), kHdr);
     const D3D12_CPU_DESCRIPTOR_HANDLE base = rtvHeap_->GetCPUDescriptorHandleForHeapStart();
-    ID3D12Resource* rts[6] = {albedo_.Get(), normal_.Get(), ldrSky_.Get(), ldrFwd_.Get(), scene_.Get(), ui_.Get()};
-    for (u32 i = 0; i < 6; ++i) r.device_->CreateRenderTargetView(rts[i], nullptr, {base.ptr + size_t(i) * rtvStride_});
+    ID3D12Resource* rts[7] = {albedo_.Get(), normal_.Get(), ldrSky_.Get(), ldrFwd_.Get(), scene_.Get(), ui_.Get(), motion_.Get()};
+    for (u32 i = 0; i < 7; ++i) r.device_->CreateRenderTargetView(rts[i], nullptr, {base.ptr + size_t(i) * rtvStride_});
     historyValid_ = false;
     return true;
 }
@@ -638,6 +644,7 @@ void Renderer::Shading::prepare(const FrameInput& in) {
     t(0, 3) = float(move[0]), t(1, 3) = float(move[1]), t(2, 3) = float(move[2]);
     const Mat4 prev = (historyValid_ ? prevVpNoJitter_ : in.vpNoJitter) * t;
     std::memcpy(k.prevViewProj, prev.m, 64);
+    std::memcpy(prevViewProj_, prev.m, 64);
     prevVpNoJitter_ = in.vpNoJitter;
     prevCam_[0] = cam.x, prevCam_[1] = cam.y, prevCam_[2] = cam.z;
 
@@ -717,6 +724,18 @@ void Renderer::Shading::prepare(const FrameInput& in) {
     k.flags[2] = histSlot_;      // previous history
     k.flags[3] = histSlot_ ^ 1;  // written this frame
     std::memcpy(constantsMapped_ + size_t(in.frameIndex) * kConstantBytes, &k, sizeof(k));
+}
+
+void Renderer::Shading::fillPassContext(PassContext& pc, const FrameInput& in) const {
+    pc.width = renderW_, pc.height = renderH_;
+    pc.jitter[0] = in.jitter[0], pc.jitter[1] = in.jitter[1];
+    pc.prevViewProj = prevViewProj_;
+    // curUv = (pixel + jitterPixels()) / size (shading.hlsli): the unjittered position of the sample.
+    pc.motionScale[0] = 1.0f / float(renderW_), pc.motionScale[1] = 1.0f / float(renderH_);
+    pc.motionScale[2] = -in.jitter[0] * 0.5f, pc.motionScale[3] = in.jitter[1] * 0.5f;
+    pc.shadowCascades = updateMask_ && shadowMap_ ? r.shaderSettings_.cascades : 0;
+    pc.shadowMask = pc.shadowCascades ? updateMask_ : 0;
+    pc.shadowMats = shadowMat_;
 }
 
 void Renderer::Shading::barrier(ID3D12Resource* res, D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to) {
@@ -855,9 +874,25 @@ void Renderer::Shading::record(ID3D12GraphicsCommandList* list, const FrameInput
                                       shadowCounts_.Get(), u64(seg) * 4);
             }
         }
+        mark(list, "shadow maps");
+        // Entities, block entities, items (RenderPass::drawShadow): this frame's geometry, per updated cascade.
+        if (!r.passes_[int(PassStage::World)].empty()) {
+            Timer t;
+            ID3D12DescriptorHeap* heaps[] = {r.srvHeap_.Get()};
+            for (u32 c = 0; c < cascades; ++c) {
+                if (!(updateMask_ & (1u << c))) continue;
+                const D3D12_CPU_DESCRIPTOR_HANDLE d{dsvHeap_->GetCPUDescriptorHandleForHeapStart().ptr + size_t(c) * dsvStride_};
+                list->OMSetRenderTargets(0, nullptr, FALSE, &d);
+                list->RSSetViewports(1, &sv);
+                list->RSSetScissorRects(1, &ss);
+                list->SetDescriptorHeaps(1, heaps);
+                r.runShadowPasses({list, in.frameIndex, c, shadowMat_[c], pc.blockTextures, pc.textureRemap});
+            }
+            passCpuMs_ += t.ms();
+            mark(list, "shadow casters");
+        }
         barrier(shadowMap_.Get(), kDepthWrite, kSrv);
         flushBarriers(list);
-        mark(list, "shadow maps");
     }
 
     // ---- sky stage -> LDR layer A ----
@@ -897,12 +932,16 @@ void Renderer::Shading::record(ID3D12GraphicsCommandList* list, const FrameInput
     }
     mark(list, "g-buffer");
 
-    // ---- World stage (entities) -> LDR layer B ----
+    // ---- World stage (entities) -> LDR layer B; moving geometry writes its motion (until MotionCS) ----
+    barrier(motion_.Get(), kSrv, kRt);
+    flushBarriers(list);
     {
-        const float clear[4] = {0, 0, 0, 0};
+        const float clear[4] = {0, 0, 0, 0}, noMotion[4] = {kNoMotion, kNoMotion, 0, 0};
         list->ClearRenderTargetView(rtv(3), clear, 0, nullptr);
+        list->ClearRenderTargetView(rtv(6), noMotion, 0, nullptr);
         const D3D12_CPU_DESCRIPTOR_HANDLE t = rtv(3);
         list->OMSetRenderTargets(1, &t, FALSE, &dsv);
+        pc.colorRtv = t, pc.motionRtv = rtv(6), pc.dsv = dsv;
         runStage(PassStage::World);
     }
     mark(list, "entities");
@@ -962,7 +1001,9 @@ void Renderer::Shading::record(ID3D12GraphicsCommandList* list, const FrameInput
         list->ClearRenderTargetView(rtv(2), clear, 0, nullptr);
         const D3D12_CPU_DESCRIPTOR_HANDLE t = rtv(2);
         list->OMSetRenderTargets(1, &t, FALSE, &dsv);
+        pc.colorRtv = t;
         runStage(PassStage::AfterTranslucent);
+        pc.colorRtv = {}, pc.motionRtv = {}, pc.dsv = {};
     }
     mark(list, "clouds+weather");
 
@@ -991,7 +1032,7 @@ void Renderer::Shading::record(ID3D12GraphicsCommandList* list, const FrameInput
 
     // ---- motion vectors ----
     barrier(scene_.Get(), kUav, kSrv);
-    barrier(motion_.Get(), kSrv, kUav);
+    barrier(motion_.Get(), kRt, kUav);
     flushBarriers(list);
     list->SetPipelineState(psoMotion_.Get());
     list->Dispatch(groups(w, 8), groups(h, 8), 1);

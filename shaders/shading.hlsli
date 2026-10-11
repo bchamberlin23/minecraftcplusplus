@@ -31,7 +31,7 @@ cbuffer Shade : register(b2) {
     float4 gCave;                // minimum light: the dimension's ambient light colour (linear, HDR)
 };
 // Debug views (MCPP_SHADERS_DEBUG): 1 raw HDR (exposure 1, no tonemap), 2 albedo, 3 normal, 4 shadow, 5 lighting only,
-// 6 volumetric in-scatter x4.
+// 6 volumetric in-scatter x4, 7 motion vectors.
 uint debugView() { return (gFlags.x >> 8) & 15; }
 uint tonemapMode() { return (gFlags.x >> 12) & 3; }
 static const uint kFlagWaving = 1, kFlagPcss = 2, kFlagSsao = 4, kFlagVolumetric = 8, kFlagSsr = 16, kFlagTaa = 32;
@@ -61,7 +61,8 @@ SamplerState gPointClamp : register(s3);
 
 // Material classes (low 4 bits of gMaterial; the G-buffer keeps 3 bits).
 static const uint kMatDefault = 0, kMatLeaves = 1, kMatPlant = 2, kMatEmissive = 3, kMatGlow = 4, kMatWater = 5,
-                  kMatGlass = 6, kMatIce = 7;
+                  kMatGlass = 6, kMatIce = 7,
+                  kMatEntity = 8;  // forward layer (entities, block entities): no stored normal
 // Waving (bits 4..5): 0 none, 1 plant (top waves), 2 upper half of a double plant, 3 leaves (everything).
 uint matClass(uint m) { return m & 15; }
 uint matWave(uint m) { return (m >> 4) & 3; }
@@ -226,6 +227,9 @@ float3 shadeSurface(Surface s, float3 rel, float2 pixel) {
     float lightVisible = dot(gLightColor.rgb, 1) > 0 ? 1 : 0;
     if (lightVisible > 0 && (ndl > 0 || foliage)) shadow = shadowVisibility(rel, s.n * (ndl >= 0 ? 1 : -1), pixel, thickness);
     else thickness = 4;
+    // Entities have no stored normal (n = light direction, the albedo carries the game's directional shading), so
+    // their far side lies in their own shadow: keep some of the direct light there instead of going black.
+    if (s.mat == kMatEntity) shadow = lerp(0.4, 1.0, shadow);
     // Sky gate: no direct light deep inside (beyond the shadow distance the sky light level is all we know).
     float gateFar = pow(saturate(s.sky / 15.0), 6.0);
     float gateNear = saturate(s.sky / 4.0);
@@ -238,7 +242,7 @@ float3 shadeSurface(Surface s, float3 rel, float2 pixel) {
         float trans = exp(-thickness * 1.2) * (0.35 + 0.65 * pow(saturate(dot(-v, l)), 4.0) * 2.0);
         diffuse = direct * (wrap * shadow * 0.6 + trans * 0.3);
     }
-    float hemi = 0.65 + 0.35 * s.n.y;
+    float hemi = s.mat == kMatEntity ? 1.0 : 0.65 + 0.35 * s.n.y;
     float3 ambient = gAmbient.rgb * skyCurve(s.sky) * hemi;
     float3 block = gBlockColor.rgb * blockCurve(s.block);
     float3 cave = gCave.rgb * hemi;

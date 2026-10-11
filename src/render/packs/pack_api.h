@@ -9,6 +9,13 @@
 
 class Renderer;
 class BlockRegistry;
+class GameReports;
+namespace net {
+class Client;
+}
+namespace ui {
+class Ui;
+}
 
 namespace packs {
 
@@ -35,8 +42,6 @@ struct PackGameState {
     int eyeBrightness[2] = {0, 240};  // block, sky light at the eye (x16)
     int isEyeInWater = -1;            // 0 air, 1 water, 2 lava, 3 powder snow (-1: from the sky state)
     float blindness = 0, nightVision = 0, darknessFactor = 0, darknessLightFactor = 0, playerMood = 0;
-    std::string heldItem, heldItem2;  // "minecraft:torch"
-    int heldBlockLight = 0, heldBlockLight2 = 0;
     std::string biome = "minecraft:plains";
     float temperature = 0.8f, rainfall = 0.4f;
     int precipitation = 1;  // 0 none, 1 rain, 2 snow
@@ -59,6 +64,19 @@ struct PackStatus {
     double loadMs = 0;
 };
 PackStatus packStatus(Renderer& renderer);
+
+// The local player as packs see it: Iris heldItemId / heldBlockLightValue (+ 2 for the off hand: item.properties id,
+// the held block's light emission), isElytraFlying and heavyFog (a boss bar that creates world fog: the dragon fight).
+struct PackPlayerState {
+    std::string heldItem[2];  // main hand, off hand ("minecraft:torch", "" = empty)
+    int heldLight[2] = {};
+    bool elytraFlying = false, heavyFog = false;
+};
+// Main thread, once per frame (returns at once while no pack is active).
+void updatePlayer(Renderer& renderer, const ui::Ui& ui, int selectedSlot, const GameReports& reports, BlockRegistry& registry);
+// Network observers behind that state (our shared flags: fall flying; boss bars with the world fog flag). Before
+// Client::start, for every client.
+void attachNetwork(net::Client& client);
 
 // Command line: --shaderpack <name | path | off> and --pack-option NAME=VALUE (main.cpp forwards them), applied once
 // the renderer and the block registry exist.

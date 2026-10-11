@@ -711,6 +711,7 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     }
     const bool packActive = packs_ && packs_->active();  // an OptiFine / Iris shader pack replaces the pipeline
     const bool shaded = !packActive && shading_ && shaderPreset_ != ShaderPreset::Off;
+    bool packUi = false;  // a pack with frame generation: UI layer like the built-in pipeline (Packs::frameGenUi)
     if (!shaded) stats_.passCount = 0;
 
     // Camera-relative matrices: the world is translated by -camera on the GPU in integer
@@ -846,6 +847,8 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     pc.shading = shaded;
     pc.textureRemap = remapVa;
     std::memcpy(pc.lightmap, fc.lightmap, sizeof(pc.lightmap));
+    if (shaded) shading_->fillPassContext(pc, shadeIn);
+    if (!packActive) preparePasses(pc);  // shadow casters: this frame's entity geometry before the shadow maps
     if (shaded) {
         shading_->mark(list_.Get(), "cull");
         shadeTimer = Timer();
@@ -869,7 +872,17 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
         list_->SetGraphicsRootDescriptorTable(4, srvHeap_->GetGPUDescriptorHandleForHeapStart());
         list_->RSSetViewports(1, &vpRect);
         list_->RSSetScissorRects(1, &scissor);
-        list_->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
+        packUi = packs_->frameGenUi();  // frame generation: the overlays and the Hud stage into the pipeline's UI layer
+        if (packUi) {
+            transition(shading_->ui_.Get(), D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+            const D3D12_CPU_DESCRIPTOR_HANDLE ui{shading_->rtvHeap_->GetCPUDescriptorHandleForHeapStart().ptr +
+                                                 size_t(5) * shading_->rtvStride_};
+            const float clear[4] = {0, 0, 0, 0};
+            list_->ClearRenderTargetView(ui, clear, 0, nullptr);
+            list_->OMSetRenderTargets(1, &ui, FALSE, &dsv);
+        } else {
+            list_->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
+        }
     } else {
     list_->ClearRenderTargetView(rtv, fogColor_, 0, nullptr);
     list_->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
@@ -949,10 +962,10 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
         draw(psoScreenLines_.Get(), D3D_PRIMITIVE_TOPOLOGY_LINELIST,
              put(screenLines_.data(), screenLines_.size() * sizeof(LineVertex)), u32(screenLines_.size()), 1);
     }
-    pc.uiLayer = shaded && !upscalers_->uiComposedBySwapChain();  // we composite it, then AfterUi draws on top
+    pc.uiLayer = (shaded || packUi) && !upscalers_->uiComposedBySwapChain();  // we composite it, then AfterUi on top
     runPasses(PassStage::Hud, pc);
-    if (!shaded) runPasses(PassStage::AfterUi, pc);
-    if (shaded) {
+    if (!shaded && !packUi) runPasses(PassStage::AfterUi, pc);
+    if (shaded || packUi) {
         upscalers_->beforeUiComposite(list_.Get(), bb);  // frame generation: keep the hudless image
         if (upscalers_->uiComposedBySwapChain()) {       // FSR FG blends the UI layer itself (real + generated frames)
             D3D12_RESOURCE_BARRIER b{};
@@ -999,7 +1012,7 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     } else {
         std::memset(stats_.commands, 0, sizeof(stats_.commands));
     }
-    if (shaded) upscalers_->endFrame(list_.Get(), bb);  // frame generation inputs (tags / prepare pass)
+    if (shaded || packUi) upscalers_->endFrame(list_.Get(), bb);  // frame generation inputs (tags / prepare pass)
     list_->Close();
     ID3D12CommandList* lists[] = {list_.Get()};
     queue_->ExecuteCommandLists(1, lists);
@@ -1034,11 +1047,11 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
 }
 
 u32 Renderer::renderWidth() const {
-    if (packs_ && packs_->active()) return width_;
+    if (packs_ && packs_->active()) return packs_->renderSize(false);
     return shading_ && shaderPreset_ != ShaderPreset::Off ? shading_->renderW_ : width_;
 }
 u32 Renderer::renderHeight() const {
-    if (packs_ && packs_->active()) return height_;
+    if (packs_ && packs_->active()) return packs_->renderSize(true);
     return shading_ && shaderPreset_ != ShaderPreset::Off ? shading_->renderH_ : height_;
 }
 
@@ -1053,6 +1066,25 @@ bool Renderer::addPass(RenderPass* pass, PassStage stage) {
     if (!pass->create(*this)) return false;
     passes_[int(stage)].push_back(pass);
     return true;
+}
+
+void Renderer::preparePasses(const PassContext& ctx) {
+    PassContext c = ctx;
+    RenderPass* done[32];
+    u32 n = 0;
+    for (int stage : {int(PassStage::Sky), int(PassStage::World), int(PassStage::AfterTranslucent), int(PassStage::Hud),
+                      int(PassStage::AfterUi)}) {
+        c.stage = PassStage(stage);
+        for (RenderPass* p : passes_[stage]) {
+            if (std::find(done, done + n, p) != done + n) continue;
+            if (n < 32) done[n++] = p;
+            p->prepare(c);
+        }
+    }
+}
+
+void Renderer::runShadowPasses(const ShadowContext& sc) {
+    for (RenderPass* p : passes_[int(PassStage::World)]) p->drawShadow(sc);
 }
 
 void Renderer::runPasses(PassStage stage, const PassContext& ctx) {

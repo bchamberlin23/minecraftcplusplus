@@ -25,7 +25,7 @@ float3 shadeForward(float4 e, float3 rel, float2 pixel) {
     s.sky = float(code >> 3);
     s.block = float(code & 7) * (15.0 / 7.0);
     s.ao = 1;
-    s.mat = kMatDefault;
+    s.mat = kMatEntity;
     return shadeSurface(s, rel, pixel) * 0.8;
 }
 
@@ -94,7 +94,9 @@ void DeferredCS(uint2 px : SV_DispatchThreadID) {
         z = viewDepth(d);
         float4 e = gTex[kTexLdrFwd].Load(int3(px, 0));
         if (e.a >= 0.499) {
-            c = shadeForward(e, rel, pixel);
+            // The first-person hand (own depth range in front of the world, d > 0.9) is lit where the camera is, just
+            // clear of the player (whose body casts its shadow in first person).
+            c = shadeForward(e, d > 0.9 ? gLightDir.xyz * 2.0 : rel, pixel);
         } else {
             float4 a = gTex[kTexAlbedo].Load(int3(px, 0));
             float4 nl = gTex[kTexNormal].Load(int3(px, 0));
@@ -197,11 +199,13 @@ void VolumetricCS(uint2 px : SV_DispatchThreadID) {
 }
 
 // ---- motion vectors (for TAA and external upscalers) ----------------------------------------------------
-// previous UV - current UV, both unjittered (UV units, +y down). Camera motion only: the world is static;
-// entities and waving foliage are not in it (TAA treats entity pixels as reactive instead).
+// previous UV - current UV, both unjittered (UV units, +y down). Geometry that moves on its own (entities, the
+// hand, particles, animated block entities) wrote its motion into the target in the World / AfterTranslucent
+// stages (PassContext::motionRtv); everything else gets the camera's motion (the world is static).
 [numthreads(8, 8, 1)]
 void MotionCS(uint2 px : SV_DispatchThreadID) {
     if (any(px >= uint2(gScreen.xy))) return;
+    if (gRW[kRwMotion][px].x < 16384.0) return;  // object motion (the target is cleared to 32768)
     float2 pixel = float2(px) + 0.5;
     float d = gTex[kTexDepth].Load(int3(px, 0)).r;
     float4 prevClip = d > 0 ? mul(gPrevViewProj, float4(relPosition(pixel, d), 1))

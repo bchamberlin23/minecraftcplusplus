@@ -68,6 +68,10 @@ public:
 
     bool create(Renderer& renderer) override;
     void draw(const PassContext& ctx) override;
+    // Shader pipeline: built once in prepare; shadow casters per cascade (sections inside it + animating ones), and
+    // motion vectors for animating instances (last frame's corners) and waving banners.
+    void prepare(const PassContext& ctx) override;
+    void drawShadow(const ShadowContext& sc) override;
 
     struct Stats {
         double cpuMs = 0;  // last frame: updates, culling, dynamic rebuilds, uploads
@@ -159,6 +163,9 @@ private:
 
     // block_entity_render.cpp: GPU
     void uploadSections(const PassContext& ctx);
+    void build(const PassContext& ctx);   // CPU: tracking, culling, dynamic rebuilds, uploads
+    void record(const PassContext& ctx);  // the World-stage draws of the last build
+    void bindGpu(ID3D12GraphicsCommandList* list, u32 frame, D3D12_GPU_DESCRIPTOR_HANDLE blockTextures);
 
     World& world_;
     BlockRegistry& registry_;
@@ -235,6 +242,23 @@ private:
     // GPU
     ComPtr<ID3D12RootSignature> rootSig_;
     ComPtr<ID3D12PipelineState> psoCutout_, psoText_, psoTranslucent_;
+    ComPtr<ID3D12PipelineState> psoCutoutMv_, psoTextMv_, psoTranslucentMv_, psoShadow_;  // motion target / shadow maps
+    // Last build.
+    bool prepared_ = false, built_ = false;
+    u32 visCount_[3] = {}, quadTotal_[3] = {}, dynFirst_[3] = {}, dynCount_[3] = {};
+    u32 shadowVis_[4][2] = {}, shadowQuads_[4][2] = {};  // per cascade: sections / quads (cutout, translucent)
+    // Motion vectors of animating instances: last frame's corner positions (camera-relative to that frame's camera).
+    struct PrevDyn {
+        u64 frame = 0;
+        double cam[3] = {};
+        u32 counts[3] = {};
+        std::vector<float> pos;
+    };
+    std::unordered_map<u64, PrevDyn> prevDyn_;  // by block position
+    std::vector<float> dynPrev_[3];              // previous corners of dyn_[p] (12 floats per quad)
+    u64 buildFrame_ = 0;
+    float waveTime_ = 0;                         // banner wave time of the last build
+    bool waveTimeValid_ = false;
     ComPtr<ID3D12Resource> arena_, upload_, fontTex_;
     u8* mapped_ = nullptr;
     u32 fontDescriptor_ = 0;

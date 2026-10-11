@@ -3,6 +3,7 @@
 // per-texture-layer block id table (mc_Entity) from block.properties.
 #include "render/packs/pack_programs.h"
 
+#include "assets/asset_source.h"
 #include "assets/assets.h"
 
 #include <stb/stb_image.h>
@@ -96,6 +97,17 @@ bool Renderer::Packs::finalize(Pipe& p, std::string& error) {
         std::mt19937 rng(0);
         for (size_t i = 0; i < px.size(); ++i) px[i] = u8(rng() & 255);
         upload(p.noise, n, n, DXGI_FORMAT_R8G8B8A8_UNORM, px.data(), 4);
+    }
+    for (int g = 0; g < 2; ++g) {  // enchantment glint (scrolling UVs wrap: not usable from an atlas)
+        std::vector<u8> bytes;
+        const char* path = g == 0 ? "assets/minecraft/textures/misc/enchanted_glint_armor.png"
+                                  : "assets/minecraft/textures/misc/enchanted_glint_item.png";
+        int w = 0, h = 0, n = 0;
+        u8* img = AssetSource::client().read(path, bytes)
+                      ? stbi_load_from_memory(bytes.data(), int(bytes.size()), &w, &h, &n, 4)
+                      : nullptr;
+        if (!img || !upload(p.glint[g], u32(w), u32(h), DXGI_FORMAT_R8G8B8A8_UNORM, img, 4)) p.glint[g] = Texture{};
+        if (img) stbi_image_free(img);
     }
     {  // lightmap: 16x16, rewritten every frame from an upload buffer
         p.lightmap.res = texture2D(16, 16, 1, DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_RESOURCE_FLAG_NONE, kSrv);
@@ -230,7 +242,8 @@ bool Renderer::Packs::finalize(Pipe& p, std::string& error) {
 bool Renderer::Packs::createTargets(Pipe& p) {
     ID3D12Device* dev = r.device_.Get();
     PackDefinition& def = *p.def;
-    p.width = r.width_, p.height = r.height_;
+    targetSize(p.width, p.height, p.scaled);
+    p.outW = r.width_, p.outH = r.height_;
     auto newCpu = [&] { return p.cpuCount < p.cpuCap ? p.cpuCount++ : 0u; };
     auto res2D = [&](u32 w, u32 h, u16 mips, DXGI_FORMAT f, D3D12_RESOURCE_FLAGS flags, D3D12_RESOURCE_STATES state,
                      const D3D12_CLEAR_VALUE* clear, u16 depth = 1, bool is3d = false) {
@@ -345,14 +358,74 @@ bool Renderer::Packs::createTargets(Pipe& p) {
         uv.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
         dev->CreateUnorderedAccessView(p.depthTex[i].Get(), nullptr, &uv, cpuAt(p.cpuHeap.Get(), p.srvStride, p.depthUav[i]));
     }
-    {  // the renderer's depth buffer (reversed-Z) as R32F
+    // Upscaling: block textures keep their detail at the lower render size (atlas samplers get a negative mip bias,
+    // like the built-in pipeline's sampleBlock).
+    if (const float bias = p.scaled ? std::log2(std::min(float(p.width) / float(p.outW), 1.0f)) : 0.0f; bias != p.atlasMipBias) {
+        p.atlasMipBias = bias;
+        for (size_t i = 0; i < p.samplerKind.size(); ++i) {
+            if (p.samplerKind[i] != Samp::AtlasWrap) continue;
+            D3D12_SAMPLER_DESC sd{};  // samplerDesc(Samp::AtlasWrap) in pack_pipeline.cpp, plus the bias
+            sd.Filter = D3D12_FILTER_MIN_MAG_POINT_MIP_LINEAR;
+            sd.AddressU = sd.AddressV = sd.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+            sd.MaxLOD = 4;
+            sd.MaxAnisotropy = 1;
+            sd.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
+            sd.MipLODBias = bias;
+            dev->CreateSampler(&sd, cpuAt(p.samplerHeap.Get(), p.samplerStride, u32(i)));
+        }
+    }
+    // Upscaling (Pipe::scaled): the pack's own scene depth at the render size, the upscaler's inputs and output.
+    p.ownDepth.Reset(), p.upColor.Reset(), p.upDepth.Reset(), p.upMotion.Reset(), p.upOut.Reset();
+    if (p.scaled) {
+        D3D12_CLEAR_VALUE dc{};
+        dc.Format = DXGI_FORMAT_D32_FLOAT;
+        D3D12_DEPTH_STENCIL_VIEW_DESC dv{};
+        dv.Format = DXGI_FORMAT_D32_FLOAT;
+        dv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+        p.ownDepth = res2D(p.width, p.height, 1, DXGI_FORMAT_R32_TYPELESS, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL,
+                           D3D12_RESOURCE_STATE_DEPTH_WRITE, &dc);
+        p.upDepth = res2D(p.width, p.height, 1, DXGI_FORMAT_R32_TYPELESS, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL,
+                          D3D12_RESOURCE_STATE_DEPTH_READ | kSrv, &dc);
+        D3D12_CLEAR_VALUE cc{};
+        cc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        p.upColor = res2D(p.width, p.height, 1, DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, kSrv, &cc);
+        p.upMotion = res2D(p.width, p.height, 1, DXGI_FORMAT_R16G16_FLOAT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, kSrv, nullptr);
+        p.upOut = res2D(p.outW, p.outH, 1, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
+        if (!p.ownDepth || !p.upDepth || !p.upColor || !p.upMotion || !p.upOut) return false;
+        p.ownDepth->SetName(L"pack scene depth (scaled)");
+        p.upDepth->SetName(L"pack upscaler depth"), p.upColor->SetName(L"pack upscaler color");
+        p.upMotion->SetName(L"pack upscaler motion"), p.upOut->SetName(L"pack upscaler output");
+        dev->CreateDepthStencilView(p.ownDepth.Get(), &dv, cpuAt(p.dsvHeap.Get(), p.dsvStride, Pipe::kOwnDsv));
+        dev->CreateDepthStencilView(p.upDepth.Get(), &dv, cpuAt(p.dsvHeap.Get(), p.dsvStride, Pipe::kUpDepthDsv));
+        if (!p.upColorSrv) p.upColorSrv = newCpu(), p.upDepthSrv = newCpu(), p.upMotionSrv = newCpu(), p.upMotionUav = newCpu(),
+                           p.upOutSrv = newCpu(), p.upColorRtv = p.rtvCount++;
+        auto srv = [&](ID3D12Resource* res, DXGI_FORMAT f, u32 slot) {
+            D3D12_SHADER_RESOURCE_VIEW_DESC sv{};
+            sv.Format = f;
+            sv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            sv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            sv.Texture2D.MipLevels = 1;
+            dev->CreateShaderResourceView(res, &sv, cpuAt(p.cpuHeap.Get(), p.srvStride, slot));
+        };
+        srv(p.upColor.Get(), DXGI_FORMAT_R8G8B8A8_UNORM, p.upColorSrv);
+        srv(p.upDepth.Get(), DXGI_FORMAT_R32_FLOAT, p.upDepthSrv);
+        srv(p.upMotion.Get(), DXGI_FORMAT_R16G16_FLOAT, p.upMotionSrv);
+        srv(p.upOut.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT, p.upOutSrv);
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uv{};
+        uv.Format = DXGI_FORMAT_R16G16_FLOAT;
+        uv.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        dev->CreateUnorderedAccessView(p.upMotion.Get(), nullptr, &uv, cpuAt(p.cpuHeap.Get(), p.srvStride, p.upMotionUav));
+        dev->CreateRenderTargetView(p.upColor.Get(), nullptr, cpuAt(p.rtvHeap.Get(), p.rtvStride, p.upColorRtv));
+    }
+    {  // the scene depth (reversed-Z) as R32F: the renderer's depth buffer, or ownDepth when scaled
         if (!p.sceneDepthSrv) p.sceneDepthSrv = newCpu();
         D3D12_SHADER_RESOURCE_VIEW_DESC sv{};
         sv.Format = DXGI_FORMAT_R32_FLOAT;
         sv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         sv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
         sv.Texture2D.MipLevels = 1;
-        dev->CreateShaderResourceView(r.depth_.Get(), &sv, cpuAt(p.cpuHeap.Get(), p.srvStride, p.sceneDepthSrv));
+        dev->CreateShaderResourceView(p.sceneDepth(r), &sv, cpuAt(p.cpuHeap.Get(), p.srvStride, p.sceneDepthSrv));
     }
     {  // LDR layer for passes that do not use the pack
         D3D12_CLEAR_VALUE cv{};

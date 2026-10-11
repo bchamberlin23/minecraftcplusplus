@@ -56,12 +56,45 @@ struct PassContext {
     // An OptiFine / Iris shader pack is active (render/packs): passes that support it hand vanilla-style geometry to
     // the pack's gbuffers programs (render/pack_sink.h); others draw as usual into a layer the pack merges.
     class PackSink* pack = nullptr;
+
+    // ---- shader pipeline extras (zero / null otherwise) ----
+    // Projection jitter of this frame (NDC offsets added to the projection's x / y): passes with their own
+    // projection (the first-person hand) apply it too so the temporal passes see consistent samples.
+    float jitter[2] = {};
+    // Motion vectors (World and AfterTranslucent stages). Geometry that moves on its own (entities, particles, the
+    // hand, animated block entities) writes per-pixel motion: such passes bind {colorRtv, motionRtv} with dsv
+    // themselves, use PSOs with a second R16G16_FLOAT target (kMotionFormat) and write prevUv - curUv (UV units,
+    // +y down) with curUv = SV_Position.xy * motionScale.xy + motionScale.zw and prevUv from prevViewProj; they rebind
+    // {colorRtv} before returning. Pixels nobody writes get camera motion. motionRtv.ptr == 0: not available.
+    D3D12_CPU_DESCRIPTOR_HANDLE colorRtv{}, motionRtv{}, dsv{};
+    const float* prevViewProj = nullptr;  // camera-relative position (this frame's camera) -> previous clip, unjittered
+    float motionScale[4] = {};
+    // Shadow casters (pipeline): the cascades drawn this frame (bit c of shadowMask) and their camera-relative
+    // light matrices (column-major like viewProj; clip x, y in -1..1, z 0..1 from the light). Passes that cast
+    // shadows keep geometry for casters inside them (see RenderPass::drawShadow).
+    u32 shadowCascades = 0, shadowMask = 0;
+    const float (*shadowMats)[16] = nullptr;
+};
+// One shadow cascade being drawn: depth only (D32, LESS_EQUAL, no depth clip), viewport / DSV bound.
+struct ShadowContext {
+    ID3D12GraphicsCommandList* list;
+    u32 frame;                    // like PassContext::frame
+    u32 cascade;
+    const float* matrix;          // PassContext::shadowMats[cascade]
+    D3D12_GPU_DESCRIPTOR_HANDLE blockTextures;
+    D3D12_GPU_VIRTUAL_ADDRESS textureRemap;
 };
 class RenderPass {
 public:
+    static constexpr DXGI_FORMAT kMotionFormat = DXGI_FORMAT_R16G16_FLOAT;
     virtual ~RenderPass() = default;
     virtual bool create(class Renderer& renderer) = 0;  // once, from Renderer::addPass
     virtual void draw(const PassContext& ctx) = 0;       // pass-owned root signature / PSO / heaps as needed
+    // Once per frame before anything is recorded (not with a shader pack), in stage order (Sky passes first):
+    // passes that cast shadows build this frame's geometry here so drawShadow and draw reuse it.
+    virtual void prepare(const PassContext&) {}
+    // Pipeline shadow maps, once per updated cascade, after prepare (World-stage passes only).
+    virtual void drawShadow(const ShadowContext&) {}
 };
 enum class PassStage {
     Sky,    // first: after the clear, before any terrain (depth test/write off is up to the pass)
@@ -298,6 +331,8 @@ private:
     Lightmap lightmap_;
     u32 descriptorSize_ = 0, descriptorsUsed_ = 1, descriptorCapacity_ = 0;  // 0: block textures
     void runPasses(PassStage stage, const PassContext& ctx);
+    void preparePasses(const PassContext& ctx);    // RenderPass::prepare, each pass once
+    void runShadowPasses(const ShadowContext& sc);  // RenderPass::drawShadow of the World-stage passes
     void submitAndWait();  // close + execute list_ (recorded from allocators_[0]) and wait
 
     std::unique_ptr<Shading> shading_;

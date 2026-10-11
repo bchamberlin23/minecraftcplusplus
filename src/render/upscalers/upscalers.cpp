@@ -1,5 +1,6 @@
 #include "render/upscalers/upscalers.h"
 
+#include "render/packs/pack_pipeline.h"
 #include "render/shading.h"
 
 #include <softpub.h>
@@ -397,7 +398,8 @@ void Upscalers::submitEnd() {
 void Upscalers::setCamera(CameraFrame c) {
     const Mat4 vp = c.proj * c.view;
     const double move[3] = {c.pos[0] - prevPos_[0], c.pos[1] - prevPos_[1], c.pos[2] - prevPos_[2]};
-    c.reset = !havePrev_ || (r.shading_ && !r.shading_->historyValid_) ||
+    const bool pack = r.packs_ && r.packs_->active();  // a shader pack: the built-in pipeline's history does not apply
+    c.reset = !havePrev_ || (!pack && r.shading_ && !r.shading_->historyValid_) ||
               std::abs(move[0]) + std::abs(move[1]) + std::abs(move[2]) > 64.0;
     Mat4 t;
     t(0, 0) = t(1, 1) = t(2, 2) = t(3, 3) = 1;
@@ -466,6 +468,10 @@ void Upscalers::endFrame(ID3D12GraphicsCommandList* list, ID3D12Resource* backbu
     in.list = list;
     in.depth = r.shading_->sceneDepth_.Get(), in.depthState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
     in.motion = r.shading_->motion_.Get(), in.motionState = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
+    if (r.packs_ && r.packs_->active()) {  // a shader pack (render/packs, upscaling path): its depth and motion
+        if (!r.packs_->frameGenInputs(in.depth, in.motion)) return;
+        in.depthState = D3D12_RESOURCE_STATE_DEPTH_READ | D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
+    }
     in.hudless = hudless_.Get(), in.hudlessState = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
     in.ui = r.shading_->ui_.Get(), in.uiState = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
     in.backbuffer = backbuffer;

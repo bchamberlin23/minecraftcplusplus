@@ -29,6 +29,7 @@ class BlockRegistry;
 
 namespace packs {
 struct PackGameState;
+struct PackPlayerState;
 }
 
 struct Renderer::Packs : PackSink {
@@ -54,6 +55,7 @@ struct Renderer::Packs : PackSink {
     Status status() const;
     void setBlockRegistry(const BlockRegistry* registry) { registry_ = registry; }
     void setGameState(const packs::PackGameState& s);
+    void setPlayerState(const packs::PackPlayerState& s);
 
     // ---- per frame ----
     struct FrameInput {
@@ -66,6 +68,11 @@ struct Renderer::Packs : PackSink {
     };
     void record(ID3D12GraphicsCommandList* list, const FrameInput& in, PassContext& pc, ID3D12Resource* backbuffer,
                 D3D12_CPU_DESCRIPTOR_HANDLE backbufferRtv);
+    // Frame generation with a pack (needs the upscaling path: its upright depth and camera motion vectors). After record:
+    // the overlays and Hud go into the built-in pipeline's UI layer (frameGenUi), and Upscalers::endFrame tags these.
+    bool frameGenUi() const;
+    u32 renderSize(bool height) const;  // the pack's render size (below the output size when upscaling)
+    bool frameGenInputs(ID3D12Resource*& depth, ID3D12Resource*& motion) const;  // states: DEPTH_READ|SRV, SRV
 
     // PackSink (extension passes, during record).
     void draw(const PackDraw& d) override;
@@ -74,6 +81,7 @@ struct Renderer::Packs : PackSink {
     int itemId(std::string_view name) const override;
     int blockId(u16 blockState) const override;
     bool vanillaClouds() const override;
+    ID3D12Resource* glintTexture(bool item) const override;
 
     struct Pipe;   // a loaded pack's GPU state (pack_pipe.h)
     struct Frame;  // per-frame recording (pack_frame.cpp)
@@ -84,11 +92,19 @@ private:
     bool build(std::unique_ptr<packs::PackDefinition> def, std::unique_ptr<Pipe>& out, std::string& error);
     bool finalize(Pipe& p, std::string& error);
     bool createTargets(Pipe& p);
+    void targetSize(u32& w, u32& h, bool& scaled) const;  // the pack's render size (upscaler render size when scaled)
+    struct ScaleCache {  // the SDKs' optimal render scale (queried when the upscaler, quality or output size change)
+        int kind = -1, quality = -1;
+        u32 w = 0, h = 0;
+        float scale = 1;
+    };
+    mutable ScaleCache scaleCache_;
     void updateLayerTable(Pipe& p);
 
     std::unique_ptr<Pipe> pipe_;
     const BlockRegistry* registry_ = nullptr;
     std::unique_ptr<packs::PackGameState> game_;
+    std::unique_ptr<packs::PackPlayerState> player_;
 
     mutable std::mutex mutex_;
     std::thread loader_;

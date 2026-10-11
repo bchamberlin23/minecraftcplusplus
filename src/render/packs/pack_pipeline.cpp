@@ -4,6 +4,7 @@
 
 #include "assets/assets.h"
 #include "render/packs/pack_api.h"
+#include "render/upscalers/upscalers.h"
 
 #include <stb/stb_image.h>
 
@@ -13,6 +14,9 @@
 #include <set>
 
 #include "PackDepthFlipPS.h"
+#include "PackDepthUpPS.h"
+#include "PackMotionCS.h"
+#include "PackUpCopyPS.h"
 #include "PackDepthToGlCS.h"
 #include "PackMergePS.h"
 #include "PackMergeVS.h"
@@ -171,7 +175,8 @@ bool serializeRoot(ID3D12Device* dev, const D3D12_ROOT_SIGNATURE_DESC& rd, ComPt
 
 // ==== lifecycle ==========================================================================================================
 
-Renderer::Packs::Packs(Renderer& renderer) : r(renderer), game_(std::make_unique<PackGameState>()) {}
+Renderer::Packs::Packs(Renderer& renderer)
+    : r(renderer), game_(std::make_unique<PackGameState>()), player_(std::make_unique<PackPlayerState>()) {}
 
 Renderer::Packs::~Packs() {
     ++generation_;
@@ -213,6 +218,8 @@ void Renderer::Packs::setGameState(const PackGameState& s) {
     if (dimensionChanged && !requestPath_.empty()) request(fs::path(requestPath_), requestOptions_);
 }
 
+void Renderer::Packs::setPlayerState(const PackPlayerState& s) { *player_ = s; }
+
 void Renderer::Packs::loadThread(fs::path path, LoadOptions options, u64 generation) {
     Timer t;
     auto def = std::make_unique<PackDefinition>();
@@ -251,7 +258,10 @@ void Renderer::Packs::beginFrame() {
         status_.pack.clear();
     }
     if (!next) {
-        if (pipe_) updateLayerTable(*pipe_);
+        if (pipe_) {
+            resize();  // an upscaler switched on / off or its render size changed
+            updateLayerTable(*pipe_);
+        }
         return;
     }
     r.waitIdle();
@@ -273,10 +283,34 @@ void Renderer::Packs::beginFrame() {
 }
 
 void Renderer::Packs::resize() {
-    if (pipe_ && (pipe_->width != r.width_ || pipe_->height != r.height_)) {
+    if (!pipe_) return;
+    u32 w, h;
+    bool scaled;
+    targetSize(w, h, scaled);
+    if (pipe_->width != w || pipe_->height != h || pipe_->scaled != scaled || pipe_->outW != r.width_ ||
+        pipe_->outH != r.height_) {
         r.waitIdle();
         createTargets(*pipe_);
+        pipe_->upHistory = false;
+        if (scaled != pipe_->scaled) LOG("shader pack: %ux%u", w, h);
     }
+}
+
+// A vendor upscaler (DLSS / FSR / XeSS) is selected: the pack renders at its render size (see Pipe::scaled).
+void Renderer::Packs::targetSize(u32& w, u32& h, bool& scaled) const {
+    scaled = r.upscaler_ != nullptr && r.upscalers_;
+    float scale = 1.0f;
+    if (scaled) {
+        const VideoSettings& v = r.upscalers_->settings();
+        ScaleCache& c = scaleCache_;
+        if (c.kind != int(v.upscaler) || c.quality != int(v.quality) || c.w != r.width_ || c.h != r.height_) {
+            c.kind = int(v.upscaler), c.quality = int(v.quality), c.w = r.width_, c.h = r.height_;
+            c.scale = std::clamp(r.upscalers_->renderScale(v.upscaler, v.quality), 0.33f, 1.0f);
+        }
+        scale = c.scale;
+    }
+    w = std::max(1u, u32(float(r.width_) * scale + 0.5f));
+    h = std::max(1u, u32(float(r.height_) * scale + 0.5f));
 }
 
 // ==== build (background thread) ===========================================================================================
@@ -412,7 +446,8 @@ bool Renderer::Packs::build(std::unique_ptr<PackDefinition> defPtr, std::unique_
         };
         if (!computePso(g_PackDepthToGlCS, sizeof(g_PackDepthToGlCS), p.psoDepthToGl) ||
             !computePso(g_PackMipCS, sizeof(g_PackMipCS), p.psoMip) ||
-            !computePso(g_PackShadowCullCS, sizeof(g_PackShadowCullCS), p.psoShadowCull))
+            !computePso(g_PackShadowCullCS, sizeof(g_PackShadowCullCS), p.psoShadowCull) ||
+            !computePso(g_PackMotionCS, sizeof(g_PackMotionCS), p.psoMotion))
             return false;
         D3D12_GRAPHICS_PIPELINE_STATE_DESC m{};
         m.pRootSignature = p.utilRoot.Get();
@@ -434,6 +469,10 @@ bool Renderer::Packs::build(std::unique_ptr<PackDefinition> defPtr, std::unique_
         m.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;  // a buffer as is onto the back buffer
         rt.BlendEnable = FALSE;
         if (!check(dev->CreateGraphicsPipelineState(&m, IID_PPV_ARGS(&p.psoCopy)), "copy pipeline", &error)) return false;
+        m.PS = {g_PackUpCopyPS, sizeof(g_PackUpCopyPS)};  // the upscaler's output onto the back buffer (no flip)
+        if (!check(dev->CreateGraphicsPipelineState(&m, IID_PPV_ARGS(&p.psoUpCopy)), "upscale copy pipeline", &error))
+            return false;
+        m.PS = {g_PackMergePS, sizeof(g_PackMergePS)};
         rt.BlendEnable = TRUE;
         // Depth the D3D way up (no colour target, writes depth everywhere).
         m.PS = {g_PackDepthFlipPS, sizeof(g_PackDepthFlipPS)};
@@ -445,6 +484,9 @@ bool Renderer::Packs::build(std::unique_ptr<PackDefinition> defPtr, std::unique_
         m.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_ALWAYS;
         m.DSVFormat = DXGI_FORMAT_D32_FLOAT;
         if (!check(dev->CreateGraphicsPipelineState(&m, IID_PPV_ARGS(&p.psoDepthFlip)), "depth flip pipeline", &error))
+            return false;
+        m.PS = {g_PackDepthUpPS, sizeof(g_PackDepthUpPS)};
+        if (!check(dev->CreateGraphicsPipelineState(&m, IID_PPV_ARGS(&p.psoDepthUp)), "depth upsample pipeline", &error))
             return false;
         p.shadowArgs = r.createBuffer(u64(Pipe::kShadowSegCap) * 4 * 28, D3D12_HEAP_TYPE_DEFAULT,
                                       D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
@@ -501,6 +543,7 @@ bool Renderer::Packs::build(std::unique_ptr<PackDefinition> defPtr, std::unique_
         for (u32 k = 0; k < u32(Samp::Count); ++k) {
             D3D12_SAMPLER_DESC sd = samplerDesc(Samp(k));
             dev->CreateSampler(&sd, {p.samplerHeap->GetCPUDescriptorHandleForHeapStart().ptr + size_t(k) * p.samplerStride});
+            p.samplerKind.push_back(Samp(k));
         }
         p.samplerCount = u32(Samp::Count);
         // Upload ring.
@@ -647,6 +690,7 @@ bool Renderer::Packs::build(std::unique_ptr<PackDefinition> defPtr, std::unique_
         for (size_t k = 0; k < kinds.size(); ++k) {
             D3D12_SAMPLER_DESC sd = samplerDesc(kinds[k]);
             dev->CreateSampler(&sd, {p.samplerHeap->GetCPUDescriptorHandleForHeapStart().ptr + size_t(first + k) * p.samplerStride});
+            p.samplerKind.push_back(kinds[k]);
         }
         p.samplerCount += u32(kinds.size());
         return first;

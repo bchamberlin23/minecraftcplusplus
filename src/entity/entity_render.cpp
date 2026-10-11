@@ -5,13 +5,18 @@
 #include "world/world.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <shared_mutex>
 
+#include "EntityCutoutMvPS.h"
 #include "EntityCutoutPS.h"
 #include "EntityFreeVS.h"
 #include "EntityGlintPS.h"
 #include "EntityModelVS.h"
+#include "EntityShadowFreeVS.h"
+#include "EntityShadowPS.h"
+#include "EntityShadowVS.h"
 #include "EntityTranslucentPS.h"
 
 namespace ent {
@@ -22,12 +27,13 @@ constexpr float kDeg = kPi / 180.0f;
 
 // Per-frame upload capacities.
 constexpr u32 kMaxMatrices = 1 << 15, kMaxInstances = 1 << 14, kMaxRefs = 1 << 18, kMaxFree = 1 << 13;
-constexpr u64 kConstBytes = 256;
+constexpr u64 kConstBytes = 1024;
 constexpr u64 kMatOffset = kConstBytes;
-constexpr u64 kInstOffset = kMatOffset + u64(kMaxMatrices) * 48;
+constexpr u64 kPrevMatOffset = kMatOffset + u64(kMaxMatrices) * 48;  // last frame's part matrices (motion vectors)
+constexpr u64 kInstOffset = kPrevMatOffset + u64(kMaxMatrices) * 48;
 constexpr u64 kRefOffset = kInstOffset + u64(kMaxInstances) * 32;
 constexpr u64 kFreeOffset = kRefOffset + u64(kMaxRefs) * 8;
-constexpr u64 kFrameBytes = (kFreeOffset + u64(kMaxFree) * 112 + 65535) & ~u64(65535);
+constexpr u64 kFrameBytes = (kFreeOffset + u64(kMaxFree) * 128 + 65535) & ~u64(65535);
 
 enum LayerFlags : u8 { Emissive = 1, Translucent = 2, TintWool = 8, TintCollar = 16, Armor = 32, Elytra = 64, Glint = 128 };
 enum Special : u8 {
@@ -44,9 +50,11 @@ struct FreeQuad {
     float pos[4][3];
     float uv[4][2];
     float normal[3];
-    u32 tex, color, light, overlay, pad;
+    u32 tex, color, light, overlay;
+    float motion[3];  // current - previous frame position (blocks)
+    u32 pad[2];
 };
-static_assert(sizeof(FreeQuad) == 112);
+static_assert(sizeof(FreeQuad) == 128);
 
 // DyeColor.getTextureDiffuseColor, by dye id.
 constexpr u32 kDye[16] = {0xF9FFFE, 0xF9801D, 0xC74EBD, 0x3AB3DA, 0xFED83D, 0x80C71F, 0xF38BAA, 0x474F52,
@@ -105,6 +113,8 @@ float lerpAngle(float a, float from, float to) {
     if (d < -180) d += 360;
     return from + a * d;
 }
+
+std::vector<PackVertex> g_packGlint;  // shader packs: armour glint quads of the entity being built (packQuad bucket 4)
 
 bool check(HRESULT hr, const char* what) {
     if (SUCCEEDED(hr)) return true;
@@ -499,7 +509,7 @@ bool EntityRenderer::create(Renderer& r) {
     ranges[0].BaseShaderRegister = 5;
     ranges[1] = ranges[0];
     ranges[1].BaseShaderRegister = 6;
-    D3D12_ROOT_PARAMETER params[9]{};
+    D3D12_ROOT_PARAMETER params[10]{};
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;  // b0
     params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;  // b1
     params[1].Constants.ShaderRegister = 1;
@@ -515,6 +525,9 @@ bool EntityRenderer::create(Renderer& r) {
         params[7 + i].DescriptorTable.pDescriptorRanges = &ranges[i];
         params[7 + i].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     }
+    params[9].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;  // t7: last frame's part matrices
+    params[9].Descriptor.ShaderRegister = 7;
+    params[9].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
     D3D12_STATIC_SAMPLER_DESC samp[2]{};
     samp[0].Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
     samp[0].AddressU = samp[0].AddressV = samp[0].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
@@ -526,7 +539,7 @@ bool EntityRenderer::create(Renderer& r) {
     samp[1].AddressU = samp[1].AddressV = samp[1].AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
     samp[1].ShaderRegister = 1;
     D3D12_ROOT_SIGNATURE_DESC rd{};
-    rd.NumParameters = 9;
+    rd.NumParameters = 10;
     rd.pParameters = params;
     rd.NumStaticSamplers = 2;
     rd.pStaticSamplers = samp;
@@ -539,8 +552,9 @@ bool EntityRenderer::create(Renderer& r) {
                "CreateRootSignature"))
         return false;
 
+    // targets: 1 colour; 2 colour + motion (written); 3 colour + motion (kept); 0 shadow map (depth only)
     auto pso = [&](const void* vs, size_t vsSize, const void* ps, size_t psSize, bool blend, D3D12_CULL_MODE cull,
-                   ComPtr<ID3D12PipelineState>& out) {
+                   ComPtr<ID3D12PipelineState>& out, int targets = 1) {
         D3D12_GRAPHICS_PIPELINE_STATE_DESC d{};
         d.pRootSignature = rootSig_.Get();
         d.VS = {vs, vsSize};
@@ -570,21 +584,38 @@ bool EntityRenderer::create(Renderer& r) {
         d.DepthStencilState.DepthWriteMask = blend ? D3D12_DEPTH_WRITE_MASK_ZERO : D3D12_DEPTH_WRITE_MASK_ALL;
         d.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_GREATER_EQUAL;  // reversed Z
         d.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-        d.NumRenderTargets = 1;
-        d.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+        d.NumRenderTargets = targets == 0 ? 0 : targets == 1 ? 1 : 2;
+        d.RTVFormats[0] = targets ? DXGI_FORMAT_R8G8B8A8_UNORM : DXGI_FORMAT_UNKNOWN;
+        if (targets >= 2) {
+            d.RTVFormats[1] = RenderPass::kMotionFormat;
+            d.BlendState.IndependentBlendEnable = TRUE;
+            d.BlendState.RenderTarget[1].RenderTargetWriteMask = targets == 2 ? D3D12_COLOR_WRITE_ENABLE_ALL : 0;
+        }
+        if (targets == 0) {  // shadow caster: depth only, no depth clip, slope bias like the terrain's model shadows
+            d.BlendState.RenderTarget[0].RenderTargetWriteMask = 0;
+            d.RasterizerState.DepthClipEnable = FALSE;
+            d.RasterizerState.SlopeScaledDepthBias = 1.5f;
+            d.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+            d.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+        }
         d.DSVFormat = DXGI_FORMAT_D32_FLOAT;
         d.SampleDesc.Count = 1;
         return check(device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&out)), "CreateGraphicsPipelineState");
     };
-    if (!pso(g_EntityModelVS, sizeof(g_EntityModelVS), g_EntityCutoutPS, sizeof(g_EntityCutoutPS), false,
-             D3D12_CULL_MODE_BACK, psoCutout_) ||
-        !pso(g_EntityModelVS, sizeof(g_EntityModelVS), g_EntityTranslucentPS, sizeof(g_EntityTranslucentPS), true,
-             D3D12_CULL_MODE_BACK, psoTranslucent_) ||
-        !pso(g_EntityFreeVS, sizeof(g_EntityFreeVS), g_EntityCutoutPS, sizeof(g_EntityCutoutPS), false,
-             D3D12_CULL_MODE_NONE, psoFree_) ||
-        !pso(g_EntityModelVS, sizeof(g_EntityModelVS), g_EntityGlintPS, sizeof(g_EntityGlintPS), true,
-             D3D12_CULL_MODE_NONE, psoGlint_))
+#define SH(n) g_##n, sizeof(g_##n)
+    const auto back = D3D12_CULL_MODE_BACK, noCull = D3D12_CULL_MODE_NONE;
+    if (!pso(SH(EntityModelVS), SH(EntityCutoutPS), false, back, psoCutout_) ||
+        !pso(SH(EntityModelVS), SH(EntityTranslucentPS), true, back, psoTranslucent_) ||
+        !pso(SH(EntityFreeVS), SH(EntityCutoutPS), false, noCull, psoFree_) ||
+        !pso(SH(EntityModelVS), SH(EntityGlintPS), true, noCull, psoGlint_) ||
+        !pso(SH(EntityModelVS), SH(EntityCutoutMvPS), false, back, psoCutoutMv_, 2) ||
+        !pso(SH(EntityModelVS), SH(EntityTranslucentPS), true, back, psoTranslucentMv_, 3) ||
+        !pso(SH(EntityFreeVS), SH(EntityCutoutMvPS), false, noCull, psoFreeMv_, 2) ||
+        !pso(SH(EntityModelVS), SH(EntityGlintPS), true, noCull, psoGlintMv_, 3) ||
+        !pso(SH(EntityShadowVS), SH(EntityShadowPS), false, noCull, psoShadow_, 0) ||
+        !pso(SH(EntityShadowFreeVS), SH(EntityShadowPS), false, noCull, psoShadowFree_, 0))
         return false;
+#undef SH
 
     auto buffer = [&](u64 size, D3D12_HEAP_TYPE heap, D3D12_RESOURCE_STATES state, ComPtr<ID3D12Resource>& out) {
         D3D12_HEAP_PROPERTIES hp{heap};
@@ -831,6 +862,7 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
             a.entity = &e == localPlayer_ ? kLocalPlayerId : e.id;
             a.light = light;
             a.babyOffset = e.baby && d.special != SpArmorStand;
+            a.shadowOnly = shadowOnly_;
             const i16 arms[2] = {m.role(RightArm), m.role(LeftArm)};
             for (int k = 0; k < 2; ++k) {
                 if (arms[k] < 0 || hidden_[size_t(arms[k])]) continue;
@@ -853,6 +885,10 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         const u32 base = matCount_;
         std::memcpy(frameBase_ + kMatOffset + u64(base) * 48, mats_.data(), parts * 48);
         matCount_ += u32(parts);
+        if (!pack_) {  // motion vectors: this entity's matrices for the next frame
+            entMats_.insert(entMats_.end(), mats_.begin(), mats_.begin() + ptrdiff_t(parts));
+            entHash_ = entHash_ * 31 + u32(L.model) * 7 + u32(parts);
+        }
         const TexRect& tr = assets_.rect(L.tex);
         GpuInstance inst{base, L.color, (L.flags & Emissive) ? (light | 256u) : light, overlay,
                          {tr.u0, tr.v0, tr.du, tr.dv}};
@@ -861,6 +897,14 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         const bool translucent = (L.flags & Translucent) != 0;
         if (pack_) {  // shader pack: the posed quads as vertices (entity atlas coordinates)
             const auto& quads = assets_.quads();
+            // Armour glint (TextureTransform.setupGlintTexturing, scale 0.16, glint speed 0.5) as gbuffers_armor_glint
+            // geometry: the texture transform is applied here (the glint texture wraps).
+            const bool glint = (L.flags & Glint) && pack_->glintTexture(false);
+            float scroll[2] = {};
+            if (glint) {
+                const double ms = nowSeconds() * 1000.0 * 8.0 * 0.5;
+                scroll[0] = -float(std::fmod(ms, 110000.0) / 110000.0), scroll[1] = float(std::fmod(ms, 30000.0) / 30000.0);
+            }
             for (size_t i = 0; i < parts; ++i) {
                 if (hidden_[i]) continue;
                 const ModelPart& part = m.parts[i];
@@ -875,6 +919,14 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
                     }
                     for (int r = 0; r < 3; ++r) n[r] = pm[r * 4] * gq.normal[0] + pm[r * 4 + 1] * gq.normal[1] + pm[r * 4 + 2] * gq.normal[2];
                     packQuad(translucent ? 1 : 0, pos, uv, n, L.color, inst.light, overlay);
+                    if (glint) {
+                        const float gc = 0.98480775f, gs = 0.17364818f;  // 10 degrees
+                        for (int c = 0; c < 4; ++c) {
+                            const float gx = gq.uv[c][0] * 0.16f, gy = gq.uv[c][1] * 0.16f;
+                            uv[c][0] = gx * gc - gy * gs + scroll[0], uv[c][1] = gx * gs + gy * gc + scroll[1];
+                        }
+                        packQuad(4, pos, uv, n, 0xBFFFFFFFu, 256u, 0);  // alpha: glint strength 0.75 (option default)
+                    }
                 }
             }
             continue;
@@ -884,7 +936,7 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
             if (hidden_[i]) continue;
             const ModelPart& part = m.parts[i];
             for (u32 q = part.quadFirst; q < part.quadFirst + part.quadCount; ++q) {
-                if (L.flags & Glint) glint_.push_back(q), glint_.push_back(instId);
+                if ((L.flags & Glint) && !shadowOnly_) glint_.push_back(q), glint_.push_back(instId);
                 if (translucent) {
                     translucent_.push_back(q);
                     translucent_.push_back(instId);
@@ -912,7 +964,9 @@ void EntityRenderer::emitFree(const float pos[4][3], const float uv[4][2], const
     std::memcpy(q.pos, pos, sizeof(q.pos));
     std::memcpy(q.uv, uv, sizeof(q.uv));
     std::memcpy(q.normal, n, sizeof(q.normal));
-    q.tex = tex, q.color = color, q.light = light, q.overlay = overlay, q.pad = 0;
+    q.tex = tex, q.color = color, q.light = light, q.overlay = overlay;
+    std::copy(freeMotion_, freeMotion_ + 3, q.motion);
+    q.pad[0] = q.pad[1] = 0;
     std::memcpy(frameBase_ + kFreeOffset + u64(freeCount_++) * sizeof(FreeQuad), &q, sizeof(FreeQuad));
 }
 
@@ -1063,18 +1117,45 @@ void EntityRenderer::freeEntity(const Entity& e, const TypeDef& d, float pt, con
     }
 }
 
+void EntityRenderer::prepare(const PassContext& ctx) {
+    if (ctx.pack) return;  // shader packs: built in draw (the pack's own frame)
+    build(ctx);
+    prepared_ = true;
+}
+
 void EntityRenderer::draw(const PassContext& ctx) {
+    if (!prepared_) build(ctx);
+    prepared_ = false;
+    if (built_) record(ctx);
+}
+
+namespace {
+// Sphere (camera-relative centre, radius) against a shadow cascade's light matrix (column-major, ortho).
+bool inCascade(const float* m, const float c[3], float r) {
+    for (int row = 0; row < 3; ++row) {
+        const float v = m[row] * c[0] + m[4 + row] * c[1] + m[8 + row] * c[2] + m[12 + row];
+        const float len = std::sqrt(m[row] * m[row] + m[4 + row] * m[4 + row] + m[8 + row] * m[8 + row]);
+        if (row < 2 ? std::abs(v) > 1 + r * len : v > 1 + r * len) return false;  // casters before the near plane clamp
+    }
+    return true;
+}
+}  // namespace
+
+void EntityRenderer::build(const PassContext& ctx) {
     Timer timer;
     const auto& entities = world_.entities();
     stats_ = {};
     stats_.entities = u32(entities.size());
     attachments_.clear();
-    if ((entities.empty() && !localPlayer_) || !mapped_) return;
+    casters_.clear();
+    built_ = false;
+    if ((entities.empty() && !localPlayer_ && !localShadow_) || !mapped_) return;
     frameBase_ = mapped_ + u64(ctx.frame) * kFrameBytes;
     matCount_ = instCount_ = refCount_ = freeCount_ = 0;
     pack_ = ctx.pack;
     translucent_.clear();
     glint_.clear();
+    ++buildFrame_;
 
     // Frustum planes from the camera-relative view-projection (column-major memory, like the renderer's).
     auto vp = [&](int r, int c) { return ctx.viewProj[c * 4 + r]; };
@@ -1096,37 +1177,63 @@ void EntityRenderer::draw(const PassContext& ctx) {
     const double cam[3] = {ctx.camX, ctx.camY, ctx.camZ};
     const float pt = std::clamp(world_.partialTick(), 0.0f, 1.0f);
     const float maxDist = std::min(ctx.fogEnd, 192.0f);
+    const u32 shadowMask = pack_ || !ctx.shadowMats ? 0u : ctx.shadowMask;
     World& world = world_.world();
     std::shared_lock lock(world.mutex());
-    auto drawEntity = [&](const Entity& e) {
-        if (e.type < 0 || size_t(e.type) >= defs_.size()) return;
+    // 0: not drawn, 1: in view, 2: only casts a shadow into the view.
+    auto classify = [&](const Entity& e, float sphere[4]) -> int {
+        if (e.type < 0 || size_t(e.type) >= defs_.size()) return 0;
         const TypeDef& d = defs_[size_t(e.type)];
-        if (d.kind == Kind::None || !e.info) return;
-        if (d.kind == Kind::Item && externalItems_) return;  // 3D item models: the visuals pass
-        if (e.category == Category::Living && (e.sharedFlags & 0x20)) return;  // invisible
+        if (d.kind == Kind::None || !e.info) return 0;
+        if (d.kind == Kind::Item && externalItems_) return 0;  // 3D item models: the visuals pass
+        if (e.category == Category::Living && (e.sharedFlags & 0x20)) return 0;  // invisible
+        float w = e.info->width, h = e.info->height;
+        if (d.special == SpSlime) w *= float(e.size), h *= float(e.size);
+        sphere[3] = std::max(w, h) * 0.75f * d.scale + 0.5f;
+        for (int a = 0; a < 3; ++a) sphere[a] = float(e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt - cam[a]);
+        sphere[1] += h * 0.5f;
+        const float dist = std::sqrt(sphere[0] * sphere[0] + sphere[1] * sphere[1] + sphere[2] * sphere[2]);
+        if (dist - sphere[3] > maxDist) return 0;
+        if (&e != localShadow_) {
+            bool inside = true;
+            for (const auto& pl : planes) {
+                const float len = std::sqrt(pl[0] * pl[0] + pl[1] * pl[1] + pl[2] * pl[2]);
+                if (pl[0] * sphere[0] + pl[1] * sphere[1] + pl[2] * sphere[2] + pl[3] < -sphere[3] * len) {
+                    inside = false;
+                    break;
+                }
+            }
+            if (inside) return 1;
+        }
+        for (u32 c = 0; c < 4; ++c)
+            if ((shadowMask >> c) & 1 && inCascade(ctx.shadowMats[c], sphere, sphere[3])) return 2;
+        return 0;
+    };
+    auto drawEntity = [&](const Entity& e, const float sphere[4]) {
+        const TypeDef& d = defs_[size_t(e.type)];
         double c[3];
         for (int a = 0; a < 3; ++a) c[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt - cam[a];
         float w = e.info->width, h = e.info->height;
         if (d.special == SpSlime) w *= float(e.size), h *= float(e.size);
-        const float radius = std::max(w, h) * 0.75f * d.scale + 0.5f;
-        const float cx = float(c[0]), cy = float(c[1]) + h * 0.5f, cz = float(c[2]);
-        const float dist = std::sqrt(cx * cx + cy * cy + cz * cz);
-        if (dist - radius > maxDist) return;
-        bool inside = true;
-        for (const auto& pl : planes) {
-            const float len = std::sqrt(pl[0] * pl[0] + pl[1] * pl[1] + pl[2] * pl[2]);
-            if (pl[0] * cx + pl[1] * cy + pl[2] * cz + pl[3] < -radius * len) {
-                inside = false;
-                break;
-            }
-        }
-        if (!inside) return;
+        const float cx = float(c[0]), cz = float(c[2]);
         // Light at the entity's eye position (EntityRenderer samples getLightProbePosition = the eyes).
         const int lx = int(std::floor(e.pos[0])), ly = int(std::floor(e.pos[1] + e.info->eye)),
                   lz = int(std::floor(e.pos[2]));
         u32 light = 0xF0;
         if (ly >= world.minSectionY() * 16 && ly < (world.maxSectionY() + 1) * 16)
             light = world.light(lx >> 4, ly >> 4, lz >> 4).at(lx & 15, ly & 15, lz & 15);
+        // Motion: last frame's pose of this entity (prev_), compared after posing.
+        PrevPose* prev = nullptr;
+        if (!pack_) {
+            prev = &prev_[e.id];
+            const bool fresh = prev->frame + 1 == buildFrame_;
+            for (int a = 0; a < 3; ++a)
+                freeMotion_[a] = fresh ? float(c[a] + cam[a] - prev->pos[a]) : 0.0f;
+            entMats_.clear();
+            entHash_ = 0;
+        }
+        Caster k{{sphere[0], sphere[1], sphere[2]}, sphere[3], refCount_, 0, u32(translucent_.size() / 2), 0, freeCount_, 0};
+        const u32 matBase = matCount_;
         bool drawn = false;
         if (d.kind == Kind::Mob) drawn = modelEntity(e, d, pt, cam, light);
         else if (d.kind == Kind::Item || d.kind == Kind::Block || d.kind == Kind::Sprite) {
@@ -1145,10 +1252,10 @@ void EntityRenderer::draw(const PassContext& ctx) {
                 const int a1 = (axis + 1) % 3, a2 = (axis + 2) % 3;
                 float pos[4][3];
                 const float s1[4] = {0, 1, 1, 0}, s2[4] = {0, 0, 1, 1};
-                for (int k = 0; k < 4; ++k) {
-                    pos[k][axis] = v;
-                    pos[k][a1] = s1[k] ? hi[a1] : lo[a1];
-                    pos[k][a2] = s2[k] ? hi[a2] : lo[a2];
+                for (int q = 0; q < 4; ++q) {
+                    pos[q][axis] = v;
+                    pos[q][a1] = s1[q] ? hi[a1] : lo[a1];
+                    pos[q][a2] = s2[q] ? hi[a2] : lo[a2];
                 }
                 const TexRect& t = assets_.rect(0);
                 const float uv[4][2] = {{t.u0, t.v0}, {t.u0, t.v0}, {t.u0, t.v0}, {t.u0, t.v0}};
@@ -1156,18 +1263,64 @@ void EntityRenderer::draw(const PassContext& ctx) {
             }
             drawn = true;
         }
-        stats_.drawn += drawn;
-        if (pack_) packFlush(e);
+        stats_.drawn += drawn && !shadowOnly_;
+        if (pack_) {
+            packFlush(e);
+            return;
+        }
+        // Last frame's matrices for the motion vectors (same model layers), re-expressed relative to this camera.
+        const u32 mats = matCount_ - matBase;
+        if (mats) {
+            Mat34* out = reinterpret_cast<Mat34*>(frameBase_ + kPrevMatOffset) + matBase;
+            if (prev->frame + 1 == buildFrame_ && prev->hash == entHash_ && prev->mats.size() == mats && mats == entMats_.size()) {
+                const float shift[3] = {float(prev->cam[0] - cam[0]), float(prev->cam[1] - cam[1]), float(prev->cam[2] - cam[2])};
+                for (u32 i = 0; i < mats; ++i) {
+                    Mat34 m = prev->mats[i];
+                    m.m[3] += shift[0], m.m[7] += shift[1], m.m[11] += shift[2];
+                    out[i] = m;
+                }
+            } else {
+                std::memcpy(out, entMats_.data(), std::min<size_t>(entMats_.size(), mats) * sizeof(Mat34));
+            }
+        }
+        prev->frame = buildFrame_;
+        prev->hash = entHash_;
+        prev->mats.swap(entMats_);
+        std::copy(cam, cam + 3, prev->cam);
+        for (int a = 0; a < 3; ++a) prev->pos[a] = c[a] + cam[a];
+        std::fill(freeMotion_, freeMotion_ + 3, 0.0f);
+        k.refN = refCount_ - k.ref;
+        k.trN = u32(translucent_.size() / 2) - k.tr;
+        k.freeN = freeCount_ - k.free;
+        if (shadowMask && (k.refN || k.trN || k.freeN)) casters_.push_back(k);
     };
-    for (const auto& [id, e] : entities) drawEntity(e);
-    if (localPlayer_) drawEntity(*localPlayer_);
+    // Entities in view first, then those that only cast a shadow into it (their ranges follow the view's).
+    static thread_local std::vector<std::pair<const Entity*, std::array<float, 4>>> shadowOnly;
+    shadowOnly.clear();
+    shadowOnly_ = false;
+    auto visit = [&](const Entity& e) {
+        float sphere[4];
+        const int k = classify(e, sphere);
+        if (k == 1) drawEntity(e, sphere);
+        else if (k == 2) shadowOnly.push_back({&e, {sphere[0], sphere[1], sphere[2], sphere[3]}});
+    };
+    for (const auto& [id, e] : entities) visit(e);
+    if (localPlayer_) visit(*localPlayer_);
+    if (localShadow_ && !pack_) visit(*localShadow_);
+    camCutout_ = refCount_, camFree_ = freeCount_, camTranslucent_ = u32(translucent_.size() / 2);
+    shadowOnly_ = true;
+    for (const auto& [e, s] : shadowOnly) drawEntity(*e, s.data());
+    shadowOnly_ = false;
     lock.unlock();
-    const u32 cutoutRefs = refCount_;
+    if (!pack_ && buildFrame_ % 256 == 0)  // forget entities not seen for a while
+        for (auto it = prev_.begin(); it != prev_.end();) it = it->second.frame + 8 < buildFrame_ ? prev_.erase(it) : std::next(it);
+    cutoutRefs_ = refCount_;
     u32* refs = reinterpret_cast<u32*>(frameBase_ + kRefOffset);
     const u32 extra = std::min<u32>(u32(translucent_.size() / 2), kMaxRefs - refCount_);
     std::memcpy(refs + u64(refCount_) * 2, translucent_.data(), u64(extra) * 8);
     refCount_ += extra;
-    const u32 glintRefs = refCount_;
+    camTranslucent_ = std::min(camTranslucent_, extra);
+    glintRefs_ = refCount_;
     const u32 glints = std::min<u32>(u32(glint_.size() / 2), kMaxRefs - refCount_);
     std::memcpy(refs + u64(refCount_) * 2, glint_.data(), u64(glints) * 8);
     refCount_ += glints;
@@ -1180,7 +1333,11 @@ void EntityRenderer::draw(const PassContext& ctx) {
         float light0[4], light1[4];
         float glintRect[4], glint[4];
         float lightmap[3][4];
+        float prevViewProj[16];
+        float motion[4];
+        float shadowMat[4][16];
     } k{};
+    static_assert(sizeof(Constants) <= kConstBytes);
     std::memcpy(k.lightmap, ctx.lightmap, sizeof(k.lightmap));
     std::memcpy(k.viewProj, ctx.viewProj, sizeof(k.viewProj));
     std::memcpy(k.fogColor, ctx.fogColor, sizeof(k.fogColor));
@@ -1197,6 +1354,9 @@ void EntityRenderer::draw(const PassContext& ctx) {
         k.glint[0] = -float(std::fmod(ms, 110000.0) / 110000.0), k.glint[1] = float(std::fmod(ms, 30000.0) / 30000.0);
         k.glint[2] = 0.75f;
     }
+    if (ctx.prevViewProj) std::memcpy(k.prevViewProj, ctx.prevViewProj, sizeof(k.prevViewProj));
+    std::memcpy(k.motion, ctx.motionScale, sizeof(k.motion));
+    if (ctx.shadowMats) std::memcpy(k.shadowMat, ctx.shadowMats, sizeof(k.shadowMat));
     std::memcpy(frameBase_, &k, sizeof(k));
 
     stats_.instances = instCount_;
@@ -1217,9 +1377,10 @@ void EntityRenderer::draw(const PassContext& ctx) {
         pack_ = nullptr;
         return;
     }
-    if (!refCount_ && !freeCount_) return;
+    built_ = refCount_ || freeCount_;
+}
 
-    // Record.
+void EntityRenderer::record(const PassContext& ctx) {
     ID3D12GraphicsCommandList* list = ctx.list;
     const D3D12_GPU_VIRTUAL_ADDRESS va = upload_->GetGPUVirtualAddress() + u64(ctx.frame) * kFrameBytes;
     ID3D12DescriptorHeap* heaps[] = {renderer_->descriptorHeap()};
@@ -1233,6 +1394,7 @@ void EntityRenderer::draw(const PassContext& ctx) {
     list->SetGraphicsRootShaderResourceView(6, va + kFreeOffset);
     list->SetGraphicsRootDescriptorTable(7, renderer_->gpuDescriptor(atlasDescriptor_));
     list->SetGraphicsRootDescriptorTable(8, ctx.blockTextures);
+    list->SetGraphicsRootShaderResourceView(9, va + kPrevMatOffset);
     list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     auto drawRange = [&](ID3D12PipelineState* pso, u32 first, u32 count) {
         if (!count) return;
@@ -1241,10 +1403,59 @@ void EntityRenderer::draw(const PassContext& ctx) {
         list->SetGraphicsRoot32BitConstants(1, 2, consts, 0);
         list->DrawInstanced(count * 6, 1, 0, 0);
     };
-    drawRange(psoCutout_.Get(), 0, cutoutRefs);
-    drawRange(psoFree_.Get(), 0, freeCount_);
-    drawRange(psoTranslucent_.Get(), cutoutRefs, glintRefs - cutoutRefs);
-    if (glintTex >= 0) drawRange(psoGlint_.Get(), glintRefs, refCount_ - glintRefs);
+    const bool mv = ctx.motionRtv.ptr != 0;  // shader pipeline: motion vectors into the second target
+    if (mv) {
+        const D3D12_CPU_DESCRIPTOR_HANDLE rts[2] = {ctx.colorRtv, ctx.motionRtv};
+        list->OMSetRenderTargets(2, rts, FALSE, &ctx.dsv);
+    }
+    drawRange((mv ? psoCutoutMv_ : psoCutout_).Get(), 0, camCutout_);
+    drawRange((mv ? psoFreeMv_ : psoFree_).Get(), 0, camFree_);
+    drawRange((mv ? psoTranslucentMv_ : psoTranslucent_).Get(), cutoutRefs_, camTranslucent_);
+    if (assets_.texture("misc/enchanted_glint_armor") >= 0)
+        drawRange((mv ? psoGlintMv_ : psoGlint_).Get(), glintRefs_, refCount_ - glintRefs_);
+    if (mv) list->OMSetRenderTargets(1, &ctx.colorRtv, FALSE, &ctx.dsv);
+}
+
+void EntityRenderer::drawShadow(const ShadowContext& sc) {
+    if (casters_.empty() || !built_) return;
+    ID3D12GraphicsCommandList* list = sc.list;
+    const D3D12_GPU_VIRTUAL_ADDRESS va = upload_->GetGPUVirtualAddress() + u64(sc.frame) * kFrameBytes;
+    list->SetGraphicsRootSignature(rootSig_.Get());
+    list->SetGraphicsRootConstantBufferView(0, va);
+    list->SetGraphicsRootShaderResourceView(2, quads_->GetGPUVirtualAddress());
+    list->SetGraphicsRootShaderResourceView(3, va + kMatOffset);
+    list->SetGraphicsRootShaderResourceView(4, va + kInstOffset);
+    list->SetGraphicsRootShaderResourceView(5, va + kRefOffset);
+    list->SetGraphicsRootShaderResourceView(6, va + kFreeOffset);
+    list->SetGraphicsRootDescriptorTable(7, renderer_->gpuDescriptor(atlasDescriptor_));
+    list->SetGraphicsRootDescriptorTable(8, sc.blockTextures);
+    list->SetGraphicsRootShaderResourceView(9, va + kPrevMatOffset);
+    list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    // Casters inside this cascade; neighbouring entities' ranges merge into one draw.
+    ID3D12PipelineState* bound = nullptr;
+    auto draw = [&](ID3D12PipelineState* pso, u32 first, u32 count) {
+        if (!count) return;
+        if (pso != bound) list->SetPipelineState(bound = pso);
+        const u32 consts[2] = {first, sc.cascade};
+        list->SetGraphicsRoot32BitConstants(1, 2, consts, 0);
+        list->DrawInstanced(count * 6, 1, 0, 0);
+    };
+    for (int kind = 0; kind < 3; ++kind) {  // model cutout, model translucent, free quads
+        ID3D12PipelineState* pso = (kind == 2 ? psoShadowFree_ : psoShadow_).Get();
+        u32 runFirst = 0, runCount = 0;
+        for (const Caster& c : casters_) {
+            const u32 first = kind == 0 ? c.ref : kind == 1 ? cutoutRefs_ + c.tr : c.free;
+            const u32 count = kind == 0 ? c.refN : kind == 1 ? c.trN : c.freeN;
+            if (!count || !inCascade(sc.matrix, c.c, c.r)) continue;
+            if (runCount && runFirst + runCount == first) {
+                runCount += count;
+                continue;
+            }
+            draw(pso, runFirst, runCount);
+            runFirst = first, runCount = count;
+        }
+        draw(pso, runFirst, runCount);
+    }
 }
 
 // ---- shader packs ----
@@ -1263,7 +1474,7 @@ void EntityRenderer::packQuad(int bucket, const float pos[4][3], const float uv[
     v.normal = packNormal(n[0], n[1], n[2]);
     v.entity = -1;
     const float mid[2] = {(uv[0][0] + uv[2][0]) * 0.5f, (uv[0][1] + uv[2][1]) * 0.5f};
-    std::vector<PackVertex>& out = bucket == 3 ? packBlock_ : packVerts_[bucket];
+    std::vector<PackVertex>& out = bucket == 4 ? g_packGlint : bucket == 3 ? packBlock_ : packVerts_[bucket];
     for (int c = 0; c < 4; ++c) {
         std::copy(pos[c], pos[c] + 3, v.pos);
         v.uv[0] = uv[c][0], v.uv[1] = uv[c][1];
@@ -1294,6 +1505,16 @@ void EntityRenderer::packFlush(const Entity& e) {
     submit(packVerts_[2], PackRole::Entities, PackBlend::Opaque, false);
     submit(packBlock_, PackRole::Entities, PackBlend::Opaque, true);
     submit(packVerts_[1], PackRole::EntitiesTranslucent, PackBlend::Translucent, false);
+    if (!g_packGlint.empty()) {
+        PackDraw d;
+        d.role = PackRole::ArmorGlint, d.blend = PackBlend::Glint;
+        d.texture = pack_->glintTexture(false);
+        d.depthWrite = false, d.depthEqual = true;  // culled like the base: faces behind it never show the glint
+        d.vertices = g_packGlint.data(), d.vertexCount = u32(g_packGlint.size());
+        d.entityId = id;
+        pack_->draw(d);
+        g_packGlint.clear();
+    }
     packOverlay_ = 0;
 }
 

@@ -14,13 +14,16 @@ cbuffer Frame : register(b0) {
     float4 gGlintRect;   // item atlas rect of misc/enchanted_glint_item (u0 v0 du dv)
     float4 gGlint;       // x, y = scroll offset, z = strength, w = 1: no fog (first-person hand)
     float4 gLightmap[3]; // the game's lightmap inputs (lightmap.hlsli)
+    float4x4 gPrevViewProj;  // shader pipeline: camera-relative position (this frame) -> previous clip, unjittered
+    float4 gMotion;          // curUv = SV_Position.xy * gMotion.xy + gMotion.zw (PassContext::motionScale)
+    float4x4 gShadowMat[4];  // shadow cascades (camera-relative -> light clip)
 };
 #include "lightmap.hlsli"
 cbuffer Draw : register(b1) {
     uint gBase;   // first instance (meshes) / particle
     uint gCount;  // instances in the list
     uint gMode;
-    uint gPad;
+    uint gCascade;  // shadow caster draws
 };
 
 struct Quad {
@@ -41,6 +44,7 @@ struct Instance {
     uint count;
     uint prefix;        // quads of the earlier instances in this list
     uint pad;
+    float4 p0, p1, p2;  // last frame's transform (motion vectors)
 };
 struct Particle {
     float3 pos;    // camera-relative
@@ -50,6 +54,8 @@ struct Particle {
     uint light;
     uint tex;      // like Quad.tex
     float roll;
+    float3 motion; // moved since the last frame (blocks)
+    float pad;
 };
 
 StructuredBuffer<Quad> gStatic : register(t0);
@@ -74,6 +80,7 @@ struct VSOut {
     float fog : FOG;
     float shade : SHADE;
     nointerpolation uint lightBits : LIGHTBITS;
+    float4 prevClip : PREVCLIP;  // previous frame's clip position (motion vectors)
 };
 
 static const uint kCorner[6] = {0, 1, 2, 0, 2, 3};
@@ -111,6 +118,7 @@ VSOut finish(float3 rel, float3 n, float2 uv, uint tex, float4 tint, uint light,
     o.lightBits = light;
     o.overlay = float4(1, 0, 0, float(overlay & 255) / 255.0);
     o.fog = gGlint.w > 0.5 ? 0.0 : saturate((length(rel) - gFogParams.x) / max(gFogParams.y - gFogParams.x, 1e-3));
+    o.prevClip = 0;
     return o;
 }
 
@@ -138,6 +146,7 @@ VSOut VisualsVS(uint vid : SV_VertexID) {
     float2 g = q.pos[corner].xy * 0.5 + q.pos[corner].z * 0.25;
     const float c = 0.98480775, s = 0.17364818;
     o.glintUv = float2(g.x * c - g.y * s, g.x * s + g.y * c) + gGlint.xy;
+    o.prevClip = mul(gPrevViewProj, float4(dot(inst.p0, p), dot(inst.p1, p), dot(inst.p2, p), 1));
     return o;
 }
 
@@ -151,7 +160,9 @@ VSOut ParticleVS(uint vid : SV_VertexID) {
     float2 r = float2(xy.x * cr - xy.y * sr, xy.x * sr + xy.y * cr) * pt.size;
     float3 rel = pt.pos + gCamRight.xyz * r.x + gCamUp.xyz * r.y;
     float2 uv = float2(xy.x > 0 ? pt.uv.z : pt.uv.x, xy.y > 0 ? pt.uv.y : pt.uv.w);
-    return finish(rel, float3(0, 1, 0), uv, pt.tex, unpackColor(pt.color), pt.light | 512, 0, false);
+    VSOut o = finish(rel, float3(0, 1, 0), uv, pt.tex, unpackColor(pt.color), pt.light | 512, 0, false);
+    o.prevClip = mul(gPrevViewProj, float4(rel - pt.motion, 1));
+    return o;
 }
 
 float4 sampleTex(VSOut i) {
@@ -180,6 +191,23 @@ float4 shade(VSOut i, float minAlpha, bool translucent) {
 }
 
 float4 VisualsCutoutPS(VSOut i) : SV_Target { return shade(i, 0.1, false); }
+
+// Shader pipeline with a motion target: previous UV - current UV (deferred.hlsl MotionCS convention).
+struct MvOut {
+    float4 color : SV_Target0;
+    float2 motion : SV_Target1;
+};
+float2 motionVector(float4 svPos, float4 prevClip) {
+    float2 cur = svPos.xy * gMotion.xy + gMotion.zw;
+    float2 prev = float2(prevClip.x, -prevClip.y) / prevClip.w * 0.5 + 0.5;
+    return prevClip.w > 0 ? prev - cur : 0;
+}
+MvOut VisualsCutoutMvPS(VSOut i) {
+    MvOut o;
+    o.color = shade(i, 0.1, false);
+    o.motion = motionVector(i.pos, i.prevClip);
+    return o;
+}
 float4 VisualsTranslucentPS(VSOut i) : SV_Target { return shade(i, 0.004, true); }
 
 // Text (name tags): the font atlas or solid backgrounds, alpha blended, light without diffuse shading.
@@ -200,10 +228,52 @@ float4 VisualsGlintPS(VSOut i) : SV_Target {
 }
 
 float4 ParticleCutoutPS(VSOut i) : SV_Target { return shade(i, 0.1, false); }
+MvOut ParticleCutoutMvPS(VSOut i) {
+    MvOut o;
+    o.color = shade(i, 0.1, false);
+    o.motion = motionVector(i.pos, i.prevClip);
+    return o;
+}
 float4 ParticleTranslucentPS(VSOut i) : SV_Target {
     float4 c = sampleTex(i) * i.tint;
     clip(c.a - 0.004);
     c.rgb *= i.light;
     c.rgb = lerp(c.rgb, gFogColor.rgb, i.fog);
     return c;
+}
+
+// Shadow casters (shader pipeline): instance quads into a cascade, alpha-tested.
+struct ShadowOut {
+    float4 pos : SV_Position;
+    float2 uv : TEXCOORD0;
+    nointerpolation uint tex : TEX;
+    float alpha : ALPHA;
+};
+ShadowOut VisualsShadowVS(uint vid : SV_VertexID) {
+    uint qi = vid / 6;
+    uint corner = kCorner[vid % 6];
+    uint lo = 0, hi = gCount - 1;
+    while (lo < hi) {
+        uint mid = (lo + hi + 1) >> 1;
+        if (gInstances[gBase + mid].prefix <= qi) lo = mid;
+        else hi = mid - 1;
+    }
+    Instance inst = gInstances[gBase + lo];
+    uint index = inst.first + qi - inst.prefix;
+    Quad q;
+    if (inst.flags & 1) q = gDynamic[index];
+    else q = gStatic[index];
+    float4 p = float4(q.pos[corner], 1);
+    ShadowOut o;
+    o.pos = mul(gShadowMat[gCascade], float4(dot(inst.r0, p), dot(inst.r1, p), dot(inst.r2, p), 1));
+    o.uv = q.uv[corner];
+    o.tex = q.tex;
+    o.alpha = unpackColor(q.color).a * unpackColor(inst.color).a;
+    return o;
+}
+void VisualsShadowPS(ShadowOut i) {
+    VSOut v = (VSOut)0;
+    v.uv = i.uv;
+    v.tex = i.tex;
+    clip(sampleTex(v).a * i.alpha - 0.5);
 }

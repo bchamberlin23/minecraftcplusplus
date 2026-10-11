@@ -56,6 +56,7 @@ struct Renderer::Shading {
         u32 frameIndex;  // ctx.frame slot
     };
     void prepare(const FrameInput& in);  // constants for this frame
+    void fillPassContext(PassContext& pc, const FrameInput& in) const;  // jitter, motion, shadow casters
     void record(ID3D12GraphicsCommandList* list, const FrameInput& in, bool haveWorld, D3D12_GPU_VIRTUAL_ADDRESS cb,
                 D3D12_GPU_VIRTUAL_ADDRESS activeVa, u32 activeCount, PassContext& pc, ID3D12Resource* backbuffer,
                 D3D12_CPU_DESCRIPTOR_HANDLE backbufferRtv);
@@ -122,6 +123,7 @@ struct Renderer::Shading {
     bool historyValid_ = false;
     double prevCam_[3] = {};
     Mat4 prevVpNoJitter_;
+    float prevViewProj_[16] = {};  // this frame's camera-relative position -> previous clip (ShadeConstants::prevViewProj)
     double startTime_ = 0, lastTime_ = 0;
     float dt_ = 0;
     bool exposureReset_ = true;

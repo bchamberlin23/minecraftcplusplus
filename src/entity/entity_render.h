@@ -16,6 +16,11 @@ public:
     ~EntityRenderer() override;
     bool create(Renderer& renderer) override;
     void draw(const PassContext& ctx) override;
+    // Shader pipeline: entities are posed once in prepare (camera-visible ones and shadow casters inside the updated
+    // cascades), then drawn into the shadow maps (drawShadow) and the World stage (draw, with motion vectors from
+    // the previous frame's part matrices kept per entity).
+    void prepare(const PassContext& ctx) override;
+    void drawShadow(const ShadowContext& sc) override;
 
     struct Stats {
         double cpuMs = 0;  // last frame: culling, animation, matrices and uploads
@@ -31,6 +36,8 @@ public:
     void setItemEntitiesExternal(bool external) { externalItems_ = external; }  // the visuals pass draws item entities
     // The local player, drawn like any other player while the camera is detached (F5); nullptr: not drawn.
     void setLocalPlayer(const Entity* e) { localPlayer_ = e; }
+    // First-person camera: the local player is not drawn but still casts its shadow (shader pipeline).
+    void setLocalPlayerShadow(const Entity* e) { localShadow_ = e; }
     static constexpr i32 kLocalPlayerId = INT32_MIN;
     // Model attachment points of the entities drawn in the last frame (camera-relative part matrices, blocks):
     // ItemInHandLayer / CustomHeadLayer of the visuals pass.
@@ -41,6 +48,7 @@ public:
         u32 light;
         u8 valid;           // 1 right arm, 2 left arm, 4 head
         bool babyOffset;    // ItemInHandLayer baby offsets
+        bool shadowOnly;    // posed only as a shadow caster (outside the view, or the first-person local player)
     };
     const std::vector<Attachment>& attachments() const { return attachments_; }
 
@@ -83,6 +91,8 @@ private:
     void emitBlock(u16 block, const Mat34& m, u32 light, u32 overlay);
     void emitFree(const float pos[4][3], const float uv[4][2], const float n[3], u32 tex, u32 color, u32 light,
                   u32 overlay);
+    void build(const PassContext& ctx);   // CPU: cull, pose, upload (draw or prepare)
+    void record(const PassContext& ctx);  // the World-stage draws of the last build
 
     EntityWorld& world_;
     const EntityAssets& assets_;
@@ -91,6 +101,8 @@ private:
 
     ComPtr<ID3D12RootSignature> rootSig_;
     ComPtr<ID3D12PipelineState> psoCutout_, psoTranslucent_, psoFree_, psoGlint_;
+    // Shader pipeline: with a motion target (PassContext::motionRtv) and shadow casters (depth only).
+    ComPtr<ID3D12PipelineState> psoCutoutMv_, psoTranslucentMv_, psoFreeMv_, psoGlintMv_, psoShadow_, psoShadowFree_;
     ComPtr<ID3D12Resource> quads_, atlas_, upload_;
     u8* mapped_ = nullptr;
     u32 atlasDescriptor_ = 0;
@@ -113,6 +125,28 @@ private:
     ItemModels* items_ = nullptr;
     bool externalItems_ = false;
     const Entity* localPlayer_ = nullptr;
+    const Entity* localShadow_ = nullptr;
+
+    // Last build: reference ranges. Refs: [cutout: camera | shadow only][translucent: camera | shadow only][glint].
+    bool prepared_ = false, built_ = false, shadowOnly_ = false;
+    u32 cutoutRefs_ = 0, glintRefs_ = 0, camCutout_ = 0, camTranslucent_ = 0, camFree_ = 0;
+    struct Caster {  // one entity's geometry for the shadow maps (camera-relative bounding sphere)
+        float c[3], r;
+        u32 ref, refN, tr, trN, free, freeN;
+    };
+    std::vector<Caster> casters_;
+    // Motion vectors: last frame's part matrices (camera-relative to that frame's camera) and position per entity.
+    struct PrevPose {
+        u64 frame = 0;
+        u32 hash = 0;
+        double cam[3] = {}, pos[3] = {};
+        std::vector<Mat34> mats;
+    };
+    std::unordered_map<i32, PrevPose> prev_;
+    std::vector<Mat34> entMats_;  // scratch: all part matrices of the entity being posed
+    u32 entHash_ = 0;
+    u64 buildFrame_ = 0;
+    float freeMotion_[3] = {};    // emitFree: current - previous position (blocks) of the entity being built
     std::vector<Attachment> attachments_;
     int elytraModel_ = -1, elytraBabyModel_ = -1;
 

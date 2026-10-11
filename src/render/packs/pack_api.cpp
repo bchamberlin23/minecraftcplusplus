@@ -1,9 +1,17 @@
 #include "render/packs/pack_api.h"
 
+#include "assets/assets.h"
+#include "assets/game_reports.h"
+#include "net/client.h"
 #include "render/packs/pack_pipeline.h"
+#include "ui/items.h"
+#include "ui/ui.h"
 
 #include <algorithm>
+#include <atomic>
 #include <fstream>
+#include <mutex>
+#include <unordered_set>
 
 Renderer::Packs& Renderer::packs() {
     if (!packs_) packs_ = std::make_unique<Packs>(*this);
@@ -143,6 +151,105 @@ PackStatus packStatus(Renderer& renderer) {
     PackStatus out;
     out.active = s.pack, out.loading = s.loading, out.error = s.error, out.warnings = s.warnings, out.loadMs = s.loadMs;
     return out;
+}
+
+// ---- the local player ----
+
+namespace {
+// Network thread -> main thread.
+std::atomic<i32> g_selfId{INT32_MIN};
+std::atomic<bool> g_fallFlying{false};
+std::mutex g_bossMutex;
+std::unordered_set<std::string> g_fogBosses;  // boss bar UUIDs (16 raw bytes) with the CREATE_WORLD_FOG flag
+std::atomic<bool> g_heavyFog{false};
+}  // namespace
+
+void attachNetwork(net::Client& client) {
+    client.onPlayPeek("login", [](net::Reader& r) {  // ClientboundLoginPacket: our entity id first
+        g_selfId = r.i32v();
+        g_fallFlying = false;
+        std::lock_guard lock(g_bossMutex);
+        g_fogBosses.clear();
+        g_heavyFog = false;
+    });
+    client.onPlayPeek("set_entity_data", [](net::Reader& r) {  // Entity.DATA_SHARED_FLAGS_ID (0), bit 7: fall flying
+        if (r.varInt() != g_selfId.load()) return;
+        for (int guard = 0; guard < 8 && r.ok; ++guard) {
+            const int index = r.u8v();
+            if (index == 0xFF) break;
+            const int type = r.varInt();
+            if (type == 0) {
+                const u8 v = r.u8v();
+                if (index == 0) g_fallFlying = (v & 0x80) != 0;
+            } else if (type == 1) {
+                r.varInt();
+            } else {
+                break;  // other serializers: the flags come first when present
+            }
+        }
+    });
+    client.onPlayPeek("boss_event", [](net::Reader& r) {  // ClientboundBossEventPacket: UUID, operation
+        const std::string_view id = r.bytes(16);
+        const int op = r.varInt();
+        int flags = -1;
+        if (op == 0) {  // add: name, progress, colour, overlay, flags
+            r.nbt();
+            r.f32();
+            r.varInt(), r.varInt();
+            flags = r.u8v();
+        } else if (op == 5) {  // update properties
+            flags = r.u8v();
+        }
+        if (!r.ok || (op != 1 && flags < 0)) return;
+        std::lock_guard lock(g_bossMutex);
+        if (op == 1 || !(flags & 4)) g_fogBosses.erase(std::string(id));
+        else g_fogBosses.insert(std::string(id));
+        g_heavyFog = !g_fogBosses.empty();
+    });
+}
+
+void updatePlayer(Renderer& renderer, const ui::Ui& ui, int selectedSlot, const GameReports& reports,
+                  BlockRegistry& registry) {
+    Renderer::Packs& packs = renderer.packs();
+    if (!packs.active()) return;
+    // Item network id -> name and held light (Iris: a block item's default state light emission), resolved once.
+    static const GameReports* names = nullptr;
+    static std::vector<std::string> itemNames;
+    static std::vector<i8> itemLight;  // -1 unknown
+    if (names != &reports) {
+        names = &reports;
+        itemNames.clear();
+        const nlohmann::json& reg = reports.registries();
+        if (reg.contains("minecraft:item"))
+            for (const auto& e : reg["minecraft:item"]["entries"].items()) {
+                const int id = e.value().value("protocol_id", -1);
+                if (id < 0) continue;
+                if (size_t(id) >= itemNames.size()) itemNames.resize(size_t(id) + 1);
+                itemNames[size_t(id)] = e.key();
+            }
+        itemLight.assign(itemNames.size(), -1);
+    }
+    PackPlayerState s;
+    const int slots[2] = {36 + std::clamp(selectedSlot, 0, 8), 45};
+    for (int h = 0; h < 2; ++h) {
+        const ui::ItemStack* stack = ui.playerSlot(slots[h]);
+        if (!stack || stack->item < 0 || size_t(stack->item) >= itemNames.size()) continue;
+        const size_t item = size_t(stack->item);
+        s.heldItem[h] = itemNames[item];
+        if (itemLight[item] < 0) {
+            int light = 0;
+            const std::string& n = itemNames[item];
+            if (reports.hasBlock(n)) {
+                const u16 block = registry.idFor(reports.complete(n));
+                if (block) light = registry.infos()[block].emission;
+            }
+            itemLight[item] = i8(light);
+        }
+        s.heldLight[h] = itemLight[item];
+    }
+    s.elytraFlying = g_fallFlying;
+    s.heavyFog = g_heavyFog;
+    packs.setPlayerState(s);
 }
 
 namespace {

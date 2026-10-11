@@ -12,7 +12,10 @@
 #include <cmath>
 #include <shared_mutex>
 
+#include "BlockEntityMvPS.h"
 #include "BlockEntityPS.h"
+#include "BlockEntityShadowPS.h"
+#include "BlockEntityShadowVS.h"
 #include "BlockEntityTranslucentPS.h"
 #include "BlockEntityVS.h"
 
@@ -23,9 +26,13 @@ constexpr u64 kArenaQuads = u64(1) << 18;                   // 29 MB of baked se
 constexpr u32 kMaxVis = 8192;                               // visible sections per pass
 constexpr u32 kMaxDyn = 1 << 15;                            // per-frame quads of animating block entities
 constexpr u64 kStageBytes = u64(8) << 20;                   // section quads + font rows uploaded per frame
-constexpr u64 kVisOffset = 256;
-constexpr u64 kDynOffset = kVisOffset + u64(kMaxVis) * 3 * 32;
-constexpr u64 kStageOffset = (kDynOffset + u64(kMaxDyn) * sizeof(BeQuad) + 511) & ~u64(511);
+constexpr u32 kMaxShadowVis = 2048;                        // sections per (cascade, cutout | translucent)
+constexpr u64 kConstBytes = 1024;
+constexpr u64 kVisOffset = kConstBytes;
+constexpr u64 kShadowVisOffset = kVisOffset + u64(kMaxVis) * 3 * 32;
+constexpr u64 kDynOffset = kShadowVisOffset + u64(kMaxShadowVis) * 8 * 32;
+constexpr u64 kDynPrevOffset = kDynOffset + u64(kMaxDyn) * sizeof(BeQuad);  // last frame's corners (motion vectors)
+constexpr u64 kStageOffset = (kDynPrevOffset + u64(kMaxDyn) * 48 + 511) & ~u64(511);
 constexpr u64 kFrameBytes = (kStageOffset + kStageBytes + 65535) & ~u64(65535);
 constexpr float kViewDistance = 64.0f;
 
@@ -59,7 +66,7 @@ bool BlockEntityRenderer::create(Renderer& r) {
         ranges[i].NumDescriptors = 1;
         ranges[i].BaseShaderRegister = UINT(3 + i);  // t3 atlas, t4 font, t5 block textures
     }
-    D3D12_ROOT_PARAMETER params[8]{};
+    D3D12_ROOT_PARAMETER params[9]{};
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;  // b0
     params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;  // b1
     params[1].Constants.ShaderRegister = 1;
@@ -75,6 +82,9 @@ bool BlockEntityRenderer::create(Renderer& r) {
         params[5 + i].DescriptorTable.pDescriptorRanges = &ranges[i];
         params[5 + i].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     }
+    params[8].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;  // t6: last frame's corners of the dynamic quads
+    params[8].Descriptor.ShaderRegister = 6;
+    params[8].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
     D3D12_STATIC_SAMPLER_DESC samp[2]{};
     samp[0].Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
     samp[0].AddressU = samp[0].AddressV = samp[0].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
@@ -86,7 +96,7 @@ bool BlockEntityRenderer::create(Renderer& r) {
     samp[1].AddressU = samp[1].AddressV = samp[1].AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
     samp[1].ShaderRegister = 1;
     D3D12_ROOT_SIGNATURE_DESC rd{};
-    rd.NumParameters = 8;
+    rd.NumParameters = 9;
     rd.pParameters = params;
     rd.NumStaticSamplers = 2;
     rd.pStaticSamplers = samp;
@@ -99,10 +109,13 @@ bool BlockEntityRenderer::create(Renderer& r) {
                "CreateRootSignature"))
         return false;
 
-    auto pso = [&](const void* ps, size_t psSize, bool blend, D3D12_CULL_MODE cull, ComPtr<ID3D12PipelineState>& out) {
+    // targets: 1 colour; 2 colour + motion (written); 3 colour + motion (kept); 0 shadow map (depth only)
+    auto pso = [&](const void* ps, size_t psSize, bool blend, D3D12_CULL_MODE cull, ComPtr<ID3D12PipelineState>& out,
+                   int targets = 1) {
         D3D12_GRAPHICS_PIPELINE_STATE_DESC d{};
         d.pRootSignature = rootSig_.Get();
-        d.VS = {g_BlockEntityVS, sizeof(g_BlockEntityVS)};
+        d.VS = targets ? D3D12_SHADER_BYTECODE{g_BlockEntityVS, sizeof(g_BlockEntityVS)}
+                       : D3D12_SHADER_BYTECODE{g_BlockEntityShadowVS, sizeof(g_BlockEntityShadowVS)};
         d.PS = {ps, psSize};
         auto& rt = d.BlendState.RenderTarget[0];
         rt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
@@ -124,16 +137,33 @@ bool BlockEntityRenderer::create(Renderer& r) {
         d.DepthStencilState.DepthWriteMask = blend ? D3D12_DEPTH_WRITE_MASK_ZERO : D3D12_DEPTH_WRITE_MASK_ALL;
         d.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_GREATER_EQUAL;  // reversed Z; coplanar layers draw in order
         d.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-        d.NumRenderTargets = 1;
-        d.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+        d.NumRenderTargets = targets == 0 ? 0 : targets == 1 ? 1 : 2;
+        d.RTVFormats[0] = targets ? DXGI_FORMAT_R8G8B8A8_UNORM : DXGI_FORMAT_UNKNOWN;
+        if (targets >= 2) {
+            d.RTVFormats[1] = RenderPass::kMotionFormat;
+            d.BlendState.IndependentBlendEnable = TRUE;
+            d.BlendState.RenderTarget[1].RenderTargetWriteMask = targets == 2 ? D3D12_COLOR_WRITE_ENABLE_ALL : 0;
+        }
+        if (targets == 0) {  // shadow caster: depth only, no depth clip, slope bias like the terrain's model shadows
+            d.BlendState.RenderTarget[0].RenderTargetWriteMask = 0;
+            d.RasterizerState.DepthClipEnable = FALSE;
+            d.RasterizerState.SlopeScaledDepthBias = 1.5f;
+            d.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+            d.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+        }
         d.DSVFormat = DXGI_FORMAT_D32_FLOAT;
         d.SampleDesc.Count = 1;
         return check(device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&out)), "CreateGraphicsPipelineState");
     };
-    if (!pso(g_BlockEntityPS, sizeof(g_BlockEntityPS), false, D3D12_CULL_MODE_BACK, psoCutout_) ||
-        !pso(g_BlockEntityPS, sizeof(g_BlockEntityPS), false, D3D12_CULL_MODE_NONE, psoText_) ||
-        !pso(g_BlockEntityTranslucentPS, sizeof(g_BlockEntityTranslucentPS), true, D3D12_CULL_MODE_BACK, psoTranslucent_))
+#define SH(n) g_##n, sizeof(g_##n)
+    const auto back = D3D12_CULL_MODE_BACK, noCull = D3D12_CULL_MODE_NONE;
+    if (!pso(SH(BlockEntityPS), false, back, psoCutout_) || !pso(SH(BlockEntityPS), false, noCull, psoText_) ||
+        !pso(SH(BlockEntityTranslucentPS), true, back, psoTranslucent_) ||
+        !pso(SH(BlockEntityMvPS), false, back, psoCutoutMv_, 2) || !pso(SH(BlockEntityMvPS), false, noCull, psoTextMv_, 2) ||
+        !pso(SH(BlockEntityTranslucentPS), true, back, psoTranslucentMv_, 3) ||
+        !pso(SH(BlockEntityShadowPS), false, noCull, psoShadow_, 0))
         return false;
+#undef SH
 
     auto buffer = [&](u64 size, D3D12_HEAP_TYPE heap, D3D12_RESOURCE_STATES state, ComPtr<ID3D12Resource>& out) {
         D3D12_HEAP_PROPERTIES hp{heap};
@@ -282,8 +312,33 @@ void BlockEntityRenderer::uploadSections(const PassContext& ctx) {
     }
 }
 
+void BlockEntityRenderer::prepare(const PassContext& ctx) {
+    if (ctx.pack) return;  // shader packs: built in draw
+    build(ctx);
+    prepared_ = true;
+}
+
 void BlockEntityRenderer::draw(const PassContext& ctx) {
+    if (!prepared_) build(ctx);
+    prepared_ = false;
+    if (built_) record(ctx);
+}
+
+namespace {
+// Sphere (camera-relative centre, radius) against a shadow cascade's light matrix (column-major, ortho).
+bool inCascade(const float* m, const float c[3], float r) {
+    for (int row = 0; row < 3; ++row) {
+        const float v = m[row] * c[0] + m[4 + row] * c[1] + m[8 + row] * c[2] + m[12 + row];
+        const float len = std::sqrt(m[row] * m[row] + m[4 + row] * m[4 + row] + m[8 + row] * m[8 + row]);
+        if (row < 2 ? std::abs(v) > 1 + r * len : v > 1 + r * len) return false;
+    }
+    return true;
+}
+}  // namespace
+
+void BlockEntityRenderer::build(const PassContext& ctx) {
     Timer timer;
+    built_ = false;
     if (!mapped_) return;
     ++frame_;
     // Ranges freed by edits are reused once the frames that drew them are done.
@@ -322,9 +377,45 @@ void BlockEntityRenderer::draw(const PassContext& ctx) {
         for (int c = 0; c < 3; ++c) out[c] = vp(row, c) / l;
     }
     VisBatch* vis = reinterpret_cast<VisBatch*>(frameBase + kVisOffset);
+    VisBatch* shadowVis = reinterpret_cast<VisBatch*>(frameBase + kShadowVisOffset);
     u32 visCount[3] = {}, quadTotal[3] = {};
+    std::memset(shadowVis_, 0, sizeof(shadowVis_));
+    std::memset(shadowQuads_, 0, sizeof(shadowQuads_));
     for (auto& v : dyn_) v.clear();
+    for (auto& v : dynPrev_) v.clear();
     stats_ = {};
+    const u32 shadowMask = ctx.pack || !ctx.shadowMats ? 0u : ctx.shadowMask;
+    ++buildFrame_;
+    // Motion vectors of animating instances: last frame's corner positions per instance (block position).
+    const double* camNow = cam_;
+    auto emitTracked = [&](const Instance& in, const Data* data) {
+        u32 before[3];
+        for (int p = 0; p < 3; ++p) before[p] = u32(dyn_[p].size());
+        emitInstance(dyn, in, data, partial_);
+        const u64 key = (u64(u32(in.x) & 0x3FFFFFF) << 38) | (u64(u32(in.y) & 0xFFF) << 26) | (u64(u32(in.z) & 0x3FFFFFF));
+        PrevDyn& pd = prevDyn_[key];
+        bool match = pd.frame + 1 == buildFrame_;
+        for (int p = 0; p < 3; ++p) match = match && pd.counts[p] == u32(dyn_[p].size()) - before[p];
+        const float shift[3] = {float(pd.cam[0] - camNow[0]), float(pd.cam[1] - camNow[1]), float(pd.cam[2] - camNow[2])};
+        size_t at = 0;
+        std::vector<float> cur;
+        cur.reserve(pd.pos.size());
+        for (int p = 0; p < 3; ++p) {
+            for (u32 i = before[p]; i < u32(dyn_[p].size()); ++i) {
+                const BeQuad& q = dyn_[p][i];
+                for (int c = 0; c < 4; ++c)
+                    for (int a = 0; a < 3; ++a) {
+                        cur.push_back(q.pos[c][a]);
+                        dynPrev_[p].push_back(match ? pd.pos[at] + shift[a] : q.pos[c][a]);
+                        ++at;
+                    }
+            }
+            pd.counts[p] = u32(dyn_[p].size()) - before[p];
+        }
+        pd.pos.swap(cur);
+        pd.frame = buildFrame_;
+        std::copy(camNow, camNow + 3, pd.cam);
+    };
     {
         std::shared_lock lock(world_.mutex());
         applyNetwork();
@@ -360,8 +451,15 @@ void BlockEntityRenderer::draw(const PassContext& ctx) {
                     break;
                 }
             }
-            if (!inside) continue;
-            ++stats_.visibleSections;
+            // Shadow casters: sections inside each cascade drawn this frame (cutout and translucent quads).
+            u32 inCascades = 0;
+            if (shadowMask && !ctx.pack) {
+                const float centre[3] = {(lo[0] + hi[0]) * 0.5f, (lo[1] + hi[1]) * 0.5f, (lo[2] + hi[2]) * 0.5f};
+                for (u32 c = 0; c < 4; ++c)
+                    if ((shadowMask >> c) & 1 && inCascade(ctx.shadowMats[c], centre, 16.3f)) inCascades |= 1u << c;
+            }
+            if (!inside && !inCascades) continue;
+            if (inside) ++stats_.visibleSections;
             if (ctx.pack) {  // shader pack: all instances as vertices (no GPU section batches)
                 for (const Instance& in : s.list) {
                     const double dx = in.x + 0.5 - ctx.camX, dy = in.y + 0.5 - ctx.camY, dz = in.z + 0.5 - ctx.camZ;
@@ -373,12 +471,21 @@ void BlockEntityRenderer::draw(const PassContext& ctx) {
             }
             u32 first = u32(s.offset);
             for (int p = 0; p < 3; ++p) {
-                if (s.counts[p] && visCount[p] < kMaxVis) {
+                if (inside && s.counts[p] && visCount[p] < kMaxVis) {
                     VisBatch& b = vis[p * kMaxVis + visCount[p]++];
                     b.origin[0] = float(ox), b.origin[1] = float(oy), b.origin[2] = float(oz);
                     b.first = first, b.prefix = quadTotal[p];
                     quadTotal[p] += s.counts[p];
                 }
+                if (p != 1 && s.counts[p])  // sign text casts no shadow
+                    for (u32 c = 0; c < 4; ++c) {
+                        u32& n = shadowVis_[c][p / 2];
+                        if (!((inCascades >> c) & 1) || n >= kMaxShadowVis) continue;
+                        VisBatch& b = shadowVis[(c * 2 + p / 2) * kMaxShadowVis + n++];
+                        b.origin[0] = float(ox), b.origin[1] = float(oy), b.origin[2] = float(oz);
+                        b.first = first, b.prefix = shadowQuads_[c][p / 2];
+                        shadowQuads_[c][p / 2] += s.counts[p];
+                    }
                 first += s.counts[p];
             }
             // Animating block entities: rebuilt every frame, camera-relative.
@@ -388,11 +495,13 @@ void BlockEntityRenderer::draw(const PassContext& ctx) {
                 const double dx = in.x + 0.5 - ctx.camX, dy = in.y + 0.5 - ctx.camY, dz = in.z + 0.5 - ctx.camZ;
                 if (dx * dx + dy * dy + dz * dz > double(kViewDistance) * kViewDistance) continue;
                 if (dyn_[0].size() + dyn_[1].size() + dyn_[2].size() > kMaxDyn - 4096) break;
-                emitInstance(dyn, in, in.data >= 0 ? &s.data[size_t(in.data)] : nullptr, partial_);
+                emitTracked(in, in.data >= 0 ? &s.data[size_t(in.data)] : nullptr);
                 ++stats_.dynamic;
             }
         }
     }
+    if (buildFrame_ % 256 == 0)  // forget instances that stopped animating
+        for (auto it = prevDyn_.begin(); it != prevDyn_.end();) it = it->second.frame + 8 < buildFrame_ ? prevDyn_.erase(it) : std::next(it);
     if (ctx.pack) {  // drawn by the shader pack (packInstance)
         stats_.cpuMs = timer.ms();
         cpuTotal_ += stats_.cpuMs;
@@ -400,15 +509,18 @@ void BlockEntityRenderer::draw(const PassContext& ctx) {
         ++frames_;
         return;
     }
-    // Dynamic quads: [cutout][text][translucent].
-    u32 dynFirst[3], dynCount[3], at = 0;
+    // Dynamic quads: [cutout][text][translucent], with their previous positions.
+    u32 at = 0;
     for (int p = 0; p < 3; ++p) {
-        dynFirst[p] = at;
-        dynCount[p] = u32(std::min<size_t>(dyn_[p].size(), kMaxDyn - at));
-        std::memcpy(frameBase + kDynOffset + u64(at) * sizeof(BeQuad), dyn_[p].data(), u64(dynCount[p]) * sizeof(BeQuad));
-        at += dynCount[p];
+        dynFirst_[p] = at;
+        dynCount_[p] = u32(std::min<size_t>(dyn_[p].size(), kMaxDyn - at));
+        std::memcpy(frameBase + kDynOffset + u64(at) * sizeof(BeQuad), dyn_[p].data(), u64(dynCount_[p]) * sizeof(BeQuad));
+        std::memcpy(frameBase + kDynPrevOffset + u64(at) * 48, dynPrev_[p].data(), u64(dynCount_[p]) * 48);
+        at += dynCount_[p];
     }
     stats_.dynamicQuads = at;
+    std::copy(visCount, visCount + 3, visCount_);
+    std::copy(quadTotal, quadTotal + 3, quadTotal_);
 
     struct Constants {
         float viewProj[16];
@@ -416,25 +528,38 @@ void BlockEntityRenderer::draw(const PassContext& ctx) {
         float fogParams[4];  // fog start, fog end, daylight, banner wave time (ticks mod 100)
         float light0[4], light1[4];
         float lightmap[3][4];
+        float prevViewProj[16];
+        float motion[4];
+        float misc[4];  // x = 1: shader pipeline (pipeline-aware output); y = last frame's banner wave time
+        float shadowMat[4][16];
     } k{};
+    static_assert(sizeof(Constants) <= kConstBytes);
     std::memcpy(k.lightmap, ctx.lightmap, sizeof(k.lightmap));
     std::memcpy(k.viewProj, ctx.viewProj, sizeof(k.viewProj));
     std::memcpy(k.fogColor, ctx.fogColor, sizeof(k.fogColor));
     k.fogParams[0] = ctx.fogStart, k.fogParams[1] = ctx.fogEnd, k.fogParams[2] = ctx.daylight;
-    k.fogParams[3] = float(gameTicks_ % 100) + partial_;
+    const float wave = float(gameTicks_ % 100) + partial_;
+    k.fogParams[3] = wave;
     const float l0[3] = {0.2f, 1.0f, -0.7f}, l1[3] = {-0.2f, 1.0f, 0.7f};
     const float n0 = 1.0f / std::sqrt(0.04f + 1.0f + 0.49f);
     for (int a = 0; a < 3; ++a) k.light0[a] = l0[a] * n0, k.light1[a] = l1[a] * n0;
+    if (ctx.prevViewProj) std::memcpy(k.prevViewProj, ctx.prevViewProj, sizeof(k.prevViewProj));
+    std::memcpy(k.motion, ctx.motionScale, sizeof(k.motion));
+    k.misc[0] = ctx.shading ? 1.0f : 0.0f;
+    k.misc[1] = waveTimeValid_ ? waveTime_ : wave;
+    waveTime_ = wave, waveTimeValid_ = true;
+    if (ctx.shadowMats) std::memcpy(k.shadowMat, ctx.shadowMats, sizeof(k.shadowMat));
     std::memcpy(frameBase, &k, sizeof(k));
 
     stats_.cpuMs = timer.ms();
     cpuTotal_ += stats_.cpuMs;
     historyMs_[frames_ % kHistory] = float(stats_.cpuMs);
     ++frames_;
-    if (!quadTotal[0] && !quadTotal[1] && !quadTotal[2] && !at) return;
+    built_ = quadTotal[0] || quadTotal[1] || quadTotal[2] || at;
+}
 
-    ID3D12GraphicsCommandList* list = ctx.list;
-    const D3D12_GPU_VIRTUAL_ADDRESS va = upload_->GetGPUVirtualAddress() + u64(ctx.frame) * kFrameBytes;
+void BlockEntityRenderer::bindGpu(ID3D12GraphicsCommandList* list, u32 frame, D3D12_GPU_DESCRIPTOR_HANDLE blockTextures) {
+    const D3D12_GPU_VIRTUAL_ADDRESS va = upload_->GetGPUVirtualAddress() + u64(frame) * kFrameBytes;
     ID3D12DescriptorHeap* heaps[] = {renderer_->descriptorHeap()};
     list->SetDescriptorHeaps(1, heaps);
     list->SetGraphicsRootSignature(rootSig_.Get());
@@ -444,21 +569,60 @@ void BlockEntityRenderer::draw(const PassContext& ctx) {
     list->SetGraphicsRootShaderResourceView(4, va + kVisOffset);
     list->SetGraphicsRootDescriptorTable(5, renderer_->gpuDescriptor(entityRenderer_.atlasDescriptor()));
     list->SetGraphicsRootDescriptorTable(6, renderer_->gpuDescriptor(fontDescriptor_));
-    list->SetGraphicsRootDescriptorTable(7, ctx.blockTextures);
+    list->SetGraphicsRootDescriptorTable(7, blockTextures);
+    list->SetGraphicsRootShaderResourceView(8, va + kDynPrevOffset);
     list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    ID3D12PipelineState* psos[3] = {psoCutout_.Get(), psoText_.Get(), psoTranslucent_.Get()};
+}
+
+void BlockEntityRenderer::record(const PassContext& ctx) {
+    ID3D12GraphicsCommandList* list = ctx.list;
+    bindGpu(list, ctx.frame, ctx.blockTextures);
+    const bool mv = ctx.motionRtv.ptr != 0;  // shader pipeline: motion vectors into the second target
+    if (mv) {
+        const D3D12_CPU_DESCRIPTOR_HANDLE rts[2] = {ctx.colorRtv, ctx.motionRtv};
+        list->OMSetRenderTargets(2, rts, FALSE, &ctx.dsv);
+    }
+    ID3D12PipelineState* psos[3] = {(mv ? psoCutoutMv_ : psoCutout_).Get(), (mv ? psoTextMv_ : psoText_).Get(),
+                                    (mv ? psoTranslucentMv_ : psoTranslucent_).Get()};
     for (int p = 0; p < 3; ++p) {
-        if (!quadTotal[p] && !dynCount[p]) continue;
+        if (!quadTotal_[p] && !dynCount_[p]) continue;
         list->SetPipelineState(psos[p]);
-        if (quadTotal[p]) {
-            const u32 c[4] = {u32(p) * kMaxVis, visCount[p], 0, 0};
+        if (quadTotal_[p]) {
+            const u32 c[4] = {u32(p) * kMaxVis, visCount_[p], 0, 0};
             list->SetGraphicsRoot32BitConstants(1, 4, c, 0);
-            list->DrawInstanced(quadTotal[p] * 6, 1, 0, 0);
+            list->DrawInstanced(quadTotal_[p] * 6, 1, 0, 0);
         }
-        if (dynCount[p]) {
-            const u32 c[4] = {dynFirst[p], 0, 1, 0};
+        if (dynCount_[p]) {
+            const u32 c[4] = {dynFirst_[p], 0, 1, 0};
             list->SetGraphicsRoot32BitConstants(1, 4, c, 0);
-            list->DrawInstanced(dynCount[p] * 6, 1, 0, 0);
+            list->DrawInstanced(dynCount_[p] * 6, 1, 0, 0);
+        }
+    }
+    if (mv) list->OMSetRenderTargets(1, &ctx.colorRtv, FALSE, &ctx.dsv);
+}
+
+void BlockEntityRenderer::drawShadow(const ShadowContext& sc) {
+    if (!built_ || sc.cascade >= 4) return;
+    const u32* vis = shadowVis_[sc.cascade];
+    const u32* quads = shadowQuads_[sc.cascade];
+    if (!quads[0] && !quads[1] && !dynCount_[0] && !dynCount_[2]) return;
+    ID3D12GraphicsCommandList* list = sc.list;
+    bindGpu(list, sc.frame, sc.blockTextures);
+    // The static lists sit in the shadow area of the upload: the shader reads gBatches from kVisOffset.
+    list->SetGraphicsRootShaderResourceView(
+        4, upload_->GetGPUVirtualAddress() + u64(sc.frame) * kFrameBytes + kShadowVisOffset);
+    list->SetPipelineState(psoShadow_.Get());
+    for (int p = 0; p < 2; ++p) {
+        if (quads[p]) {
+            const u32 c[4] = {(sc.cascade * 2 + u32(p)) * kMaxShadowVis, vis[p], 0, sc.cascade};
+            list->SetGraphicsRoot32BitConstants(1, 4, c, 0);
+            list->DrawInstanced(quads[p] * 6, 1, 0, 0);
+        }
+        const int dp = p * 2;  // dynamic cutout / translucent
+        if (dynCount_[dp]) {
+            const u32 c[4] = {dynFirst_[dp], 0, 1, sc.cascade};
+            list->SetGraphicsRoot32BitConstants(1, 4, c, 0);
+            list->DrawInstanced(dynCount_[dp] * 6, 1, 0, 0);
         }
     }
 }
@@ -481,8 +645,28 @@ void BlockEntityRenderer::packInstance(PackSink& pack, const Emit& base, const I
             v.color = q.color;
             v.light = (block << 4) | ((sky << 4) << 16);
             v.overlay = 10u << 16;
-            const float n[3] = {float(i8(q.normal & 255)) / 127.0f, float(i8((q.normal >> 8) & 255)) / 127.0f,
-                                float(i8((q.normal >> 16) & 255)) / 127.0f};
+            float n[3] = {float(i8(q.normal & 255)) / 127.0f, float(i8((q.normal >> 8) & 255)) / 127.0f,
+                          float(i8((q.normal >> 16) & 255)) / 127.0f};
+            float pos[4][3];
+            for (int c = 0; c < 4; ++c) std::copy(q.pos[c], q.pos[c] + 3, pos[c]);
+            if (q.wave) {  // BannerFlagModel wave, as blockentity.hlsl does on the GPU for the built-in renderers
+                const float time = float(gameTicks_ % 100) + partial_;
+                const float phase = std::fmod((float((q.wave >> 16) & 127) + time) / 100.0f, 1.0f);
+                const float a = (-0.0125f + 0.01f * std::cos(6.2831853f * phase)) * 3.14159265f;
+                const float ang = float(q.wave & 0xFFFF) / 65536.0f * 6.2831853f;
+                const float k[3] = {std::cos(ang), 0, std::sin(ang)}, ca = std::cos(a), sa = std::sin(a);
+                auto rotate = [&](float vv[3]) {  // Rodrigues about k
+                    const float d = k[0] * vv[0] + k[1] * vv[1] + k[2] * vv[2];
+                    const float cr[3] = {k[1] * vv[2] - k[2] * vv[1], k[2] * vv[0] - k[0] * vv[2], k[0] * vv[1] - k[1] * vv[0]};
+                    for (int i = 0; i < 3; ++i) vv[i] = vv[i] * ca + cr[i] * sa + k[i] * d * (1 - ca);
+                };
+                for (auto& pp : pos) {
+                    float rel[3] = {pp[0] - q.pivot[0], pp[1] - q.pivot[1], pp[2] - q.pivot[2]};
+                    rotate(rel);
+                    for (int i = 0; i < 3; ++i) pp[i] = q.pivot[i] + rel[i];
+                }
+                rotate(n);
+            }
             v.normal = packNormal(n[0], n[1], n[2]);
             v.entity = -1;
             float uv[4][2];
@@ -492,7 +676,7 @@ void BlockEntityRenderer::packInstance(PackSink& pack, const Emit& base, const I
             }
             v.midUv[0] = (uv[0][0] + uv[2][0]) * 0.5f, v.midUv[1] = (uv[0][1] + uv[2][1]) * 0.5f;
             for (int c = 0; c < 4; ++c) {
-                std::copy(q.pos[c], q.pos[c] + 3, v.pos);
+                std::copy(pos[c], pos[c] + 3, v.pos);
                 v.uv[0] = uv[c][0], v.uv[1] = uv[c][1];
                 verts[p][t].push_back(v);
             }

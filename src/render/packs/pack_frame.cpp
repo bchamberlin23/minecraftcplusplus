@@ -5,6 +5,8 @@
 #include "assets/assets.h"
 #include "core/math.h"
 #include "render/packs/pack_api.h"
+#include "render/shading.h"
+#include "render/upscalers/upscalers.h"
 
 #include <algorithm>
 #include <cmath>
@@ -233,6 +235,10 @@ struct Renderer::Packs::Frame {
     D3D12_CPU_DESCRIPTOR_HANDLE dsv(u32 i) const {
         return {p.dsvHeap->GetCPUDescriptorHandleForHeapStart().ptr + size_t(i) * p.dsvStride};
     }
+    // The scene depth (reversed Z, GL orientation): the renderer's, or the pack's own at the render size when scaled.
+    D3D12_CPU_DESCRIPTOR_HANDLE sceneDsv() const {
+        return p.ownDepth ? dsv(Pipe::kOwnDsv) : r.dsvHeap_->GetCPUDescriptorHandleForHeapStart();
+    }
     D3D12_GPU_DESCRIPTOR_HANDLE samplerGpu(u32 i) const {
         return {p.samplerHeap->GetGPUDescriptorHandleForHeapStart().ptr + u64(i) * p.samplerStride};
     }
@@ -415,10 +421,13 @@ struct Renderer::Packs::Frame {
         u.setIvec("atlasSize", i32(p.atlasW), i32(p.atlasH));
         u.setIvec("terrainTextureSize", i32(p.atlasW), i32(p.atlasH));
         u.setInt("terrainIconSize", kTexSize);
-        u.setInt("heldItemId", k.itemId(g.heldItem));
-        u.setInt("heldItemId2", k.itemId(g.heldItem2));
-        u.setInt("heldBlockLightValue", g.heldBlockLight);
-        u.setInt("heldBlockLightValue2", g.heldBlockLight2);
+        const PackPlayerState& pl = *k.player_;
+        u.setInt("heldItemId", pl.heldItem[0].empty() ? -1 : k.itemId(pl.heldItem[0]));
+        u.setInt("heldItemId2", pl.heldItem[1].empty() ? -1 : k.itemId(pl.heldItem[1]));
+        u.setInt("heldBlockLightValue", pl.heldLight[0]);
+        u.setInt("heldBlockLightValue2", pl.heldLight[1]);
+        u.setBool("isElytraFlying", pl.elytraFlying);
+        u.setBool("heavyFog", pl.heavyFog);
         u.setInt("biome", biomeIndex(g.biome));
         u.setInt("biome_category", g.biomeCategory);
         u.setInt("biome_precipitation", g.precipitation);
@@ -729,11 +738,19 @@ struct Renderer::Packs::Frame {
             d.SampleMask = UINT_MAX;
             d.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
             d.RasterizerState.CullMode = cull ? D3D12_CULL_MODE_BACK : D3D12_CULL_MODE_NONE;
-            d.RasterizerState.FrontCounterClockwise = b.final ? FALSE : TRUE;  // y flipped: GL's CCW front faces
+            // y flipped: the terrain adapters' clockwise (D3D) fronts become counter-clockwise; PackSink geometry
+            // (Generic) keeps the game's counter-clockwise winding (entity models, items), which the flip makes clockwise.
+            d.RasterizerState.FrontCounterClockwise = b.final || a == Adapter::Generic ? FALSE : TRUE;
             d.RasterizerState.DepthClipEnable = TRUE;
             d.DepthStencilState.DepthEnable = depth != 0;
             d.DepthStencilState.DepthWriteMask = depth == 1 || depth == 3 ? D3D12_DEPTH_WRITE_MASK_ALL : D3D12_DEPTH_WRITE_MASK_ZERO;
-            d.DepthStencilState.DepthFunc = depth == 3 ? D3D12_COMPARISON_FUNC_LESS_EQUAL : D3D12_COMPARISON_FUNC_GREATER_EQUAL;
+            // depth 4: glint over the geometry drawn just before (vanilla EQUAL_DEPTH_TEST). Base and glint come from
+            // different pack programs whose positions differ by a few ULPs, so instead of EQUAL: pushed slightly away
+            // (reversed Z: smaller) and kept only where the stored depth is no farther, i.e. on that geometry (not on
+            // what shows through its transparent texels).
+            d.DepthStencilState.DepthFunc = depth == 3 || depth == 4 ? D3D12_COMPARISON_FUNC_LESS_EQUAL
+                                                                     : D3D12_COMPARISON_FUNC_GREATER_EQUAL;
+            if (depth == 4) d.RasterizerState.DepthBias = -64, d.RasterizerState.SlopeScaledDepthBias = -0.5f;
             d.DSVFormat = depth ? DXGI_FORMAT_D32_FLOAT : DXGI_FORMAT_UNKNOWN;
             d.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
             d.SampleDesc.Count = 1;
@@ -785,7 +802,7 @@ struct Renderer::Packs::Frame {
             trans(t.tex[cur].Get(), t.state[cur], kRt);
             rts[i] = rtv(t.rtv[cur]);
         }
-        const D3D12_CPU_DESCRIPTOR_HANDLE ds = r.dsvHeap_->GetCPUDescriptorHandleForHeapStart();
+        const D3D12_CPU_DESCRIPTOR_HANDLE ds = sceneDsv();
         list->OMSetRenderTargets(UINT(b.drawBuffers.size()), rts, FALSE, depth ? &ds : nullptr);
         const D3D12_VIEWPORT vp{0, 0, float(p.width), float(p.height), 0, 1};
         const D3D12_RECT sc{0, 0, LONG(p.width), LONG(p.height)};
@@ -1018,7 +1035,7 @@ struct Renderer::Packs::Frame {
     }
 
     // ---- depth copies ----
-    D3D12_GPU_VIRTUAL_ADDRESS utilConstants(const float* shadowMat, u32 activeCount = 0) {
+    D3D12_GPU_VIRTUAL_ADDRESS utilConstants(const float* shadowMat, u32 activeCount = 0, const float* camFrac = nullptr) {
         struct {
             float mat[16];
             i32 camBlock[4];
@@ -1031,6 +1048,7 @@ struct Renderer::Packs::Frame {
         const double bx = std::floor(cam.x), by = std::floor(cam.y), bz = std::floor(cam.z);
         c.camBlock[0] = i32(bx), c.camBlock[1] = i32(by), c.camBlock[2] = i32(bz);
         c.camFrac[0] = float(cam.x - bx), c.camFrac[1] = float(cam.y - by), c.camFrac[2] = float(cam.z - bz);
+        if (camFrac) std::copy(camFrac, camFrac + 4, c.camFrac);
         const float F = std::max(in.viewDistance, 64.0f) * 4.0f;
         c.depth[0] = F / (F - kNear), c.depth[1] = float(p.width), c.depth[2] = float(p.height);
         c.misc[0] = activeCount, c.misc[1] = Pipe::kShadowSegCap;
@@ -1042,7 +1060,7 @@ struct Renderer::Packs::Frame {
     }
     D3D12_RESOURCE_STATES sceneDepthState = kDepthWrite;
     void depthCopy(int index) {
-        trans(r.depth_.Get(), sceneDepthState, kDepthRead);
+        trans(p.sceneDepth(r), sceneDepthState, kDepthRead);
         trans(p.depthTex[index].Get(), p.depthTexState[index], kUav);
         flush();
         list->SetComputeRootSignature(p.utilRoot.Get());
@@ -1057,14 +1075,204 @@ struct Renderer::Packs::Frame {
         list->SetPipelineState(p.psoDepthToGl.Get());
         list->Dispatch((p.width + 7) / 8, (p.height + 7) / 8, 1);
         trans(p.depthTex[index].Get(), p.depthTexState[index], kSrv);
-        trans(r.depth_.Get(), sceneDepthState, kDepthWrite);
+        trans(p.sceneDepth(r), sceneDepthState, kDepthWrite);
         flush();
+    }
+
+    // ---- temporal upscaling (Pipe::scaled): DLSS / FSR / XeSS on the pack's final image ----
+    // Start of the frame: this frame's sub-pixel jitter (Halton 2, 3 like the built-in pipeline; packs see it through
+    // gl_Position, adapter.hlsli) and the camera the upscaler SDKs read (Upscalers::setCamera).
+    Mat4 upVp;  // this frame's unjittered view-projection (camera-relative, reversed Z): motion vectors
+    void upscaleCamera() {
+        p.jitter[0] = p.jitter[1] = 0;
+        if (!p.scaled || !r.upscaler_) return;
+        const u32 phases = r.upscalers_->jitterPhases(p.width, p.outW);
+        p.jitterPhase = (p.jitterPhase + 1) % phases;
+        auto halton = [](u32 i, u32 b) {
+            float f = 1, x = 0;
+            for (; i > 0; i /= b) f /= float(b), x += f * float(i % b);
+            return x;
+        };
+        p.jitter[0] = (halton(p.jitterPhase + 1, 2) - 0.5f) * 2.0f / float(p.width);
+        p.jitter[1] = (halton(p.jitterPhase + 1, 3) - 0.5f) * 2.0f / float(p.height);
+        const CameraState& cam = *in.cam;
+        const float cy = std::cos(cam.yaw), sy = std::sin(cam.yaw), cp = std::cos(cam.pitch), sp = std::sin(cam.pitch);
+        const Vec3 fwd{-sy * cp, -sp, cy * cp};
+        const Vec3 right = normalize(cross(fwd, {0, 1, 0}));
+        const Vec3 up = cross(right, fwd);
+        const float aspect = float(p.outW) / float(std::max(p.outH, 1u));
+        upscale::CameraFrame c;
+        c.pos[0] = cam.x, c.pos[1] = cam.y, c.pos[2] = cam.z;
+        const Vec3 basis[3] = {right, up, fwd};
+        for (int i = 0; i < 3; ++i) c.right[i] = (&basis[0].x)[i], c.up[i] = (&basis[1].x)[i], c.fwd[i] = (&basis[2].x)[i];
+        c.view = viewFromBasis(right, up, fwd);
+        c.proj = perspectiveReverseZ(cam.fovY, aspect, kNear);
+        c.fovY = cam.fovY, c.aspect = aspect, c.nearZ = kNear;
+        c.renderSize[0] = p.width, c.renderSize[1] = p.height;
+        c.outputSize[0] = p.outW, c.outputSize[1] = p.outH;
+        c.jitterPx[0] = -p.jitter[0] * 0.5f * float(p.width);
+        c.jitterPx[1] = p.jitter[1] * 0.5f * float(p.height);
+        r.upscalers_->setCamera(c);
+        upVp = c.proj * c.view;
+    }
+    // After final (drawn into upColor): upright depth, camera motion vectors, the upscaler into upOut, then upOut onto
+    // the back buffer and the depth (output size, the D3D way up) into the renderer's for the overlays.
+    void upscaleToBackbuffer(D3D12_CPU_DESCRIPTOR_HANDLE bb) {
+        const CameraState& cam = *in.cam;
+        // Upright depth (psoDepthFlip into upDepth).
+        D3D12_RESOURCE_STATES upDepthState = kDepthRead;
+        trans(p.sceneDepth(r), sceneDepthState, kDepthRead);
+        trans(p.upDepth.Get(), upDepthState, kDepthWrite);
+        flush();
+        ID3D12DescriptorHeap* heaps[] = {p.gpuHeap.Get()};
+        list->SetDescriptorHeaps(1, heaps);
+        list->SetGraphicsRootSignature(p.utilRoot.Get());
+        list->SetGraphicsRootConstantBufferView(0, utilConstants(nullptr));
+        u32 at = gpuAlloc(1);
+        r.device_->CopyDescriptorsSimple(1, gpuCpu(at), cpu(p.sceneDepthSrv), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        list->SetGraphicsRootDescriptorTable(1, gpuGpu(at));
+        const D3D12_CPU_DESCRIPTOR_HANDLE ud = dsv(Pipe::kUpDepthDsv);
+        list->OMSetRenderTargets(0, nullptr, FALSE, &ud);
+        const D3D12_VIEWPORT vp{0, 0, float(p.width), float(p.height), 0, 1};
+        const D3D12_RECT sc{0, 0, LONG(p.width), LONG(p.height)};
+        list->RSSetViewports(1, &vp);
+        list->RSSetScissorRects(1, &sc);
+        list->SetPipelineState(p.psoDepthFlip.Get());
+        list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        list->DrawInstanced(3, 1, 0, 0);
+        trans(p.upDepth.Get(), upDepthState, kDepthRead);
+        // Camera motion: previous clip from this frame's unjittered NDC + depth.
+        D3D12_RESOURCE_STATES motionState = kSrv;
+        trans(p.upMotion.Get(), motionState, kUav);
+        flush();
+        M4 cur, prev;
+        std::memcpy(cur.m, upVp.m, 64);
+        std::memcpy(prev.m, p.upHistory ? p.upPrevVp : upVp.m, 64);
+        M4 move = M4::identity();
+        if (p.upHistory)
+            move.at(0, 3) = float(cam.x - p.upPrevCam[0]), move.at(1, 3) = float(cam.y - p.upPrevCam[1]),
+            move.at(2, 3) = float(cam.z - p.upPrevCam[2]);
+        const M4 toPrev = mul(mul(prev, move), inverse(cur));
+        const float frac[4] = {p.jitter[0], p.jitter[1], 0, 0};
+        list->SetComputeRootSignature(p.utilRoot.Get());
+        list->SetComputeRootConstantBufferView(0, utilConstants(toPrev.m, 0, frac));
+        at = gpuAlloc(2);
+        r.device_->CopyDescriptorsSimple(1, gpuCpu(at), cpu(p.upDepthSrv), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        r.device_->CopyDescriptorsSimple(1, gpuCpu(at + 1), cpu(p.upMotionUav), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        list->SetComputeRootDescriptorTable(1, gpuGpu(at));
+        list->SetComputeRootDescriptorTable(2, gpuGpu(at + 1));
+        list->SetPipelineState(p.psoMotion.Get());
+        list->Dispatch((p.width + 7) / 8, (p.height + 7) / 8, 1);
+        trans(p.upMotion.Get(), motionState, kSrv);
+        trans(p.fallbackLayer.Get(), p.fallbackState, kSrv);  // the reactive hint (what drew without the pack, upright)
+        if (!p.exposureReady) {  // depthFar (1x1 R32F = 1) doubles as the exposure input
+            D3D12_RESOURCE_STATES e = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            trans(p.depthFar.res.Get(), e, kSrv);
+            p.exposureReady = true;
+        }
+        flush();
+        std::memcpy(p.upPrevVp, upVp.m, 64);
+        p.upPrevCam[0] = cam.x, p.upPrevCam[1] = cam.y, p.upPrevCam[2] = cam.z;
+        mark("upscaler inputs");
+
+        UpscaleInputs u;
+        u.list = list;
+        u.color = p.upColor.Get();
+        u.depth = p.upDepth.Get();
+        u.motion = p.upMotion.Get();
+        u.exposure = p.depthFar.res.Get();
+        u.reactive = p.fallbackLayer.Get();
+        u.output = p.upOut.Get();
+        u.jitter[0] = -p.jitter[0] * 0.5f * float(p.width);
+        u.jitter[1] = p.jitter[1] * 0.5f * float(p.height);
+        u.renderSize[0] = p.width, u.renderSize[1] = p.height;
+        u.outputSize[0] = p.outW, u.outputSize[1] = p.outH;
+        u.fovY = cam.fovY;
+        u.aspect = float(p.outW) / float(std::max(p.outH, 1u));
+        u.nearZ = kNear;
+        u.frameTimeMs = p.frameTime * 1000.0f;
+        u.reset = !p.upHistory;
+        r.upscaler_->evaluate(u);
+        p.upHistory = true;
+        mark("upscale");
+
+        // upOut -> back buffer; the depth -> the renderer's depth buffer (output size, untouched by the pack when scaled).
+        D3D12_RESOURCE_STATES outState = kUav;
+        trans(p.upOut.Get(), outState, kSrv);
+        flush();
+        list->SetDescriptorHeaps(1, heaps);
+        list->SetGraphicsRootSignature(p.utilRoot.Get());
+        const float ratio[4] = {0, 0, float(p.width) / float(p.outW), float(p.height) / float(p.outH)};
+        list->SetGraphicsRootConstantBufferView(0, utilConstants(nullptr, 0, ratio));
+        at = gpuAlloc(2);
+        r.device_->CopyDescriptorsSimple(1, gpuCpu(at), cpu(p.upOutSrv), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        r.device_->CopyDescriptorsSimple(1, gpuCpu(at + 1), cpu(p.sceneDepthSrv), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        const D3D12_VIEWPORT ov{0, 0, float(p.outW), float(p.outH), 0, 1};
+        const D3D12_RECT os{0, 0, LONG(p.outW), LONG(p.outH)};
+        list->RSSetViewports(1, &ov);
+        list->RSSetScissorRects(1, &os);
+        list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        list->OMSetRenderTargets(1, &bb, FALSE, nullptr);
+        list->SetGraphicsRootDescriptorTable(1, gpuGpu(at));
+        list->SetPipelineState(p.psoUpCopy.Get());
+        list->DrawInstanced(3, 1, 0, 0);
+        const D3D12_CPU_DESCRIPTOR_HANDLE rd = r.dsvHeap_->GetCPUDescriptorHandleForHeapStart();
+        list->OMSetRenderTargets(0, nullptr, FALSE, &rd);
+        list->SetGraphicsRootDescriptorTable(1, gpuGpu(at + 1));
+        list->SetPipelineState(p.psoDepthUp.Get());
+        list->DrawInstanced(3, 1, 0, 0);
+        trans(p.upOut.Get(), outState, kUav);
+        flush();
+        mark("upscaled copy");
+    }
+
+    // ---- centerDepthSmooth ----
+    void readCenterDepth() {
+        const u32 slot = p.frameSlot;
+        if (!p.centerReadback || !p.centerPending[slot]) return;
+        p.centerPending[slot] = false;
+        D3D12_RANGE range{size_t(slot) * 512, size_t(slot) * 512 + 4}, none{0, 0};
+        u8* m;
+        if (FAILED(p.centerReadback->Map(0, &range, reinterpret_cast<void**>(&m)))) return;
+        float d;
+        std::memcpy(&d, m + range.Begin, 4);
+        p.centerReadback->Unmap(0, &none);
+        if (!(d >= 0.0f && d <= 1.0f)) return;
+        if (!p.haveCenterDepth) {
+            p.centerDepthSmooth = d, p.haveCenterDepth = true;
+            return;
+        }
+        // Same exponential smoothing as eyeBrightnessSmooth (half-life in ticks).
+        const float dt = float(std::clamp(nowSeconds() - p.lastTime, 0.0, 1.0));
+        const float half = std::max(p.def->settings.centerDepthHalflife / 20.0f, 0.001f);
+        p.centerDepthSmooth += (d - p.centerDepthSmooth) * (1.0f - std::exp(-dt * 0.693f / half));
+    }
+    void copyCenterDepth() {
+        if (!p.centerReadback) {
+            p.centerReadback = r.createBuffer(512 * Renderer::kFrames, D3D12_HEAP_TYPE_READBACK);
+            if (!p.centerReadback) return;
+        }
+        trans(p.depthTex[0].Get(), p.depthTexState[0], D3D12_RESOURCE_STATE_COPY_SOURCE);
+        flush();
+        D3D12_TEXTURE_COPY_LOCATION dst{}, src{};
+        dst.pResource = p.centerReadback.Get();
+        dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        dst.PlacedFootprint.Offset = u64(p.frameSlot) * 512;
+        dst.PlacedFootprint.Footprint = {DXGI_FORMAT_R32_FLOAT, 1, 1, 1, 256};
+        src.pResource = p.depthTex[0].Get();
+        src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        const UINT cx = p.width / 2, cy = p.height / 2;
+        const D3D12_BOX box{cx, cy, 0, cx + 1, cy + 1, 1};
+        list->CopyTextureRegion(&dst, 0, 0, 0, &src, &box);
+        trans(p.depthTex[0].Get(), p.depthTexState[0], kSrv);
+        flush();
+        p.centerPending[p.frameSlot] = true;
     }
 
     // ---- passes without pack support: LDR layer (D3D orientation) merged into colortex0 ----
     void fallbackBegin(PassContext& pc) {
         // Depth the D3D way up for their depth test.
-        trans(r.depth_.Get(), sceneDepthState, kDepthRead);
+        trans(p.sceneDepth(r), sceneDepthState, kDepthRead);
         trans(p.fallbackLayer.Get(), p.fallbackState, kRt);
         flush();
         list->SetGraphicsRootSignature(p.utilRoot.Get());
@@ -1083,7 +1291,7 @@ struct Renderer::Packs::Frame {
         list->SetPipelineState(p.psoDepthFlip.Get());
         list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         list->DrawInstanced(3, 1, 0, 0);
-        trans(r.depth_.Get(), sceneDepthState, kDepthWrite);
+        trans(p.sceneDepth(r), sceneDepthState, kDepthWrite);
         flush();
         const float clear[4] = {0, 0, 0, 0};
         const D3D12_CPU_DESCRIPTOR_HANDLE fl = rtv(p.fallbackRtv);
@@ -1311,6 +1519,8 @@ struct Renderer::Packs::Frame {
         k.frame_ = this;
         readTimings();
         mark("start");
+        readCenterDepth();
+        upscaleCamera();
         computeUniforms();
         updateLightmap();
         {  // McppFrame
@@ -1326,6 +1536,7 @@ struct Renderer::Packs::Frame {
             fc.screen[0] = float(p.width), fc.screen[1] = float(p.height), fc.screen[2] = 1.0f / float(p.width),
             fc.screen[3] = 1.0f / float(p.height);
             fc.misc[0] = p.layerTableSize;
+            std::memcpy(&fc.misc[1], p.jitter, 8);  // adapter.hlsli mcppClip: gbuffers jitter (upscaling)
             u8* dst;
             p.frameCb = uploadAlloc(sizeof(fc), &dst);
             std::memcpy(dst, &fc, sizeof(fc));
@@ -1344,7 +1555,7 @@ struct Renderer::Packs::Frame {
                 list->ClearRenderTargetView(rtv(t.rtv[v]), c, 0, nullptr);
             }
         }
-        list->ClearDepthStencilView(r.dsvHeap_->GetCPUDescriptorHandleForHeapStart(), D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
+        list->ClearDepthStencilView(sceneDsv(), D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
         sceneDepthState = kDepthWrite;
 
         mark("clears");
@@ -1389,24 +1600,37 @@ struct Renderer::Packs::Frame {
         k.drawHand(true);
         setPassMatrices(0);
         depthCopy(0);
+        copyCenterDepth();
         mark("gbuffers particles+clouds+weather");
 
         // ---- composite, final ----
         passes(def.composite, backbufferRtv);
+        const bool upscale = p.scaled && p.upColor && r.upscaler_;
+        const D3D12_CPU_DESCRIPTOR_HANDLE finalRtv = upscale ? rtv(p.upColorRtv) : backbufferRtv;
+        D3D12_RESOURCE_STATES upColorState = kSrv;
+        if (upscale) {
+            trans(p.upColor.Get(), upColorState, kRt);
+            flush();
+        }
         (void)backbuffer;
         static const int debugBuffer = [] {  // MCPP_PACK_BUFFER=N: show colortexN (16, 17: shadowcolor0/1) instead of final
             const char* v = std::getenv("MCPP_PACK_BUFFER");
             return v ? std::atoi(v) : -1;
         }();
         if (debugBuffer >= 0 && (debugBuffer < 16 ? p.color[debugBuffer].tex[0] : debugBuffer < 18 ? p.shadowColor[debugBuffer - 16].tex[0] : debugBuffer < 20 ? p.shadowDepth[debugBuffer - 18].Get() : nullptr)) {
-            copyToBackbuffer(backbufferRtv, debugBuffer);
+            copyToBackbuffer(finalRtv, debugBuffer);
         } else if (def.final_ && def.final_->ok()) {
             auto it = def.computes.find("final");
-            fullscreenPass(*def.final_, it != def.computes.end() ? &it->second : nullptr, true, backbufferRtv);
+            fullscreenPass(*def.final_, it != def.computes.end() ? &it->second : nullptr, true, finalRtv);
             mark("final");
         } else {
-            copyToBackbuffer(backbufferRtv);
+            copyToBackbuffer(finalRtv);
             mark("final (copy)");
+        }
+        if (upscale) {
+            trans(p.upColor.Get(), upColorState, kSrv);
+            flush();
+            upscaleToBackbuffer(backbufferRtv);
         }
 
         if (p.frameNumber == 120) {  // MCPP_PACK_UNIFORMS=a,b,c: log those values (debugging)
@@ -1452,7 +1676,7 @@ struct Renderer::Packs::Frame {
         for (int i = 0; i < 16; ++i)
             for (int v = 0; v < 2; ++v)
                 if (p.color[i].tex[v]) trans(p.color[i].tex[v].Get(), p.color[i].state[v], kRt);
-        trans(r.depth_.Get(), sceneDepthState, kDepthWrite);
+        trans(p.sceneDepth(r), sceneDepthState, kDepthWrite);
         flush();
         mark("flip copies");
         resolveTimings();
@@ -1461,7 +1685,7 @@ struct Renderer::Packs::Frame {
         // Renderer state for the overlays / Hud passes that follow (back buffer + scene depth, renderer heap).
         ID3D12DescriptorHeap* rh[] = {r.srvHeap_.Get()};
         list->SetDescriptorHeaps(1, rh);
-        const D3D12_CPU_DESCRIPTOR_HANDLE ds = r.dsvHeap_->GetCPUDescriptorHandleForHeapStart();
+        const D3D12_CPU_DESCRIPTOR_HANDLE ds = r.dsvHeap_->GetCPUDescriptorHandleForHeapStart();  // upsampled when scaled
         list->OMSetRenderTargets(1, &backbufferRtv, FALSE, &ds);
         const D3D12_VIEWPORT vp{0, 0, float(r.width_), float(r.height_), 0, 1};
         const D3D12_RECT sc{0, 0, LONG(r.width_), LONG(r.height_)};
@@ -1538,7 +1762,7 @@ void Renderer::Packs::draw(const PackDraw& d) {
         for (Batch& bt : batches_) {
             const PackDraw& a = bt.draw;
             if (a.role == d.role && a.blend == d.blend && a.renderStage == d.renderStage && a.depthTest == d.depthTest &&
-                a.depthWrite == d.depthWrite && a.cull == d.cull && a.blockAtlas == d.blockAtlas && a.texture == d.texture &&
+                a.depthWrite == d.depthWrite && a.depthEqual == d.depthEqual && a.hand == d.hand && a.cull == d.cull && a.blockAtlas == d.blockAtlas && a.texture == d.texture &&
                 a.entityId == d.entityId && a.blockEntityId == d.blockEntityId && a.itemId == d.itemId &&
                 std::memcmp(a.entityColor, d.entityColor, sizeof(a.entityColor)) == 0) {
                 bt.ranges.push_back(range);
@@ -1559,7 +1783,7 @@ void Renderer::Packs::drawRanges(const PackDraw& d, const Batch::Range* ranges, 
     u16 index;
     const ProgramBin* b = f.program(p.def->resolve(gbOf(d.role)), &index);
     if (!b || !b->vs[size_t(Adapter::Generic)].present) return;
-    const u8 depth = shadow ? 3 : d.depthTest ? (d.depthWrite ? 1 : 2) : 0;
+    const u8 depth = shadow ? 3 : !d.depthTest ? 0 : d.depthEqual ? 4 : d.depthWrite ? 1 : 2;
     ID3D12PipelineState* pso = f.graphicsPso(index, Adapter::Generic, u8(d.blend), depth, d.cull ? 1 : 0);
     if (!pso) return;
     UniformStore& u = p.uniforms;
@@ -1569,7 +1793,7 @@ void Renderer::Packs::drawRanges(const PackDraw& d, const Batch::Range* ranges, 
     u.setInt("blockEntityId", d.blockEntityId);
     u.setInt("currentRenderedItemId", d.itemId);
     u.setVec("entityColor", d.entityColor[0], d.entityColor[1], d.entityColor[2], d.entityColor[3], 4);
-    const bool hand = d.role == PackRole::Hand || d.role == PackRole::HandTranslucent;
+    const bool hand = d.role == PackRole::Hand || d.role == PackRole::HandTranslucent || d.hand;
     if (!shadow) f.setPassMatrices(hand ? 3 : 0);
     if (!shadow) f.bindGbufferTargets(*b, depth != 0);
     // gtexture: the draw's texture (a view in this frame's slice), the atlas, or white.
@@ -1613,7 +1837,7 @@ void Renderer::Packs::drawRanges(const PackDraw& d, const Batch::Range* ranges, 
 
 void Renderer::Packs::drawHand(bool translucent) {
     for (Batch& b : hand_)
-        if ((b.draw.role == PackRole::HandTranslucent) == translucent) drawRanges(b.draw, b.ranges.data(), b.ranges.size());
+        if ((b.draw.role != PackRole::Hand) == translucent) drawRanges(b.draw, b.ranges.data(), b.ranges.size());  // glint: last
     if (translucent) hand_.clear();
 }
 
@@ -1621,7 +1845,7 @@ void Renderer::Packs::flushBatches() {
     std::vector<Batch> batches;
     batches.swap(batches_);
     for (Batch& b : batches) {
-        if (b.draw.role == PackRole::Hand || b.draw.role == PackRole::HandTranslucent) {
+        if (b.draw.role == PackRole::Hand || b.draw.role == PackRole::HandTranslucent || b.draw.hand) {
             hand_.push_back(std::move(b));  // drawn where Iris draws the hand (drawHand)
             continue;
         }
@@ -1668,6 +1892,25 @@ int Renderer::Packs::itemId(std::string_view name) const {
 int Renderer::Packs::blockId(u16 state) const {
     if (!pipe_ || state >= pipe_->blockIdByState.size()) return -1;
     return pipe_->blockIdByState[state];
+}
+
+u32 Renderer::Packs::renderSize(bool height) const {
+    if (!pipe_) return height ? r.height_ : r.width_;
+    return height ? pipe_->height : pipe_->width;
+}
+
+bool Renderer::Packs::frameGenUi() const {
+    return pipe_ && pipe_->scaled && pipe_->upHistory && r.upscalers_->frameGenActive() && r.shading_ && r.shading_->ui_;
+}
+
+bool Renderer::Packs::frameGenInputs(ID3D12Resource*& depth, ID3D12Resource*& motion) const {
+    if (!pipe_ || !pipe_->scaled || !pipe_->upHistory) return false;
+    depth = pipe_->upDepth.Get(), motion = pipe_->upMotion.Get();
+    return depth && motion;
+}
+
+ID3D12Resource* Renderer::Packs::glintTexture(bool item) const {
+    return pipe_ ? pipe_->glint[item ? 1 : 0].res.Get() : nullptr;
 }
 
 bool Renderer::Packs::vanillaClouds() const { return pipe_ && pipe_->def->settings.clouds != "off"; }

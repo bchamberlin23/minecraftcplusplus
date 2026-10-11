@@ -44,8 +44,10 @@ struct GpuParticle {
     u32 light;  // sky << 4 | block (256: full bright)
     u32 tex;    // ent::kTexItems or a block texture layer
     float roll;
+    float motion[3];  // movement since the previous frame (blocks): motion vectors
+    float pad;
 };
-static_assert(sizeof(GpuParticle) == 48);
+static_assert(sizeof(GpuParticle) == 64);
 
 class Particles {
 public:
@@ -121,6 +123,7 @@ private:
     float rain_ = 0, rainTarget_ = 0, rainOverride_ = -1;
     std::unordered_set<u64> campfires_;        // lit campfires found by the ambient sampler
     float partial_ = 0;
+    float frameTicks_ = 0;  // last frame's length in ticks (particle motion vectors)
 
     // Network (decoded on the network thread).
     struct NetSpawn {

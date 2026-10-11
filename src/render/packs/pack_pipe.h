@@ -123,6 +123,7 @@ struct Renderer::Packs::Pipe {
     ComPtr<ID3D12RootSignature> root, computeRoot, utilRoot;
     ComPtr<ID3D12CommandSignature> cmdSig;
     ComPtr<ID3D12PipelineState> psoDepthToGl, psoMip, psoShadowCull, psoMerge, psoDepthFlip, psoCopy;
+    ComPtr<ID3D12PipelineState> psoMotion, psoUpCopy, psoDepthUp;  // upscaling (scaled)
     ComPtr<ID3D12Resource> shadowArgs, shadowCounts;  // shadow cull output (4 segments)
     static constexpr u32 kShadowSegCap = 65536;
 
@@ -130,6 +131,8 @@ struct Renderer::Packs::Pipe {
     ComPtr<ID3D12DescriptorHeap> cpuHeap, gpuHeap, samplerHeap, rtvHeap, dsvHeap;
     u32 cpuCount = 0, cpuCap = 0, srvStride = 0, samplerStride = 0, rtvStride = 0, dsvStride = 0, rtvCount = 0;
     u32 samplerCount = 0, samplerKinds[size_t(packs::Samp::Count)] = {};
+    std::vector<packs::Samp> samplerKind;  // by sampler heap slot (rewritten with a mip bias when scaled)
+    float atlasMipBias = 0;
     static constexpr u32 kGpuSlice = 16384;  // shader-visible descriptors per frame slot
     u32 gpuHead = 0;                         // within the current frame's slice
     u32 nullSrv = 0, nullUav = 0, nullSrv3d = 0, nullUav3d = 0;
@@ -154,6 +157,24 @@ struct Renderer::Packs::Pipe {
     u32 fallbackSrv = 0, fallbackRtv = 0;
     ComPtr<ID3D12Resource> flippedDepth;   // the scene depth the D3D way up (for those passes), D32
     u32 flippedDsv = 1;
+
+    // Temporal upscaling with the pack (DLSS / FSR / XeSS selected): the pack renders at the upscaler's render size
+    // (width / height) with a jittered projection into its own scene depth; final draws into upColor, which the upscaler
+    // turns into upOut (output size) with upDepth (the depth the D3D way up) and upMotion (camera motion, PackMotionCS);
+    // upOut is copied to the back buffer and the depth upsampled into the renderer's (overlays). Unscaled: none of it.
+    bool scaled = false;
+    u32 outW = 0, outH = 0;                // output (swap chain) size
+    ComPtr<ID3D12Resource> ownDepth;       // R32_TYPELESS, GL orientation, reversed Z (scaled only)
+    static constexpr u32 kOwnDsv = 2, kUpDepthDsv = 3;
+    ComPtr<ID3D12Resource> upColor, upDepth, upMotion, upOut;
+    u32 upColorRtv = 0, upColorSrv = 0, upDepthSrv = 0, upMotionSrv = 0, upMotionUav = 0, upOutSrv = 0;
+    bool exposureReady = false;            // depthFar (1x1 R32F = 1) moved to ALL_SHADER_RESOURCE (exposure input)
+    u32 jitterPhase = 0;
+    float jitter[2] = {};                  // NDC offset of this frame (GL clip space, +y up)
+    float upPrevVp[16] = {};               // previous frame's unjittered view-projection (camera-relative, reversed Z)
+    double upPrevCam[3] = {};
+    bool upHistory = false;
+    ID3D12Resource* sceneDepth(Renderer& rr) const { return ownDepth ? ownDepth.Get() : rr.depth_.Get(); }
     D3D12_RESOURCE_STATES fallbackState = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
     D3D12_RESOURCE_STATES depthTexState[3] = {D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
                                               D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE};
@@ -162,6 +183,7 @@ struct Renderer::Packs::Pipe {
 
     // Textures.
     packs::Texture atlas, normals, specular, noise, lightmap, white, depthFar;
+    packs::Texture glint[2];  // misc/enchanted_glint_armor, misc/enchanted_glint_item (wrapped: own textures)
     std::vector<packs::Texture> custom;            // by CustomTexture index
     std::vector<packs::Image> images;              // custom images
     std::vector<ComPtr<ID3D12Resource>> buffers;   // bufferObject.N
@@ -200,6 +222,11 @@ struct Renderer::Packs::Pipe {
     bool havePrev = false;
     float eyeBrightnessSmooth[2] = {0, 240};
     float wetness = 0, centerDepthSmooth = 0;
+    // centerDepthSmooth: depthtex0's centre texel copied into a readback ring each frame, read when that frame slot
+    // comes round again (the renderer has waited for it: no stall), smoothed with centerDepthHalflife.
+    ComPtr<ID3D12Resource> centerReadback;  // kFrames x 512 bytes
+    bool centerPending[Renderer::kFrames] = {};
+    bool haveCenterDepth = false;
     ID3D12GraphicsCommandList* list = nullptr;  // while recording
     D3D12_GPU_VIRTUAL_ADDRESS frameCb = 0;      // McppFrame
     PassContext* pc = nullptr;

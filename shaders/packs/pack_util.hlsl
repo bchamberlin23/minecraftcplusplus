@@ -102,3 +102,30 @@ float PackDepthFlipPS(MergeOut i) : SV_Depth {
     p.y = uint(uDepth.z) - 1 - p.y;
     return uSrc[p].r;
 }
+
+// ---- temporal upscaling with a pack (Pipe::scaled, pack_frame.cpp upscaleToBackbuffer) ----
+// Camera motion vectors from the upright scene depth (uSrc, reversed Z): uShadowMat = this frame's unjittered NDC +
+// depth -> previous clip, uCamFrac.xy = this frame's jitter (NDC, +y up), uDepth.yz = size. Previous UV - current
+// UV (UV units, +y down), like the built-in pipeline's MotionCS.
+[numthreads(8, 8, 1)]
+void PackMotionCS(uint2 id : SV_DispatchThreadID) {
+    if (id.x >= uint(uDepth.y) || id.y >= uint(uDepth.z)) return;
+    float d = uSrc[id].r;
+    float2 uv = (float2(id) + 0.5) / uDepth.yz;
+    float2 ndc = float2(uv.x * 2 - 1, 1 - uv.y * 2) - uCamFrac.xy;  // where this sample is without the jitter
+    float4 prev = mul(uShadowMat, float4(ndc, d, 1));
+    float2 cur = float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    float2 prevUv = float2(prev.x / prev.w * 0.5 + 0.5, 0.5 - prev.y / prev.w * 0.5);
+    uDst[id] = float4(prev.w > 0 ? prevUv - cur : 0, 0, 0);
+}
+// The upscaler's output onto the back buffer as is (both the D3D way up).
+float4 PackUpCopyPS(MergeOut i) : SV_Target {
+    return float4(uSrc[uint2(i.pos.xy)].rgb, 1);
+}
+// The scene depth (render size, GL orientation) into the renderer's depth buffer (output size, the D3D way up) for the
+// overlays (block outline). uCamFrac.zw = render / output size.
+float PackDepthUpPS(MergeOut i) : SV_Depth {
+    uint2 p = min(uint2(i.pos.xy * uCamFrac.zw), uint2(uDepth.yz) - 1);
+    p.y = uint(uDepth.z) - 1 - p.y;
+    return uSrc[p].r;
+}

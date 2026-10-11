@@ -277,6 +277,11 @@ float4 TonemapPS(ScreenOut i) : SV_Target {
     float scotopic = saturate(1.0 - log2(max(gState[0].y, 1e-5) / 0.002) / 4.0);
     float lum = luminance(c);
     c = lerp(c, lum * float3(0.62, 0.78, 1.15), scotopic * 0.65 * saturate(1.0 - lum * exposure * 4.0));
+    if (debugView() == 7) {  // motion vectors: render pixels per frame (x red, y green; grey = still)
+        uint2 q = min(uint2(i.pos.xy * gOutput.zw * gScreen.xy), uint2(gScreen.xy) - 1);
+        float2 m = gTex[kTexMotion].Load(int3(q, 0)).xy * gScreen.xy;
+        return float4(saturate(0.5 + m * 0.04), 0.5, 1);
+    }
     if (debugView() == 1) return float4(linearToSrgb(saturate(c)), 1);
     if (debugView() >= 2) return float4(linearToSrgb(saturate(c)), 1);
     float2 uv = i.pos.xy * gOutput.zw;

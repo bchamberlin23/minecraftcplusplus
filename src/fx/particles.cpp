@@ -1037,6 +1037,7 @@ void Particles::tick() {
 
 void Particles::frame(double dt, const double cam[3]) {
     Timer t;
+    frameTicks_ = float(std::clamp(dt, 0.0, 0.1) * 20.0);
     std::copy(cam, cam + 3, cam_);
     std::vector<NetSpawn>& spawns = spawnsLocal_;
     std::vector<NetBreak>& breaks = breaksLocal_;
@@ -1132,6 +1133,9 @@ u32 Particles::build(GpuParticle* out, u32 max, const double cam[3], u32& opaque
         g.light = light;
         g.tex = ent::kTexItems;
         g.roll = p.oRoll + (p.roll - p.oRoll) * pt;
+        // Moved since the last frame: the tick velocity over the frame's length (motion vectors).
+        g.motion[0] = float(p.x - p.xo) * frameTicks_, g.motion[1] = float(p.y - p.yo) * frameTicks_;
+        g.motion[2] = float(p.z - p.zo) * frameTicks_, g.pad = 0;
     }
     opaque = n;
     const u32 tcount = max - back;

@@ -11,11 +11,14 @@ cbuffer Frame : register(b0) {
     float4 gGlintRect;   // atlas rect of misc/enchanted_glint_armor (u0 v0 du dv)
     float4 gGlint;       // x, y: scroll offset; z: strength
     float4 gLightmap[3]; // the game's lightmap inputs (lightmap.hlsli)
+    float4x4 gPrevViewProj;  // shader pipeline: camera-relative position (this frame) -> previous clip, unjittered
+    float4 gMotion;          // curUv = SV_Position.xy * gMotion.xy + gMotion.zw (PassContext::motionScale)
+    float4x4 gShadowMat[4];  // shadow cascades (camera-relative -> light clip)
 };
 #include "lightmap.hlsli"
 cbuffer Draw : register(b1) {
     uint gRefBase;
-    uint gPad;
+    uint gCascade;  // shadow caster draws
 };
 
 struct ModelQuad {
@@ -42,7 +45,8 @@ struct FreeQuad {
     uint color;
     uint light;
     uint overlay;
-    uint pad;
+    float3 motion;  // current - previous frame position (blocks)
+    uint2 pad;
 };
 
 StructuredBuffer<ModelQuad> gQuads : register(t0);
@@ -52,6 +56,7 @@ StructuredBuffer<uint2> gRefs : register(t3);       // (quad, instance)
 StructuredBuffer<FreeQuad> gFree : register(t4);
 Texture2D<float4> gAtlas : register(t5);
 Texture2DArray<float4> gBlocks : register(t6);
+StructuredBuffer<PartMatrix> gPrevMatrices : register(t7);  // last frame's part matrices (motion vectors)
 SamplerState gPoint : register(s0);
 SamplerState gBlockSampler : register(s1);
 
@@ -66,6 +71,7 @@ struct VSOut {
     float shade : SHADE;       // directional shading alone (shader pipeline)
     nointerpolation uint lightBits : LIGHTBITS;
     float2 rawUv : TEXCOORD1;  // texture coordinates within the entity texture (glint)
+    float4 prevClip : PREVCLIP;  // previous frame's clip position (motion vectors)
 };
 
 static const uint kCorner[6] = {0, 1, 2, 0, 2, 3};
@@ -102,6 +108,7 @@ VSOut finish(float3 rel, float3 n, float2 uv, uint layer, uint color, uint light
     o.overlay = white > 0 ? float4(1, 1, 1, white) : float4(1, 0, 0, red);
     o.fog = saturate((length(rel) - gFogParams.x) / max(gFogParams.y - gFogParams.x, 1e-3));
     o.rawUv = 0;
+    o.prevClip = 0;
     return o;
 }
 
@@ -117,13 +124,54 @@ VSOut EntityModelVS(uint vid : SV_VertexID) {
     float2 uv = inst.uvRect.xy + q.uv[corner] * inst.uvRect.zw;
     VSOut o = finish(rel, n, uv, 0xFFFFFFFF, inst.color, inst.light, inst.overlay);
     o.rawUv = q.uv[corner];
+    PartMatrix pm = gPrevMatrices[inst.matrixBase + q.part];
+    o.prevClip = mul(gPrevViewProj, float4(dot(pm.r0, p), dot(pm.r1, p), dot(pm.r2, p), 1));
     return o;
 }
 
 VSOut EntityFreeVS(uint vid : SV_VertexID) {
     FreeQuad q = gFree[gRefBase + vid / 6];
     uint corner = kCorner[vid % 6];
-    return finish(q.pos[corner], q.normal, q.uv[corner], q.tex, q.color, q.light, q.overlay);
+    VSOut o = finish(q.pos[corner], q.normal, q.uv[corner], q.tex, q.color, q.light, q.overlay);
+    o.prevClip = mul(gPrevViewProj, float4(q.pos[corner] - q.motion, 1));
+    return o;
+}
+
+// Shadow casters (shader pipeline): the same geometry into a cascade, alpha-tested.
+struct ShadowOut {
+    float4 pos : SV_Position;
+    float2 uv : TEXCOORD0;
+    nointerpolation uint layer : LAYER;
+    float alpha : ALPHA;
+};
+ShadowOut EntityShadowVS(uint vid : SV_VertexID) {
+    uint2 ref = gRefs[gRefBase + vid / 6];
+    uint corner = kCorner[vid % 6];
+    ModelQuad q = gQuads[ref.x];
+    Instance inst = gInstances[ref.y];
+    PartMatrix m = gMatrices[inst.matrixBase + q.part];
+    float4 p = float4(q.pos[corner] / 16.0, 1);
+    ShadowOut o;
+    o.pos = mul(gShadowMat[gCascade], float4(dot(m.r0, p), dot(m.r1, p), dot(m.r2, p), 1));
+    o.uv = inst.uvRect.xy + q.uv[corner] * inst.uvRect.zw;
+    o.layer = 0xFFFFFFFF;
+    o.alpha = float(inst.color >> 24) / 255.0;
+    return o;
+}
+ShadowOut EntityShadowFreeVS(uint vid : SV_VertexID) {
+    FreeQuad q = gFree[gRefBase + vid / 6];
+    uint corner = kCorner[vid % 6];
+    ShadowOut o;
+    o.pos = mul(gShadowMat[gCascade], float4(q.pos[corner], 1));
+    o.uv = q.uv[corner];
+    o.layer = q.tex;
+    o.alpha = float(q.color >> 24) / 255.0;
+    return o;
+}
+void EntityShadowPS(ShadowOut i) {
+    float a = i.layer == 0xFFFFFFFF ? gAtlas.SampleLevel(gPoint, i.uv, 0).a
+                                    : gBlocks.Sample(gBlockSampler, float3(i.uv, float(i.layer & 0xFFFF))).a;
+    clip(a * i.alpha - 0.5);
 }
 
 float4 shade(VSOut i, float minAlpha) {
@@ -155,6 +203,23 @@ float4 shadePipeline(VSOut i, float minAlpha, bool translucent) {
 }
 
 float4 EntityCutoutPS(VSOut i) : SV_Target { return gFogParams.w > 0.5 ? shadePipeline(i, 0.1, false) : shade(i, 0.1); }
+
+// Shader pipeline with a motion target: previous UV - current UV (deferred.hlsl MotionCS convention).
+float2 motionVector(float4 svPos, float4 prevClip) {
+    float2 cur = svPos.xy * gMotion.xy + gMotion.zw;
+    float2 prev = float2(prevClip.x, -prevClip.y) / prevClip.w * 0.5 + 0.5;
+    return prevClip.w > 0 ? prev - cur : 0;
+}
+struct MvOut {
+    float4 color : SV_Target0;
+    float2 motion : SV_Target1;
+};
+MvOut EntityCutoutMvPS(VSOut i) {
+    MvOut o;
+    o.color = shadePipeline(i, 0.1, false);
+    o.motion = motionVector(i.pos, i.prevClip);
+    return o;
+}
 float4 EntityTranslucentPS(VSOut i) : SV_Target {
     return gFogParams.w > 0.5 ? shadePipeline(i, 0.004, true) : shade(i, 0.004);
 }
