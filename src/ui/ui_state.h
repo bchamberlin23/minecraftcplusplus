@@ -157,6 +157,7 @@ struct Ui::State {
     float portalIntensity = 0, portalIntensityO = 0;  // LocalPlayer.portalEffectIntensity (nether portal)
     float spinTime = 0, spinSpeed = 0;                // LocalPlayer.spinningEffectTime / spinningEffectSpeed
     bool onFire = false;                              // our shared flag 0 (Entity.isOnFire on the client)
+    bool invertPostEffect = false;                    // ClientboundPostEffectsPacket has minecraft:invert
     void tickViewEffects(bool eyeInWater);
     float effectBlend(const char* name) const;        // LivingEntity.getEffectBlendFactor at the partial tick
     bool hardcore = false;
