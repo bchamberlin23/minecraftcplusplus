@@ -505,9 +505,24 @@ bool Renderer::createPipelines() {
 // Contiguous writes coalesce into one copy.
 void Renderer::stage(ID3D12Resource* dst, u64 dstOffset, const void* src, u64 size) {
     const u8* p = static_cast<const u8*>(src);
+    if (wrapFence_) {  // the ring wrapped at the end of the last frame: its start may still be read
+        waitFence(wrapFence_);
+        wrapFence_ = 0;
+    }
     while (size) {
-        if (stagingHead_ == kStagingBytes) flushUploads();
-        u64 n = std::min(size, kStagingBytes - stagingHead_);
+        if (stagingHead_ == stagingLimit_) {
+            // Out of free space mid-frame: once the submitted frames are done (normally already) everything but this
+            // frame's own copies is free. (Draining the GPU and submitting a copy list here stalled travel by tens
+            // of ms.)
+            waitFence(fenceCounter_);
+            if (stagingHead_ >= frameStagingStart_ && stagingLimit_ < kStagingBytes)
+                stagingLimit_ = kStagingBytes;  // the space up to the end of the ring
+            else if (stagingHead_ >= frameStagingStart_ && frameStagingStart_ > 0)
+                stagingHead_ = 0, stagingLimit_ = frameStagingStart_;  // wrap: up to this frame's start
+            else
+                flushUploads();  // this frame alone staged the whole ring (loading)
+        }
+        u64 n = std::min(size, stagingLimit_ - stagingHead_);
         std::memcpy(stagingMapped_ + stagingHead_, p, n);
         if (!copies_.empty() && copies_.back().dst == dst && copies_.back().dstOffset + copies_.back().size == dstOffset &&
             copies_.back().srcOffset + copies_.back().size == stagingHead_)
@@ -542,6 +557,9 @@ void Renderer::flushUploads() {
         waitIdle();
     }
     stagingHead_ = 0;
+    stagingLimit_ = kStagingBytes;
+    frameStagingStart_ = 0;
+    wrapFence_ = 0;
     printDebugMessages();
 }
 
@@ -1021,9 +1039,12 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     frameFence_[fi] = ++fenceCounter_;
     queue_->Signal(fence_.Get(), fenceCounter_);
     printDebugMessages();
-    // Wrap the staging ring between frames. Callers stage at most ~32 MB per frame, so data at
-    // the start of the ring was consumed by frames that have long completed (<= 3 in flight).
-    if (stagingHead_ > kStagingBytes - (u64(96) << 20)) stagingHead_ = 0;
+    // The next frame continues after this one's copies, within the same free space (stagingLimit_ keeps earlier
+    // frames' copies ahead safe; stage extends it once they are done). Near the end the ring wraps between frames:
+    // its start is reused once this frame is done (wrapFence_, see stage).
+    if (stagingHead_ >= frameStagingStart_ && stagingHead_ > kStagingBytes - (u64(96) << 20))
+        stagingHead_ = 0, stagingLimit_ = kStagingBytes, wrapFence_ = fenceCounter_;
+    frameStagingStart_ = stagingHead_;
 
     if (screenshot) {
         waitFence(frameFence_[fi]);

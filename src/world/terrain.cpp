@@ -59,7 +59,7 @@ int Terrain::regionAt(int rx, int rz) {
     for (int level = 0; level <= kMaxLevel; ++level) {
         const int per = 32 >> level;
         r.ny[level] = sectionsY;  // every level is 16 blocks tall
-        r.nodes[level].assign(size_t(per) * per * r.ny[level], kAbsent);
+        if (level > 0) r.nodes[level].assign(size_t(per) * per * r.ny[level], kAbsent);  // level 0: on first use
     }
     return it->second;
 }
@@ -342,7 +342,7 @@ void Terrain::applyCoarse(CoarseBuild& b, bool replace) {
         m = {};
     }
     // Sections created by edits since the build started must stay reachable from the LOD tree.
-    for (int ny = 0; ny < r.ny[0]; ++ny)
+    for (int ny = 0; ny < r.ny[0] && !r.nodes[0].empty(); ++ny)
         for (int z = 0; z < 32; ++z)
             for (int x = 0; x < 32; ++x)
                 if (r.at(0, x, ny, z) != kAbsent)
@@ -880,6 +880,10 @@ void Terrain::scheduleFar(double x, double z) {
     const double mx = x - farScanX_, mz = z - farScanZ_;
     if (mx * mx + mz * mz < 128.0 * 128.0 && now - farScanTime_ < 2.0) return;
     farScanX_ = x, farScanZ_ = z, farScanTime_ = now;
+    static const bool profile = std::getenv("MCPP_TERRAIN_PROFILE") != nullptr;
+    Timer tp;
+    double ms[4] = {};
+    size_t dropped = 0;
     {
         std::lock_guard lock(mutex_);  // unstarted jobs are re-planned below
         for (const FarJob& j : farQueue_) regions_[size_t(j.region)].farQueued = false;
@@ -890,14 +894,20 @@ void Terrain::scheduleFar(double x, double z) {
         const double dz = std::max({rz * 512.0 - z, 0.0, z - (rz * 512.0 + 512.0)});
         return float(std::sqrt(dx * dx + dz * dz));
     };
+    ms[0] = tp.ms(), tp = Timer();
     std::vector<FarJob> jobs;
+    double regionMs = 0;
+    size_t created = 0;
     const int reach = int(farRadius_ / 512.0f) + 1;
     const int crx = int(std::floor(x / 512.0)), crz = int(std::floor(z / 512.0));
     for (int rz = crz - reach; rz <= crz + reach; ++rz)
         for (int rx = crx - reach; rx <= crx + reach; ++rx) {
             const float d = regionDistance(rx, rz);
             if (d > farRadius_) continue;
+            const size_t before = regions_.size();
+            const Timer ta;
             const int idx = regionAt(rx, rz);
+            regionMs += ta.ms(), created += regions_.size() != before;
             RegionLod& r = regions_[size_t(idx)];
             if (r.farQueued) continue;  // being generated
             if (r.world >= 0) {
@@ -918,15 +928,23 @@ void Terrain::scheduleFar(double x, double z) {
             const float priority = r.world >= 0 ? d * 0.5f : firstPass || !r.farData ? d : d * 2.0f;
             jobs.push_back({idx, rx, rz, level, priority, coarseJob(idx)});
         }
+    ms[1] = tp.ms(), tp = Timer();
     for (size_t i = 0; i < regions_.size(); ++i) {
         const RegionLod& r = regions_[i];
-        if (r.farData && !r.farQueued && r.world < 0 && regionDistance(r.rx, r.rz) > farRadius_ + 1024.0f) dropFar(int(i));
+        if (r.farData && !r.farQueued && r.world < 0 && regionDistance(r.rx, r.rz) > farRadius_ + 1024.0f)
+            dropFar(int(i)), ++dropped;
     }
+    ms[2] = tp.ms(), tp = Timer();
     std::sort(jobs.begin(), jobs.end(), [](const FarJob& a, const FarJob& b) { return a.priority > b.priority; });
+    const size_t jobCount = jobs.size();
     {
         std::lock_guard lock(mutex_);
         for (const FarJob& j : jobs) regions_[size_t(j.region)].farQueued = true;
         farQueue_ = std::move(jobs);
     }
     farCv_.notify_all();
+    ms[3] = tp.ms();
+    if (profile && ms[0] + ms[1] + ms[2] + ms[3] > 4.0)
+        LOG("far schedule: lock+clear %.1f, plan %.1f (new regions %zu in %.1f ms, %zu jobs), drop %.1f (%zu regions), "
+            "sort+queue %.1f ms", ms[0], ms[1], created, regionMs, jobCount, ms[2], dropped, ms[3]);
 }

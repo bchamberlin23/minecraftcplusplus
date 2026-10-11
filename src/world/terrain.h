@@ -91,12 +91,16 @@ private:
         std::vector<u8> refine[kMaxLevel + 1];
         int ny[kMaxLevel + 1] = {};
         std::vector<u32> nodes[kMaxLevel + 1];
+        // Level 0 (full-detail sections) is allocated on first write: far-only regions never need it, and
+        // allocating it for every region the far terrain reaches cost ~30 us each (100 ms after a teleport).
         u32& at(int level, int x, int y, int z) {
             const int per = 32 >> level;
+            if (nodes[level].empty()) nodes[level].assign(size_t(per) * per * ny[level], kAbsent);
             return nodes[level][(size_t(y) * per + z) * per + x];
         }
         u32 at(int level, int x, int y, int z) const {
             const int per = 32 >> level;
+            if (nodes[level].empty()) return kAbsent;
             return nodes[level][(size_t(y) * per + z) * per + x];
         }
     };

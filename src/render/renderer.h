@@ -316,6 +316,11 @@ private:
     ComPtr<ID3D12Resource> staging_;
     u8* stagingMapped_ = nullptr;
     u64 stagingHead_ = 0;
+    // Ring rules: only this frame's copies [frameStagingStart_, stagingHead_) (possibly wrapped) are unsubmitted;
+    // stagingLimit_ = end of the free space ahead; wrapFence_ = frame to wait for before reusing the ring's start.
+    u64 stagingLimit_ = kStagingBytes;
+    u64 frameStagingStart_ = 0;
+    u64 wrapFence_ = 0;
     std::vector<Copy> copies_;
 
     RangeAllocator cubeAlloc_, modelAlloc_;
