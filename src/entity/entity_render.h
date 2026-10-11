@@ -26,6 +26,7 @@ public:
 
     // Equipment (armor, elytra) from the item models' equipment data; dropped items are left to the visuals pass.
     void setItemModels(ItemModels* items) { items_ = items; }
+    void setItemEntitiesExternal(bool external) { externalItems_ = external; }  // the visuals pass draws item entities
     // The local player, drawn like any other player while the camera is detached (F5); nullptr: not drawn.
     void setLocalPlayer(const Entity* e) { localPlayer_ = e; }
     static constexpr i32 kLocalPlayerId = INT32_MIN;
@@ -108,6 +109,7 @@ private:
     std::unordered_map<u64, CachedLayers> layerCache_;  // resolved layers by type + variant state
     int equipmentLayers(const Entity& e, const TypeDef& d, Layer* out, int max);
     ItemModels* items_ = nullptr;
+    bool externalItems_ = false;
     const Entity* localPlayer_ = nullptr;
     std::vector<Attachment> attachments_;
     int elytraModel_ = -1, elytraBabyModel_ = -1;

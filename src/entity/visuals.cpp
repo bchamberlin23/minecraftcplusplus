@@ -531,6 +531,7 @@ bool Visuals::Impl::createGpu(Renderer& r) {
     for (List* l : {&worldLists.cut, &worldLists.tr, &worldLists.glint, &hudLists.cut, &hudLists.tr, &hudLists.glint, &tagSee, &tagNormal})
         l->v.reserve(1024);
     gpuOk = true;
+    er.setItemEntitiesExternal(true);  // dropped items as 3D item models from now on
     return true;
 }
 

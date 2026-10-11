@@ -10,7 +10,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>
 #include <shared_mutex>
 
 namespace fx {
@@ -1004,20 +1003,14 @@ void Particles::tick() {
     if (rain_ < rainTarget_) rain_ = std::min(rainTarget_, rain_ + 0.01f);
     if (rain_ > rainTarget_) rain_ = std::max(rainTarget_, rain_ - 0.01f);
 
-    Timer tSim;
     for (Particle& p : live_) {
         tickOne(p);
         if (!(p.flags & Removed) && (ticks_ + u64(&p - live_.data())) % 4 == 0) p.light = lightAt(p.x, p.y, p.z);
     }
     live_.erase(std::remove_if(live_.begin(), live_.end(), [](const Particle& p) { return (p.flags & Removed) != 0; }),
                 live_.end());
-    const double simMs = tSim.ms();
-    Timer tAmb;
     ambient(cam_);
-    const double ambMs = tAmb.ms();
     weather(cam_);
-    static const bool dbg = std::getenv("MCPP_VISUALS_DEBUG") != nullptr;
-    if (dbg && ticks_ % 40 == 0) LOG("particles: tick sim %.3f ms ambient %.3f ms, %zu live", simMs, ambMs, live_.size());
     // CampfireBlockEntity.particleTick for campfires the sampler found (forgotten when broken or far away).
     static int cosy = -2, signal = -2;
     if (cosy == -2) cosy = typeId("campfire_cosy_smoke"), signal = typeId("campfire_signal_smoke");
@@ -1055,11 +1048,7 @@ void Particles::frame(double dt, const double cam[3]) {
         weatherQueue_.insert(weatherQueue_.end(), netWeather_.begin(), netWeather_.end());
         netWeather_.clear();
     }
-    Timer tLock;
     std::shared_lock lock(world_.mutex());
-    const double lockMs = tLock.ms();
-    static const bool dbg = std::getenv("MCPP_VISUALS_DEBUG") != nullptr;
-    if (dbg && lockMs > 0.5) LOG("particles: world lock wait %.3f ms", lockMs);
     for (CachedBlock& c : blockCache2_) c.y = INT32_MIN;  // the world may have changed since the last frame
     for (const NetBreak& b : breaks) blockDestroyed(b.x, b.y, b.z, localBlock(b.state));
     for (const NetSpawn& s : spawns) {

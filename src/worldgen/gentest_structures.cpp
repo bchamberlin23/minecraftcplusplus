@@ -169,7 +169,8 @@ int runStructureTest(BlockRegistry& registry, const fs::path& jar, const fs::pat
                                                 std::to_string(int(i32(u32(u64(key) >> 32)))));
                 }
             }
-            if (c.status == "minecraft:full" && c.cx >= area[0] && c.cz >= area[1] && c.cx <= area[2] && c.cz <= area[3])
+            if ((c.status == "minecraft:full" || c.status == "minecraft:terrain") && c.cx >= area[0] && c.cz >= area[1] &&
+                c.cx <= area[2] && c.cz <= area[3])
                 c.blocks = readBlocks(root, registry, gen.minY(), gen.height());
             saved.push_back(std::move(c));
         }
@@ -275,10 +276,49 @@ int runStructureTest(BlockRegistry& registry, const fs::path& jar, const fs::pat
     int result = (totalMatched == totalTheirs && totalOurs == totalTheirs) ? 0 : 2;
     if (mode != "all") return result;
 
+    // ---- terrain (with the beardifier) of the chunks saved at "terrain" ----
+    {
+        t = Timer();
+        std::vector<const SavedChunk*> terrainChunks;
+        for (const SavedChunk& c : saved)
+            if (!c.blocks.empty() && c.status == "minecraft:terrain") terrainChunks.push_back(&c);
+        std::atomic<size_t> next{0}, bad{0}, badBeard{0}, total{0}, bearded{0};
+        std::mutex m;
+        std::map<std::pair<std::string, std::string>, size_t> conf;
+        std::vector<std::thread> workers;
+        const unsigned n = std::max(1u, std::thread::hardware_concurrency() - 2);
+        for (unsigned i = 0; i < n; ++i)
+            workers.emplace_back([&] {
+                wg::DensityContext ctx;
+                wg::GenChunk g;
+                for (size_t k; (k = next++) < terrainChunks.size();) {
+                    const SavedChunk& c = *terrainChunks[k];
+                    std::unique_ptr<wg::DensityAddition> beard = structures.beardifier(c.cx, c.cz);
+                    gen.generate(c.cx, c.cz, g, ctx, nullptr, beard.get());
+                    size_t b = 0;
+                    for (size_t j = 0; j < c.blocks.size(); ++j)
+                        if (registry.name(c.blocks[j]) != registry.name(g.blocks[j])) {
+                            ++b;
+                            std::lock_guard lock(m);
+                            ++conf[{registry.name(c.blocks[j]), registry.name(g.blocks[j])}];
+                        }
+                    bad += b, total += c.blocks.size();
+                    if (beard) ++bearded, badBeard += b;
+                }
+            });
+        for (auto& w : workers) w.join();
+        LOG("structtest: terrain chunks: %zu, %zu of %zu blocks differ (%zu in the %zu chunks with terrain adaptation) in %.1f ms",
+            terrainChunks.size(), bad.load(), total.load(), badBeard.load(), bearded.load(), t.ms());
+        std::vector<std::pair<size_t, std::string>> v;
+        for (const auto& [k, c] : conf) v.push_back({c, k.first + "  ->  " + k.second});
+        std::sort(v.rbegin(), v.rend());
+        for (size_t i = 0; i < std::min<size_t>(v.size(), 12); ++i) LOG("structtest:   terrain %8zu  expected %s", v[i].first, v[i].second.c_str());
+    }
+
     // ---- blocks of the full chunks ----
     std::vector<const SavedChunk*> full;
     for (const SavedChunk& c : saved)
-        if (!c.blocks.empty()) full.push_back(&c);
+        if (!c.blocks.empty() && c.status == "minecraft:full") full.push_back(&c);
     std::set<std::pair<int, int>> decorate, terrain;
     for (const SavedChunk* c : full)
         for (int dz = -1; dz <= 1; ++dz)

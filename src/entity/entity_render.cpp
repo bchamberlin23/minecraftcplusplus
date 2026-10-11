@@ -772,7 +772,8 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
     }
 
     PartPose rolePose[RoleCount];
-    u64 roleSet = 0, baseHidden = 0;
+    M34 roleMat[RoleCount];
+    u64 roleSet = 0, baseHidden = 0, roleMatSet = 0;
     for (int li = 0; li < layerCount; ++li) {
         const Layer& L = layers[li];
         const Model& m = assets_.modelAt(L.model);
@@ -808,14 +809,23 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
                     if (const Role r = m.parts[i].role; r != RoleNone) rolePose[r] = poses_[i], roleSet |= 1ull << r;
             }
         }
+        const bool armor = (L.flags & Armor) && roleMatSet;
         for (size_t i = 0; i < parts; ++i) {
             const ModelPart& part = m.parts[i];
-            const M34 local = partLocal(poses_[i]);
-            const M34 parent = part.parent >= 0 ? *reinterpret_cast<const M34*>(&mats_[size_t(part.parent)]) : layerRoot;
-            *reinterpret_cast<M34*>(&mats_[i]) = mul(parent, local);
+            if (armor && part.role != RoleNone && ((roleMatSet >> part.role) & 1)) {
+                *reinterpret_cast<M34*>(&mats_[i]) = roleMat[part.role];  // same pose and chain as the parent model
+            } else {
+                const M34 local = partLocal(poses_[i]);
+                const M34 parent = part.parent >= 0 ? *reinterpret_cast<const M34*>(&mats_[size_t(part.parent)]) : layerRoot;
+                *reinterpret_cast<M34*>(&mats_[i]) = mul(parent, local);
+            }
             hidden_[i] = ((hiddenRoles >> part.role) & 1) && part.role != RoleNone ? 1 : 0;
             if (part.parent >= 0 && hidden_[size_t(part.parent)]) hidden_[i] = 1;
         }
+        if (li == 0 && living)
+            for (size_t i = 0; i < parts; ++i)
+                if (const Role r = m.parts[i].role; r != RoleNone)
+                    roleMat[r] = *reinterpret_cast<const M34*>(&mats_[i]), roleMatSet |= 1ull << r;
         if (li == 0 && living && attachments_.size() < 4096) {  // ItemInHandLayer / CustomHeadLayer anchors
             Attachment a{};
             a.entity = &e == localPlayer_ ? kLocalPlayerId : e.id;
@@ -1065,7 +1075,7 @@ void EntityRenderer::draw(const PassContext& ctx) {
         if (e.type < 0 || size_t(e.type) >= defs_.size()) return;
         const TypeDef& d = defs_[size_t(e.type)];
         if (d.kind == Kind::None || !e.info) return;
-        if (d.kind == Kind::Item && items_) return;  // 3D item models: the visuals pass
+        if (d.kind == Kind::Item && externalItems_) return;  // 3D item models: the visuals pass
         if (e.category == Category::Living && (e.sharedFlags & 0x20)) return;  // invisible
         double c[3];
         for (int a = 0; a < 3; ++a) c[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt - cam[a];
