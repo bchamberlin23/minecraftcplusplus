@@ -1,0 +1,5 @@
+# Store text with LF in git whatever the editor or tool wrote (the tree had mixed CRLF/LF).
+* text=auto eol=lf
+*.png binary
+*.dll binary
+*.lib binary
