@@ -213,8 +213,9 @@ public:
     bool heldPiercing = false;
     float heldMinimumCharge = 0;
     double attackMinReach = 0, attackMaxReach = -1;
-    int swingTicks = 6;
+    int swingTicks = 6, useSwingTicks = 6;  // attack / interact swings (onSwing reads swingTicks)
     std::function<void()> onStab;
+    std::function<void()> onStabEffects;  // PiercingWeapon.makeSound for the local player (gameplay layer)
     bool crosshairOnLiving = false;    // a living entity is under the crosshair (Minecraft.crosshairPickEntity)
     float attackStrengthScale(float a) const {
         const float delay = 20.0f / std::max(attackSpeed, 1e-4f);

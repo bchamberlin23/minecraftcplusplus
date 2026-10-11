@@ -326,6 +326,12 @@ const ItemRules::ItemInfo& ItemRules::item(std::string_view itemName) {
         k.cooldownGroup = c["minecraft:use_cooldown"].value("cooldown_group", "");
     }
     k.piercing = c.contains("minecraft:piercing_weapon");
+    auto soundOf = [&](const char* type) -> std::string {
+        if (!c.contains(type) || !c[type].is_object() || !c[type].contains("sound")) return {};
+        const nlohmann::json& s = c[type]["sound"];
+        return s.is_string() ? s.get<std::string>() : s.is_object() ? s.value("sound_id", "") : "";
+    };
+    k.piercingSound = soundOf("minecraft:piercing_weapon"), k.kineticSound = soundOf("minecraft:kinetic_weapon");
     if (c.contains("minecraft:minimum_attack_charge") && c["minecraft:minimum_attack_charge"].is_number())
         k.minimumAttackCharge = c["minecraft:minimum_attack_charge"].get<float>();
     if (c.contains("minecraft:attack_range") && c["minecraft:attack_range"].is_object()) {
@@ -336,6 +342,8 @@ const ItemRules::ItemInfo& ItemRules::item(std::string_view itemName) {
     }
     if (c.contains("minecraft:attack_animation") && c["minecraft:attack_animation"].is_object())
         k.attackSwingTicks = c["minecraft:attack_animation"].value("duration", 6);
+    if (c.contains("minecraft:interact_animation") && c["minecraft:interact_animation"].is_object())
+        k.interactSwingTicks = c["minecraft:interact_animation"].value("duration", 6);
     k.classUse = shortName == "bow" || shortName == "crossbow" || shortName == "trident" || shortName == "spyglass" ||
                  shortName == "goat_horn" || shortName == "brush" || shortName == "bundle" || shortName.ends_with("_bundle");
     if (shortName == "bow") info.use = {Anim::Bow, 72000};

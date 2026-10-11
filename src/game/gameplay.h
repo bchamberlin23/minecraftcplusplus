@@ -88,6 +88,7 @@ private:
     bool inWaterOrRain() const;
     int componentType(const char* name);  // data component type id by short name ("consumable")
     void heldWeapon();                    // Game's held weapon fields from the main hand stack
+    std::string weaponSound(const ui::ItemStack& s, const char* type);  // kinetic_weapon / piercing_weapon sound
     bool onCooldown(const ui::ItemStack* s) const;
     bool startUsing(int hand);  // LivingEntity.startUsingItem
     void tickUse();

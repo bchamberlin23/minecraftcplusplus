@@ -505,6 +505,12 @@ void Gameplay::setPlayer(Game& game, ui::Ui& ui) {
     game.handHasItem = [this](int hand) { return (hand == 0 ? mainHand() : offHand()) != nullptr; };
     game.handOnCooldown = [this](int hand) { return onCooldown(hand == 0 ? mainHand() : offHand()); };
     game.predictRelease = [this] { releaseUse(); };
+    game.onStabEffects = [this] {  // PiercingWeapon.makeSound
+        const ui::ItemStack* s = mainHand();
+        const std::string sound = s ? weaponSound(*s, "piercing_weapon") : std::string();
+        if (audio::AudioSystem* a = audio::instance(); a && !sound.empty())
+            a->play(sound, audio::Category::Player, game_->player().pos[0], game_->player().pos[1], game_->player().pos[2], 1.0f, 1.0f);
+    };
     ui.setEquipmentRule([this](const ui::ItemStack& s, bool& allowed) { return equipSlot(s, allowed, nullptr); });
     riding_ = std::make_unique<Riding>(*this, game, entities_, rules_);
     riding_->setClient(client_);
@@ -932,7 +938,13 @@ int Gameplay::predictItemUse(int hand, const RayHit* target) {
         if (worn && worn->sameItemSameComponents(*s)) return Game::kUseFail;
         return instant();
     }
-    if (u.anim == ItemRules::Anim::Block || u.anim == ItemRules::Anim::Spear) return start();
+    if (u.anim == ItemRules::Anim::Spear) {  // KineticWeapon: the use sound, heard by the user only here
+        const std::string sound = weaponSound(*s, "kinetic_weapon");
+        if (audio::AudioSystem* a = audio::instance(); a && !sound.empty())
+            a->play(sound, audio::Category::Player, game_->player().pos[0], game_->player().pos[1], game_->player().pos[2], 1.0f, 1.0f);
+        return start();
+    }
+    if (u.anim == ItemRules::Anim::Block) return start();
     (void)target;
     return Game::kUsePass;
 }
@@ -1023,6 +1035,37 @@ int Gameplay::predictUseOn(int hand, const RayHit& hit) {
     return Game::kUsePass;
 }
 
+// A weapon component's "sound" (kinetic_weapon / piercing_weapon): the stack's patch, else the item's default.
+std::string Gameplay::weaponSound(const ui::ItemStack& s, const char* type) {
+    const ItemRules::Components& d = rules_.components(itemName(s.item));
+    std::string sound = std::string(type) == "kinetic_weapon" ? d.kineticSound : d.piercingSound;
+    const int t = componentType(type);
+    if (removedFrom(s, t)) return {};
+    const std::string* c = patchOf(s, t);
+    if (!c) return sound;
+    net::Reader r(reinterpret_cast<const u8*>(c->data()), c->size());
+    auto holder = [&]() -> std::string {  // Holder<SoundEvent>: 0 inline (identifier, optional range), else id + 1
+        const int h = r.varInt();
+        if (h == 0) {
+            std::string n(r.str());
+            if (r.boolean()) r.f32();
+            return n;
+        }
+        return size_t(h - 1) < soundNames_.size() ? soundNames_[size_t(h - 1)] : std::string();
+    };
+    if (std::string(type) == "piercing_weapon") {  // dealsKnockback, dismounts, optional sound, optional hit sound
+        r.boolean(), r.boolean();
+        sound = r.boolean() ? holder() : std::string();
+    } else {  // contact cooldown, delay, three optional conditions, forward movement, multiplier, optional sound
+        r.varInt(), r.varInt();
+        for (int i = 0; i < 3; ++i)
+            if (r.boolean()) r.varInt(), r.f32(), r.f32();
+        r.f32(), r.f32();
+        sound = r.boolean() ? holder() : std::string();
+    }
+    return r.ok ? sound : std::string();
+}
+
 // The main hand's weapon components for Minecraft.startAttack (defaults with the stack's patch): piercing_weapon,
 // minimum_attack_charge, attack_range (the player's: creative or survival reaches, plus the hitbox margin) and the
 // attack_animation duration with Haste / Conduit Power / Mining Fatigue (LivingEntity.getModifiedSwingDuration).
@@ -1050,17 +1093,23 @@ void Gameplay::heldWeapon() {
             if (on) r.varInt();
             d.attackSwingTicks = on ? r.varInt() : 6;
         });
+        read("interact_animation", [&](net::Reader& r, bool on) {
+            if (on) r.varInt();
+            d.interactSwingTicks = on ? r.varInt() : 6;
+        });
     }
     game_->heldPiercing = d.piercing;
     game_->heldMinimumCharge = d.minimumAttackCharge;
     const bool creative = game_->gameMode == 1;
     game_->attackMinReach = d.hasAttackRange ? std::max(0.0, double(d.attackRange[creative ? 2 : 0] - d.attackRange[4])) : 0.0;
     game_->attackMaxReach = d.hasAttackRange ? double(d.attackRange[creative ? 3 : 1] + d.attackRange[4]) : -1.0;
-    int swing = d.attackSwingTicks;
-    const int haste = effect("haste"), conduit = effect("conduit_power");
-    if (haste >= 0 || conduit >= 0) swing -= 1 + std::max(haste, conduit);  // MobEffectUtil.getDigSpeedAmplification
-    else if (const int fatigue = effect("mining_fatigue"); fatigue >= 0) swing += (1 + fatigue) * 2;
-    game_->swingTicks = swing;
+    const int haste = effect("haste"), conduit = effect("conduit_power"), fatigue = effect("mining_fatigue");
+    auto modified = [&](int swing) {  // MobEffectUtil.getDigSpeedAmplification / Mining Fatigue
+        if (haste >= 0 || conduit >= 0) return swing - (1 + std::max(haste, conduit));
+        return fatigue >= 0 ? swing + (1 + fatigue) * 2 : swing;
+    };
+    game_->swingTicks = modified(d.attackSwingTicks);
+    game_->useSwingTicks = modified(d.interactSwingTicks);
 }
 
 // Item.releaseUsing on the client: a riptide trident held for 10 ticks in water or rain launches the player.

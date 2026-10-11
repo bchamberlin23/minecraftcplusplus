@@ -79,7 +79,8 @@ public:
         bool piercing = false, hasAttackRange = false;
         float minimumAttackCharge = 0;
         float attackRange[6] = {0, 3, 0, 5, 0.3f, 1};
-        int attackSwingTicks = 6;
+        int attackSwingTicks = 6, interactSwingTicks = 6;  // attack_animation / interact_animation durations
+        std::string kineticSound, piercingSound;  // kinetic_weapon / piercing_weapon "sound" (use start, stab)
     };
     const Components& components(std::string_view itemName);
     bool inTag(std::string_view tag, std::string_view blockName) const;  // "minecraft:climbable"

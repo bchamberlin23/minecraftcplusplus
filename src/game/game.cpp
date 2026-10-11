@@ -421,7 +421,12 @@ int Game::useItemOn(int hand) {
     edit(t[0], t[1], t[2], id);
     placedLast_ = true;
     if (onBlockChanged) onBlockChanged(true, t[0], t[1], t[2], id);
-    if (onSwing) onSwing();
+    if (onSwing) {  // a use swing: the item's interact_animation
+        const int attackSwing = swingTicks;
+        swingTicks = useSwingTicks;
+        onSwing();
+        swingTicks = attackSwing;
+    }
     return kUseConsume;
 }
 
@@ -579,6 +584,7 @@ bool Game::startAttack() {
     if (heldMinimumCharge > 0 && float(attackStrengthTicker) / attackStrengthDelay() < heldMinimumCharge) return false;
     if (heldPiercing) {  // MultiPlayerGameMode.piercingAttack: a stab (the server finds what it hits)
         if (onStab) onStab();
+        if (onStabEffects) onStabEffects();
         attackStrengthTicker = 0;  // Player.onAttack
         if (onSwing) onSwing();
         return true;
