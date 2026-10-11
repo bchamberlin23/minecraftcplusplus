@@ -183,7 +183,47 @@ void Gameplay::attach(net::Client& client) {
             entityId_ = id;
             effects_.clear(), attributes_.clear(), entityAttributes_.clear();
             if (riding_) riding_->dismounted();
+            if (game_) game_->border = WorldBorder{};  // a new ClientLevel
         });
+    });
+    // World border (ClientPacketListener.handleInitializeBorder / handleSetBorder*).
+    auto border = [this](std::function<void(WorldBorder&)> fn) {
+        post([this, fn = std::move(fn)] {
+            if (game_) fn(game_->border);
+        });
+    };
+    client.onPlayPeek("initialize_border", [border](net::Reader& r) {
+        const double x = r.f64(), z = r.f64(), oldSize = r.f64(), newSize = r.f64();
+        const i64 lerpTime = r.varLong();
+        const int maxSize = r.varInt(), warningBlocks = r.varInt(), warningTime = r.varInt();
+        if (r.ok) border([=](WorldBorder& b) {
+            b.setCenter(x, z);
+            if (lerpTime > 0) b.lerpSizeBetween(oldSize, newSize, lerpTime);
+            else b.setSize(newSize);
+            b.absoluteMaxSize = maxSize;
+            b.warningBlocks = warningBlocks, b.warningTime = warningTime;
+        });
+    });
+    client.onPlayPeek("set_border_center", [border](net::Reader& r) {
+        const double x = r.f64(), z = r.f64();
+        if (r.ok) border([=](WorldBorder& b) { b.setCenter(x, z); });
+    });
+    client.onPlayPeek("set_border_lerp_size", [border](net::Reader& r) {
+        const double oldSize = r.f64(), newSize = r.f64();
+        const i64 lerpTime = r.varLong();
+        if (r.ok) border([=](WorldBorder& b) { b.lerpSizeBetween(oldSize, newSize, lerpTime); });
+    });
+    client.onPlayPeek("set_border_size", [border](net::Reader& r) {
+        const double size = r.f64();
+        if (r.ok) border([=](WorldBorder& b) { b.setSize(size); });
+    });
+    client.onPlayPeek("set_border_warning_delay", [border](net::Reader& r) {
+        const int time = r.varInt();
+        if (r.ok) border([=](WorldBorder& b) { b.warningTime = time; });
+    });
+    client.onPlayPeek("set_border_warning_distance", [border](net::Reader& r) {
+        const int blocks = r.varInt();
+        if (r.ok) border([=](WorldBorder& b) { b.warningBlocks = blocks; });
     });
     client.onPlayPeek("respawn", [this](net::Reader&) {  // a new player entity: no effects, default attributes
         post([this] {

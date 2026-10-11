@@ -29,6 +29,7 @@ Texture2DArray gCelestial : register(t2);
 Texture2D gEndSky : register(t3);
 Texture2D gRain : register(t4);
 Texture2D gSnow : register(t5);
+Texture2D gForcefield : register(t6);
 SamplerState gWrap : register(s0);   // point, wrap
 SamplerState gClamp : register(s1);  // point, clamp
 
@@ -133,6 +134,13 @@ float4 SkyWeatherPS(GeoOut i) : SV_Target {
     float4 c = t * i.color;
     if (c.a < 0.1) discard;
     return c;
+}
+
+// World border wall (core/world_border.fsh): the forcefield texture times the status tint and fade.
+float4 SkyBorderPS(GeoOut i) : SV_Target {
+    float4 t = gForcefield.Sample(gWrap, i.uv);
+    if (t.a == 0) discard;
+    return t * i.color;
 }
 
 // ---- clouds ------------------------------------------------------------------------------------

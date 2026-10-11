@@ -56,6 +56,19 @@ void Physics::collisionBoxes(const AABB& area, std::vector<AABB>& out) const {
                     if (a.intersects(area)) out.push_back(a);
                 }
             }
+    if (context.set && border &&
+        border->insideCloseToBorder(context.x, context.z, area.max[0] - area.min[0], area.max[2] - area.min[2])) {
+        // WorldBorder.getCollisionShape: INFINITY minus the box floor(min) .. ceil(max); as slabs cut to the area.
+        const double lo[2] = {std::floor(border->minX()), std::floor(border->minZ())};
+        const double hi[2] = {std::ceil(border->maxX()), std::ceil(border->maxZ())};
+        for (int side = 0; side < 4; ++side) {
+            AABB a{{area.min[0] - 1, area.min[1] - 1, area.min[2] - 1}, {area.max[0] + 1, area.max[1] + 1, area.max[2] + 1}};
+            const int axis = side < 2 ? 0 : 2, k = side < 2 ? 0 : 1;
+            if (side & 1) a.min[axis] = std::max(a.min[axis], hi[k]);
+            else a.max[axis] = std::min(a.max[axis], lo[k]);
+            if (a.min[axis] < a.max[axis] && a.intersects(area)) out.push_back(a);
+        }
+    }
 }
 
 bool Physics::inFluid(const AABB& box) const {
@@ -275,6 +288,7 @@ void Player::move(const Physics& physics, double dx, double dy, double dz) {
         std::fill(vel, vel + 3, 0.0);
     }
     const double in[3] = {dx, dy, dz};
+    physics.context.x = pos[0], physics.context.z = pos[2];
     AABB start = box();
     AABB area = start;
     for (int a = 0; a < 3; ++a) (in[a] < 0 ? area.min[a] : area.max[a]) += in[a];
@@ -342,7 +356,7 @@ void Player::tick(const Physics& physics, const PlayerInput& rawInput) {
     const bool jumpPressed = rawInput.jump && !wasJumping_;
     wasJumping_ = rawInput.jump;
     // Collision shapes that depend on the player (scaffolding, powder snow).
-    physics.context = {true, pos[1], fallDistance, rawInput.sneak, attr.powderSnowWalker};
+    physics.context = {true, pos[1], fallDistance, rawInput.sneak, attr.powderSnowWalker, pos[0], pos[2]};
     updatePose(physics);
     // Player.isMovingSlowly: crouching or crawling walks at the sneaking speed.
     sneaking = pose == Pose::Crouching && !flying;

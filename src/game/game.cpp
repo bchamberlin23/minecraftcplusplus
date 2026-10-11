@@ -28,6 +28,7 @@ Game::Game(World& world, BlockRegistry& registry, Terrain& terrain, Renderer& re
       renderer_(renderer),
       physics_(world, registry),
       lighting_(world, registry) {
+    physics_.border = &border;
     player_.pos[0] = start.x, player_.pos[1] = start.y, player_.pos[2] = start.z;
     std::copy(player_.pos, player_.pos + 3, player_.prev);
     player_.yaw = float(start.yaw * kPi / 180.0);
@@ -200,6 +201,7 @@ void Game::frame(Window& w, double dt) {
     while (tickAccumulator_ >= kTick) {
         // Minecraft.tick: the keybinds (attack / digging) with a fresh pick, then the player.
         ++ticks_;
+        border.tick();  // ClientLevel.tick
         alpha_ = 1.0;
         retarget();
         if (inputSuspended) missTime_ = 10000;
@@ -308,6 +310,11 @@ bool Game::useTarget(bool place) {
         if (onSwing) onSwing();
         return true;
     }
+    // MultiPlayerGameMode.useItemOn: a block outside the world border fails (nothing is sent, no item use follows).
+    if (!border.blockWithinBounds(target_.x, target_.z)) {
+        useConsumed_ = true;
+        return false;
+    }
     // Using a block that opens a screen (or acting with an item that is not a block) goes to the server as is.
     const bool interacts = onInteract && !player_.sneaking && onInteract(target_.x, target_.y, target_.z);
     if (interacts || !hotbar_[selected_]) {
@@ -406,6 +413,7 @@ bool Game::destroyBlock(int x, int y, int z) {
 bool Game::startDestroyBlock(int x, int y, int z, int face) {
     // Player.blockActionRestricted: spectators never, adventure only with a matching can_break on the held item.
     if (gameMode == 3 || (gameMode == 2 && !(adventureMayBreak && adventureMayBreak(x, y, z)))) return false;
+    if (!border.blockWithinBounds(x, z)) return false;
     if (instabuild) {
         const bool breaks = !(canDestroyInCreative && !canDestroyInCreative()) && world_.block(x, y, z) != 0;
         sendDig(kStartDestroy, x, y, z, face, breaks);
@@ -445,7 +453,7 @@ bool Game::continueDestroyBlock(int x, int y, int z, int face) {
         --destroyDelay_;
         return true;
     }
-    if (instabuild) {
+    if (instabuild && border.blockWithinBounds(x, z)) {
         destroyDelay_ = 5;
         const bool breaks = !(canDestroyInCreative && !canDestroyInCreative()) && world_.block(x, y, z) != 0;
         sendDig(kStartDestroy, x, y, z, face, breaks);
@@ -580,8 +588,8 @@ void Game::buildOverlay() {
     std::vector<LineVertex> world, screen;
     std::vector<SpriteVertex> sprites;
 
-    // Outline of the targeted block's selection shape.
-    if (target_.hit) {
+    // Outline of the targeted block's selection shape (none outside the world border).
+    if (target_.hit && border.blockWithinBounds(target_.x, target_.z)) {
         const BlockInfo& b = registry_.infos()[world_.block(target_.x, target_.y, target_.z)];
         for (u32 i = 0; i < b.selectionCount; ++i) {
             const Box& s = registry_.box(b.selectionFirst + i);

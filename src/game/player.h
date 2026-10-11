@@ -1,5 +1,6 @@
 #pragma once
 #include "core/common.h"
+#include "game/world_border.h"
 
 #include <functional>
 
@@ -45,8 +46,12 @@ public:
         bool set = false;
         double feetY = 0, fallDistance = 0;
         bool descending = false, powderSnowWalker = false;
+        double x = 0, z = 0;  // the entity's position (the world border collides only near it)
     };
     mutable EntityContext context;
+    // The level's world border: with an entity context, Entity.collectColliders adds its collision shape (everything
+    // outside the border's block-aligned box) when the entity is close to it (WorldBorder.isInsideCloseToBorder).
+    const WorldBorder* border = nullptr;
     const World& world() const { return world_; }
     const BlockRegistry& registry() const { return registry_; }
 

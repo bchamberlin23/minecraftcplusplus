@@ -28,7 +28,7 @@ private:
     Canvas canvas_;
     Renderer* renderer_ = nullptr;
     ComPtr<ID3D12RootSignature> root_;
-    ComPtr<ID3D12PipelineState> pso_, psoInvert_, psoGlint_;
+    ComPtr<ID3D12PipelineState> pso_, psoInvert_, psoGlint_, psoVignette_;
     ComPtr<ID3D12Resource> guiTex_, iconTex_, vertices_, upload_;
     u8* vertexMapped_ = nullptr;
     u8* uploadMapped_ = nullptr;

@@ -38,6 +38,8 @@ public:
     // Used by input handling and by the scripted self-test.
     void retarget();
     const RayHit& target() const { return target_; }
+    // The level's world border (ClientLevel.getWorldBorder): collisions, block targeting, the wall and the vignette.
+    WorldBorder border;
     bool useTarget(bool place);  // break or place at the current target; true if the world changed
     void setHeld(u16 id) { hotbar_[selected_] = id; }
     int selectedSlot() const { return selected_; }

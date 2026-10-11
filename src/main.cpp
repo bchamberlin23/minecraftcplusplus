@@ -958,6 +958,8 @@ int wmain(int argc, wchar_t** argv) {
         const bool timeUp = opt.seconds > 0 && now - loopStart >= opt.seconds;  // --seconds: shoot the last frame
         if (opt.seconds > 0) shot = timeUp && !opt.screenshot.empty();
         sky.setBossOverlay(ui::bossDarkenScreen(), ui::bossWorldFog());  // boss bar flags (mp_hud.h)
+        sky.setWorldBorder(session ? &game.border : nullptr, game.partialTick(),
+                           float(std::min(ui.settings().renderDistance, opt.detail) * 16));
         sky.update(cam, dt);
         ui.endFrame();
         if (haveReports) packs::updatePlayer(renderer, ui, game.selectedSlot(), reports, registry);  // held light

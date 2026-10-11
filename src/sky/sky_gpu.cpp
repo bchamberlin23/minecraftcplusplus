@@ -3,6 +3,7 @@
 #include "render/pack_sink.h"
 
 #include "SkyCloudPS.h"
+#include "SkyBorderPS.h"
 #include "SkyCloudVS.h"
 #include "SkyDarkDiscPS.h"
 #include "SkyDiscPS.h"
@@ -99,7 +100,7 @@ bool SkyGpu::createTexture(const Image* layers, u32 count, u32 descriptor, ComPt
 bool SkyGpu::init(Renderer& renderer, SkyImages images, std::vector<Sky::Frame::Vertex> stars) {
     renderer_ = &renderer;
     ID3D12Device* device = renderer.device();
-    descriptors_ = renderer.allocDescriptors(4);
+    descriptors_ = renderer.allocDescriptors(5);
     if (descriptors_ == UINT32_MAX) return ok(E_OUTOFMEMORY, "descriptor allocation");
     for (u32 i = 0; i < 9; ++i) {  // shader packs bind single textures (the srv slot is overwritten below)
         if (!createTexture(&images.celestial[i], 1, descriptors_, celestial2d_[i])) return false;
@@ -107,12 +108,13 @@ bool SkyGpu::init(Renderer& renderer, SkyImages images, std::vector<Sky::Frame::
     starsCpu_ = stars;
     if (!createTexture(images.celestial, 9, descriptors_, celestial_) ||
         !createTexture(&images.endSky, 1, descriptors_ + 1, endSky_) ||
-        !createTexture(&images.rain, 1, descriptors_ + 2, rain_) || !createTexture(&images.snow, 1, descriptors_ + 3, snow_))
+        !createTexture(&images.rain, 1, descriptors_ + 2, rain_) || !createTexture(&images.snow, 1, descriptors_ + 3, snow_) ||
+        !createTexture(&images.forcefield, 1, descriptors_ + 4, forcefield_))
         return false;
 
     D3D12_DESCRIPTOR_RANGE range{};
     range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    range.NumDescriptors = 4;
+    range.NumDescriptors = 5;
     range.BaseShaderRegister = 2;
     D3D12_ROOT_PARAMETER params[5]{};
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
@@ -181,7 +183,8 @@ bool SkyGpu::init(Renderer& renderer, SkyImages images, std::vector<Sky::Frame::
         !pso(SHADER(SkyGeoVS), SHADER(SkyGeoPS), Blend::Alpha, false, false, false, psoBlend_) ||
         !pso(SHADER(SkyGeoVS), SHADER(SkyGeoPS), Blend::Add, false, false, false, psoAdd_) ||
         !pso(SHADER(SkyCloudVS), SHADER(SkyCloudPS), Blend::Alpha, true, true, true, psoClouds_) ||
-        !pso(SHADER(SkyGeoVS), SHADER(SkyWeatherPS), Blend::Alpha, true, false, false, psoWeather_))
+        !pso(SHADER(SkyGeoVS), SHADER(SkyWeatherPS), Blend::Alpha, true, false, false, psoWeather_) ||
+        !pso(SHADER(SkyGeoVS), SHADER(SkyBorderPS), Blend::Add, true, false, false, psoBorder_))
         return false;
 #undef SHADER
 
@@ -343,6 +346,13 @@ void SkyGpu::drawLate(const PassContext& ctx) {
         list->SetGraphicsRootShaderResourceView(2, ring_->GetGPUVirtualAddress() + u64(frameIndex_) * kSlotBytes + 256);
         list->SetGraphicsRoot32BitConstants(1, 2, consts, 0);
         list->DrawInstanced(u32(std::min<size_t>(f.weather.size(), kMaxDynamicVertices - consts[0])), 1, 0, 0);
+    }
+    if (!f.border.empty()) {  // RenderPipelines.WORLD_BORDER: additive (BlendFunction.OVERLAY), no culling
+        const u32 consts[2] = {putVertices(f.border), 0};
+        list->SetPipelineState(psoBorder_.Get());
+        list->SetGraphicsRootShaderResourceView(2, ring_->GetGPUVirtualAddress() + u64(frameIndex_) * kSlotBytes + 256);
+        list->SetGraphicsRoot32BitConstants(1, 2, consts, 0);
+        list->DrawInstanced(u32(std::min<size_t>(f.border.size(), kMaxDynamicVertices - consts[0])), 1, 0, 0);
     }
     list->EndQuery(queries_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, ctx.frame * 4 + 3);
     list->ResolveQueryData(queries_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, ctx.frame * 4, 4, queryReadback_.Get(),
