@@ -175,6 +175,10 @@ struct Visuals::Impl {
     std::vector<MeshQuad> dyn;
     Lists worldLists, hudLists, shadowLists;  // shadowLists: casters outside the view (shadow maps only)
     u64 updatedFrame = ~u64(0), preparedFrame = ~u64(0), handWorldFrame = ~u64(0);
+    // Shader pipeline: particles are built in the World stage, where the opaque ones are drawn into the lit entity
+    // layer (in the late LDR layer they were vanilla-lit and came out far too dark next to the HDR-lit terrain).
+    u64 particleFrame = ~u64(0);
+    u32 particleOpaque = 0, particleTotal = 0;
     // Motion vectors: last frame's transform of each keyed instance (camera-relative to that frame's camera).
     struct PrevInst {
         u64 frame;
@@ -444,6 +448,22 @@ void StagePass::draw(const PassContext& ctx) {
                 D3D12_VIEWPORT full{0, 0, float(ctx.width), float(ctx.height), 0.0f, 1.0f};
                 ctx.list->RSSetViewports(1, &full);
             }
+            if (m.particles && ctx.shading && mv) {
+                const double cam[3] = {ctx.camX, ctx.camY, ctx.camZ};
+                auto* out = reinterpret_cast<fx::GpuParticle*>(m.frameBase + kParticleOffset);
+                m.particleTotal = m.particles->build(out, kMaxParticles, cam, m.particleOpaque);
+                m.frameParticleMs += m.particles->stats().buildMs;
+                m.particleFrame = m.frameCounter;
+                m.uploadPending(ctx);
+                if (m.particleOpaque) {
+                    const D3D12_GPU_VIRTUAL_ADDRESS va = m.upload->GetGPUVirtualAddress() + u64(ctx.frame) * kFrameBytes;
+                    ctx.list->SetGraphicsRootConstantBufferView(0, va);  // the World stage's (pipeline) constants
+                    const u32 c[4] = {0, 0, 0, 0};
+                    ctx.list->SetPipelineState(m.psoPartCutMv.Get());
+                    ctx.list->SetGraphicsRoot32BitConstants(1, 4, c, 0);
+                    ctx.list->DrawInstanced(m.particleOpaque * 6, 1, 0, 0);
+                }
+            }
             if (mv) ctx.list->OMSetRenderTargets(1, &ctx.colorRtv, FALSE, &ctx.dsv);
             m.stats().worldMs = t.ms();
             break;
@@ -461,6 +481,8 @@ void StagePass::draw(const PassContext& ctx) {
                 m.packParticles(*ctx.pack, ctx, m.packParticleBuf.data(), opaque, false);
                 m.packParticles(*ctx.pack, ctx, m.packParticleBuf.data() + opaque, total - opaque, true);
                 opaque = total = 0;  // nothing left for the GPU path below
+            } else if (m.particles && m.particleFrame == m.frameCounter) {  // built (opaque drawn) in the World stage
+                opaque = m.particleOpaque, total = m.particleTotal;
             } else if (m.particles) {
                 auto* out = reinterpret_cast<fx::GpuParticle*>(m.frameBase + kParticleOffset);
                 total = m.particles->build(out, kMaxParticles, cam, opaque);
@@ -480,7 +502,9 @@ void StagePass::draw(const PassContext& ctx) {
                 list->SetGraphicsRoot32BitConstants(1, 4, c, 0);
                 list->DrawInstanced(count * 6, 1, 0, 0);
             };
-            if (ctx.motionRtv.ptr) {  // shader pipeline: opaque particles write their motion
+            if (m.particleFrame == m.frameCounter) {
+                // opaque particles were drawn in the World stage
+            } else if (ctx.motionRtv.ptr) {  // shader pipeline: opaque particles write their motion
                 const D3D12_CPU_DESCRIPTOR_HANDLE rts[2] = {ctx.colorRtv, ctx.motionRtv};
                 list->OMSetRenderTargets(2, rts, FALSE, &ctx.dsv);
                 particleDraw(m.psoPartCutMv.Get(), 0, opaque);
