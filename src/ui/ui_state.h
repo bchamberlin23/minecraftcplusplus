@@ -96,6 +96,7 @@ enum class Screen {
     Online, SkinCustomization, Sounds, Controls, MouseSettings, KeyBinds, Accessibility, VideoExtra,
     // Registered screens (modules.h ScreenDef): signs and books, advancements, statistics, game mode switcher, bed
     Sign, BookEdit, BookView, Advancements, Stats, GameModeSwitcher, InBed,
+    Friends, AddFriend,  // friends_screen.cpp
     // Front end (frontend.h)
     Title, Worlds, CreateWorld, EditWorld, Confirm, Servers, EditServer, DirectConnect, Loading, Message, OpenToLan
 };

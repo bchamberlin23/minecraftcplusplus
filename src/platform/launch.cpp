@@ -166,7 +166,8 @@ bool perRunArgument(std::wstring_view a, int& values) {
         {L"--selftest", 0},     {L"--save", 0},          {L"--gentest", 2},      {L"--gentest-chunks", 1},
         {L"--audio-test", 0},   {L"--audio-capture", 1}, {L"--readonly", 0},     {L"--menu", 1},
         {L"--radius", 1},       {L"--create-name", 1},   {L"--create-seed", 1},  {L"--create-mode", 1},
-        {L"--create-difficulty", 1}, {L"--create-cheats", 1}, {L"--create-structures", 1}};
+        {L"--create-difficulty", 1}, {L"--create-cheats", 1}, {L"--create-structures", 1},
+        {L"--friend-join", 1}};
     for (auto [name, n] : kPerRun)
         if (a == name) {
             values = n;

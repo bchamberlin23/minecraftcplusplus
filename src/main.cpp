@@ -22,6 +22,7 @@
 #include "render/renderer.h"
 #include "render/upscalers/upscalers.h"
 #include "sky/sky.h"
+#include "social/friends.h"
 #include "ui/mp_hud.h"
 #include "ui/ui.h"
 #include "world/biome_colors.h"
@@ -89,6 +90,7 @@ struct Options {
     std::string menu;                            // --menu worlds|servers: the title screen opens that list
     std::wstring childScript;                    // --child-script: test script for the instance the menu starts
     std::optional<LocalServer::Config::Create> create;  // --create-*: a new world, made by the local server
+    std::string friendJoin;                      // --friend-join <code>: a friend's world through the friends tunnel
 };
 
 void usage() {
@@ -105,6 +107,7 @@ void usage() {
         "                          [--saves-dir <dir>] [--servers-file <servers.json>] [--servers-dat <servers.dat>]\n"
         "                          [--menu worlds|servers] [--child-script <file>] [--create-name <name> --create-seed <seed>\n"
         "                           --create-mode survival|hardcore|creative --create-difficulty <d> --create-cheats 0|1]\n"
+        "                          [--friend-join <friend code> [--name <player>]] | --friends-selftest | --friends-node ...\n"
         "without --world / --connect / --play: the title screen\n"
         "controls: click to capture the mouse, WASD move, Space jump (double-tap: fly), Shift sneak / descend,\n"
         "          Ctrl sprint, left click break, right click place, middle click pick, 1-9 / wheel hotbar, Esc release");
@@ -183,6 +186,8 @@ int wmain(int argc, wchar_t** argv) {
     launch::initProcess(argc, argv);  // log file without a console, handoff from the previous instance
     installCrashHandler();             // stack + minidump in the log on a crash (platform/crash.h)
     if (argc >= 3 && std::wstring_view(argv[1]) == L"--pack-test") return packs::runPackTest(argc, argv);
+    if (argc >= 2 && std::wstring_view(argv[1]) == L"--friends-selftest") return social::runFriendsSelfTest();  // social/
+    if (argc >= 2 && std::wstring_view(argv[1]) == L"--friends-node") return social::runFriendsNode(argc - 2, argv + 2);
     Options opt;
     for (int i = 1; i < argc; ++i) {
         std::wstring a = argv[i];
@@ -238,6 +243,7 @@ int wmain(int argc, wchar_t** argv) {
         else if (a == L"--servers-dat") opt.serversDat = next();
         else if (a == L"--menu") opt.menu = fs::path(next()).string();
         else if (a == L"--child-script") opt.childScript = next();
+        else if (a == L"--friend-join") opt.friendJoin = fs::path(next()).string(), opt.connect = "friend", opt.generate = false;
         else if (a == L"--handoff" || a == L"--window") next();  // platform/launch.h
         else if (a == L"--shaderpack" || a == L"--pack-option") packs::commandLine(a, next());  // render/packs/pack_api.h
         else if (a.starts_with(L"--create-")) {
@@ -295,6 +301,21 @@ int wmain(int argc, wchar_t** argv) {
             ownership.reason.c_str());
         return 1;
     }
+    // Friends (social/friends.h): presence, invites and friends' worlds through a peer-to-peer tunnel. Off for tools and
+    // benchmarks, and for scripted test runs unless they name a friends folder (MCPP_FRIENDS_DIR).
+    const bool friendsOn = !opt.friendJoin.empty() || (!opt.bench && !opt.selftest && !opt.audioTest && opt.gentestDir.empty() &&
+                                                       (opt.script.empty() || _wgetenv(L"MCPP_FRIENDS_DIR")));
+    if (friendsOn &&
+        !social::Friends::get().start({social::Friends::defaultDir(), opt.name != "Player" ? opt.name : ownership.playerName, {}}))
+        LOG("warning: friends are unavailable in this run");
+    std::string friendError;
+    std::future<u16> friendTunnel;  // --friend-join: set up while the game loads
+    if (!opt.friendJoin.empty())
+        friendTunnel = std::async(std::launch::async, [&] {
+            social::Key32 key;
+            if (!social::Friends::parseCode(opt.friendJoin, key)) return friendError = "That is not a friend code.", u16(0);
+            return social::Friends::get().join(key, 40.0, friendError);
+        });
     if (opt.gentestDir.empty() && !opt.audioTest) upscale::preinit();  // Streamline's slInit, beside the loading
     const fs::path saves = opt.savesDir.empty() ? mc / "saves" : opt.savesDir;
     // The title screen's panorama is a world of its own, generated once into a cache (seed and spot picked at
@@ -427,6 +448,14 @@ int wmain(int argc, wchar_t** argv) {
     // --- multiplayer (--connect): log in; the world then comes from the server instead of a save ---
     std::unique_ptr<net::Client> netClient;
     std::unique_ptr<net::Session> session;
+    if (friendTunnel.valid()) {  // the friend's world: through the tunnel's loopback port
+        const u16 port = friendTunnel.get();
+        if (!port) {
+            LOG("error: %s", friendError.c_str());
+            return 1;
+        }
+        opt.connect = "127.0.0.1:" + std::to_string(port);
+    }
     if (!opt.connect.empty()) {
         const net::ServerAddress address = net::resolveAddress(net::parseAddress(opt.connect));  // + SRV, like the game
         const std::string host = address.host;
@@ -1058,6 +1087,7 @@ int wmain(int argc, wchar_t** argv) {
         }
     }
     saveNow("exit");
+    social::Friends::get().stop();  // goodbye to friends; closes tunnels (a guest's connection ends here)
     if (session) session->report();
     audio.report();
 

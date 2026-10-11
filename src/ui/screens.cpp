@@ -438,7 +438,9 @@ void Ui::State::buildButtons() {
         half(0, y, tr("gui.advancements"), [this] { openAdvancementsFromPause(*this); });  // advancements.cpp
         half(1, y, tr("gui.stats"), [this] { openStatsFromPause(*this); });  // stats.cpp
         y += 24;
-        full(y, Text("Mods & Packs"), [this] { openScreen(Screen::Mods); });  // mods_screen.cpp
+        half(0, y, Text("Mods & Packs"), [this] { openScreen(Screen::Mods); });  // mods_screen.cpp
+        half(1, y, Text(), [this] { openFriendsScreen(*this); });  // friends_screen.cpp
+        buttons.back().labelFn = friendsButtonLabel;
         y += 24;
         half(0, y, tr("menu.options"), [this] { openScreen(Screen::Options); });
         if (fe->cfg.singleplayer)  // title.cpp

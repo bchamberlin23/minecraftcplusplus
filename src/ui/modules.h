@@ -32,6 +32,7 @@ struct UiModule {
     void (*drawHud)(UiState& s, Canvas& c) = nullptr;  // HUD layer, before the chat (not while F1 hides the HUD)
     void (*drawHudTop)(UiState& s, Canvas& c) = nullptr;  // over the chat (player list)
     bool (*worldKey)(UiState& s, const InputEvent& e) = nullptr;  // input while no screen is open; true: consumed
+    void (*drawTop)(UiState& s, Canvas& c) = nullptr;  // over everything, screens and the title screen too (toasts)
 };
 struct UiModuleRegistrar {
     explicit UiModuleRegistrar(const UiModule& m);
