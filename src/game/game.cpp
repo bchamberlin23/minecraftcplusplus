@@ -40,6 +40,7 @@ Game::Game(World& world, BlockRegistry& registry, Terrain& terrain, Renderer& re
 
 CameraState Game::camera() const {
     CameraState c;
+    if (cameraEntity >= 0 && entityView && entityView(cameraEntity, c)) return c;
     double eye[3];
     if (riding() && rideEye && rideEye(eye)) {  // the seat of the vehicle as it is drawn
         c.x = eye[0], c.y = eye[1], c.z = eye[2];
@@ -217,6 +218,9 @@ void Game::frame(Window& w, double dt) {
         if (riding()) {  // a passenger does not move itself (LocalPlayer.rideTick)
             player_.lastInput = input;
             rideTick(input);
+        } else if (cameraEntity >= 0) {  // spectating another entity: the keys reach the server, the player stays
+            player_.tick(physics_, PlayerInput{});
+            player_.lastInput = input;
         } else {
             player_.tick(physics_, input);
         }

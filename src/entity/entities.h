@@ -215,6 +215,9 @@ public:
         localTick_ = std::move(tick);
     }
     int localControl() const { return localControl_; }
+    // The entity the camera views from in first person (set_camera): not drawn (LevelRenderer skips the camera's
+    // entity), its shadow still cast. -1: none.
+    int viewEntity = -1;
     float partialTick() const { return float(tickAccumulator_ / 0.05); }
     const EntityAssets& assets() const { return assets_; }
     World& world() const { return world_; }

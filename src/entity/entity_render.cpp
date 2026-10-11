@@ -1327,7 +1327,7 @@ void EntityRenderer::build(const PassContext& ctx) {
         sphere[1] += h * 0.5f;
         const float dist = std::sqrt(sphere[0] * sphere[0] + sphere[1] * sphere[1] + sphere[2] * sphere[2]);
         if (dist - sphere[3] > maxDist) return 0;
-        if (&e != localShadow_) {
+        if (&e != localShadow_ && e.id != world_.viewEntity) {
             bool inside = true;
             for (const auto& pl : planes) {
                 const float len = std::sqrt(pl[0] * pl[0] + pl[1] * pl[1] + pl[2] * pl[2]);

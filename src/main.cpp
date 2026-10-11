@@ -815,6 +815,7 @@ int wmain(int argc, wchar_t** argv) {
         }
         if (session) terrain.setFarActive(session->dimension().name == "minecraft:overworld");
         if (haveEntities) entities.frame(dt);
+        if (haveEntities) entities.viewEntity = game.cameraMode == 0 ? game.cameraEntity : -1;  // set_camera
         ui.beginFrame(dt);  // UI input first: an open screen takes the game's input
 
         if (opt.bench && opt.fly) {

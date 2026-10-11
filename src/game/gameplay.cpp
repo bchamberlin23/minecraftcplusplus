@@ -183,7 +183,10 @@ void Gameplay::attach(net::Client& client) {
             entityId_ = id;
             effects_.clear(), attributes_.clear(), entityAttributes_.clear();
             if (riding_) riding_->dismounted();
-            if (game_) game_->border = WorldBorder{}, game_->clearCooldowns();  // a new ClientLevel and player
+            if (game_) {  // a new ClientLevel and player
+                game_->border = WorldBorder{};
+                game_->clearCooldowns(), game_->cameraEntity = -1;
+            }
         });
     });
     // ClientboundCooldownPacket: cooldown group, duration in ticks (0 removes it).
@@ -195,6 +198,61 @@ void Gameplay::attach(net::Client& client) {
             if (!game_) return;
             if (duration == 0) game_->removeCooldown(group);
             else game_->addCooldown(group, duration);
+        });
+    });
+    // ClientboundSetCameraPacket: the entity the view follows (handleSetCamera: only an entity we know).
+    client.onPlayPeek("set_camera", [this](net::Reader& r) {
+        const int id = r.varInt();
+        if (r.ok) post([this, id] {
+            if (!game_) return;
+            if (id == entityId_) game_->cameraEntity = -1;
+            else if (entities_ && entities_->entity(id)) game_->cameraEntity = id;
+        });
+    });
+    // ClientboundPlayerRotationPacket (handleRotatePlayer): yaw / pitch, each absolute or relative; the client answers
+    // with its new rotation (ServerboundMovePlayerPacket.Rot, not on the ground, no collision).
+    client.onPlayPeek("player_rotation", [this](net::Reader& r) {
+        const float yRot = r.f32();
+        const bool relativeY = r.boolean();
+        const float xRot = r.f32();
+        const bool relativeX = r.boolean();
+        if (r.ok) post([this, yRot, relativeY, xRot, relativeX] {
+            if (!game_) return;
+            Player& p = game_->player();
+            constexpr float kDeg = 180.0f / 3.14159265f;
+            const float yaw = (relativeY ? p.yaw * kDeg : 0.0f) + yRot;
+            const float pitch = std::clamp((relativeX ? p.pitch * kDeg : 0.0f) + xRot, -90.0f, 90.0f);
+            p.yaw = yaw / kDeg, p.pitch = pitch / kDeg;
+            if (!client_) return;
+            net::Writer w;
+            w.f32(yaw), w.f32(pitch);
+            w.u8v(0);
+            client_->sendPlay("move_player_rot", w);
+        });
+    });
+    // ClientboundPlayerLookAtPacket (handleLookAt -> Entity.lookAt): turn from our feet or eyes towards a point, or
+    // towards an entity's feet or eyes when we know it.
+    client.onPlayPeek("player_look_at", [this](net::Reader& r) {
+        const int fromEyes = r.varInt();
+        double to[3];
+        for (double& v : to) v = r.f64();
+        int entity = -1, toEyes = 0;
+        if (r.boolean()) entity = r.varInt(), toEyes = r.varInt();
+        if (r.ok) post([this, fromEyes, x = to[0], y = to[1], z = to[2], entity, toEyes] {
+            if (!game_) return;
+            double target[3] = {x, y, z};
+            if (const ent::Entity* e = entity >= 0 && entities_ ? entities_->entity(entity) : nullptr) {
+                std::copy(e->pos, e->pos + 3, target);
+                if (toEyes == 1 && e->info) target[1] += e->info->eye;
+            }
+            Player& p = game_->player();
+            const double dx = target[0] - p.pos[0], dy = target[1] - (p.pos[1] + (fromEyes == 1 ? p.eyeHeight() : 0.0));
+            const double dz = target[2] - p.pos[2];
+            auto wrap = [](float deg) { return deg - 360.0f * std::floor((deg + 180.0f) / 360.0f); };  // Mth.wrapDegrees
+            constexpr double kDeg = 180.0 / 3.14159265358979;
+            const float pitch = wrap(float(-(std::atan2(dy, std::sqrt(dx * dx + dz * dz)) * kDeg)));
+            const float yaw = wrap(float(std::atan2(dz, dx) * kDeg) - 90.0f);
+            p.yaw = float(yaw / kDeg), p.pitch = float(pitch / kDeg);
         });
     });
     // World border (ClientPacketListener.handleInitializeBorder / handleSetBorder*).
@@ -239,7 +297,7 @@ void Gameplay::attach(net::Client& client) {
     client.onPlayPeek("respawn", [this](net::Reader&) {  // a new player entity: no effects, default attributes
         post([this] {
             effects_.clear(), attributes_.clear();
-            if (game_) game_->clearCooldowns();
+            if (game_) game_->clearCooldowns(), game_->cameraEntity = -1;
             if (riding_) riding_->dismounted();
         });
     });
@@ -429,6 +487,21 @@ void Gameplay::setPlayer(Game& game, ui::Ui& ui) {
     };
     game.adventureMayBreak = [this](int x, int y, int z) { return adventureMayBreak(x, y, z); };
     game.mainHandOnCooldown = [this] { return onCooldown(mainHand()); };
+    game.entityView = [this](int id, CameraState& c) {  // Camera.setup on an entity: its eyes, its view rotation
+        const ent::Entity* e = entities_ ? entities_->entity(id) : nullptr;
+        if (!e || !e->info) return false;
+        const float a = entities_->partialTick();
+        c.x = e->prevPos[0] + (e->pos[0] - e->prevPos[0]) * a;
+        c.y = e->prevPos[1] + (e->pos[1] - e->prevPos[1]) * a + e->info->eye;
+        c.z = e->prevPos[2] + (e->pos[2] - e->prevPos[2]) * a;
+        // LivingEntity.getViewYRot: the head's rotation; other entities their own.
+        const bool living = e->category == ent::Category::Living || e->category == ent::Category::Player;
+        const float y0 = living ? e->prevHeadYaw : e->prevYaw, y1 = living ? e->headYaw : e->yaw;
+        const float yaw = y0 + (y1 - y0 - 360.0f * std::floor((y1 - y0 + 180.0f) / 360.0f)) * a;  // Mth.rotLerp
+        const float pitch = e->prevPitch + (e->pitch - e->prevPitch) * a;
+        c.yaw = yaw * 3.14159265f / 180.0f, c.pitch = pitch * 3.14159265f / 180.0f;
+        return true;
+    };
 }
 
 bool Gameplay::onCooldown(const ui::ItemStack* s) const {  // ItemCooldowns.isOnCooldown

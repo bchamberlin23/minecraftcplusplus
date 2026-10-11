@@ -30,6 +30,11 @@ public:
     // View override (UI: the lying-down camera while sleeping, Camera.setup); may adjust the camera. Runs for every
     // perspective, before the third-person pull-back.
     std::function<void(CameraState&)> viewCameraOverride;
+    // Minecraft.setCameraEntity (set_camera): the entity the view follows, -1 the player. While it is another entity
+    // the player gets no movement input (LocalPlayer.isControlledCamera; its keys still go to the server). entityView
+    // gives that entity's eye position and view rotation at the partial tick (false: unknown, the player's view).
+    int cameraEntity = -1;
+    std::function<bool(int id, CameraState& out)> entityView;
     // The player's arm swings (attack press, block broken / placed): drives the hand animation.
     std::function<void()> onSwing;
     std::string status() const;
