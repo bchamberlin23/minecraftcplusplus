@@ -53,7 +53,7 @@ public:
     // Biome tints for meshes built from now on (null: the fixed default tints).
     void setBiomeColors(const BiomeColors* colors) { biomeColors_ = colors; }
     void reserveFar(float radius) { farRadius_ = radius; }
-    void setDetailRadius(float blocks) { detailRadius_ = blocks; }  // full-detail radius (options screen)
+    void setDetailRadius(float blocks) { detailRadius_ = blocks, cutDirty_ = true; }  // full-detail radius (options)
     void enableFar(FarGenFn fn, int genMinY, unsigned threads);
     void stopFar();  // joins the far threads (before whatever fn uses goes away)
     // Far terrain shows the overworld: off (and dropped) while the player is in another dimension.
@@ -92,6 +92,10 @@ private:
         int ny[kMaxLevel + 1] = {};
         std::vector<u32> nodes[kMaxLevel + 1];
         u32& at(int level, int x, int y, int z) {
+            const int per = 32 >> level;
+            return nodes[level][(size_t(y) * per + z) * per + x];
+        }
+        u32 at(int level, int x, int y, int z) const {
             const int per = 32 >> level;
             return nodes[level][(size_t(y) * per + z) * per + x];
         }
@@ -145,7 +149,7 @@ private:
     void syncRegions();
     int regionAt(int rx, int rz);  // creates the LOD state for a region on first use
     void scheduleFar(double x, double z);
-    void dropFar(RegionLod& r);
+    void dropFar(int region);
     void farMain();
     void applyCoarse(CoarseBuild& build, bool replace);
     void collectResults(double x, double y, double z, bool unlimited);
@@ -154,7 +158,13 @@ private:
     void workerMain();
     // The cut of one region: a 2D quadtree walk by horizontal distance (all 16-block layers share it), taking
     // every layer's node at each chosen position.
-    void collect(RegionLod& r, int level, int x, int z, double px, double pz);
+    // Appends the region's nodes for a camera at (px, pz); slack = how far the camera can move horizontally before
+    // any node's level would change (distance to the nearest refinement threshold).
+    void collect(const RegionLod& r, int level, int x, int z, double px, double pz, std::vector<u32>& out,
+                 double& slack) const;
+    void markCut(int region) {
+        if (size_t(region) < cutCache_.size()) cutCache_[size_t(region)].dirty = true;
+    }
 
     const World& world_;
     const BlockRegistry& registry_;
@@ -173,11 +183,16 @@ private:
     std::vector<Result> pendingUpload_;         // finished meshes waiting for upload budget
     double scanX_ = 0, scanY_ = 0, scanZ_ = 0;
     bool scanned_ = false;
-    double cutX_ = 0, cutY_ = 0, cutZ_ = 0;
-    bool cutDirty_ = true;
+    bool cutDirty_ = true;  // every region (markCut: one region)
+    struct CutCache {
+        double x = 0, z = 0, slack = -1;  // camera at the last walk; valid while it stays within slack
+        bool dirty = true;
+    };
+    std::vector<CutCache> cutCache_;
     size_t inFlight_ = 0;
     std::unordered_map<u64, u32> stamps_;  // section -> edit count
     std::vector<u32> active_;
+    std::vector<std::vector<u32>> cutParts_;  // per region: its part of active_
     TerrainStats stats_;
 
     std::thread worker_;

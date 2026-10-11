@@ -15,6 +15,7 @@
 #include "net/session.h"
 #include "net/status.h"
 #include "platform/launch.h"
+#include "platform/crash.h"
 #include "platform/ownership.h"
 #include "platform/window.h"
 #include "render/renderer.h"
@@ -175,6 +176,7 @@ int runPackTest(int argc, wchar_t** argv);  // render/packs/pack_test.cpp
 
 int wmain(int argc, wchar_t** argv) {
     launch::initProcess(argc, argv);  // log file without a console, handoff from the previous instance
+    installCrashHandler();             // stack + minidump in the log on a crash (platform/crash.h)
     if (argc >= 3 && std::wstring_view(argv[1]) == L"--pack-test") return packs::runPackTest(argc, argv);
     Options opt;
     for (int i = 1; i < argc; ++i) {
@@ -412,6 +414,7 @@ int wmain(int argc, wchar_t** argv) {
         audio.attachNet(*netClient);
         if (haveEntities) entities.attach(*netClient), blockEntityRenderer.attach(*netClient), visuals.attach(*netClient);
         sky.attach(*netClient, haveReports ? &reports : nullptr);
+        packs::attachNetwork(*netClient);  // shader pack uniforms (isElytraFlying, heavyFog)
         ui.registerHandlers(*netClient);
         if (!netClient->start({host, port, opt.name, jar})) return 1;
         session = std::make_unique<net::Session>(*netClient, world, registry, reports);
@@ -728,6 +731,7 @@ int wmain(int argc, wchar_t** argv) {
             audio.attachNet(*netClient);
             if (haveEntities) entities.attach(*netClient), blockEntityRenderer.attach(*netClient), visuals.attach(*netClient);
             sky.attach(*netClient, haveReports ? &reports : nullptr);
+            packs::attachNetwork(*netClient);
             ui.registerHandlers(*netClient);
             if (netClient->start({"127.0.0.1", localServer->port(), opt.name, jar, localServer->stateTable()})) {
                 session = std::make_unique<net::Session>(*netClient, world, registry, reports);
@@ -855,6 +859,7 @@ int wmain(int argc, wchar_t** argv) {
         if (opt.seconds > 0) shot = timeUp && !opt.screenshot.empty();
         sky.update(cam, dt);
         ui.endFrame();
+        if (haveReports) packs::updatePlayer(renderer, ui, game.selectedSlot(), reports, registry);  // held light
         renderer.upscalers().setMenuActive(ui.menuOpen());  // frame generation pauses in menus
         if (!opt.bench) cam.fovY = ui.fovRadians();
         const fs::path* uiShot = ui.screenshotRequest();

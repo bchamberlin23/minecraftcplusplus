@@ -9,6 +9,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -313,6 +314,7 @@ void Terrain::buildRegion(const CoarseJob& job, CoarseBuild& out, bool lockWorld
 
 void Terrain::applyCoarse(CoarseBuild& b, bool replace) {
     RegionLod& r = regions_[b.region];
+    markCut(b.region);  // its LOD meshes (slots) are replaced below
     const World::Region* source = r.world >= 0 ? world_.regions()[size_t(r.world)].get() : nullptr;
     if (b.source != source || b.farLevel != (r.farData ? r.farData->level : 0)) {  // built from outdated inputs
         markDirty(b.region);
@@ -348,7 +350,6 @@ void Terrain::applyCoarse(CoarseBuild& b, bool replace) {
                         u32& a = r.at(level, x >> level, ny, z >> level);
                         if (a == kAbsent) a = Renderer::kNoSlot;
                     }
-    cutDirty_ = true;
 }
 
 bool Terrain::buildCoarse() {
@@ -470,7 +471,7 @@ void Terrain::collectResults(double x, double y, double z, bool unlimited) {
             state = r.mesh.empty() ? Renderer::kNoSlot
                                    : renderer_.addMesh(r.mesh, 0, r.req.cx * 16, r.req.sy * 16, r.req.cz * 16);
             uploaded += r.mesh.cubeQuads.size() * kCubeQuadBytes + r.mesh.modelQuads.size() * 4;
-            cutDirty_ = true;
+            markCut(r.req.region);
             continue;
         }
         if (distance(0, r.req.cx * 16.0, r.req.sy * 16.0, r.req.cz * 16.0, x, y, z) > evict) {
@@ -489,7 +490,7 @@ void Terrain::collectResults(double x, double y, double z, bool unlimited) {
         }
         state = slot;
         resident_.push_back(r.req);
-        cutDirty_ = true;
+        markCut(r.req.region);
     }
     pendingUpload_.erase(pendingUpload_.begin(), pendingUpload_.begin() + n);
 }
@@ -506,7 +507,7 @@ void Terrain::rescan(double x, double y, double z) {
             u32& state = detailState(r);
             if (isSlot(state)) renderer_.removeMesh(state);
             state = kNotReady;
-            cutDirty_ = true;
+            markCut(r.region);
         } else {
             resident_[keep++] = r;
         }
@@ -562,15 +563,17 @@ void Terrain::dispatch() {
     cv_.notify_all();
 }
 
-void Terrain::collect(RegionLod& r, int level, int x, int z, double px, double pz) {
+void Terrain::collect(const RegionLod& r, int level, int x, int z, double px, double pz, std::vector<u32>& out,
+                      double& slack) const {
     const int size = 16 << level, per = 32 >> level;
     const double x0 = r.rx * 512.0 + x * size, z0 = r.rz * 512.0 + z * size;
     const double dx = std::max({x0 - px, 0.0, px - (x0 + size)}), dz = std::max({z0 - pz, 0.0, pz - (z0 + size)});
     const double t = threshold(level);
+    if (level > 0) slack = std::min(slack, std::abs(std::sqrt(dx * dx + dz * dz) - t));
     const bool refine = level > 0 && dx * dx + dz * dz < t * t &&
                         (r.refine[level].empty() || r.refine[level][size_t(z) * per + x] < level);
     if (refine && level > 1) {
-        for (int i = 0; i < 4; ++i) collect(r, level - 1, x * 2 + (i & 1), z * 2 + (i >> 1), px, pz);
+        for (int i = 0; i < 4; ++i) collect(r, level - 1, x * 2 + (i & 1), z * 2 + (i >> 1), px, pz, out, slack);
         return;
     }
     for (int ny = 0; ny < r.ny[level]; ++ny) {
@@ -584,11 +587,11 @@ void Terrain::collect(RegionLod& r, int level, int x, int z, double px, double p
             }
             if (ready) {
                 for (int i = 0; i < 4; ++i)
-                    if (const u32 c = r.at(0, x * 2 + (i & 1), ny, z * 2 + (i >> 1)); isSlot(c)) active_.push_back(c);
+                    if (const u32 c = r.at(0, x * 2 + (i & 1), ny, z * 2 + (i >> 1)); isSlot(c)) out.push_back(c);
                 continue;
             }
         }
-        if (isSlot(s)) active_.push_back(s);
+        if (isSlot(s)) out.push_back(s);
     }
 }
 
@@ -614,6 +617,7 @@ void Terrain::remesh(const std::vector<u64>& sections) {
         meshGrid(padded, light, registry_, true, false, mesh, biomeColors_ ? &colors : nullptr);
         state = mesh.empty() ? Renderer::kNoSlot : renderer_.addMesh(mesh, 0, cx * 16, sy * 16, cz * 16);
         markDirty(it->second);
+        markCut(it->second);
         if (!resident) resident_.push_back({it->second, cx, sy, cz, 0.0f, 0});
         // New sections must be reachable from the LOD tree.
         for (int level = 1; level <= kMaxLevel; ++level) {
@@ -621,7 +625,6 @@ void Terrain::remesh(const std::vector<u64>& sections) {
             if (a == kAbsent) a = Renderer::kNoSlot;
         }
     }
-    cutDirty_ = true;
 }
 
 void Terrain::addChunk(int cx, int cz, const std::vector<u64>& dirtySections) {
@@ -652,7 +655,7 @@ void Terrain::addChunk(int cx, int cz, const std::vector<u64>& dirtySections) {
         if (isSlot(state) || state == Renderer::kNoSlot) refresh_.push_back({rit->second, scx, ssy, scz, 0.0f, 0, true});
     }
     scanned_ = false;  // the next update streams the new sections in
-    cutDirty_ = true;
+    markCut(it->second);
 }
 
 void Terrain::removeChunk(int cx, int cz) {
@@ -667,7 +670,7 @@ void Terrain::removeChunk(int cx, int cz) {
     }
     std::erase_if(resident_, [&](const Request& q) { return q.cx == cx && q.cz == cz; });
     markDirty(it->second);
-    cutDirty_ = true;
+    markCut(it->second);
 }
 
 void Terrain::refresh(const std::vector<u64>& sections) {
@@ -683,6 +686,10 @@ void Terrain::refresh(const std::vector<u64>& sections) {
 }
 
 void Terrain::update(double x, double y, double z, bool waitForDetail) {
+    static const bool profile = std::getenv("MCPP_TERRAIN_PROFILE") != nullptr;
+    Timer tTotal, tPart;
+    double partMs[6] = {};
+    int farApplied = 0;
     // Rebuild distant LOD for regions that have been quiet for a moment after edits.
     {
         std::lock_guard lock(mutex_);
@@ -702,6 +709,7 @@ void Terrain::update(double x, double y, double z, bool waitForDetail) {
             }
         }
     }
+    partMs[0] = tPart.ms(), tPart = Timer();
     // Far terrain: a few regions per frame (each uploads all of its meshes), then keep the queue current.
     if (farGen_) {
         std::vector<FarResult> ready;
@@ -719,9 +727,13 @@ void Terrain::update(double x, double y, double z, bool waitForDetail) {
             if (r.farData && r.farData->level <= f.grid->level) continue;
             r.farData = std::move(f.grid);
             applyCoarse(f.build, true);
+            ++farApplied;
         }
+        partMs[1] = tPart.ms(), tPart = Timer();
         if (farActive_) scheduleFar(x, z);
+        partMs[2] = tPart.ms();
     }
+    tPart = Timer();
     for (;;) {
         collectResults(x, y, z, waitForDetail);
         const double mx = x - scanX_, my = y - scanY_, mz = z - scanZ_;
@@ -732,16 +744,44 @@ void Terrain::update(double x, double y, double z, bool waitForDetail) {
         if (wanted_.empty() && !busy_ && done_.empty() && pendingUpload_.empty()) break;
         cv_.wait_for(lock, std::chrono::milliseconds(2), [&] { return !done_.empty(); });
     }
+    partMs[3] = tPart.ms(), tPart = Timer();
 
-    // The cut depends only on camera position and residency, not on view direction.
-    const double cx = x - cutX_, cy = y - cutY_, cz = z - cutZ_;
-    if (cutDirty_ || cx * cx + cy * cy + cz * cz > 16.0) {  // a few blocks never change the right level
+    // The cut depends only on camera position and residency, not on view direction. Incremental: a region is walked
+    // again only when its nodes changed (markCut) or the camera moved past its slack (a level boundary).
+    {
+        const Timer tc;
+        cutParts_.resize(regions_.size());
+        cutCache_.resize(regions_.size());
+        size_t walked = 0, byDirty = 0, byMove = 0;
+        double minSlack = 1e30;
+        const bool global = cutDirty_;
+        for (size_t i = 0; i < regions_.size(); ++i) {
+            CutCache& c = cutCache_[i];
+            const double mx = x - c.x, mz = z - c.z;
+            if (!cutDirty_ && !c.dirty && mx * mx + mz * mz < c.slack * c.slack) continue;
+            byDirty += c.dirty, byMove += !c.dirty;
+            minSlack = std::min(minSlack, c.slack);
+            std::vector<u32>& part = cutParts_[i];
+            part.clear();
+            double slack = 1e30;
+            collect(regions_[i], kMaxLevel, 0, 0, x, z, part, slack);
+            c = {x, z, slack, false};
+            ++walked;
+        }
         cutDirty_ = false;
-        cutX_ = x, cutY_ = y, cutZ_ = z;
-        active_.clear();
-        for (RegionLod& r : regions_) collect(r, kMaxLevel, 0, 0, x, z);
-        renderer_.setActive(active_);
+        if (walked) {
+            active_.clear();
+            for (const auto& part : cutParts_) active_.insert(active_.end(), part.begin(), part.end());
+            renderer_.setActive(active_);
+        }
+        if (profile && tc.ms() > 1.0)
+            LOG("terrain cut: %.2f ms | %zu of %zu regions walked (global %d, dirty %zu, moved %zu, min slack %.2f), %zu active",
+                tc.ms(), walked, regions_.size(), int(global), byDirty, byMove, minSlack, active_.size());
     }
+    partMs[4] = tPart.ms();
+    if (profile && tTotal.ms() > 4.0)
+        LOG("terrain update %.1f ms | coarse %.1f, far apply %.1f (%d regions), far schedule %.1f, detail %.1f, cut %.1f",
+            tTotal.ms(), partMs[0], partMs[1], farApplied, partMs[2], partMs[3], partMs[4]);
 
     stats_.detailResident = resident_.size();
     stats_.detailPending = wanted_.size() + inFlight_;
@@ -772,7 +812,7 @@ void Terrain::setFarActive(bool active) {
     if (!active)
         for (size_t i = 0; i < regions_.size(); ++i)
             if (regions_[i].farData) {
-                dropFar(regions_[i]);
+                dropFar(int(i));
                 if (regions_[i].world >= 0) markDirty(int(i));  // rebuild from its own chunks only
             }
     farScanTime_ = -1e9;  // rescan right away when it comes back
@@ -789,7 +829,9 @@ void Terrain::stopFar() {
 }
 
 void Terrain::farMain() {
-    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
+    // Same priority as chunk generation: a far region covers ~1000 chunks for the cost of one, so it must not starve
+    // while chunks are generated nearby (it did at LOWEST: the distant view stayed empty during play).
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
     for (;;) {
         FarJob job;
         {
@@ -817,7 +859,8 @@ void Terrain::farMain() {
     }
 }
 
-void Terrain::dropFar(RegionLod& r) {
+void Terrain::dropFar(int region) {
+    RegionLod& r = regions_[size_t(region)];
     for (int level = 1; level <= kMaxLevel; ++level) {
         for (u32& s : r.nodes[level]) {
             if (isSlot(s)) renderer_.removeMesh(s);
@@ -827,7 +870,7 @@ void Terrain::dropFar(RegionLod& r) {
     }
     r.farData.reset();
     std::fill(std::begin(r.colLevel), std::end(r.colLevel), u8(0));
-    cutDirty_ = true;
+    markCut(region);
 }
 
 // Queues far regions within the radius, nearest first: every region at the coarsest level, then refinements
@@ -875,8 +918,10 @@ void Terrain::scheduleFar(double x, double z) {
             const float priority = r.world >= 0 ? d * 0.5f : firstPass || !r.farData ? d : d * 2.0f;
             jobs.push_back({idx, rx, rz, level, priority, coarseJob(idx)});
         }
-    for (RegionLod& r : regions_)
-        if (r.farData && !r.farQueued && r.world < 0 && regionDistance(r.rx, r.rz) > farRadius_ + 1024.0f) dropFar(r);
+    for (size_t i = 0; i < regions_.size(); ++i) {
+        const RegionLod& r = regions_[i];
+        if (r.farData && !r.farQueued && r.world < 0 && regionDistance(r.rx, r.rz) > farRadius_ + 1024.0f) dropFar(int(i));
+    }
     std::sort(jobs.begin(), jobs.end(), [](const FarJob& a, const FarJob& b) { return a.priority > b.priority; });
     {
         std::lock_guard lock(mutex_);
