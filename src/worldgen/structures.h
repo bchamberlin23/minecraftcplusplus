@@ -40,6 +40,9 @@ public:
     // LevelChunk.postProcessGeneration for the blocks structure pieces marked in chunks[4] (fences, torches, ladders,
     // bars): their shapes are updated from their final neighbours. Call when the chunk's 3x3 is decorated.
     void postProcess(const std::array<GenChunk*, 9>& chunks) const;
+    // Drops cached starts, heights and marks farther than radius chunks from (cx, cz); they are deterministic and
+    // recomputed when needed again. Without it the caches grew with every chunk generated while travelling.
+    void trim(int cx, int cz, int radius) const;
 
     // Reports for verification: the valid starts originating in a chunk.
     struct PieceReport {

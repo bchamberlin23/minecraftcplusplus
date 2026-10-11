@@ -17,6 +17,7 @@ namespace net {
 
 class Session {
 public:
+    bool tracksChunk(int cx, int cz) const { return chunks_.count(World::chunkKey(cx, cz)) != 0; }  // loaded by the server
     Session(Client& client, World& world, BlockRegistry& registry, const GameReports& reports);
 
     // Before the window opens: waits for the login and the first position from the server.

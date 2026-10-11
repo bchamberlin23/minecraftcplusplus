@@ -481,6 +481,9 @@ public:
     // ChunkAccess.markPosForPostProcessing: positions whose shape is updated when their chunk is finished.
     void markPostProcess(const BlockPos& p) const;
     std::vector<BlockPos> takeMarks(int cx, int cz) const;
+    // Drops cached heights and post-process marks farther than radius chunks from (cx, cz) (deterministic: they are
+    // recomputed if needed again). Thread-safe.
+    void trimCaches(int cx, int cz, int radius) const;
 
 private:
     struct HeightCache;

@@ -42,6 +42,9 @@
 #include <numeric>
 #include <random>
 
+#include <windows.h>
+#include <psapi.h>
+
 namespace {
 
 constexpr float kPi = 3.14159265f;
@@ -574,7 +577,7 @@ int wmain(int argc, wchar_t** argv) {
                 return generator->biomes().name(generator->noiseBiome(saveBiomeContext, qx, qy, qz));
             },
             gameDataVersion(jar));
-    double genScan = 0;
+    double genScan = 0, evictScan = 0;
     std::deque<std::unique_ptr<wg::GenChunk>> genBacklog;  // generated chunks waiting for the per-frame budget
     Lighting genLighting(world, registry);
 
@@ -828,6 +831,54 @@ int wmain(int argc, wchar_t** argv) {
         Timer phase;
         double genMs = 0, terrainMs = 0;
         if (genService && (!session || session->dimension().name == "minecraft:overworld") && !(menu && ui.switching())) {
+            // Play mode: chunks far behind the player leave memory (the server owns the world; chunks it no longer
+            // sends and locally generated ones come back when needed). Kept, they grew ~150 MB/s while travelling.
+            if (session && now - evictScan > 2.0) {
+                evictScan = now;
+                const int ccx = int(std::floor(cam.x)) >> 4, ccz = int(std::floor(cam.z)) >> 4;
+                const int keep = genRadius + 8;
+                // Structure starts / heights reach 8 chunks past the chunks being generated: trim well beyond.
+                if (structures) structures->trim(ccx, ccz, keep + 16);
+                std::vector<std::pair<int, int>> evict;
+                {
+                    std::shared_lock lock(world.mutex());
+                    for (const auto& r : world.regions()) {
+                        if (std::max(std::abs(r->rx * 32 + 16 - ccx), std::abs(r->rz * 32 + 16 - ccz)) <= keep - 16) continue;
+                        for (int i = 0; i < 1024; ++i) {
+                            if (!r->columns[i].count) continue;
+                            const int cx = r->rx * 32 + (i & 31), cz = r->rz * 32 + (i >> 5);
+                            if (std::max(std::abs(cx - ccx), std::abs(cz - ccz)) > keep && !session->tracksChunk(cx, cz))
+                                evict.push_back({cx, cz});
+                        }
+                    }
+                }
+                if (!evict.empty()) {
+                    const Timer te;
+                    {
+                        std::unique_lock lock(world.mutex());
+                        for (const auto& [cx, cz] : evict) world.removeChunk(cx, cz);
+                    }
+                    for (const auto& [cx, cz] : evict) terrain.removeChunk(cx, cz);
+                    if (opt.profile) {
+                        size_t bytes = 0, columns = 0, regions = 0;
+                        std::shared_lock lock(world.mutex());
+                        for (const auto& r : world.regions()) {
+                            ++regions;
+                            bytes += r->sections.capacity() * sizeof(World::Section) + r->palettes.capacity() * 2 +
+                                     r->words.capacity() * 8 + r->lightArrays.size() * sizeof(World::LightArray);
+                            for (const auto& c : r->columns) columns += c.count > 0;
+                        }
+                        PROCESS_MEMORY_COUNTERS_EX pmc{};
+                        GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc), sizeof(pmc));
+                        HEAP_SUMMARY hs{};
+                        hs.cb = sizeof(hs);
+                        HeapSummary(GetProcessHeap(), 0, &hs);
+                        LOG("evicted %zu chunks beyond %d in %.1f ms | world: %zu regions, %zu chunks, %.0f MB | process private %.0f MB"
+                            " | heap allocated %.0f MB, committed %.0f MB", evict.size(), keep, te.ms(), regions, columns,
+                            bytes / 1048576.0, pmc.PrivateUsage / 1048576.0, hs.cbAllocated / 1048576.0, hs.cbCommitted / 1048576.0);
+                    }
+                }
+            }
             if (now - genScan > 0.25) {  // ask for missing chunks around the camera, nearest first
                 genScan = now;
                 const int ccx = int(std::floor(cam.x)) >> 4, ccz = int(std::floor(cam.z)) >> 4;

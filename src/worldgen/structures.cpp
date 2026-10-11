@@ -129,7 +129,7 @@ struct StructureSystem::Impl {
     void resolveRing(const Set& s, Ring& r) const;
 
     // ---- starts ----
-    const std::vector<std::shared_ptr<Start>>& starts(int cx, int cz) const;
+    std::vector<std::shared_ptr<Start>> starts(int cx, int cz) const;  // by value: trim() may drop the cache entry
     void createStructures(int cx, int cz, std::vector<std::shared_ptr<Start>>& out) const;
     std::shared_ptr<Start> tryGenerate(const Structure& s, int cx, int cz) const;
     // references: structure -> source chunks (LongOpenHashSet order), for the structures matching `filter`
@@ -291,7 +291,18 @@ void StructureSystem::Impl::createStructures(int cx, int cz, std::vector<std::sh
     }
 }
 
-const std::vector<std::shared_ptr<Start>>& StructureSystem::Impl::starts(int cx, int cz) const {
+void StructureSystem::trim(int cx, int cz, int radius) const {
+    {
+        std::lock_guard lock(impl_->startsMutex);
+        std::erase_if(impl_->startCache, [&](const auto& kv) {
+            const int x = int(i32(u32(kv.first >> 32))), z = int(i32(u32(kv.first)));
+            return std::max(std::abs(x - cx), std::abs(z - cz)) > radius;
+        });
+    }
+    impl_->env->trimCaches(cx, cz, radius);
+}
+
+std::vector<std::shared_ptr<Start>> StructureSystem::Impl::starts(int cx, int cz) const {
     std::shared_ptr<StartEntry> e;
     {
         std::lock_guard lock(startsMutex);

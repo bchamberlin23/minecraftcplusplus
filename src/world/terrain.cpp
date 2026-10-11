@@ -862,11 +862,10 @@ void Terrain::farMain() {
 void Terrain::dropFar(int region) {
     RegionLod& r = regions_[size_t(region)];
     for (int level = 1; level <= kMaxLevel; ++level) {
-        for (u32& s : r.nodes[level]) {
+        for (u32 s : r.nodes[level])
             if (isSlot(s)) renderer_.removeMesh(s);
-            s = kAbsent;
-        }
-        r.refine[level].clear();
+        std::vector<u32>().swap(r.nodes[level]);  // freed (reads see kAbsent; allocated again on first write)
+        std::vector<u8>().swap(r.refine[level]);
     }
     r.farData.reset();
     std::fill(std::begin(r.colLevel), std::end(r.colLevel), u8(0));
@@ -944,6 +943,29 @@ void Terrain::scheduleFar(double x, double z) {
     }
     farCv_.notify_all();
     ms[3] = tp.ms();
+    if (profile) {  // memory by kind (MCPP_TERRAIN_PROFILE)
+        size_t farBytes = 0, nodeBytes = 0, level0 = 0, farRegions = 0, fine = 0;
+        for (const RegionLod& r : regions_) {
+            for (int level = 0; level <= kMaxLevel; ++level) nodeBytes += r.nodes[level].capacity() * 4;
+            level0 += !r.nodes[0].empty();
+            if (r.farData) {
+                ++farRegions, fine += r.farData->level <= 2;
+                farBytes += r.farData->start.capacity() * 4 + r.farData->runs.capacity() * sizeof(FarGrid::Run) +
+                            r.farData->biomes.capacity();
+            }
+        }
+        size_t farDone = 0, coarseDone = 0, doneN = 0, meshBytes = 0;
+        {
+            std::lock_guard lock(mutex_);
+            farDone = farDone_.size(), coarseDone = coarseDone_.size(), doneN = done_.size();
+            for (const FarResult& f : farDone_)
+                for (const auto& [c, m] : f.build.meshes) meshBytes += m.cubeQuads.capacity() * kCubeQuadBytes + m.modelQuads.capacity() * 4;
+        }
+        LOG("terrain memory: %zu regions (%zu with level 0), nodes %.0f MB, far data %.0f MB in %zu regions (%zu at level <= 2)"
+            " | queues: far done %zu (%.0f MB meshes), coarse done %zu, detail done %zu, pending upload %zu, far queue %zu",
+            regions_.size(), level0, nodeBytes / 1048576.0, farBytes / 1048576.0, farRegions, fine, farDone,
+            meshBytes / 1048576.0, coarseDone, doneN, pendingUpload_.size(), farQueue_.size());
+    }
     if (profile && ms[0] + ms[1] + ms[2] + ms[3] > 4.0)
         LOG("far schedule: lock+clear %.1f, plan %.1f (new regions %zu in %.1f ms, %zu jobs), drop %.1f (%zu regions), "
             "sort+queue %.1f ms", ms[0], ms[1], created, regionMs, jobCount, ms[2], dropped, ms[3]);

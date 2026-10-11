@@ -631,6 +631,19 @@ void StructureEnv::markPostProcess(const BlockPos& p) const {
     if (std::find(v.begin(), v.end(), p) == v.end()) v.push_back(p);
 }
 
+void StructureEnv::trimCaches(int cx, int cz, int radius) const {
+    auto far = [&](u64 key, int shift) {
+        const int x = int(i32(u32(key >> 32))) >> shift, z = int(i32(u32(key))) >> shift;
+        return std::max(std::abs(x - cx), std::abs(z - cz)) > radius;
+    };
+    for (HeightCache::Shard& shard : heights_->shards) {
+        std::lock_guard lock(shard.mutex);
+        std::erase_if(shard.map, [&](const auto& kv) { return far(kv.first, 4); });  // keys are block columns
+    }
+    std::lock_guard lock(markMutex_);
+    std::erase_if(marks_, [&](const auto& kv) { return far(kv.first, 0); });  // keys are chunks
+}
+
 std::vector<BlockPos> StructureEnv::takeMarks(int cx, int cz) const {
     const u64 k = (u64(u32(cx)) << 32) | u32(cz);
     std::lock_guard lock(markMutex_);

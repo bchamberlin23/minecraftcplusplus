@@ -75,6 +75,8 @@ private:
     std::vector<std::unique_ptr<GenChunk>> done_;         // delivered chunks, for take()
     std::vector<std::pair<int, int>> pendingWanted_;     // the latest setWanted, for a terrain worker
     std::atomic<bool> wantedPending_{false};
+    std::atomic<bool> rescheduleNeeded_{false};      // take() made room below kDoneLimit
+    static constexpr size_t kDoneLimit = 256;        // delivered chunks waiting for the main thread
     double totalMs_ = 0, decorateMs_ = 0;
     size_t decorated_ = 0;
     size_t generated_ = 0;

@@ -92,6 +92,14 @@ void GenService::applyWanted(std::vector<std::pair<int, int>> chunks) {
             } else
                 ++it;
         }
+        // Delivered chunks the main thread has not taken yet, now far away: dropped like their entries (were
+        // they wanted again, they are generated again).
+        std::lock_guard mail(mailMutex_);
+        std::erase_if(done_, [&](std::unique_ptr<GenChunk>& c) {
+            if (std::abs(c->cx - ox) <= reach && std::abs(c->cz - oz) <= reach) return false;
+            graveyard_.push_back(std::move(c));
+            return true;
+        });
     }
     terrainQueue_.clear();
     for (auto it = chunks_.begin(); it != chunks_.end();)  // re-queued below in priority order
@@ -108,6 +116,11 @@ void GenService::applyWanted(std::vector<std::pair<int, int>> chunks) {
 // Runs after every finished job, under mutex_: starts from the first unfinished wanted chunk and looks at a
 // bounded number of unfinished ones, so it stays cheap however many chunks are wanted.
 void GenService::schedule() {
+    {  // Backpressure: the main thread applies a few chunks per frame; generating far ahead of it only queued
+       // copies (they reached 20000 chunks / 4 GB while travelling). take() asks for more once there is room.
+        std::lock_guard mail(mailMutex_);
+        if (done_.size() >= kDoneLimit) return;
+    }
     bool prefixDone = true;
     int pendingSeen = 0;
     for (size_t i = scanFrom_; i < wanted_.size() && pendingSeen < 1000000; ++i) {
@@ -180,12 +193,18 @@ void GenService::schedule() {
 }
 
 std::vector<std::unique_ptr<GenChunk>> GenService::take(size_t max) {
-    std::lock_guard mail(mailMutex_);
     std::vector<std::unique_ptr<GenChunk>> out;
-    while (!done_.empty() && out.size() < max) {
-        out.push_back(std::move(done_.back()));
-        done_.pop_back();
+    {
+        std::lock_guard mail(mailMutex_);
+        const bool full = done_.size() >= kDoneLimit;
+        while (!done_.empty() && out.size() < max) {
+            out.push_back(std::move(done_.back()));
+            done_.pop_back();
+        }
+        if (!full || done_.size() >= kDoneLimit) return out;
     }
+    rescheduleNeeded_ = true;  // room again: a terrain worker resumes scheduling
+    terrainCv_.notify_one();
     return out;
 }
 
@@ -226,8 +245,12 @@ void GenService::terrainWorker() {
             std::unique_lock lock(mutex_);
             // wait_for: wantedPending_ is set without mutex_, so a notify can slip past the predicate check.
             terrainCv_.wait_for(lock, std::chrono::milliseconds(50),
-                                [&] { return quit_ || !terrainQueue_.empty() || !graveyard_.empty() || wantedPending_; });
+                                [&] {
+                                    return quit_ || !terrainQueue_.empty() || !graveyard_.empty() || wantedPending_ ||
+                                           rescheduleNeeded_;
+                                });
             if (quit_) return;
+            if (rescheduleNeeded_.exchange(false)) schedule();
             if (wantedPending_.exchange(false)) {
                 std::vector<std::pair<int, int>> w;
                 {
