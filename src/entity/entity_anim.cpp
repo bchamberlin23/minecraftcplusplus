@@ -318,6 +318,17 @@ u64 animate(Anim kind, const AnimState& s, const Model& model, PartPose* poses) 
             if (s.standFlags & 8) hidden |= 1ull << BasePlate;
             break;
         }
+        case Anim::Shulker: {  // ShulkerModel.setupAnim: the lid opens with the peek, the head looks around
+            const float bs = (0.5f + s.peek) * kPi, q = -1.0f + std::sin(bs);
+            const float extra = bs > kPi ? std::sin(s.age * 0.1f) * 0.7f : 0.0f;
+            for (size_t i = 0; i < model.parts.size(); ++i)
+                if (model.parts[i].name == "lid") {
+                    poses[i].x = 0, poses[i].y = 16.0f + std::sin(bs) * 8.0f + extra, poses[i].z = 0;
+                    poses[i].yRot = s.peek > 0.3f ? q * q * q * q * kPi * 0.125f : 0.0f;
+                }
+            if (PartPose* h = P[Head]) h->xRot = s.pitch * kDeg, h->yRot = (s.headYaw - 180.0f) * kDeg;
+            break;
+        }
     }
     return hidden;
 }

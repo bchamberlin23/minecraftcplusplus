@@ -39,8 +39,11 @@ enum LayerFlags : u8 { Emissive = 1, Translucent = 2, TintWool = 8, TintCollar =
 enum Special : u8 {
     SpNone, SpCow, SpPig, SpChicken, SpSheep, SpWolf, SpCat, SpHorse, SpLlama, SpRabbit, SpParrot, SpFox, SpAxolotl,
     SpPanda, SpMooshroom, SpVillager, SpZombieVillager, SpSlime, SpPlayer, SpFrog, SpArmorStand, SpCreeper, SpBoat,
-    SpMinecart, SpArrow, SpXpOrb, SpTrident
+    SpMinecart, SpArrow, SpXpOrb, SpTrident, SpDisplay, SpShulker, SpCushion, SpSulfurCube, SpZombieNautilus
 };
+// DyeColor names by id.
+const char* const kDyeNames[16] = {"white", "orange", "magenta", "light_blue", "yellow", "lime", "pink", "gray",
+                                   "light_gray", "cyan", "purple", "blue", "brown", "green", "red", "black"};
 
 struct GpuInstance {
     u32 matrixBase, color, light, overlay;
@@ -292,6 +295,17 @@ void EntityRenderer::buildDefs() {
         else if (n == "wither_skull") mob(Anim::None, "wither_skull#main", "wither/wither");
         else if (n == "leash_knot") mob(Anim::None, "leash_knot#main", "lead_knot/lead_knot");
         else if (n == "end_crystal") mob(Anim::None, "end_crystal#main", "end_crystal/end_crystal");
+        else if (n == "shulker") mob(Anim::Shulker, "shulker#main", "shulker/shulker"), d.special = SpShulker;
+        else if (n == "cushion") mob(Anim::None, "cushion#main", "cushion/white_cushion"), d.special = SpCushion;
+        else if (n == "sulfur_cube") {  // SulfurCubeRenderer: the inner cube (SulfurCubeInnerLayer, drawn first), the outer
+            mob(Anim::None, "sulfur_cube#inner", "sulfur_cube/sulfur_cube_inner", "sulfur_cube_small#inner",
+                "sulfur_cube/sulfur_cube_inner_small");
+            d.base.flags = Translucent;
+            extra("sulfur_cube#main", "sulfur_cube/sulfur_cube_outer", Translucent, "sulfur_cube_small#main",
+                  "sulfur_cube/sulfur_cube_outer_small");
+            d.special = SpSulfurCube;
+        } else if (n == "zombie_nautilus")
+            mob(Anim::Head, "zombie_nautilus#main", "nautilus/zombie_nautilus"), d.special = SpZombieNautilus;
         else if (n == "item") d.kind = Kind::Item;
         else if (n == "falling_block") d.kind = Kind::Block;
         else if (n == "tnt") d.kind = Kind::Block, d.block = "minecraft:tnt";
@@ -304,11 +318,12 @@ void EntityRenderer::buildDefs() {
         else if (n == "dragon_fireball") sprite(T("enderdragon/dragon_fireball"), 2.0f);
         else if (n == "fishing_bobber") sprite(T("fishing/fishing_hook"), 1.0f);
         else if (n == "experience_orb") sprite(T("experience/experience_orb"), 0.6f), d.special = SpXpOrb;
-        else if (n == "area_effect_cloud" || n == "marker" || n == "interaction" || n == "block_display" ||
-                 n == "item_display" || n == "text_display" || n == "lightning_bolt" || n == "ominous_item_spawner")
-            d.kind = Kind::None;  // invisible or effect-only
+        else if (n == "block_display") d.kind = Kind::Block, d.special = SpDisplay;  // DisplayRenderer.BlockDisplayRenderer
+        else if (n == "area_effect_cloud" || n == "marker" || n == "interaction" || n == "item_display" ||
+                 n == "text_display" || n == "lightning_bolt" || n == "ominous_item_spawner")
+            d.kind = Kind::None;  // invisible, effect-only or drawn by the visuals pass (item / text displays)
         else if (n == "item_frame" || n == "glow_item_frame" || n == "painting")
-            d.kind = Kind::None;  // block-attached decorations: not drawn yet
+            d.kind = Kind::None;  // block-attached decorations: the visuals pass
         {  // ArmorModelSet (HumanoidArmorLayer)
             static const char* kPieces[4] = {"#helmet", "#chestplate", "#leggings", "#boots"};
             const std::string set = n == "player" || n == "mannequin" ? "player" : n;
@@ -350,7 +365,7 @@ int EntityRenderer::resolve(const Entity& e, const TypeDef& d, Layer* out) {
     const u64 key = (u64(u32(e.type)) << 48) | (v1 << 36) | ((u64(e.variant2) & 0xFFF) << 24) |
                     ((u64(e.villagerType) & 0xFF) << 16) | (u64(e.baby) << 0) | (u64(e.tame) << 1) |
                     (u64(e.angry) << 2) | (u64(e.slim) << 3) | (u64((e.wool & 0x10) != 0) << 4) |
-                    (u64((e.wool & 15) != 0) << 5);
+                    (u64((e.wool & 15) != 0) << 5) | (u64(e.dyeColor & 31) << 6);
     auto it = layerCache_.find(key);
     if (it == layerCache_.end()) {
         CachedLayers c;
@@ -467,6 +482,20 @@ int EntityRenderer::resolveUncached(const Entity& e, const TypeDef& d, Layer* ou
         case SpPlayer:
             model = e.slim && d.base.babyModel >= 0 ? d.base.babyModel : d.base.model;
             if (e.skin >= 0) tex = e.skin;
+            break;
+        case SpCushion:  // CushionRenderer.TEXTURES_BY_COLOR (white by default)
+            if (const int t = T(std::string("cushion/") + kDyeNames[std::clamp(e.dyeColor, 0, 15)] + "_cushion"); t >= 0) tex = t;
+            break;
+        case SpShulker:  // ShulkerRenderer.getTextureLocation: no colour (16) is the default texture
+            if (e.dyeColor >= 0 && e.dyeColor < 16)
+                if (const int t = T(std::string("shulker/shulker_") + kDyeNames[e.dyeColor]); t >= 0) tex = t;
+            break;
+        case SpZombieNautilus:  // ZombieNautilusRenderer: the variant's model type and texture
+            if (const Variant* v = variantOf("zombie_nautilus_variant")) {
+                if (v->tex >= 0) tex = v->tex;
+                if (v->model == "warm")
+                    if (const int m = assets_.model("zombie_nautilus_coral#main"); m >= 0) model = m;
+            }
             break;
         default: break;
     }
@@ -779,6 +808,11 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         const float hurt = float(e.vehicleHurt) - pt;
         if (hurt > 0) root = mul(root, rotX(std::sin(hurt) * hurt * std::max(e.vehicleDamage - pt, 0.0f) / 10.0f * float(e.vehicleHurtDir) * kDeg));
         root = mul(root, scale(-1, -1, 1));
+    } else if (d.special == SpCushion) {  // CushionRenderer.submit: facing the yaw's direction, upside down
+        const float facing = std::floor(yaw / 90.0f + 0.5f) * 90.0f;  // Direction.fromYRot(...).toYRot()
+        root = mul(root, rotY((180.0f - facing) * kDeg));
+        root = mul(root, rotX(kPi));
+        root = mul(root, translate(0, -0.25f, 0));
     } else if (d.special == SpArrow || d.special == SpTrident) {
         root = mul(root, rotY((yaw - 90.0f) * kDeg));
         root = mul(root, rotZ((pitch + (d.special == SpTrident ? 90.0f : 0.0f)) * kDeg));
@@ -799,7 +833,7 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
             root = mul(root, rotY((180.0f - yaw) * kDeg));
         } else {
             // LivingEntityRenderer.setupRotations (frozen shaking, death roll, riptide spin, sleeping).
-            float bodyRot = bodyYaw;
+            float bodyRot = d.special == SpShulker ? bodyYaw + 180.0f : bodyYaw;  // ShulkerRenderer.setupRotations
             if (fullyFrozen(e)) bodyRot += float(std::cos(std::floor(float(e.age) + pt) * 3.25f) * kPi * 0.4f);
             if (!sleeping) root = mul(root, rotY((180.0f - bodyRot) * kDeg));
             if (e.deathTime > 0) {
@@ -833,6 +867,18 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
                 root = mul(root, rotX(swimAmount * target * kDeg));
                 if (e.pose == 3) root = mul(root, translate(0, -1.0f, 0.3f));
             }
+            if (d.special == SpShulker) {  // rotateAround(attachFace.getOpposite().getRotation(), 0, 0.5, 0)
+                M34 face = M34::identity();
+                switch (e.attachFace) {
+                    case 1: face = rotX(kPi); break;                              // up: down's rotation
+                    case 2: face = rotX(kPi / 2); break;                          // north: south's
+                    case 3: face = mul(rotX(kPi / 2), rotZ(kPi)); break;          // south: north's
+                    case 4: face = mul(rotX(kPi / 2), rotZ(-kPi / 2)); break;     // west: east's
+                    case 5: face = mul(rotX(kPi / 2), rotZ(kPi / 2)); break;      // east: west's
+                    default: break;                                                // down: up's (none)
+                }
+                root = mul(mul(mul(root, translate(0, 0.5f, 0)), face), translate(0, -0.5f, 0));
+            }
         }
         root = mul(root, scale(-1, -1, 1));
         float sc = d.scale;
@@ -848,8 +894,14 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         }
         const bool babyFallback = e.baby && d.base.babyModel < 0 && d.special != SpPlayer && d.special != SpArmorStand;
         if (babyFallback) sx *= 0.5f, sy *= 0.5f, sz *= 0.5f;
+        float lift = 0;
+        if (d.special == SpSulfurCube) {  // SulfurCubeRenderer.scale: 0.999, the size, adults halved, then lifted
+            const float k = 0.999f * float(e.size) * (e.baby ? 1.0f : 0.5f);
+            sx = sy = sz = k;
+            lift = (e.baby ? 1.24f : 0.98f) - ((e.sharedFlags & 0x20) ? 0.0f : 1.0f / 16.0f) + 0.001f / k;
+        }
         if (sx != 1 || sy != 1 || sz != 1) root = mul(root, scale(sx, sy, sz));
-        root = mul(root, translate(0, -1.501f, 0));
+        root = mul(root, translate(0, lift - 1.501f, 0));
         if (e.hurtTime > 0 || e.deathTime > 0) overlay |= 77;  // OverlayTexture red: 30 %
 
         s.walkPos = (e.walkPos - e.walkSpeed * (1.0f - pt)) * e.walkScale;
@@ -915,6 +967,7 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         }
         s.standFlags = e.standFlags;
         s.standPose = e.standPose;
+        s.peek = e.peekO + (e.peek - e.peekO) * pt;
         s.skinParts = e.category == Category::Player ? e.skinParts : 0x7F;
     } else {
         root = mul(root, rotY((180.0f - yaw) * kDeg));
@@ -1175,6 +1228,14 @@ void EntityRenderer::freeEntity(const Entity& e, const TypeDef& d, float pt, con
     double p[3];
     for (int a = 0; a < 3; ++a) p[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt - cam[a];
     BlockRegistry& reg = world_.registry();
+    if (d.kind == Kind::Block && d.special == SpDisplay) {  // the block model in block space, under the display's pose
+        const u16 block = world_.localBlock(e.blockState);
+        M34 m;
+        if (!block || !displayMatrix(e, pt, camYaw_, camPitch_, m.m)) return;
+        m.m[3] += float(p[0]), m.m[7] += float(p[1]), m.m[11] += float(p[2]);
+        emitBlock(block, *reinterpret_cast<const Mat34*>(&m), displayLight(e, light), 0);
+        return;
+    }
     if (d.kind == Kind::Block) {
         if (!d.block.empty() && !d.blockId) d.blockId = reg.idFor(world_.reports().complete(d.block));
         const u16 block = !d.block.empty() ? d.blockId : world_.localBlock(e.blockState);
@@ -1320,6 +1381,12 @@ void EntityRenderer::build(const PassContext& ctx) {
         l = std::sqrt(std::max(l, 1e-12f));
         for (int c = 0; c < 3; ++c) camVec[r * 3 + c] = vp(r, c) / l;
     }
+    {  // camera rotation from its forward direction (the projection's w row)
+        float f[3], l = 0;
+        for (int c = 0; c < 3; ++c) f[c] = vp(3, c), l += f[c] * f[c];
+        l = std::sqrt(std::max(l, 1e-12f));
+        camYaw_ = std::atan2(-f[0], f[2]) / kDeg, camPitch_ = std::asin(std::clamp(-f[1] / l, -1.0f, 1.0f)) / kDeg;
+    }
     const double cam[3] = {ctx.camX, ctx.camY, ctx.camZ};
     const float pt = std::clamp(world_.partialTick(), 0.0f, 1.0f);
     const float maxDist = std::min(ctx.fogEnd, 192.0f);
@@ -1334,12 +1401,18 @@ void EntityRenderer::build(const PassContext& ctx) {
         if (d.kind == Kind::Item && externalItems_) return 0;  // 3D item models: the visuals pass
         if (e.category == Category::Living && (e.sharedFlags & 0x20)) return 0;  // invisible
         float w = e.info->width, h = e.info->height;
-        if (d.special == SpSlime) w *= float(e.size), h *= float(e.size);
+        if (d.special == SpSlime || d.special == SpSulfurCube) w *= float(e.size), h *= float(e.size);
         sphere[3] = std::max(w, h) * 0.75f * d.scale + 0.5f;
+        if (d.special == SpDisplay) {  // bounds of the transformed block (rotations keep lengths)
+            const DisplayState::Xform& x = e.display.to;
+            const float s = std::max({std::abs(x.s[0]), std::abs(x.s[1]), std::abs(x.s[2])});
+            sphere[3] = std::sqrt(x.t[0] * x.t[0] + x.t[1] * x.t[1] + x.t[2] * x.t[2]) + s * 1.75f + 0.5f;
+        }
         for (int a = 0; a < 3; ++a) sphere[a] = float(e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt - cam[a]);
         sphere[1] += h * 0.5f;
         const float dist = std::sqrt(sphere[0] * sphere[0] + sphere[1] * sphere[1] + sphere[2] * sphere[2]);
         if (dist - sphere[3] > maxDist) return 0;
+        if (d.special == SpDisplay && dist > e.display.viewRange * 64.0f) return 0;  // shouldRenderAtSqrDistance
         if (&e != localShadow_ && e.id != world_.viewEntity) {
             bool inside = true;
             for (const auto& pl : planes) {
@@ -1360,7 +1433,7 @@ void EntityRenderer::build(const PassContext& ctx) {
         double c[3];
         for (int a = 0; a < 3; ++a) c[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt - cam[a];
         float w = e.info->width, h = e.info->height;
-        if (d.special == SpSlime) w *= float(e.size), h *= float(e.size);
+        if (d.special == SpSlime || d.special == SpSulfurCube) w *= float(e.size), h *= float(e.size);
         const float cx = float(c[0]), cz = float(c[2]);
         // Light at the entity's eye position (EntityRenderer samples getLightProbePosition = the eyes).
         const int lx = int(std::floor(e.pos[0])), ly = int(std::floor(e.pos[1] + e.info->eye)),

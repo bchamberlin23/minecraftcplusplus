@@ -42,7 +42,7 @@ constexpr float kPi = 3.14159265f;
 constexpr float kDeg = kPi / 180.0f;
 
 // Per-frame upload slice: three constant buffers, instances, dynamic quads, particles, staging for copies.
-constexpr u32 kMaxInstances = 1 << 14, kMaxDynamic = 1 << 13, kMaxParticles = 16384;
+constexpr u32 kMaxInstances = 1 << 14, kMaxDynamic = 1 << 15, kMaxParticles = 16384;
 constexpr u64 kCbBytes = 1024;
 constexpr u64 kInstOffset = kCbBytes * 3;
 constexpr u64 kDynOffset = kInstOffset + u64(kMaxInstances) * 128;
@@ -92,6 +92,14 @@ float wrapDegrees(float d) {
     if (d >= 180.0f) d -= 360.0f;
     if (d < -180.0f) d += 360.0f;
     return d;
+}
+
+// Camera yRot / xRot (degrees) from the view direction (the view-projection's w row): display billboards.
+void cameraAngles(const PassContext& ctx, float& yaw, float& pitch) {
+    float f[3], l = 0;
+    for (int c = 0; c < 3; ++c) f[c] = ctx.viewProj[c * 4 + 3], l += f[c] * f[c];
+    l = std::sqrt(std::max(l, 1e-12f));
+    yaw = std::atan2(-f[0], f[2]) / kDeg, pitch = std::asin(std::clamp(-f[1] / l, -1.0f, 1.0f)) / kDeg;
 }
 
 // Instance list of one draw (contiguous in the upload slice after copying).
@@ -161,6 +169,7 @@ struct Visuals::Impl {
     ComPtr<ID3D12PipelineState> psoCutMv, psoTrMv, psoGlintMv, psoPartCutMv, psoShadow;
     // Block cracks: multiplied into the colour; with the shader pipeline alpha blended into the entity layer.
     ComPtr<ID3D12PipelineState> psoCrumble, psoCrumbleMv;
+    ComPtr<ID3D12PipelineState> psoAdd;  // BlendFunction.LIGHTNING: src alpha + dst (lightning bolts)
     ComPtr<ID3D12Resource> store, upload, itemTex, fontTex;
     u8* mapped = nullptr;
     u32 descTable = UINT32_MAX;  // items, font
@@ -191,6 +200,28 @@ struct Visuals::Impl {
     float prevHandVp[16] = {};  // last frame's hand projection (unjittered) when the hand was in the World stage
     List tagSee, tagNormal;
     List cracks;  // block destruction overlays (LevelRenderer crumbling), drawn after the World stage's translucent list
+    // Lightning bolts (LightningBoltRenderer): additive quads in the AfterTranslucent stage. The shape's seed is the
+    // client's own (LightningBolt.seed), re-rolled with each flash like LightningBolt.tick.
+    List bolts;
+    struct Bolt {
+        u64 seed = 0;
+        int life = 2, flashes = 1, age = -1;
+    };
+    std::unordered_map<int, Bolt> boltStates;
+    u64 boltRandom = 0x2545F4914F6CDD1Dull;
+    void buildBolts(const PassContext& ctx);
+    // Particles of entity events and animate packets: TrackingEmitter (critical hits, totems) and the entities'
+    // handleEntityEvent bursts (poof, hearts, villager moods, teleport portal).
+    struct Emitter {
+        int entity;
+        const char* type;
+        int life, lifetime;
+    };
+    std::vector<Emitter> emitters;
+    std::mt19937 fxRandom{0xC0FFEEu};
+    void entityEffect(const Entity& e, int event, bool animate);
+    bool emit(Emitter& em);  // TrackingEmitter.tick; false when the emitter is done
+    void tickEmitters();
     bool crackDraw = false;
     int crackRects[2][10] = {{-2, -2, -2, -2, -2, -2, -2, -2, -2, -2}, {-2, -2, -2, -2, -2, -2, -2, -2, -2, -2}};
     void buildCracks(const PassContext& ctx);
@@ -217,8 +248,14 @@ struct Visuals::Impl {
     bool avatarReady = false;
     std::vector<i8> skullCache;  // item id -> 1 skull, 0 not, -1 unknown
     std::vector<const ItemMesh*> skullMeshes;  // item id -> worn skull model
-    std::vector<i8> mapItem;                   // item id -> 1 filled map, 0 not, -1 unknown
     const ItemMesh* frameMeshes[4] = {};       // item / glow frame, without / with a map
+    // Maps in item frames: the map image in the item atlas and its quad (MapRenderer), by map id.
+    struct MapTex {
+        int ax = -1, ay = -1;
+        u32 version = ~0u, quad = UINT32_MAX;
+    };
+    std::unordered_map<int, MapTex> mapTextures;
+    const MapTex* mapTexture(int id);  // nullptr: no map data (yet)
     std::vector<Xf> armMats;                   // scratch: arm part matrices
 
     // Name tags: text quads per name in the static store.
@@ -227,6 +264,16 @@ struct Visuals::Impl {
         float width = 0;
     };
     std::unordered_map<std::string, Tag> tags;
+    // Text displays: the laid out text per entity (background quad first, then the glyphs, font units), drawn from
+    // the per-frame quads; rebuilt when the text, line width or style changes.
+    struct TextBlock {
+        u32 version = 0;
+        bool valid = false;
+        float width = 0, height = 0;
+        std::vector<MeshQuad> quads;
+    };
+    std::unordered_map<int, TextBlock> textBlocks;
+    const TextBlock& textBlock(int id, const DisplayState& s);
 
     // Paintings: painting_variant network id -> asset / size.
     struct PaintingInfo {
@@ -314,6 +361,8 @@ bool Visuals::load(const fs::path& jar, const fs::path& minecraftDir, const Game
     if (!m.font->load(*m.res, m.fontAtlas)) m.font.reset();
     m.particles = std::make_unique<fx::Particles>(m.world.world(), m.world.registry(), reports, m.models);
     m.particles->init(*m.res);
+    m.world.onEntityEvent = [&m](const Entity& e, int event) { m.entityEffect(e, event, false); };
+    m.world.onAnimate = [&m](const Entity& e, int action) { m.entityEffect(e, action, true); };
     m.loaded = true;
     LOG("visuals %7.1f ms  item models, font and particles from the game", t.ms());
     return true;
@@ -470,8 +519,9 @@ void StagePass::draw(const PassContext& ctx) {
             break;
         }
         case 2: {
-            m.tagSee.clear(), m.tagNormal.clear();
+            m.tagSee.clear(), m.tagNormal.clear(), m.bolts.clear();
             m.buildTags(ctx);
+            m.buildBolts(ctx);
             // Particles.
             const double cam[3] = {ctx.camX, ctx.camY, ctx.camZ};
             u32 opaque = 0, total = 0;
@@ -491,7 +541,7 @@ void StagePass::draw(const PassContext& ctx) {
             }
             m.uploadPending(ctx);
             m.writeCb(1, ctx, ctx.viewProj, false, false);
-            const bool a = m.flush(m.tagSee), b = m.flush(m.tagNormal);
+            const bool a = m.flush(m.tagSee), b = m.flush(m.tagNormal), bolt = m.flush(m.bolts);
             m.bindCommon(ctx);
             ID3D12GraphicsCommandList* list = ctx.list;
             const D3D12_GPU_VIRTUAL_ADDRESS va = m.upload->GetGPUVirtualAddress() + u64(ctx.frame) * kFrameBytes;
@@ -514,6 +564,7 @@ void StagePass::draw(const PassContext& ctx) {
                 particleDraw(m.psoPartCut.Get(), 0, opaque);
             }
             particleDraw(m.psoPartTr.Get(), opaque, total - opaque);
+            if (bolt) m.drawList(ctx, m.psoAdd.Get(), m.bolts, 1);
             if (a) m.drawList(ctx, m.psoTextSee.Get(), m.tagSee, 1);
             if (b) m.drawList(ctx, m.psoText.Get(), m.tagNormal, 1);
             m.stats().particles = total;
@@ -606,7 +657,7 @@ bool Visuals::Impl::createGpu(Renderer& r) {
     if (!check(device->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(), IID_PPV_ARGS(&rootSig)),
                "CreateRootSignature"))
         return false;
-    enum Blend { Opaque, Alpha, Glint, Crumble };
+    enum Blend { Opaque, Alpha, Glint, Crumble, Add };
     // targets: 1 colour; 2 colour + motion (written); 3 colour + motion (kept); 0 shadow map (depth only)
     auto pso = [&](const void* vs, size_t vsSize, const void* ps, size_t psSize, Blend blend, bool depthTest, bool depthWrite,
                    ComPtr<ID3D12PipelineState>& out, int targets = 1) {
@@ -630,6 +681,10 @@ bool Visuals::Impl::createGpu(Renderer& r) {
             rt.SrcBlend = D3D12_BLEND_DEST_COLOR, rt.DestBlend = D3D12_BLEND_SRC_COLOR, rt.BlendOp = D3D12_BLEND_OP_ADD;
             rt.SrcBlendAlpha = D3D12_BLEND_ZERO, rt.DestBlendAlpha = D3D12_BLEND_ONE, rt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
             rt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_RED | D3D12_COLOR_WRITE_ENABLE_GREEN | D3D12_COLOR_WRITE_ENABLE_BLUE;
+        } else if (blend == Add) {  // LIGHTNING: src colour * src alpha + dst (alpha untouched: additive in a premultiplied layer)
+            rt.BlendEnable = TRUE;
+            rt.SrcBlend = D3D12_BLEND_SRC_ALPHA, rt.DestBlend = D3D12_BLEND_ONE, rt.BlendOp = D3D12_BLEND_OP_ADD;
+            rt.SrcBlendAlpha = D3D12_BLEND_ZERO, rt.DestBlendAlpha = D3D12_BLEND_ONE, rt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
         }
         d.SampleMask = UINT_MAX;
         d.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
@@ -669,6 +724,7 @@ bool Visuals::Impl::createGpu(Renderer& r) {
         !pso(SH(VisualsVS), SH(VisualsGlintPS), Glint, true, false, psoGlintMv, 3) ||
         !pso(SH(VisualsVS), SH(VisualsCrumblingPS), Crumble, true, false, psoCrumble) ||
         !pso(SH(VisualsVS), SH(VisualsCrumblingPS), Alpha, true, false, psoCrumbleMv, 3) ||
+        !pso(SH(VisualsVS), SH(VisualsTranslucentPS), Add, true, false, psoAdd) ||
         !pso(SH(ParticleVS), SH(ParticleCutoutMvPS), Opaque, true, true, psoPartCutMv, 2) ||
         !pso(SH(VisualsShadowVS), SH(VisualsShadowPS), Opaque, true, true, psoShadow, 0))
         return false;
@@ -1074,6 +1130,86 @@ const Visuals::Impl::Tag& Visuals::Impl::tag(const std::string& name) {
     return tags.emplace(name, t).first->second;
 }
 
+// MapTextureManager: the map's colours as a 128 x 128 image (refreshed with each update) and MapRenderer's quad
+// (0..128 at z -0.01, map space).
+const Visuals::Impl::MapTex* Visuals::Impl::mapTexture(int id) {
+    u32 version = 0;
+    const std::vector<u8>* colors = ui::mapColors(id, version);
+    if (!colors || colors->size() < 128 * 128) return nullptr;
+    MapTex& t = mapTextures[id];
+    if (t.ax < 0) {
+        ui::Atlas& atlas = models.atlas();
+        if (!atlas.alloc(128, 128, t.ax, t.ay)) {
+            mapTextures.erase(id);
+            return nullptr;
+        }
+        const float W = float(atlas.width()), H = float(atlas.height());
+        const float u0 = float(t.ax) / W, v0 = float(t.ay) / H, u1 = float(t.ax + 128) / W, v1 = float(t.ay + 128) / H;
+        MeshQuad q{};
+        const float corners[4][4] = {{0, 128, u0, v1}, {128, 128, u1, v1}, {128, 0, u1, v0}, {0, 0, u0, v0}};
+        for (int k = 0; k < 4; ++k)
+            q.pos[k][0] = corners[k][0], q.pos[k][1] = corners[k][1], q.pos[k][2] = -0.01f, q.uv[k][0] = corners[k][2],
+            q.uv[k][1] = corners[k][3];
+        q.normal = packNormal(0, 0, -1), q.color = 0xFFFFFFFF, q.tex = kTexItems, q.flags = kQuadNoShade;
+        t.quad = models.addQuads(&q, 1);
+    }
+    if (t.quad == UINT32_MAX) return nullptr;
+    if (t.version != version) {
+        t.version = version;
+        std::vector<u8> px(128 * 128 * 4);
+        for (size_t i = 0; i < 128 * 128; ++i) {
+            const u32 c = ui::mapColorRgba((*colors)[i]);
+            std::memcpy(&px[i * 4], &c, 4);
+        }
+        models.atlas().blit(t.ax, t.ay, 128, 128, px.data(), 128 * 4);
+    }
+    return &t;
+}
+
+// TextDisplayRenderer.splitLines + submitInner's layout: lines wrapped at the line width, aligned within the widest
+// line; the background covers (-1, -1) .. (width, height).
+const Visuals::Impl::TextBlock& Visuals::Impl::textBlock(int id, const DisplayState& s) {
+    TextBlock& b = textBlocks[id];
+    if (b.valid && b.version == s.textVersion) return b;
+    b = TextBlock{};
+    b.valid = true, b.version = s.textVersion;
+    if (!font) return b;
+    const ui::Text text = s.text.empty() ? ui::Text() : ui::parseComponent(s.text, &res->lang());
+    const std::vector<ui::Text> lines = font->split(text, s.lineWidth);
+    std::vector<int> widths;
+    int width = 0;
+    for (const ui::Text& l : lines) widths.push_back(font->width(l)), width = std::max(width, widths.back());
+    const int height = int(lines.size()) * 10 - 1;
+    b.width = float(width), b.height = float(height);
+    MeshQuad bg{};
+    const float corners[4][2] = {{-1, -1}, {-1, float(height)}, {float(width), float(height)}, {float(width), -1}};
+    for (int k = 0; k < 4; ++k) bg.pos[k][0] = corners[k][0], bg.pos[k][1] = corners[k][1], bg.pos[k][2] = -0.01f;  // behind
+    bg.normal = packNormal(0, 0, 1), bg.color = 0xFFFFFFFF, bg.tex = kTexSolid, bg.flags = kQuadNoShade;
+    b.quads.push_back(bg);
+    canvas.begin(1u << 14, 1u << 14, 1);
+    float y = 0;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        const float x = (s.style & 8) ? 0.0f : (s.style & 16) ? float(width - widths[i]) : float(width) / 2.0f - float(widths[i]) / 2.0f;
+        font->draw(canvas, lines[i], x, y, 0xFFFFFFFF, (s.style & 1) != 0);
+        y += 10;
+    }
+    const auto& v = canvas.vertices();
+    for (size_t k = 0; k + 5 < v.size(); k += 6) {
+        const ui::UiVertex* c[4] = {&v[k], &v[k + 1], &v[k + 2], &v[k + 5]};
+        MeshQuad q{};
+        for (int j = 0; j < 4; ++j) {
+            q.pos[j][0] = c[j]->x, q.pos[j][1] = c[j]->y, q.pos[j][2] = 0;
+            q.uv[j][0] = c[j]->u, q.uv[j][1] = c[j]->v;
+        }
+        q.normal = packNormal(0, 0, 1);
+        q.color = c[0]->color;
+        q.tex = c[0]->mode == ui::ModeSolid ? kTexSolid : kTexFont;
+        q.flags = kQuadNoShade;
+        b.quads.push_back(q);
+    }
+    return b;
+}
+
 // ---------------------------------------------------------------------------------------------------------
 // Local player state (20 Hz)
 
@@ -1173,7 +1309,7 @@ void Visuals::Impl::update() {
     if (game) {
         tickClock += dt;
         int n = 0;
-        while (tickClock >= 0.05 && n < 5) tickClock -= 0.05, ++n, tickLocal();
+        while (tickClock >= 0.05 && n < 5) tickClock -= 0.05, ++n, tickLocal(), tickEmitters();
         if (tickClock >= 0.05) tickClock = 0;
         partial = float(tickClock / 0.05);
         // The avatar for the third-person camera (drawn by the entity renderer this frame).
@@ -1292,6 +1428,7 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
     }
     // Item frames, paintings, dropped items.
     static int frameType = -2, glowFrameType = -2, paintingType = -2;
+    static const int ominousType = assets.typeId("minecraft:ominous_item_spawner");
     if (frameType == -2)
         frameType = assets.typeId("minecraft:item_frame"), glowFrameType = assets.typeId("minecraft:glow_item_frame"),
         paintingType = assets.typeId("minecraft:painting");
@@ -1328,11 +1465,53 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
         return false;
     };
     static const int kStep[6][3] = {{0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}};
+    static const int itemDisplayType = assets.typeId("minecraft:item_display");
+    float camYaw, camPitch;
+    cameraAngles(ctx, camYaw, camPitch);
     for (const auto& [id, e] : entities) {
+        if (e.type == itemDisplayType && e.itemId >= 0) {  // DisplayRenderer.ItemDisplayRenderer
+            double p[3];
+            for (int a = 0; a < 3; ++a) p[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt - cam[a];
+            const float d2 = float(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]), range = e.display.viewRange * 64.0f;
+            Xf m;
+            if (d2 > range * range || !displayMatrix(e, pt, camYaw, camPitch, m.m)) continue;
+            m.m[3] += float(p[0]), m.m[7] += float(p[1]), m.m[11] += float(p[2]);
+            // Culled like the entity renderer when the display has a size (width and height), else always drawn.
+            const DisplayState& s = e.display;
+            if (s.width > 0 && s.height > 0 &&
+                !visible(float(p[0]), float(p[1]) + s.height * 0.5f, float(p[2]), std::max(s.width, s.height)))
+                continue;
+            static const Display kContext[10] = {Display::None,  Display::ThirdLeft, Display::ThirdRight, Display::FirstLeft,
+                                                 Display::FirstRight, Display::Head, Display::Gui,     Display::Ground,
+                                                 Display::Fixed, Display::None};
+            const Display ctxt = kContext[std::clamp(s.itemContext, 0, 9)];
+            const bool flat = ctxt == Display::Gui || ctxt == Display::Ground || ctxt == Display::Fixed;
+            worldLists.begin(u64(u32(id)) << 4 | 3);
+            pushItem(worldLists, models.mesh(e.itemId, e.itemDye, flat), ctxt, xfMul(m, xfRotY(kPi)),
+                     displayLight(e, lightAt(e.pos[0], e.pos[1], e.pos[2])), e.itemFoil);
+            continue;
+        }
         const bool frame = e.type == frameType || e.type == glowFrameType;
-        if (!frame && e.type != paintingType && e.category != Category::Item) continue;
+        if (!frame && e.type != paintingType && e.category != Category::Item && e.type != ominousType) continue;
         double p[3];
         for (int a = 0; a < 3; ++a) p[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt;
+        if (e.pickupBy != INT_MIN) {  // ItemPickupParticleGroup: towards the collector's middle, (time / 3)^2
+            double to[3];
+            if (auto c = entities.find(e.pickupBy); c != entities.end() && c->second.info) {
+                const Entity& t = c->second;
+                for (int a = 0; a < 3; ++a) to[a] = t.prevPos[a] + (t.pos[a] - t.prevPos[a]) * pt;
+                to[1] += t.info->eye / 2.0;
+            } else if (game) {  // the local player
+                const Player& pl = game->player();
+                for (int a = 0; a < 3; ++a) to[a] = pl.prev[a] + (pl.pos[a] - pl.prev[a]) * pt;
+                to[1] += pl.eyeHeight() / 2.0;
+            } else {
+                std::copy(p, p + 3, to);
+            }
+            float t = (float(e.pickupLife) + pt) / 3.0f;
+            t = std::min(t * t, 1.0f);
+            for (int a = 0; a < 3; ++a) p[a] += (to[a] - p[a]) * t;
+        }
         const float rx = float(p[0] - cam[0]), ry = float(p[1] - cam[1]), rz = float(p[2] - cam[2]);
         const float radius = e.type == paintingType ? 4.0f : 1.0f;
         Lists* target = &worldLists;
@@ -1342,7 +1521,7 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
         }
         Lists& L = *target;
         L.begin(u64(u32(id)) << 4 | 3);
-        const u32 light = lightAt(p[0], p[1], p[2]);
+        u32 light = lightAt(p[0], p[1], p[2]);
         if (frame) {  // ItemFrameRenderer
             const int dir = std::clamp(e.direction, 0, 5);
             Xf m = xfTranslate(rx, ry, rz);
@@ -1355,13 +1534,8 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
             m = xfMul(m, xfRotY(yRot * kDeg));
             const bool glow = e.type == glowFrameType;
             const bool invisible = (e.sharedFlags & 0x20) != 0;
-            bool map = false;
-            if (e.itemId >= 0) {
-                if (mapItem.size() <= size_t(e.itemId)) mapItem.resize(size_t(e.itemId) + 1, -1);
-                i8& mi = mapItem[size_t(e.itemId)];
-                if (mi < 0) mi = models.itemName(e.itemId) == "filled_map" ? 1 : 0;
-                map = mi == 1;
-            }
+            const MapTex* mapTex = e.itemId >= 0 && e.mapId >= 0 ? mapTexture(e.mapId) : nullptr;  // a map with data
+            const bool map = mapTex != nullptr;
             u32 frameLight = light;
             if (glow) frameLight = (light & 0xF0) | std::max<u32>(light & 15, 5);
             if (!invisible) {
@@ -1369,7 +1543,14 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
                 if (!fm) fm = &models.blockModelMesh(std::string("block/") + (glow ? "glow_item_frame" : "item_frame") + (map ? "_map" : ""));
                 pushRaw(L, *fm, xfMul(m, xfTranslate(-0.5f, -0.5f, -0.5f)), frameLight);
             }
-            if (e.itemId >= 0) {
+            if (map) {  // MapRenderer: the 128 x 128 map image (decorations are not drawn)
+                Xf im = xfMul(m, xfTranslate(0, 0, invisible ? 0.5f : 0.4375f));
+                im = xfMul(im, xfRotZ(float(e.rotation % 4 * 2) * 45.0f * kDeg));
+                im = xfMul(im, xfRotZ(kPi));
+                im = xfMul(im, xfScale(1.0f / 128, 1.0f / 128, 1.0f / 128));
+                im = xfMul(im, xfTranslate(-64, -64, -1));
+                L.cut.add(im, mapTex->quad, 1, (glow ? 0xFDu : frameLight) | 512u, 0xFFFFFFFF, 0, L.next());
+            } else if (e.itemId >= 0) {
                 Xf im = xfMul(m, xfTranslate(0, 0, invisible ? 0.5f : 0.4375f));
                 im = xfMul(im, xfRotZ(float(e.rotation % 8) * 45.0f * kDeg));
                 im = xfMul(im, xfScale(0.5f, 0.5f, 0.5f));
@@ -1382,9 +1563,25 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
             if (!info) continue;
             if (!info->mesh) info->mesh = &models.paintingMesh(info->asset, info->w, info->h);
             static const int k2d[6] = {0, 0, 2, 0, 1, 3};  // 3D data value -> 2D data value (S W N E)
-            const int d2 = k2d[std::clamp(e.direction, 0, 5)];
+            const int dir = std::clamp(e.direction, 0, 5), d2 = k2d[dir];
             Xf m = xfMul(xfTranslate(rx, ry, rz), xfRotY(float(180 - d2 * 90) * kDeg));
-            pushRaw(L, *info->mesh, m, light);
+            if (info->mesh->empty()) continue;
+            // PaintingRenderer.extractRenderState: each segment lit by the block it covers.
+            const ItemMesh::Part& part = info->mesh->parts[0];
+            const int w = info->w, h = info->h;
+            if (part.count < u32(w * h) * ItemModels::kPaintingSegmentQuads) continue;
+            for (int sy = 0; sy < h; ++sy)
+                for (int sx = 0; sx < w; ++sx) {
+                    const double ox = sx - w / 2.0 + 0.5, oy = sy - h / 2.0 + 0.5;
+                    double bx = std::floor(e.pos[0]), bz = std::floor(e.pos[2]);
+                    if (dir == 2) bx = std::floor(e.pos[0] + ox);       // north
+                    else if (dir == 4) bz = std::floor(e.pos[2] - ox);  // west
+                    else if (dir == 3) bx = std::floor(e.pos[0] - ox);  // south
+                    else if (dir == 5) bz = std::floor(e.pos[2] + ox);  // east
+                    const u32 seg = u32(sx + sy * w) * ItemModels::kPaintingSegmentQuads;
+                    L.cut.add(m, part.first + seg, ItemModels::kPaintingSegmentQuads, lightAt(bx, std::floor(e.pos[1] + oy), bz),
+                              0xFFFFFFFF, 0, L.next());
+                }
             continue;
         }
         // ItemEntityRenderer: bob, spin and several copies for larger stacks (GROUND display).
@@ -1392,10 +1589,18 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
         const ItemMesh& mesh = models.mesh(e.itemId, e.itemDye, true);
         if (mesh.empty()) continue;
         const float age = float(e.age) + pt;
-        const float bobY = std::sin(age / 10.0f + e.bobOffset) * 0.1f + 0.1f;
-        const float spin = age / 20.0f + e.bobOffset;
-        Xf m = xfTranslate(rx, ry + bobY + (-mesh.groundMinY + 0.0625f), rz);
-        m = xfMul(m, xfRotY(spin));
+        Xf m;
+        if (e.type == ominousType) {  // OminousItemSpawnerRenderer: grows in over 50 ticks, spins 40 degrees a tick
+            const float s = std::min(age, 50.0f) / 50.0f;
+            m = xfMul(xfTranslate(rx, ry, rz), xfScale(s, s, s));
+            m = xfMul(m, xfRotY(wrapDegrees(age * 40.0f) * kDeg));
+            light = 0xFF;
+        } else {
+            const float bobY = std::sin(age / 10.0f + e.bobOffset) * 0.1f + 0.1f;
+            const float spin = age / 20.0f + e.bobOffset;
+            m = xfTranslate(rx, ry + bobY + (-mesh.groundMinY + 0.0625f), rz);
+            m = xfMul(m, xfRotY(spin));
+        }
         const int c = e.itemCount;
         const int amount = c > 48 ? 5 : c > 32 ? 4 : c > 16 ? 3 : c > 1 ? 2 : 1;
         u32 rng = u32(e.itemId) * 2654435761u + 7;
@@ -1448,6 +1653,44 @@ void Visuals::Impl::buildTags(const PassContext& ctx) {
         targeted = world.pick(eye, dir, limit).id;
     }
     std::shared_lock lock(world.world().mutex());
+    // Text displays (DisplayRenderer.TextDisplayRenderer): the display's pose, then rotate(Y, pi) and scale(-0.025);
+    // one-sided (the text pipelines cull back faces), see-through ones without the depth test.
+    static const int textDisplayType = assets.typeId("minecraft:text_display");
+    float camYaw, camPitch;
+    cameraAngles(ctx, camYaw, camPitch);
+    for (const auto& [id, e] : world.entities()) {
+        if (e.type != textDisplayType) continue;
+        double p[3];
+        for (int a = 0; a < 3; ++a) p[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt - cam[a];
+        const float range = e.display.viewRange * 64.0f;
+        Xf m;
+        if (float(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]) > range * range || !displayMatrix(e, pt, camYaw, camPitch, m.m))
+            continue;
+        m.m[3] += float(p[0]), m.m[7] += float(p[1]), m.m[11] += float(p[2]);
+        const TextBlock& t = textBlock(id, e.display);
+        m = xfMul(m, xfRotY(kPi));
+        m = xfMul(m, xfScale(-0.025f, -0.025f, -0.025f));
+        m = xfMul(m, xfTranslate(1.0f - t.width / 2.0f, -t.height, 0));
+        const float c0[3] = {m.m[0], m.m[4], m.m[8]}, c1[3] = {m.m[1], m.m[5], m.m[9]};
+        const float n[3] = {c0[1] * c1[2] - c0[2] * c1[1], c0[2] * c1[0] - c0[0] * c1[2], c0[0] * c1[1] - c0[1] * c1[0]};
+        if (n[0] * m.m[3] + n[1] * m.m[7] + n[2] * m.m[11] <= 0) continue;  // seen from behind
+        u32 background;
+        int opacity;
+        displayTextColors(e, pt, background, opacity);
+        if (e.display.style & 4) background = u32(int(0.25f * 255.0f)) << 24;  // default background: text background opacity
+        u32 alpha = u8(opacity);
+        if ((alpha & 0xFC) == 0) alpha = 255;  // Font.adjustColor
+        const u32 first = u32(dyn.size());
+        if (first + t.quads.size() > kMaxDynamic) continue;
+        dyn.insert(dyn.end(), t.quads.begin(), t.quads.end());
+        const u32 light = displayLight(e, lightAt(e.pos[0], e.pos[1], e.pos[2])) | 512u;
+        List& L = (e.display.style & 2) ? tagSee : tagNormal;
+        if (background) L.add(m, first, 1, light, abgr(background & 0xFFFFFF, background >> 24), 1);
+        L.add(m, first + 1, u32(t.quads.size()) - 1, light, (alpha << 24) | 0xFFFFFF, 1);
+    }
+    if (frameCounter % 256 == 0)  // forget the text of removed displays
+        for (auto it = textBlocks.begin(); it != textBlocks.end();)
+            it = world.entities().count(it->first) ? std::next(it) : textBlocks.erase(it);
     for (const auto& [id, e] : world.entities()) {
         if (!e.info || e.name.empty() || e.deathTime > 0) continue;
         if (e.category == Category::Living && (e.sharedFlags & 0x20)) continue;
@@ -1485,6 +1728,176 @@ void Visuals::Impl::buildTags(const PassContext& ctx) {
         }
         ++self.stats_.tags;
     }
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Lightning bolts (LightningBoltRenderer)
+
+namespace {
+// LegacyRandomSource (java.util.Random): the bolt's shape from its seed.
+struct JavaRandom {
+    u64 seed;
+    explicit JavaRandom(u64 s) : seed((s ^ 0x5DEECE66Dull) & ((1ull << 48) - 1)) {}
+    int next(int bits) {
+        seed = (seed * 0x5DEECE66Dull + 0xBull) & ((1ull << 48) - 1);
+        return int(i64(seed) >> (48 - bits));
+    }
+    int nextInt(int bound) {
+        if ((bound & -bound) == bound) return int((i64(bound) * i64(next(31))) >> 31);
+        int bits, val;
+        do bits = next(31), val = bits % bound;
+        while (bits - val + (bound - 1) < 0);
+        return val;
+    }
+};
+}  // namespace
+
+void Visuals::Impl::buildBolts(const PassContext& ctx) {
+    static const int boltType = assets.typeId("minecraft:lightning_bolt");
+    const double cam[3] = {ctx.camX, ctx.camY, ctx.camZ};
+    const float pt = std::clamp(world.partialTick(), 0.0f, 1.0f);
+    auto rnd = [&] {  // the client's own randomness (seeds, flash counts)
+        boltRandom ^= boltRandom << 13, boltRandom ^= boltRandom >> 7, boltRandom ^= boltRandom << 17;
+        return boltRandom;
+    };
+    for (const auto& [id, e] : world.entities()) {
+        if (e.type != boltType) continue;
+        Bolt& b = boltStates[id];
+        if (b.age < 0) b.age = e.age, b.seed = rnd(), b.flashes = int(rnd() % 3) + 1;
+        for (; b.age < e.age; ++b.age)  // LightningBolt.tick (client): flashes re-roll the shape
+            if (--b.life < 0 && b.flashes > 0 && b.life < -int(rnd() % 10)) --b.flashes, b.life = 1, b.seed = rnd();
+        if (b.life < 0 && b.flashes == 0) continue;  // discarded on the client
+        float xOffsets[8], zOffsets[8], xOffset = 0, zOffset = 0;
+        JavaRandom r0(b.seed);
+        for (int h = 7; h >= 0; --h) {
+            xOffsets[h] = xOffset, zOffsets[h] = zOffset;
+            xOffset += float(r0.nextInt(11) - 5), zOffset += float(r0.nextInt(11) - 5);
+        }
+        const u32 first = u32(dyn.size());
+        auto quad = [&](float sx, float sz, float ex, float ez, int seg, float top, float bottom, bool rx, bool rz, bool lx, bool lz) {
+            MeshQuad q{};
+            const float y0 = float(seg * 16), y1 = float((seg + 1) * 16);
+            const float p[4][3] = {{sx + (rx ? bottom : -bottom), y0, sz + (rz ? bottom : -bottom)},
+                                   {ex + (rx ? top : -top), y1, ez + (rz ? top : -top)},
+                                   {ex + (lx ? top : -top), y1, ez + (lz ? top : -top)},
+                                   {sx + (lx ? bottom : -bottom), y0, sz + (lz ? bottom : -bottom)}};
+            std::memcpy(q.pos, p, sizeof(p));
+            q.normal = packNormal(0, 1, 0), q.color = 0x4C7F7373u;  // (0.45, 0.45, 0.5, 0.3)
+            q.tex = kTexSolid, q.flags = kQuadNoShade;
+            dyn.push_back(q);
+        };
+        for (int layer = 0; layer < 4 && dyn.size() + 64 <= kMaxDynamic; ++layer) {
+            JavaRandom r(b.seed);
+            for (int branch = 0; branch < 3; ++branch) {
+                const bool trunk = branch == 0;
+                const int start = 7 - branch, end = trunk ? 0 : start - 3 + 1;
+                float sx = xOffsets[start] - xOffset, sz = zOffsets[start] - zOffset;
+                for (int seg = start; seg >= end; --seg) {
+                    const float ex = sx, ez = sz;
+                    const int spread = trunk ? 5 : 15;
+                    sx += float(r.nextInt(spread * 2 + 1) - spread), sz += float(r.nextInt(spread * 2 + 1) - spread);
+                    float top = 0.1f + float(layer) * 0.2f, bottom = top;
+                    if (trunk) top *= float(seg) * 0.1f + 1.0f, bottom *= float(seg - 1) * 0.1f + 1.0f;
+                    quad(sx, sz, ex, ez, seg, top, bottom, false, false, true, false);
+                    quad(sx, sz, ex, ez, seg, top, bottom, true, false, true, true);
+                    quad(sx, sz, ex, ez, seg, top, bottom, true, true, false, true);
+                    quad(sx, sz, ex, ez, seg, top, bottom, false, true, false, false);
+                }
+            }
+        }
+        double p[3];
+        for (int a = 0; a < 3; ++a) p[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt - cam[a];
+        bolts.add(xfTranslate(float(p[0]), float(p[1]), float(p[2])), first, u32(dyn.size()) - first, 256u | 512u, 0xFFFFFFFF, 1);
+    }
+    if (frameCounter % 64 == 0)  // forget removed bolts
+        for (auto it = boltStates.begin(); it != boltStates.end();)
+            it = world.entities().count(it->first) ? std::next(it) : boltStates.erase(it);
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Entity event / animate particles
+
+namespace {
+void entityBox(const Entity& e, float& w, float& h) {
+    w = e.info ? e.info->width : 0.6f, h = e.info ? e.info->height : 1.8f;
+    if (e.baby && e.category == Category::Living) w *= 0.5f, h *= 0.5f;
+}
+}  // namespace
+
+void Visuals::Impl::entityEffect(const Entity& e, int event, bool animate) {
+    if (!particles || !e.info) return;
+    if (animate) {  // ClientPacketListener.handleAnimate
+        if (event == 1 || event == 2) {
+            emitters.push_back({e.id, event == 1 ? "crit" : "enchanted_hit", 0, 3});
+            if (!emit(emitters.back())) emitters.pop_back();  // TrackingEmitter ticks once when created
+        }
+        return;
+    }
+    if (event == 35) {  // totem of undying
+        emitters.push_back({e.id, "totem_of_undying", 0, 30});
+        if (!emit(emitters.back())) emitters.pop_back();
+        return;
+    }
+    std::uniform_real_distribution<double> u(0.0, 1.0);
+    std::normal_distribution<double> g(0.0, 1.0);
+    float w, h;
+    entityBox(e, w, h);
+    const std::string& n = e.info->name;
+    // n particles at getRandomX(1), getRandomY() + dy, getRandomZ(1), gaussian * 0.02 motion (offset back by `back`).
+    auto burst = [&](const char* type, int count, double dy, double back) {
+        std::shared_lock lock(world.world().mutex());
+        for (int i = 0; i < count; ++i) {
+            const double xa = g(fxRandom) * 0.02, ya = g(fxRandom) * 0.02, za = g(fxRandom) * 0.02;
+            const double x = e.pos[0] + (2 * u(fxRandom) - 1) * w, y = e.pos[1] + u(fxRandom) * h + dy,
+                         z = e.pos[2] + (2 * u(fxRandom) - 1) * w;
+            particles->spawn(type, x - xa * back, y - ya * back, z - za * back, xa, ya, za);
+        }
+    };
+    const bool villager = n == "minecraft:villager";
+    const bool tamable = n == "minecraft:wolf" || n == "minecraft:cat" || n == "minecraft:parrot" || n.ends_with("horse") ||
+                         n == "minecraft:donkey" || n == "minecraft:mule" || n.ends_with("llama") || n == "minecraft:camel" ||
+                         n == "minecraft:nautilus";
+    if (event == 60 || event == 20) burst("poof", 20, 0, 10);  // LivingEntity.makePoofParticles, Mob.spawnAnim
+    else if (event == 18 && e.category == Category::Living) burst("heart", 7, 0.5, 0);  // Animal: in love
+    else if ((event == 6 || event == 7) && tamable) burst(event == 7 ? "heart" : "smoke", 7, 0.5, 0);  // taming
+    else if (villager && event == 12) burst("heart", 5, 1.0, 0);  // Villager.addParticlesAroundSelf
+    else if (villager && event == 13) burst("angry_villager", 5, 1.0, 0);
+    else if (villager && event == 14) burst("happy_villager", 5, 1.0, 0);
+    else if (villager && event == 42) burst("splash", 5, 1.0, 0);
+    else if (event == 46 && e.category != Category::Other) {  // LivingEntity: teleport (chorus fruit, endermen)
+        std::shared_lock lock(world.world().mutex());
+        for (int i = 0; i < 128; ++i) {
+            const double d = i / 127.0;
+            const float xa = (float(u(fxRandom)) - 0.5f) * 0.2f, ya = (float(u(fxRandom)) - 0.5f) * 0.2f,
+                        za = (float(u(fxRandom)) - 0.5f) * 0.2f;
+            const double x = e.prevPos[0] + (e.pos[0] - e.prevPos[0]) * d + (u(fxRandom) - 0.5) * w * 2.0;
+            const double y = e.prevPos[1] + (e.pos[1] - e.prevPos[1]) * d + u(fxRandom) * h;
+            const double z = e.prevPos[2] + (e.pos[2] - e.prevPos[2]) * d + (u(fxRandom) - 0.5) * w * 2.0;
+            particles->spawn("portal", x, y, z, xa, ya, za);
+        }
+    }
+}
+
+bool Visuals::Impl::emit(Emitter& em) {
+    auto it = world.entities().find(em.entity);
+    if (it == world.entities().end() || !particles) return false;
+    const Entity& e = it->second;
+    float w, h;
+    entityBox(e, w, h);
+    std::uniform_real_distribution<float> u(-1.0f, 1.0f);
+    std::shared_lock lock(world.world().mutex());
+    for (int i = 0; i < 16; ++i) {
+        const double xa = u(fxRandom), ya = u(fxRandom), za = u(fxRandom);
+        if (xa * xa + ya * ya + za * za > 1.0) continue;
+        particles->spawn(em.type, e.pos[0] + w * xa / 4.0, e.pos[1] + h * (0.5 + ya / 4.0), e.pos[2] + w * za / 4.0, xa, ya + 0.2, za);
+    }
+    return ++em.life < em.lifetime;
+}
+
+void Visuals::Impl::tickEmitters() {
+    for (size_t i = 0; i < emitters.size();)
+        if (emit(emitters[i])) ++i;
+        else emitters.erase(emitters.begin() + ptrdiff_t(i));
 }
 
 // ---------------------------------------------------------------------------------------------------------

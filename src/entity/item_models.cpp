@@ -676,6 +676,7 @@ struct ItemModels::Impl {
                 const JModel::Tr& tr = m->display[src];
                 part.display[c] = displayXf(tr.rot, tr.trans, tr.scale, left, !tr.set);
             }
+            part.display[size_t(Display::None)] = xfTranslate(-0.5f, -0.5f, -0.5f);
             // ItemStackRenderState.getModelBoundingBox (GROUND display) for dropped items.
             float lo[3] = {1e9f, 1e9f, 1e9f}, hi[3] = {-1e9f, -1e9f, -1e9f};
             for (const auto* v : {&out.cutout, &out.translucent})
@@ -862,42 +863,68 @@ const ItemMesh& ItemModels::paintingMesh(const std::string& assetId, int width, 
     ItemMesh mesh;
     Impl::Tex* front = impl_->tex("painting/" + strip(assetId));
     Impl::Tex* back = impl_->tex("painting/back");
-    if (front && back && width > 0 && height > 0 && store_.size() + uploaded_ + 6 <= kMaxQuads) {
-        // PaintingRenderer.renderPainting: front at z = -1/32 facing -z, back at +1/32, edges from the back sprite.
+    if (front && back && width > 0 && height > 0 && store_.size() + uploaded_ + u32(6 * width * height) <= kMaxQuads) {
+        // PaintingRenderer.renderPainting: one segment per block (front at z = -1/32 facing -z, the whole back sprite at
+        // +1/32, edges from the back sprite's first pixel row / column on the outer segments). kPaintingSegmentQuads
+        // quads per segment in segment order (x + y * width); edges inside the painting stay empty (zero area).
         const Rect& f = rects_[size_t(front->rect)];
         const Rect& b = rects_[size_t(back->rect)];
-        const float W = float(width), H = float(height), x0 = -W / 2, x1 = W / 2, y0 = -H / 2, y1 = H / 2, e = 1.0f / 32;
+        const float e = 1.0f / 32, offX = -float(width) / 2, offY = -float(height) / 2;
+        const float bu0 = b.u0, bu1 = b.u0 + b.du, bv0 = b.v0, bv1 = b.v0 + b.dv, tbv1 = b.v0 + b.dv / 16.0f, lru1 = b.u0 + b.du / 16.0f;
         Impl::Out out;
         const Xf id;
         auto Q = [&](const float p[4][3], const float uv[4][2], float nx, float ny, float nz) {
             const float n[3] = {nx, ny, nz};
             impl_->quad(out, id, p, uv, n, kTexItems, 0xFFFFFFFF, 0, false);
         };
-        {  // front: texture u runs from x1 (u0) to x0 (u1)... seen from -z
-            const float p[4][3] = {{x1, y0, -e}, {x0, y0, -e}, {x0, y1, -e}, {x1, y1, -e}};
-            const float uv[4][2] = {{f.u0, f.v0 + f.dv}, {f.u0 + f.du, f.v0 + f.dv}, {f.u0 + f.du, f.v0}, {f.u0, f.v0}};
-            Q(p, uv, 0, 0, -1);
-        }
-        {
-            const float p[4][3] = {{x1, y1, e}, {x0, y1, e}, {x0, y0, e}, {x1, y0, e}};
-            const float uv[4][2] = {{b.u0 + b.du, b.v0}, {b.u0, b.v0}, {b.u0, b.v0 + b.dv}, {b.u0 + b.du, b.v0 + b.dv}};
+        auto none = [&] {
+            const float p[4][3] = {}, uv[4][2] = {};
             Q(p, uv, 0, 0, 1);
-        }
-        const float tv1 = b.v0 + b.dv / 16.0f, lu1 = b.u0 + b.du / 16.0f;
-        {  // top / bottom
-            const float p[4][3] = {{x1, y1, -e}, {x0, y1, -e}, {x0, y1, e}, {x1, y1, e}};
-            const float uv[4][2] = {{b.u0, b.v0}, {b.u0 + b.du, b.v0}, {b.u0 + b.du, tv1}, {b.u0, tv1}};
-            Q(p, uv, 0, 1, 0);
-            const float q[4][3] = {{x1, y0, e}, {x0, y0, e}, {x0, y0, -e}, {x1, y0, -e}};
-            Q(q, uv, 0, -1, 0);
-        }
-        {  // sides
-            const float p[4][3] = {{x1, y1, e}, {x1, y0, e}, {x1, y0, -e}, {x1, y1, -e}};
-            const float uv[4][2] = {{lu1, b.v0}, {lu1, b.v0 + b.dv}, {b.u0, b.v0 + b.dv}, {b.u0, b.v0}};
-            Q(p, uv, -1, 0, 0);
-            const float q[4][3] = {{x0, y1, -e}, {x0, y0, -e}, {x0, y0, e}, {x0, y1, e}};
-            Q(q, uv, 1, 0, 0);
-        }
+        };
+        for (int sy = 0; sy < height; ++sy)
+            for (int sx = 0; sx < width; ++sx) {
+                const float x0 = offX + float(sx + 1), x1 = offX + float(sx), y0 = offY + float(sy + 1), y1 = offY + float(sy);
+                const float fu0 = f.u0 + f.du * float(width - sx) / float(width), fu1 = f.u0 + f.du * float(width - sx - 1) / float(width);
+                const float fv0 = f.v0 + f.dv * float(height - sy) / float(height), fv1 = f.v0 + f.dv * float(height - sy - 1) / float(height);
+                {
+                    const float p[4][3] = {{x0, y1, -e}, {x1, y1, -e}, {x1, y0, -e}, {x0, y0, -e}};
+                    const float uv[4][2] = {{fu1, fv0}, {fu0, fv0}, {fu0, fv1}, {fu1, fv1}};
+                    Q(p, uv, 0, 0, -1);
+                }
+                {
+                    const float p[4][3] = {{x0, y0, e}, {x1, y0, e}, {x1, y1, e}, {x0, y1, e}};
+                    const float uv[4][2] = {{bu1, bv0}, {bu0, bv0}, {bu0, bv1}, {bu1, bv1}};
+                    Q(p, uv, 0, 0, 1);
+                }
+                if (sy == height - 1) {
+                    const float p[4][3] = {{x0, y0, -e}, {x1, y0, -e}, {x1, y0, e}, {x0, y0, e}};
+                    const float uv[4][2] = {{bu0, bv0}, {bu1, bv0}, {bu1, tbv1}, {bu0, tbv1}};
+                    Q(p, uv, 0, 1, 0);
+                } else {
+                    none();
+                }
+                if (sy == 0) {
+                    const float p[4][3] = {{x0, y1, e}, {x1, y1, e}, {x1, y1, -e}, {x0, y1, -e}};
+                    const float uv[4][2] = {{bu0, bv0}, {bu1, bv0}, {bu1, tbv1}, {bu0, tbv1}};
+                    Q(p, uv, 0, -1, 0);
+                } else {
+                    none();
+                }
+                if (sx == width - 1) {
+                    const float p[4][3] = {{x0, y0, e}, {x0, y1, e}, {x0, y1, -e}, {x0, y0, -e}};
+                    const float uv[4][2] = {{lru1, bv0}, {lru1, bv1}, {bu0, bv1}, {bu0, bv0}};
+                    Q(p, uv, -1, 0, 0);
+                } else {
+                    none();
+                }
+                if (sx == 0) {
+                    const float p[4][3] = {{x1, y0, -e}, {x1, y1, -e}, {x1, y1, e}, {x1, y0, e}};
+                    const float uv[4][2] = {{lru1, bv0}, {lru1, bv1}, {bu0, bv1}, {bu0, bv0}};
+                    Q(p, uv, 1, 0, 0);
+                } else {
+                    none();
+                }
+            }
         ItemMesh::Part& part = mesh.parts[mesh.partCount++];
         part.first = uploaded_ + u32(store_.size()), part.count = u32(out.cutout.size());
         part.tfirst = part.first + part.count, part.tcount = 0;

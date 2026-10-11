@@ -71,9 +71,10 @@ const ui::Items* gItems = nullptr;  // EntityWorld::setItemDecoder
 
 // ItemStack.OPTIONAL_STREAM_CODEC. Component patches are not length-prefixed: without the item registry a stack
 // with added components cannot be skipped and returns false (after reading the item id); the caller stops there.
-bool readItemStack(net::Reader& r, i64& item, int& count, i32* dye = nullptr, bool* foil = nullptr) {
+bool readItemStack(net::Reader& r, i64& item, int& count, i32* dye = nullptr, bool* foil = nullptr, i32* mapId = nullptr) {
     if (dye) *dye = -1;
     if (foil) *foil = false;
+    if (mapId) *mapId = -1;
     if (gItems) {
         ui::ItemStack st;
         const bool ok = gItems->read(r, st);
@@ -81,6 +82,14 @@ bool readItemStack(net::Reader& r, i64& item, int& count, i32* dye = nullptr, bo
         count = st.count;
         if (dye) *dye = st.dyedColor >= 0 ? i32(st.dyedColor & 0xFFFFFF) : -1;
         if (foil) *foil = gItems->foil(st);
+        static const int mapIdType = gItems->componentType("map_id");
+        if (mapId)
+            for (const auto& c : st.added)
+                if (c.type == mapIdType) {
+                    net::Reader v(reinterpret_cast<const u8*>(c.data.data()), c.data.size());
+                    const i32 id = v.varInt();
+                    if (v.ok) *mapId = id;
+                }
         return ok && r.ok;
     }
     count = r.varInt();
@@ -198,6 +207,22 @@ EntityWorld::EntityWorld(EntityAssets& assets, World& world, BlockRegistry& regi
         d.paddleLeft = id({"DATA_ID_PADDLE_LEFT"});
         d.paddleRight = id({"DATA_ID_PADDLE_RIGHT"});
         d.chest = id({"DATA_ID_CHEST"});
+        d.color = id({"DATA_COLOR", "DATA_COLOR_ID"});
+        d.attachFace = id({"DATA_ATTACH_FACE_ID"});
+        d.peek = id({"DATA_PEEK_ID"});
+        if (t.name == "minecraft:block_display" || t.name == "minecraft:item_display" || t.name == "minecraft:text_display") {
+            d.dStart = id({"DATA_TRANSFORMATION_INTERPOLATION_START_DELTA_TICKS_ID"});
+            d.dDuration = id({"DATA_TRANSFORMATION_INTERPOLATION_DURATION_ID"});
+            d.dPosRot = id({"DATA_POS_ROT_INTERPOLATION_DURATION_ID"});
+            d.dTranslation = id({"DATA_TRANSLATION_ID"}), d.dScale = id({"DATA_SCALE_ID"});
+            d.dLeft = id({"DATA_LEFT_ROTATION_ID"}), d.dRight = id({"DATA_RIGHT_ROTATION_ID"});
+            d.dBillboard = id({"DATA_BILLBOARD_RENDER_CONSTRAINTS_ID"}), d.dBrightness = id({"DATA_BRIGHTNESS_OVERRIDE_ID"});
+            d.dViewRange = id({"DATA_VIEW_RANGE_ID"}), d.dWidth = id({"DATA_WIDTH_ID"}), d.dHeight = id({"DATA_HEIGHT_ID"});
+            d.dBlock = id({"DATA_BLOCK_STATE_ID"}), d.dItem = id({"DATA_ITEM_STACK_ID"}), d.dItemContext = id({"DATA_ITEM_DISPLAY_ID"});
+            d.dText = id({"DATA_TEXT_ID"}), d.dLineWidth = id({"DATA_LINE_WIDTH_ID"});
+            d.dBackground = id({"DATA_BACKGROUND_COLOR_ID"}), d.dOpacity = id({"DATA_TEXT_OPACITY_ID"});
+            d.dStyle = id({"DATA_STYLE_FLAGS_ID"});
+        }
         categories_[i] = categoryFor(t.name);
         // Synched data only carries values that differ from the default: start registry variants at the
         // default each entity defines (VariantUtils.getDefaultOrAny(..., DEFAULT)).
@@ -252,7 +277,7 @@ Category EntityWorld::categoryFor(const std::string& n) const {
         if (n == std::string("minecraft:") + p) return Category::Projectile;
     static const char* kOther[] = {"area_effect_cloud", "marker", "interaction", "block_display", "item_display",
                                    "text_display", "lightning_bolt", "item_frame", "glow_item_frame", "painting",
-                                   "leash_knot", "evoker_fangs", "end_crystal", "ominous_item_spawner"};
+                                   "leash_knot", "evoker_fangs", "end_crystal", "ominous_item_spawner", "cushion"};
     for (const char* p : kOther)
         if (n == std::string("minecraft:") + p) return Category::Other;
     return Category::Living;
@@ -287,8 +312,8 @@ void readEntityData(net::Reader& r, EventQueue& q, int entityEffect) {
             case 2: v.i = r.varLong(); break;              // long
             case 3: v.f[0] = r.f32(); break;               // float
             case 4: q.strings.emplace_back(r.str()), v.str = i32(q.strings.size() - 1); break;  // string
-            case 5:  // component
-                q.strings.push_back(net::componentText(r.nbt(), nullptr)), v.str = i32(q.strings.size() - 1);
+            case 5:  // component: kept as NBT (text displays lay out the styled text)
+                q.strings.emplace_back(r.nbt()), v.str = i32(q.strings.size() - 1);
                 break;
             case 6:  // optional component
                 if (r.boolean()) q.strings.push_back(net::componentText(r.nbt(), nullptr));
@@ -297,10 +322,10 @@ void readEntityData(net::Reader& r, EventQueue& q, int entityEffect) {
                 break;
             case 7: {  // item stack
                 int count = 0;
-                i32 dye = -1;
+                i32 dye = -1, mapId = -1;
                 bool foil = false;
-                const bool complete = readItemStack(r, v.i, count, &dye, &foil);
-                v.f[0] = float(count), v.f[1] = float(dye), v.f[2] = foil ? 1.0f : 0.0f;
+                const bool complete = readItemStack(r, v.i, count, &dye, &foil, &mapId);
+                v.f[0] = float(count), v.f[1] = float(dye), v.f[2] = foil ? 1.0f : 0.0f, v.f[3] = float(mapId);
                 stop = !complete;
                 break;
             }
@@ -542,7 +567,13 @@ void EntityWorld::attach(net::Client& client) {
         e.a = r.varInt();  // hand
         if (r.ok) q.events.push_back(e);
     });
-    on("animate", [](net::Reader&, EventQueue&) {});  // wake up / critical hit particles: nothing to draw
+    on("animate", [](net::Reader& r, EventQueue& q) {  // wake up / critical hit particles
+        Event e;
+        e.type = EventType::Animate;
+        e.id = r.varInt();
+        e.a = r.u8v();
+        if (r.ok) q.events.push_back(e);
+    });
     on("hurt_animation", [](net::Reader& r, EventQueue& q) {
         Event e;
         e.type = EventType::Hurt;
@@ -618,7 +649,9 @@ void EntityWorld::startInterpolation(Entity& e, const Step* steps, u32 count, fl
     // AbstractInterpolationHandler.interpolateTo with the handler the entity type uses.
     const double* end = count ? steps[count - 1].pos : nullptr;
     const bool stepped = e.category == Category::Living || e.category == Category::Player;
-    const bool linear = e.category == Category::Vehicle || (e.info && e.info->name == "minecraft:experience_orb");
+    // Displays: LinearInterpolationHandler over teleport_duration steps (0: placed at once).
+    const bool linear = e.category == Category::Vehicle || (e.info && e.info->name == "minecraft:experience_orb") ||
+                        (e.display.is && e.display.posRotDuration > 0);
     if (!hasRot) {
         if (stepped && e.stepCount) yaw = e.steps[(e.stepHead + e.stepCount - 1) % Entity::kMaxSteps].yaw;
         else yaw = e.yaw;
@@ -637,7 +670,7 @@ void EntityWorld::startInterpolation(Entity& e, const Step* steps, u32 count, fl
     if (linear) {
         std::copy(target, target + 3, e.linearTarget);
         e.linearYaw = yaw, e.linearPitch = pitch;
-        e.linearRemaining = 3;
+        e.linearRemaining = e.display.is ? e.display.posRotDuration : 3;
         return;
     }
     const int interval = std::max(1, e.info ? e.info->updateInterval : 3);
@@ -700,7 +733,10 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
         return;
     }
     if (ev.type == EventType::Remove) {
-        for (u32 i = 0; i < ev.count; ++i) entities_.erase(q.ints[ev.first + i]);
+        for (u32 i = 0; i < ev.count; ++i) {
+            auto r = entities_.find(q.ints[ev.first + i]);
+            if (r != entities_.end() && r->second.pickupBy == INT_MIN) entities_.erase(r);  // picked up: goes by itself
+        }
         return;
     }
     if (ev.type == EventType::Add) {
@@ -718,6 +754,7 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
         e.lerpHeadYaw = ev.f[2];
         if (e.category == Category::Block) e.blockState = ev.b;
         e.direction = ev.b;
+        e.display.is = size_t(ev.a) < dataIds_.size() && dataIds_[size_t(ev.a)].dTranslation >= 0;
         if (e.category == Category::Player) {
             auto it = players_.find(uuidKey(ev.uuid));
             const int skin = defaultSkinIndex(ev.uuid);
@@ -736,10 +773,12 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
     }
     auto it = entities_.find(ev.id);
     if (ev.type == EventType::TakeItem) {
-        // The collected item flies to the collector in the game; here it simply disappears.
-        if (it != entities_.end() && it->second.category == Category::Item) {
-            if (ev.b > 0 && it->second.itemCount > ev.b) it->second.itemCount -= ev.b;
-            else entities_.erase(it);
+        // ClientPacketListener.handleTakeItemEntity: a fully collected item flies to the collector (ItemPickupParticle)
+        // and goes after 3 ticks; a partly collected stack shrinks.
+        if (it != entities_.end() && it->second.category == Category::Item && it->second.pickupBy == INT_MIN) {
+            Entity& item = it->second;
+            if (ev.b > 0 && item.itemCount > ev.b) item.itemCount -= ev.b;
+            else item.pickupBy = ev.a, item.pickupLife = 0, item.stepCount = 0, item.linearRemaining = 0;
         }
         return;
     }
@@ -825,6 +864,10 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
         case EventType::EntityEvent:
             if (ev.a == 3 && e.category == Category::Living) e.dying = true;  // death
             if (ev.a == 2) e.hurtTime = 10;                                     // legacy hurt
+            if (onEntityEvent) onEntityEvent(e, ev.a);
+            break;
+        case EventType::Animate:
+            if (onAnimate) onAnimate(e, ev.a);
             break;
         case EventType::Passengers:
             for (auto& [id, other] : entities_)
@@ -844,6 +887,7 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
     for (u32 i = 0; i < count; ++i) {
         const MetaValue& v = values[i];
         const int idx = v.index;
+        if (e.display.is && applyDisplayData(e, d, v, q)) continue;
         if (idx == d.flags) e.sharedFlags = u8(v.i);
         else if (idx == d.mobFlags) e.mobFlags = u8(v.i);
         else if (idx == d.noGravity) e.noGravity = v.i != 0;
@@ -862,7 +906,8 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
         }
         else if (idx == d.horseVariant) e.variant = int(v.i & 0xFF), e.variant2 = int((v.i >> 8) & 0xFF);
         else if (idx == d.item && v.serializer == 7)
-            e.itemId = int(v.i), e.itemCount = std::max(1, int(v.f[0])), e.itemDye = i32(v.f[1]), e.itemFoil = v.f[2] > 0.5f;
+            e.itemId = int(v.i), e.itemCount = std::max(1, int(v.f[0])), e.itemDye = i32(v.f[1]), e.itemFoil = v.f[2] > 0.5f,
+            e.mapId = int(v.f[3]);
         else if (idx == d.rotation && v.serializer == 1) e.rotation = int(v.i);
         else if (idx == d.painting && v.serializer == 34) e.painting = int(v.i);
         else if (idx == d.nameVisible && v.serializer == 8) e.nameVisible = v.i != 0;
@@ -895,14 +940,145 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
         else if (idx == d.paddleLeft && v.serializer == 8) { if (e.id != localControl_) e.paddle[0] = v.i != 0; }
         else if (idx == d.paddleRight && v.serializer == 8) { if (e.id != localControl_) e.paddle[1] = v.i != 0; }
         else if (idx == d.chest && v.serializer == 8) e.hasChest = v.i != 0;
+        else if (idx == d.color) e.dyeColor = int(v.i);
+        else if (idx == d.attachFace) e.attachFace = int(v.i);
+        else if (idx == d.peek) e.peekRaw = int(v.i);
         else if (idx == d.mainGene) e.variant = int(v.i);
         else if (idx == d.hiddenGene) e.variant2 = int(v.i);
     }
 }
 
+// Display.onSyncedDataUpdated (and the BlockDisplay / ItemDisplay / TextDisplay overrides).
+bool EntityWorld::applyDisplayData(Entity& e, const DataIds& d, const MetaValue& v, const EventQueue& q) {
+    DisplayState& s = e.display;
+    const int idx = v.index;
+    auto copy = [&](float* out, int n) { std::copy(v.f, v.f + n, out); };
+    if (idx == d.dStart) s.startDelta = int(v.i), s.updateStart = true;
+    else if (idx == d.dDuration) s.duration = int(v.i), s.updateDuration = true;
+    else if (idx == d.dPosRot) s.posRotDuration = int(v.i);
+    else if (idx == d.dTranslation) copy(s.synched.t, 3), s.updateRender = true;
+    else if (idx == d.dScale) copy(s.synched.s, 3), s.updateRender = true;
+    else if (idx == d.dLeft) copy(s.synched.l, 4), s.updateRender = true;
+    else if (idx == d.dRight) copy(s.synched.r, 4), s.updateRender = true;
+    else if (idx == d.dBillboard) s.billboard = u8(v.i), s.updateRender = true;
+    else if (idx == d.dBrightness) s.brightness = int(v.i), s.updateRender = true;
+    else if (idx == d.dViewRange) s.viewRange = v.f[0];
+    else if (idx == d.dWidth) s.width = v.f[0];
+    else if (idx == d.dHeight) s.height = v.f[0];
+    else if (idx == d.dBlock && v.serializer == 14) e.blockState = int(v.i), s.updateRender = true;
+    else if (idx == d.dItem && v.serializer == 7) {
+        e.itemId = int(v.i), e.itemCount = std::max(1, int(v.f[0])), e.itemDye = i32(v.f[1]), e.itemFoil = v.f[2] > 0.5f;
+        s.updateRender = true;
+    } else if (idx == d.dItemContext) s.itemContext = int(v.i), s.updateRender = true;
+    else if (idx == d.dText && v.str >= 0) s.text = q.strings[size_t(v.str)], ++s.textVersion, s.updateRender = true;
+    else if (idx == d.dLineWidth) s.lineWidth = int(v.i), ++s.textVersion, s.updateRender = true;
+    else if (idx == d.dBackground) s.background = int(v.i), s.updateRender = true;
+    else if (idx == d.dOpacity) s.opacity = int(i8(u8(v.i))), s.updateRender = true;
+    else if (idx == d.dStyle) s.style = u8(v.i), ++s.textVersion, s.updateRender = true;
+    else return false;
+    return true;
+}
+
+namespace {
+
+// JOML Quaternionf.slerp (Transformation.slerp: translation / scale lerp, rotations slerp).
+void slerp(const float a[4], const float b[4], float alpha, float out[4]) {
+    const float cosom = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+    const float absCosom = std::abs(cosom);
+    float scale0, scale1;
+    if (1.0f - absCosom > 1e-6f) {
+        const float sinSqr = 1.0f - absCosom * absCosom, sinom = 1.0f / std::sqrt(sinSqr);
+        const float omega = std::atan2(sinSqr * sinom, absCosom);
+        scale0 = std::sin((1.0f - alpha) * omega) * sinom, scale1 = std::sin(alpha * omega) * sinom;
+    } else {
+        scale0 = 1.0f - alpha, scale1 = alpha;
+    }
+    if (cosom < 0) scale1 = -scale1;
+    for (int k = 0; k < 4; ++k) out[k] = scale0 * a[k] + scale1 * b[k];
+}
+DisplayState::Xform xformAt(const DisplayState& s, float progress) {
+    if (progress >= 1.0f) return s.to;
+    DisplayState::Xform x;
+    for (int k = 0; k < 3; ++k)
+        x.t[k] = s.from.t[k] + (s.to.t[k] - s.from.t[k]) * progress, x.s[k] = s.from.s[k] + (s.to.s[k] - s.from.s[k]) * progress;
+    slerp(s.from.l, s.to.l, progress, x.l);
+    slerp(s.from.r, s.to.r, progress, x.r);
+    return x;
+}
+// Row-major 3x3 of a quaternion like JOML Matrix4f.rotation (not normalised).
+void quatMatrix(const float q[4], float m[9]) {
+    const float x = q[0], y = q[1], z = q[2], w = q[3];
+    const float w2 = w * w, x2 = x * x, y2 = y * y, z2 = z * z;
+    const float dzw = 2 * z * w, dxy = 2 * x * y, dxz = 2 * x * z, dyw = 2 * y * w, dyz = 2 * y * z, dxw = 2 * x * w;
+    m[0] = w2 + x2 - z2 - y2, m[1] = dxy - dzw, m[2] = dyw + dxz;
+    m[3] = dxy + dzw, m[4] = y2 - z2 + w2 - x2, m[5] = dyz - dxw;
+    m[6] = dxz - dyw, m[7] = dyz + dxw, m[8] = z2 - y2 - x2 + w2;
+}
+void mul33(const float a[9], const float b[9], float out[9]) {
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j) out[i * 3 + j] = a[i * 3] * b[j] + a[i * 3 + 1] * b[3 + j] + a[i * 3 + 2] * b[6 + j];
+}
+int lerpByte(float a, int from, int to) { return from + int(std::floor(a * float(to - from))); }  // Mth.lerpInt
+int lerpArgb(float a, int from, int to) {  // ARGB.srgbLerp
+    u32 c = 0;
+    for (int k = 0; k < 32; k += 8) c |= u32(lerpByte(a, (from >> k) & 255, (to >> k) & 255) & 255) << k;
+    return int(c);
+}
+
+}  // namespace
+
+void displayTextColors(const Entity& e, float pt, u32& background, int& opacity) {
+    const DisplayState& s = e.display;
+    const float p = displayProgress(e, pt);
+    background = u32(lerpArgb(p, s.background0, s.background1));
+    opacity = lerpByte(p, s.opacity0, s.opacity1);
+}
+
+float displayProgress(const Entity& e, float pt) {
+    const DisplayState& s = e.display;
+    if (s.activeDuration <= 0) return 1.0f;
+    const float t = float(e.age) - float(s.startTick) + pt;
+    return std::clamp(t / float(s.activeDuration), 0.0f, 1.0f);
+}
+
+bool displayMatrix(const Entity& e, float pt, float camYaw, float camPitch, float out[12]) {
+    const DisplayState& s = e.display;
+    if (!s.hasRender) return false;
+    const DisplayState::Xform x = xformAt(s, displayProgress(e, pt));
+    // DisplayRenderer.calculateOrientation: rotationYXZ(-yRot, xRot, 0) of the entity or the camera.
+    float yaw = e.prevYaw + wrapDegrees(e.yaw - e.prevYaw) * pt, pitch = e.prevPitch + (e.pitch - e.prevPitch) * pt;
+    if (s.billboard == 1 || s.billboard == 3) yaw = camYaw - 180.0f;  // vertical, center
+    if (s.billboard == 2 || s.billboard == 3) pitch = -camPitch;       // horizontal, center
+    const float ya = -yaw * kPi / 180.0f, xa = pitch * kPi / 180.0f;
+    const float cy = std::cos(ya), sy = std::sin(ya), cx = std::cos(xa), sx = std::sin(xa);
+    const float ry[9] = {cy, 0, sy, 0, 1, 0, -sy, 0, cy}, rx[9] = {1, 0, 0, 0, cx, -sx, 0, sx, cx};
+    float orient[9], left[9], right[9], tmp[9], m[9];
+    mul33(ry, rx, orient);
+    // Transformation.getMatrix: translate(t) * rotate(left) * scale(s) * rotate(right).
+    quatMatrix(x.l, left);
+    quatMatrix(x.r, right);
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j) left[i * 3 + j] *= x.s[j];
+    mul33(left, right, tmp);
+    mul33(orient, tmp, m);
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < 3; ++j) out[i * 4 + j] = m[i * 3 + j];
+        out[i * 4 + 3] = orient[i * 3] * x.t[0] + orient[i * 3 + 1] * x.t[1] + orient[i * 3 + 2] * x.t[2];
+    }
+    return true;
+}
+
+u32 displayLight(const Entity& e, u32 worldLight) {
+    const int b = e.display.brightness;
+    if (b == -1) return worldLight;
+    return u32(((b >> 20) & 15) << 4 | ((b >> 4) & 15));
+}
+
 void EntityWorld::tick() {
     for (auto& [id, e] : entities_)  // TickRateManager.isEntityFrozen: all but players and what they drive
         if (tickRate.runs || e.category == Category::Player || e.id == localControl_) tickEntity(e);
+    for (auto it = entities_.begin(); it != entities_.end();)  // ItemPickupParticle.LIFE_TIME
+        it = it->second.pickupBy != INT_MIN && it->second.pickupLife >= 3 ? entities_.erase(it) : std::next(it);
     // The server stops tracking entities in chunks the client forgets, but a respawn or dimension change
     // replaces the whole level without removing them: drop entities whose chunk stays unloaded for 5 s.
     if (++ticks_ % 20 == 0) {
@@ -920,7 +1096,28 @@ void EntityWorld::tickEntity(Entity& e) {
     std::copy(e.pos, e.pos + 3, e.prevPos);
     e.prevYaw = e.yaw, e.prevPitch = e.pitch;
     e.prevHeadYaw = e.headYaw, e.prevBodyYaw = e.bodyYaw;
+    if (e.pickupBy != INT_MIN) {  // flying to its collector: the visuals move it, nothing else changes
+        ++e.pickupLife;
+        return;
+    }
     ++e.age;
+    if (e.display.is) {  // Display.tick (client side)
+        DisplayState& s = e.display;
+        const float last = displayProgress(e, 0.0f);  // lastProgress: the progress the last frame drew
+        if (s.updateStart) s.updateStart = false, s.startTick = e.age + s.startDelta;
+        if (s.updateDuration) s.updateDuration = false, s.activeDuration = s.duration;
+        if (s.updateRender) {
+            s.updateRender = false;
+            if (s.activeDuration != 0 && s.hasRender) {  // createInterpolatedRenderState from the current state
+                s.from = xformAt(s, last);
+                s.background0 = lerpArgb(last, s.background0, s.background1), s.opacity0 = lerpByte(last, s.opacity0, s.opacity1);
+            } else {
+                s.from = s.synched, s.background0 = s.background, s.opacity0 = s.opacity;
+            }
+            s.to = s.synched, s.background1 = s.background, s.opacity1 = s.opacity;
+            s.hasRender = true;
+        }
+    }
     if (e.hurtTime > 0) --e.hurtTime;
     if (e.vehicleHurt > 0) --e.vehicleHurt;
     if (e.vehicleDamage > 0) e.vehicleDamage = std::max(0.0f, e.vehicleDamage - 1.0f);
@@ -1081,6 +1278,14 @@ void EntityWorld::tickEntity(Entity& e) {
         e.flapping *= 0.9f;
         e.flap += e.flapping * 2.0f;
     }
+    // Shulker.updatePeekAmount: the lid follows the synched peek by 0.05 per tick.
+    if (n == "minecraft:shulker") {
+        e.bodyYaw = e.prevBodyYaw = 0;  // the body never turns (Shulker.recreateFromPacket, ShulkerBodyRotationControl)
+        e.peekO = e.peek;
+        const float target = float(e.peekRaw) * 0.01f;
+        if (e.peek > target) e.peek = std::clamp(e.peek - 0.05f, target, 1.0f);
+        else if (e.peek < target) e.peek = std::clamp(e.peek + 0.05f, 0.0f, target);
+    }
     // Creeper swelling (Creeper.tick).
     if (n == "minecraft:creeper") {
         e.oldSwell = e.swell;
@@ -1100,7 +1305,7 @@ PickResult EntityWorld::pick(const double o[3], const double dir[3], double maxD
         bool pickable = e.category == Category::Living || e.category == Category::Player ||
                         e.category == Category::Vehicle || e.category == Category::Block;
         const std::string& n = e.info->name;
-        if (n == "minecraft:item_frame" || n == "minecraft:glow_item_frame" || n == "minecraft:painting" ||
+        if (n == "minecraft:item_frame" || n == "minecraft:glow_item_frame" || n == "minecraft:painting" || n == "minecraft:cushion" ||
             n == "minecraft:leash_knot" || n == "minecraft:end_crystal" || n == "minecraft:interaction" ||
             n == "minecraft:shulker_bullet" || n == "minecraft:fireball" || n == "minecraft:small_fireball" ||
             n == "minecraft:wind_charge" || n == "minecraft:breeze_wind_charge")

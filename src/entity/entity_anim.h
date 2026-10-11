@@ -1,11 +1,11 @@
 #pragma once
 // Ports of the game's model setupAnim code (HumanoidModel, QuadrupedModel, ChickenModel, CreeperModel,
-// SpiderModel, IronGolemModel, VillagerModel, ArmorStandModel); other models only turn their head.
+// SpiderModel, IronGolemModel, VillagerModel, ArmorStandModel, ShulkerModel); other models only turn their head.
 #include "entity/entity_assets.h"
 
 namespace ent {
 
-enum class Anim : u8 { None, Head, Humanoid, Zombie, Skeleton, Quadruped, Chicken, Creeper, Spider, IronGolem, Villager, ArmorStand };
+enum class Anim : u8 { None, Head, Humanoid, Zombie, Skeleton, Quadruped, Chicken, Creeper, Spider, IronGolem, Villager, ArmorStand, Shulker };
 // HumanoidModel.ArmPose.
 enum class ArmPose : u8 { Empty, Item, Block, BowAndArrow, ThrowTrident, CrossbowCharge, CrossbowHold, Spyglass, TootHorn, Brush, Spear };
 
@@ -30,6 +30,7 @@ struct AnimState {
     float swimAmount = 0;              // LivingEntity.getSwimAmount (swimming / crawling)
     bool fallFlying = false;           // elytra gliding: head down, limbs swing by speedValue
     float speedValue = 1;              // HumanoidRenderState.speedValue
+    float peek = 0;                    // shulker lid (getClientPeekAmount)
 };
 
 // poses: one per model part, initialised by the caller from the model's initial poses.

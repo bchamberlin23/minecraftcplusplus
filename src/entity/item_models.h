@@ -51,7 +51,8 @@ Xf xfRotZ(float radians);
 void xfPoint(const Xf& m, const float in[3], float out[3]);
 u32 packNormal(float x, float y, float z);
 
-enum class Display : u8 { FirstRight, FirstLeft, ThirdRight, ThirdLeft, Head, Gui, Ground, Fixed, Count };
+// None: ItemDisplayContext.NONE (no model transform, only the centring).
+enum class Display : u8 { FirstRight, FirstLeft, ThirdRight, ThirdLeft, Head, Gui, Ground, Fixed, None, Count };
 
 struct ItemMesh {
     struct Part {
@@ -109,7 +110,10 @@ public:
     const HandInfo& handInfo(int item);
     std::string itemName(int item) const;  // without namespace ("" if unknown)
     // Painting: front (variant texture), back and edges; width x height blocks centred at the origin, facing -z.
+    // One part, kPaintingSegmentQuads quads per block segment in segment order (x + y * width): segments are lit
+    // separately (PaintingRenderState.lightCoordsPerBlock).
     const ItemMesh& paintingMesh(const std::string& assetId, int width, int height);
+    static constexpr u32 kPaintingSegmentQuads = 6;
 
     // Textures in the item atlas (path below textures/, e.g. "particle/flame"): atlas rect index or -1.
     int texture(const std::string& path);

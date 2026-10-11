@@ -23,7 +23,7 @@ enum class Kind : u8 {
     None, Generic, Terrain, Crumble, DustPillar, FallingDust, Rain, Splash, Poof, Explosion, ExplosionSeed, Smoke,
     LargeSmoke, WhiteSmoke, Flame, SmallFlame, Crit, DamageIndicator, EnchantedHit, Heart, AngryVillager, Bubble,
     BubblePop, CherryLeaves, PaleLeaves, TintedLeaves, Portal, Enchant, CampfireCosy, CampfireSignal, Spell, Witch,
-    Suspended, HappyVillager, Lava, Dust, Note, Cloud, Snowflake
+    Suspended, HappyVillager, Lava, Dust, Note, Cloud, Snowflake, Totem
 };
 enum class Opt : u8 { None, Block, Dust, DustTransition, Spell, Color, Float, VarInt, Int, IntFloat, Trail, Unsupported };
 enum SizeMode : u8 { SizeConst, SizeGrow, SizeFlame, SizePortal, SizeLava };
@@ -36,6 +36,7 @@ const std::pair<const char*, Kind> kKinds[] = {
     {"large_smoke", Kind::LargeSmoke}, {"white_smoke", Kind::WhiteSmoke}, {"flame", Kind::Flame},
     {"soul_fire_flame", Kind::Flame}, {"copper_fire_flame", Kind::Flame}, {"small_flame", Kind::SmallFlame},
     {"crit", Kind::Crit}, {"damage_indicator", Kind::DamageIndicator}, {"enchanted_hit", Kind::EnchantedHit},
+    {"totem_of_undying", Kind::Totem},
     {"heart", Kind::Heart}, {"angry_villager", Kind::AngryVillager}, {"bubble", Kind::Bubble},
     {"bubble_pop", Kind::BubblePop}, {"cherry_leaves", Kind::CherryLeaves}, {"pale_oak_leaves", Kind::PaleLeaves},
     {"red_poplar_leaves", Kind::PaleLeaves}, {"orange_poplar_leaves", Kind::PaleLeaves},
@@ -643,6 +644,18 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
             p.sizeMode = SizeGrow;
             ageSprite();
             break;
+        case Kind::Totem:  // TotemParticle (SimpleAnimatedParticle, gravity 1.25): green / yellow, full bright
+            base(x, y, z);
+            p.xd = xa, p.yd = ya, p.zd = za;
+            p.gravity = 1.25f, p.friction = 0.6f;
+            p.quadSize *= 0.75f;
+            p.lifetime = 60 + int(rng_() % 12);
+            if (rng_() % 4 == 0) p.r = 0.6f + randf() * 0.2f, p.g = 0.6f + randf() * 0.3f, p.b = randf() * 0.2f;
+            else p.r = 0.1f + randf() * 0.2f, p.g = 0.4f + randf() * 0.3f, p.b = randf() * 0.2f;
+            p.emissive = 255;
+            p.flags |= Translucent;
+            ageSprite();
+            break;
         case Kind::Snowflake:
             baseVel(x, y, z, xa, ya, za);
             p.gravity = 0.225f, p.friction = 1.0f;
@@ -975,6 +988,11 @@ void Particles::tickOne(Particle& p) {
         case Kind::EnchantedHit:
             defaultTick();
             p.g *= 0.96f, p.b *= 0.9f;
+            break;
+        case Kind::Totem:  // SimpleAnimatedParticle.tick: fades out over the second half of its life
+            defaultTick();
+            ageSprite();
+            if (p.age > p.lifetime / 2) p.a = 1.0f - float(p.age - p.lifetime / 2) / float(p.lifetime);
             break;
         case Kind::Lava:
             defaultTick();

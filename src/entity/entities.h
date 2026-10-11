@@ -7,6 +7,7 @@
 #include "entity/entity_assets.h"
 #include "game/tick_rate.h"
 
+#include <climits>
 #include <functional>
 #include <mutex>
 #include <unordered_map>
@@ -33,7 +34,7 @@ struct MetaValue {
 
 enum class EventType : u8 {
     Add, Remove, Move, PositionSync, Teleport, Motion, HeadRot, Data, Equipment, PlayerInfo, PlayerRemove, Swing,
-    Hurt, Damage, EntityEvent, TakeItem, Passengers
+    Hurt, Damage, EntityEvent, TakeItem, Passengers, Animate
 };
 
 struct Step {
@@ -68,6 +69,34 @@ struct EventQueue {
 };
 
 enum class Category : u8 { Living, Player, Item, Block, Vehicle, Projectile, Other };
+
+// Display entities (Display.java: block / item / text display): the synched transformation and render state,
+// interpolated on the client like Display.tick / calculateInterpolationProgress. Block displays use
+// Entity::blockState, item displays Entity::itemId.
+struct DisplayState {
+    bool is = false;
+    // Transformation: translation, left rotation, scale, right rotation (quaternions x y z w).
+    struct Xform {
+        float t[3] = {}, l[4] = {0, 0, 0, 1}, s[3] = {1, 1, 1}, r[4] = {0, 0, 0, 1};
+    };
+    Xform synched, from, to;  // synched data; the render state's TransformationInterpolator (from -> to)
+    int startDelta = 0, duration = 0;            // synched interpolation start delay / duration (ticks)
+    int startTick = INT_MIN, activeDuration = 0;  // applied at the next tick (updateStartTick / updateInterpolationDuration)
+    bool updateStart = false, updateDuration = false, updateRender = false, hasRender = false;
+    int posRotDuration = 0;  // teleport_duration: linear position / rotation interpolation steps
+    u8 billboard = 0;        // fixed, vertical, horizontal, center
+    int brightness = -1;     // packed block << 4 | sky << 20, -1: the world's light
+    float viewRange = 1, width = 0, height = 0;
+    int itemContext = 0;  // ItemDisplayContext id (0 none)
+    // Text display: component NBT, line width, style flags (1 shadow, 2 see through, 4 default background, 8 left,
+    // 16 right), background ARGB and text opacity (signed byte): synched and the render state's interpolators.
+    std::string text;
+    int lineWidth = 200;
+    u8 style = 0;
+    int background = 0x40000000, opacity = -1;
+    int background0 = 0x40000000, background1 = 0x40000000, opacity0 = -1, opacity1 = -1;
+    u32 textVersion = 0;  // changes with the text, line width or style (renderers cache the laid out text)
+};
 
 struct Entity {
     i32 id = 0, type = -1;
@@ -112,6 +141,10 @@ struct Entity {
     int villagerType = 0;
     int wool = 0;                   // sheep: color | 0x10 sheared
     int collar = 14;                // wolf/cat collar dye colour (red by default)
+    int dyeColor = -1;              // cushion DATA_COLOR / shulker DATA_COLOR_ID (-1: the type's default)
+    int attachFace = 0;             // shulker DATA_ATTACH_FACE_ID (Direction 3D value, down by default)
+    int peekRaw = 0;                // shulker DATA_PEEK_ID (0..100)
+    float peek = 0, peekO = 0;      // Shulker.currentPeekAmount (client side, 0..1)
     bool tame = false;
     bool angry = false;
     int itemId = -1, itemCount = 1;
@@ -130,6 +163,7 @@ struct Entity {
     u8 equipFoil = 0;                                      // enchantment glint by slot (bits)
     i32 itemDye = -1;                                      // item / item frame stack: dyed_color
     bool itemFoil = false;
+    int mapId = -1;             // item / item frame stack: map_id component (-1 none)
     int rotation = 0;           // item frame rotation (0..7)
     int direction = 0;          // add_entity data: facing of hanging entities (Direction 3D value)
     int painting = -1;          // painting_variant network id
@@ -146,6 +180,9 @@ struct Entity {
     u8 chargedCrossbow = 0;  // bit 0: the main hand holds a charged crossbow, bit 1: the off hand (local player only)
     int attachedTo = -1;     // firework rocket: the entity it is attached to (DATA_ATTACHED_TO_TARGET), -1 none
     int unloadedTicks = 0;  // ticks spent outside the loaded world
+    // ItemPickupParticle: a collected item flies to its collector (entity id; the local player when it is not one of
+    // the tracked entities) for 3 ticks, then goes. INT_MIN: not being picked up.
+    int pickupBy = INT_MIN, pickupLife = 0;
     // Pose animation (ticked by tickPoseAnimation): LivingEntity swimAmount / fallFlyTicks, ElytraAnimationState,
     // the delta movement of this and the previous tick (fall-flying body turn), the bed (SLEEPING_POS_ID).
     float swimAmount = 0, swimAmountO = 0;
@@ -163,6 +200,7 @@ struct Entity {
     // Player skin (default skins chosen from the UUID like the game).
     bool slim = false;
     int skin = -1;
+    DisplayState display;
 };
 
 struct PlayerInfo {
@@ -234,6 +272,11 @@ public:
     // blockDistance (< 0: no block targeted) is targeted; it then takes the click (attack / use when pressed).
     bool click(const double eye[3], const double dir[3], bool attack, bool use, double blockDistance, double reach,
                bool sneaking = false);  // sneaking: sent with interactions (sneak + use opens a mount's inventory)
+    // Client effects for the visuals (particles), main thread: entity events (ClientboundEntityEventPacket ids) and
+    // animate actions (ClientboundAnimatePacket: 0 wake up, 1 critical hit, 2 magic critical hit).
+    std::function<void(const Entity&, int event)> onEntityEvent;
+    std::function<void(const Entity&, int action)> onAnimate;
+
     struct Stats {
         double applyMs = 0, tickMs = 0;
         size_t events = 0;
@@ -247,12 +290,17 @@ public:
            tameFlags = -1, collar = -1, anger = -1, standFlags = -1, standPose = -1, hurt = -1, hurtDir = -1,
            damage = -1, mainGene = -1, hiddenGene = -1, mobFlags = -1, noGravity = 5, inGround = -1, rotation = -1,
            painting = -1, nameVisible = 3, livingFlags = -1, attachedTo = -1, sleepPos = -1, ticksFrozen = -1,
-           paddleLeft = -1, paddleRight = -1, chest = -1;
+           paddleLeft = -1, paddleRight = -1, chest = -1, color = -1, attachFace = -1, peek = -1;
+        // Display entities.
+        i8 dStart = -1, dDuration = -1, dPosRot = -1, dTranslation = -1, dScale = -1, dLeft = -1, dRight = -1,
+           dBillboard = -1, dBrightness = -1, dViewRange = -1, dWidth = -1, dHeight = -1, dBlock = -1, dItem = -1,
+           dItemContext = -1, dText = -1, dLineWidth = -1, dBackground = -1, dOpacity = -1, dStyle = -1;
     };
 
 private:
     void apply(const Event& e, const EventQueue& q);
     void applyData(Entity& e, const MetaValue* values, u32 count, const EventQueue& q);
+    bool applyDisplayData(Entity& e, const DataIds& d, const MetaValue& v, const EventQueue& q);
     void tick();
     void tickEntity(Entity& e);
     void startInterpolation(Entity& e, const Step* steps, u32 count, float yaw, float pitch, bool hasRot);
@@ -299,5 +347,16 @@ void tickPoseAnimation(Entity& e, const double move[3], bool fallFlying, bool cr
 int bedFacingAt(const World& world, const BlockRegistry& registry, int x, int y, int z);
 // LivingEntity.isFullyFrozen.
 inline bool fullyFrozen(const Entity& e) { return e.ticksFrozen >= 140; }
+
+// Display.calculateInterpolationProgress at a partial tick (1 without an interpolation).
+float displayProgress(const Entity& e, float partialTick);
+// DisplayRenderer.submit before submitInner: the billboard orientation and the interpolated transformation as a
+// row-major 3x4 matrix in the entity's space (translation to the entity position not included). camYaw / camPitch:
+// the camera's yRot / xRot in degrees. False when the display has no render state yet (nothing is drawn).
+bool displayMatrix(const Entity& e, float partialTick, float camYaw, float camPitch, float out[12]);
+// The display's light (brightness override, else `worldLight`) as sky << 4 | block.
+u32 displayLight(const Entity& e, u32 worldLight);
+// Text display: the interpolated background (ARGB) and text opacity (signed byte value) at a partial tick.
+void displayTextColors(const Entity& e, float partialTick, u32& background, int& opacity);
 
 }  // namespace ent

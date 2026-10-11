@@ -50,6 +50,7 @@ struct MapImage {
     std::vector<u8> colors = std::vector<u8>(128 * 128, 0);
     int ax = -1, ay = -1;  // GUI atlas region
     bool dirty = true;
+    u32 version = 0;  // updates (mapColors: maps in item frames)
 };
 std::unordered_map<int, MapImage> g_maps;
 
@@ -139,7 +140,7 @@ void registerHandlers(UiState& s, net::Client& client) {
                 for (int i = 0; i < w; ++i)
                     if (size_t(i + j * w) < colors.size() && x + i < 128 && y + j < 128)
                         m.colors[size_t(x + i + (y + j) * 128)] = u8(colors[size_t(i + j * w)]);
-            if (w) m.dirty = true;
+            if (w) m.dirty = true, ++m.version;
         });
     });
 }
@@ -653,4 +654,14 @@ const StationRegistrar kCartography({"cartography_table"}, [] {
 }());
 
 }  // namespace
+
+const std::vector<u8>* mapColors(int id, u32& version) {
+    auto it = g_maps.find(id);
+    if (it == g_maps.end()) return nullptr;
+    version = it->second.version;
+    return &it->second.colors;
+}
+
+u32 mapColorRgba(u8 packed) { return mapColor(packed); }
+
 }  // namespace ui
