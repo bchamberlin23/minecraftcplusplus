@@ -25,6 +25,7 @@
 #include "social/friends.h"
 #include "ui/mp_hud.h"
 #include "ui/ui.h"
+#include "mesh/mesher.h"
 #include "world/biome_colors.h"
 #include "world/lighting.h"
 #include "world/save.h"
@@ -1194,6 +1195,18 @@ int wmain(int argc, wchar_t** argv) {
         if (opt.seconds > 0) shot = timeUp && !opt.screenshot.empty();
         sky.setBossOverlay(ui::bossDarkenScreen(), ui::bossWorldFog());  // boss bar flags (mp_hud.h)
         sky.setRenderDistance(ui.settings().renderDistance);
+        {  // Video Settings the meshes depend on (Smooth Lighting, See-Through Leaves, Biome Blend): re-mesh on change
+            const ui::Settings& vs = ui.settings();
+            const MeshOptions mo{vs.ao, vs.cutoutLeaves};
+            static int blendRadius = -1;
+            if (!(mo == meshOptions()) || vs.biomeBlendRadius != blendRadius) {
+                const bool first = blendRadius < 0;
+                setMeshOptions(mo);
+                setBiomeBlendRadius(vs.biomeBlendRadius);
+                blendRadius = vs.biomeBlendRadius;
+                if (!first || !(mo == MeshOptions{}) || blendRadius != 2) terrain.rebuildAll();
+            }
+        }
         sky.setTickRate(game.tickRate.runs ? 1.0 / game.tickRate.tickSeconds() : 0.0);
         sky.setWorldBorder(session ? &game.border : nullptr, game.partialTick(),
                            float(std::min(ui.settings().renderDistance, opt.detail) * 16));
