@@ -195,7 +195,7 @@ bool pausesGame(Screen s) {
 void Ui::State::updatePause() {
     // Minecraft.pauseIfInactive: half a second without the focus opens the pause menu (scripted runs drive their own
     // input and keep playing).
-    if (window->focused() || fe->cfg.menu) lastActiveTime = clock;
+    if (window->focused() || fe->cfg.menu || window->headless()) lastActiveTime = clock;  // headless: never focused
     else if (settings.pauseOnLostFocus && script.empty() && screen == Screen::None && clock - lastActiveTime > 0.5)
         openScreen(Screen::Pause);
     // Minecraft.runTick: a singleplayer world that is not open to LAN pauses with a pause screen; the integrated server

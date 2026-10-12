@@ -18,6 +18,7 @@ public:
     // Automated runs (before create): the window opens off-screen without ever taking focus, and capturing the mouse
     // only changes the game's state (the real cursor is never confined, hidden or moved).
     void setHeadless(bool headless) { headless_ = headless; }
+    bool headless() const { return headless_; }
     void reveal();  // uncloaks, raises and focuses the window
     Placement placement() const;
     bool pump();  // processes messages; false once the window is closed
