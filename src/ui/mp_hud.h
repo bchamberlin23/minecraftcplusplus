@@ -10,6 +10,9 @@ namespace ui {
 bool bossDarkenScreen();
 bool bossWorldFog();
 bool bossPlayMusic();
+// The collision rule of a player's scoreboard team (Team.CollisionRule: 0 always, 1 never, 2 push other teams, 3 push
+// own team); 0 without a team.
+int teamCollisionRule(const std::string& member);
 
 // Chat screen (screens.cpp, Screen::Chat): input first (true: consumed), drawing after the input box.
 bool chatExtInput(UiState& s, const InputEvent& e);

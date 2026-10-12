@@ -150,6 +150,7 @@ public:
     double waterHeight = 0, lavaHeight = 0;
     bool eyeInWater = false, wasEyeInWater = false;
     bool fastLava = false;           // the dimension's FAST_LAVA (the nether): lava currents push harder
+    bool waterEvaporates = false;    // the dimension's WATER_EVAPORATES (the nether): water buckets fizzle
     int sprintWindow = 7;            // the Sprint Window option (double-tap forward to sprint; 0 off)
     // Riptide (LivingEntity.autoSpinAttackTicks): the client starts it when a riptide trident is released;
     // spinFlag: the server's living-entity flag 4 (the SPIN_ATTACK pose follows it).

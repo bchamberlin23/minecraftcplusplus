@@ -277,7 +277,16 @@ public:
     // Left / right click with an entity under the crosshair (before blocks): true when an entity closer than
     // blockDistance (< 0: no block targeted) is targeted; it then takes the click (attack / use when pressed).
     bool click(const double eye[3], const double dir[3], bool attack, bool use, double blockDistance, double reach,
-               bool sneaking = false, double minReach = 0);  // sneaking: sent with interactions (sneak + use opens a
+               bool sneaking = false, double minReach = 0);
+    // AttackRange.getClosesetHit for a weapon's attack_range: entities along the look from minReach to maxReach (+ the
+    // forward movement), their boxes inflated by the hitbox margin (the hit projected back onto the box unless a block
+    // is in the way); the closest to the eye. blockRay: the distance to the first block along a ray (max: none).
+    // Attacks it (true) or, with nothing in range, only the swing goes out (false).
+    using BlockRay = std::function<double(const double origin[3], const double dir[3], double max)>;
+    PickResult pickAttackRange(const double eye[3], const double dir[3], double minReach, double maxReach, double margin,
+                               double forward, const BlockRay& blockRay) const;
+    bool attackInRange(const double eye[3], const double dir[3], double minReach, double maxReach, double margin,
+                       double forward, const BlockRay& blockRay);  // sneaking: sent with interactions (sneak + use opens a
                                                              // mount's inventory); minReach: a weapon's attack range
     // Client effects for the visuals (particles), main thread: entity events (ClientboundEntityEventPacket ids, after
     // they are applied; 17 makes a firework rocket explode) and

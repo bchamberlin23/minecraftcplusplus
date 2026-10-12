@@ -1,4 +1,5 @@
 #include "game/gameplay.h"
+#include "ui/mp_hud.h"
 
 #include "assets/assets.h"
 #include "assets/game_reports.h"
@@ -546,6 +547,8 @@ void Gameplay::setPlayer(Game& game, ui::Ui& ui) {
     // (LivingEntity.pushEntities; not bats, parrots or armor stands), boats within 0.2 blocks (AbstractBoat.tick).
     game.entityPush = [this](Player& p) {
         if (!entities_ || p.noClip || game_->dead || p.onClimbable(game_->physics())) return;  // LivingEntity.isPushable
+        // EntitySelector.pushableBy on the client: only our own team's rule counts, NEVER pushes nothing.
+        if (ui::teamCollisionRule(game_->playerName) == 1) return;
         const AABB body = p.box();
         for (const auto& [id, e] : entities_->entities()) {
             if (!e.info || e.dying || id == entityId_) continue;
@@ -655,11 +658,25 @@ void Gameplay::frame() {
         const double dir[3] = {-std::sin(c.yaw) * cp, -std::sin(c.pitch), std::cos(c.yaw) * cp};
         const double block = game_->pickBlockDistance();
         const double limit = block >= 0 ? std::min(block, game_->entityReach) : game_->entityReach;
-        const ent::PickResult pick = entities_->pick(eye, dir, limit);
+        ent::PickResult pick;
+        if (game_->attackMaxReach >= 0) {  // LocalPlayer.raycastHitResult: the held item's attack_range picks
+            const double* v = game_->player().vel;
+            pick = entities_->pickAttackRange(eye, dir, game_->attackMinReach, game_->attackMaxReach, game_->attackMargin,
+                                              v[0] * dir[0] + v[1] * dir[1] + v[2] * dir[2],
+                                              [this](const double o[3], const double d[3], double max) {
+                                                  const RayHit h = game_->physics().raycast(o, d, max);
+                                                  return h.hit ? h.distance : max;
+                                              });
+        }
+        if (pick.id < 0) pick = entities_->pick(eye, dir, limit);
         if (pick.id >= 0)
             if (const ent::Entity* e = entities_->entity(pick.id))
                 game_->crosshairOnLiving = (e->category == ent::Category::Living || e->category == ent::Category::Player) &&
-                                           !e->dying && e->health > 0;
+                                           !e->dying && e->health > 0 &&
+                                           // Hud: AttackRange.isInRange of the hit (reaches widened by the margin)
+                                           (game_->attackMaxReach < 0 ||
+                                            (pick.distance >= game_->attackMinReach - game_->attackMargin &&
+                                             pick.distance <= game_->attackMaxReach + game_->attackMargin));
     }
     if (verbose_) {  // MCPP_GAMEPLAY_VERBOSE=1: movement state changes
         const Player& p = game_->player();
@@ -982,6 +999,20 @@ int Gameplay::predictBucket(int hand, const std::string& name) {
     const u16 fluidState = registry_.idFor(water ? "minecraft:water[level=0]" : "minecraft:lava[level=0]");
     auto tryPlace = [&](int x, int y, int z) {  // BucketItem.emptyContents
         const u16 state = world_.block(x, y, z);
+        const BlockInfo& target = registry_.infos()[state];
+        if (water && p.waterEvaporates && (target.replaceable || state == 0)) {
+            // WATER_EVAPORATES: a fizz and eight puffs of large smoke instead of water.
+            if (audio::AudioSystem* a = audio::instance()) {
+                const double pos[3] = {x + 0.5, y + 0.5, z + 0.5};
+                a->play("minecraft:block.fire.extinguish", audio::Category::Block, pos[0], pos[1], pos[2], 0.5f,
+                        2.6f + (randf() - randf()) * 0.8f);
+            }
+            for (int i = 0; i < 8 && game_->onParticle; ++i) {
+                const double pos[3] = {x + randf(), y + randf(), z + randf()}, vel[3] = {0, 0, 0};
+                game_->onParticle("minecraft:large_smoke", pos, vel);
+            }
+            return true;
+        }
         const std::string_view logged = registry_.property(state, "waterlogged");
         if (water && logged == "false") {  // LiquidBlockContainer.placeLiquid
             game_->predictBlock(x, y, z, registry_.withProperty(state, "waterlogged", "true"));
@@ -1122,8 +1153,9 @@ void Gameplay::heldWeapon() {
     game_->heldPiercing = d.piercing;
     game_->heldMinimumCharge = d.minimumAttackCharge;
     const bool creative = game_->gameMode == 1;
-    game_->attackMinReach = d.hasAttackRange ? std::max(0.0, double(d.attackRange[creative ? 2 : 0] - d.attackRange[4])) : 0.0;
-    game_->attackMaxReach = d.hasAttackRange ? double(d.attackRange[creative ? 3 : 1] + d.attackRange[4]) : -1.0;
+    game_->attackMinReach = d.hasAttackRange ? double(d.attackRange[creative ? 2 : 0]) : 0.0;
+    game_->attackMaxReach = d.hasAttackRange ? double(d.attackRange[creative ? 3 : 1]) : -1.0;
+    game_->attackMargin = d.hasAttackRange ? double(d.attackRange[4]) : 0.0;
     const int haste = effect("haste"), conduit = effect("conduit_power"), fatigue = effect("mining_fatigue");
     auto modified = [&](int swing) {  // MobEffectUtil.getDigSpeedAmplification / Mining Fatigue
         if (haste >= 0 || conduit >= 0) return swing - (1 + std::max(haste, conduit));

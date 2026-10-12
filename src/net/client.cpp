@@ -52,6 +52,7 @@ Dimension parseDimensionType(const std::string& id, std::string_view nbt) {
             std::string_view n;
             while (r.field(t, n)) {
                 if (t == TagByte && n == "minecraft:gameplay/fast_lava") d.fastLava = r.u8v() != 0;
+                else if (t == TagByte && n == "minecraft:gameplay/water_evaporates") d.waterEvaporates = r.u8v() != 0;
                 else r.skip(t);
             }
         } else r.skip(tag);

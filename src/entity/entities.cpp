@@ -1375,6 +1375,100 @@ PickResult EntityWorld::pick(const double o[3], const double dir[3], double maxD
     return best;
 }
 
+bool EntityWorld::attackInRange(const double eye[3], const double dir[3], double minReach, double maxReach, double margin,
+                                double forward, const BlockRay& blockRay) {
+    const PickResult p = pickAttackRange(eye, dir, minReach, maxReach, margin, forward, blockRay);
+    if (verbose_) LOG("entities: attack range %.2f..%.2f margin %.2f -> %d", minReach, maxReach, margin, p.id);
+    if (p.id < 0) {  // a miss: only the swing goes out
+        if (client_ && client_->alive()) client_->sendPlay("punch", net::Writer{});
+        return true;
+    }
+    attack(p.id);
+    return true;
+}
+
+PickResult EntityWorld::pickAttackRange(const double eye[3], const double dir[3], double minReach, double maxReach,
+                                        double margin, double forward, const BlockRay& blockRay) const {
+    PickResult best;
+    double from[3], to[3];
+    double toDist = maxReach + std::max(0.0, forward);
+    const double blockT = blockRay(eye, dir, toDist);
+    if (blockT < minReach) return best;  // a block before the reach starts
+    toDist = std::min(toDist, blockT);
+    for (int a = 0; a < 3; ++a) from[a] = eye[a] + dir[a] * minReach, to[a] = eye[a] + dir[a] * toDist;
+    // Segment entry into a box (AABB.clip): the parameter along from..to, false if it misses.
+    auto clip = [](const double lo[3], const double hi[3], const double a[3], const double b[3], double& t) {
+        double t0 = 0, t1 = 1;
+        for (int k = 0; k < 3; ++k) {
+            const double d = b[k] - a[k];
+            if (std::abs(d) < 1e-12) {
+                if (a[k] < lo[k] || a[k] > hi[k]) return false;
+                continue;
+            }
+            double ta = (lo[k] - a[k]) / d, tb = (hi[k] - a[k]) / d;
+            if (ta > tb) std::swap(ta, tb);
+            t0 = std::max(t0, ta), t1 = std::min(t1, tb);
+            if (t0 > t1) return false;
+        }
+        t = t0;
+        return true;
+    };
+    const float pt = partialTick();
+    int bestId = -1;
+    double bestDist = 1e30;
+    for (const auto& [id, e] : entities_) {
+        if (!e.info || e.deathTime > 0) continue;
+        const std::string& n = e.info->name;
+        // EntitySelector.CAN_BE_PICKED: the entities the crosshair can target (EntityWorld::pick).
+        bool pickable = e.category == Category::Living || e.category == Category::Player || e.category == Category::Vehicle ||
+                        e.category == Category::Block || n == "minecraft:item_frame" || n == "minecraft:glow_item_frame" ||
+                        n == "minecraft:painting" || n == "minecraft:end_crystal" || n == "minecraft:interaction" ||
+                        n == "minecraft:shulker_bullet" || n == "minecraft:fireball" || n == "minecraft:small_fireball" ||
+                        n == "minecraft:wind_charge" || n == "minecraft:breeze_wind_charge";
+        if (n == "minecraft:ender_dragon" || (n == "minecraft:armor_stand" && (e.standFlags & 16))) pickable = false;
+        if (!pickable) continue;
+        double w, h, c[3];
+        entitySize(e, w, h);
+        for (int a = 0; a < 3; ++a) c[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt;
+        const double lo[3] = {c[0] - w / 2, c[1], c[2] - w / 2}, hi[3] = {c[0] + w / 2, c[1] + h, c[2] + w / 2};
+        double hit[3];
+        double t;
+        const bool inside = from[0] >= lo[0] && from[0] <= hi[0] && from[1] >= lo[1] && from[1] <= hi[1] && from[2] >= lo[2] &&
+                            from[2] <= hi[2];
+        if (inside) {
+            std::copy(from, from + 3, hit);
+        } else if (clip(lo, hi, from, to, t)) {
+            for (int a = 0; a < 3; ++a) hit[a] = from[a] + (to[a] - from[a]) * t;
+        } else if (margin > 0) {
+            const double ilo[3] = {lo[0] - margin, lo[1] - margin, lo[2] - margin}, ihi[3] = {hi[0] + margin, hi[1] + margin, hi[2] + margin};
+            if (!clip(ilo, ihi, from, to, t)) continue;
+            double outside[3], toward[3] = {(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2};
+            for (int a = 0; a < 3; ++a) outside[a] = from[a] + (to[a] - from[a]) * t;
+            double d[3] = {toward[0] - outside[0], toward[1] - outside[1], toward[2] - outside[2]};
+            const double len = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+            if (len > 1e-9) {  // a block between the margin and the box stops it
+                for (double& k : d) k /= len;
+                const double bt = blockRay(outside, d, len);
+                if (bt < len)
+                    for (int a = 0; a < 3; ++a) toward[a] = outside[a] + d[a] * bt;
+            }
+            if (!clip(lo, hi, outside, toward, t)) continue;
+            for (int a = 0; a < 3; ++a) hit[a] = outside[a] + (toward[a] - outside[a]) * t;  // the surface hit
+        } else {
+            continue;
+        }
+        const double dx = hit[0] - eye[0], dy = hit[1] - eye[1], dz = hit[2] - eye[2];
+        const double dist = dx * dx + dy * dy + dz * dz;
+        if (dist < bestDist) {
+            bestDist = dist, bestId = id;
+            best.id = id, best.distance = std::sqrt(dist);
+            for (int a = 0; a < 3; ++a) best.hit[a] = hit[a] - c[a];  // relative to the entity
+        }
+    }
+    (void)bestId;
+    return best;
+}
+
 bool EntityWorld::click(const double eye[3], const double dir[3], bool attack, bool use, double blockDistance,
                         double reach, bool sneaking, double minReach) {
     const double limit = blockDistance >= 0 ? std::min(blockDistance, reach) : reach;

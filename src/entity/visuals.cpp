@@ -430,6 +430,11 @@ void Visuals::setPlayer(Game& game, ui::Ui& ui, const std::string& name, std::fu
             m.particles->blockDestroyed(x, y, z, state);
         }
     };
+    game.onParticle = [&m](std::string_view type, const double pos[3], const double vel[3]) {
+        if (!m.particles) return;
+        std::shared_lock lock(m.world.world().mutex());
+        m.particles->spawn(type, pos[0], pos[1], pos[2], vel[0], vel[1], vel[2]);
+    };
     game.onItemParticle = [&m](int item, const double pos[3], const double vel[3]) {  // eating: item shards
         if (!m.particles) return;
         std::shared_lock lock(m.world.world().mutex());

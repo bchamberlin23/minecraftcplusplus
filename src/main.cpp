@@ -794,15 +794,23 @@ int wmain(int argc, wchar_t** argv) {
         game.pistonSource = [&](std::vector<Physics::Piston>& out) { blockEntityRenderer.pistonMovers(out); };
     }
     gameplay.setPlayer(game, ui);
+    game.playerName = opt.name;
     if (haveEntities) ui.setEntities(&entities);  // inventory / mount previews, player list heads
     game.onEntityClick = [&](bool attack, bool use, double blockDistance) {  // attack / use entities first
         if (!session || !haveEntities) return false;
         const CameraState c = game.camera();
         const double eye[3] = {c.x, c.y, c.z}, cp = std::cos(c.pitch);
         const double dir[3] = {-std::sin(c.yaw) * cp, -std::sin(c.pitch), std::cos(c.yaw) * cp};
-        const bool ranged = attack && game.attackMaxReach >= 0;  // the held weapon's attack_range
-        return entities.click(eye, dir, attack, use, blockDistance, ranged ? game.attackMaxReach : game.entityReach,
-                              game.player().sneaking, ranged ? game.attackMinReach : 0.0);
+        if (attack && game.attackMaxReach >= 0) {  // the held weapon's attack_range (LocalPlayer.raycastHitResult)
+            const double* v = game.player().vel;
+            const double forward = v[0] * dir[0] + v[1] * dir[1] + v[2] * dir[2];  // getKnownMovement . look
+            return entities.attackInRange(eye, dir, game.attackMinReach, game.attackMaxReach, game.attackMargin, forward,
+                                          [&](const double o[3], const double d[3], double max) {
+                                              const RayHit h = game.physics().raycast(o, d, max);
+                                              return h.hit ? h.distance : max;
+                                          });
+        }
+        return entities.click(eye, dir, attack, use, blockDistance, game.entityReach, game.player().sneaking);
     };
     // Music, ambience, sky / fog colours and rain or snow follow the surface biome the world stores (from the
     // save, the server or our generator); where it has none, the generator's biome at that position.
@@ -903,6 +911,7 @@ int wmain(int argc, wchar_t** argv) {
         }
         if (session) terrain.setFarActive(session->dimension().name == "minecraft:overworld");
         if (session) game.player().fastLava = session->dimension().fastLava;
+        if (session) game.player().waterEvaporates = session->dimension().waterEvaporates;
         if (haveEntities) entities.frame(dt);
         if (haveEntities) entities.viewEntity = game.cameraMode == 0 ? game.cameraEntity : -1;  // set_camera
         ui.beginFrame(dt);  // UI input first: an open screen takes the game's input

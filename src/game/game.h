@@ -185,6 +185,8 @@ public:
     float cooldownPercent(const std::string& group, float partial) const;  // ItemCooldowns.getCooldownPercent
     // Item shards (eating): ParticleTypes.ITEM at a position with a velocity.
     std::function<void(int item, const double pos[3], const double vel[3])> onItemParticle;
+    // A particle of a type by name ("minecraft:large_smoke") at a position with a velocity (the client's own effects).
+    std::function<void(std::string_view type, const double pos[3], const double vel[3])> onParticle;
     bool usePressed() const { return usingItem_; }  // the use key is held after a use press
     // AbstractClientPlayer.getFieldOfViewModifier, item part: drawing a bow narrows the view (x 0.85 at full draw);
     // scoping with a spyglass in first person sets it to 0.1.
@@ -218,7 +220,8 @@ public:
     // swing's duration (attack_animation with Haste / Mining Fatigue, LivingEntity.getModifiedSwingDuration).
     bool heldPiercing = false;
     float heldMinimumCharge = 0;
-    double attackMinReach = 0, attackMaxReach = -1;
+    double attackMinReach = 0, attackMaxReach = -1, attackMargin = 0;
+    std::string playerName;  // our name (scoreboard team membership)  // attack_range: reaches (-1 none), hitbox margin
     int swingTicks = 6, useSwingTicks = 6;  // attack / interact swings (onSwing reads swingTicks)
     int swingType = 1;                      // the main hand's attack_animation type
     int useSwingTicksOf[2] = {6, 6}, useSwingTypeOf[2] = {1, 1};  // each hand's interact_animation
