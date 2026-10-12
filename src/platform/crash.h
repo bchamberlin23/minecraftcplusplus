@@ -4,3 +4,5 @@
 #include "core/common.h"
 
 void installCrashHandler();
+// Extra lines a crash logs ("Custom Server Details" of ClientboundCustomReportDetailsPacket); any thread.
+void setCrashDetails(const std::string& text);

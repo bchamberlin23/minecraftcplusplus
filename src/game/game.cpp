@@ -186,17 +186,6 @@ void Game::frame(Window& w, double dt) {
     escWasDown_ = esc;
     for (int i = 0; i < 9; ++i)
         if (presses(keys.hotbar[i])) selected_ = i;
-    // Double-tapping jump toggles flight, like creative mode.
-    for (int n = presses(keys.jump); n > 0; --n) {
-        if (clock_ - lastJumpPress_ < 0.3 && player_.mayFly && !player_.noClip && !riding()) {
-            player_.flying = !player_.flying;
-            player_.vel[1] = 0;
-            lastJumpPress_ = -1;
-        } else {
-            lastJumpPress_ = clock_;
-        }
-    }
-
     const PlayerInput input = inputSuspended ? PlayerInput{} : readInput(w);
     const Window::MouseEvents ev = w.takeMouseEvents();
     if (inputSuspended) pendingAttacks_ = 0;
@@ -229,8 +218,17 @@ void Game::frame(Window& w, double dt) {
             player_.tick(physics_, PlayerInput{});
             player_.lastInput = input;
         } else {
+            refreshPistons();
+            player_.tickPistons(physics_);  // the moving blocks' ticks (ClientLevel block entities)
             player_.tick(physics_, input);
+            if (entityPush) entityPush(player_);  // other entities' pushEntities / boats push the player
         }
+        if (traceTicks)
+            LOG("tick %llu: pos %.4f %.4f %.4f vel %.4f %.4f %.4f ground %d hcol %d water %.3f lava %.3f eye %d swim %d sprint %d "
+                "fly %d glide %d pose %d spin %d", (unsigned long long)ticks_, player_.pos[0], player_.pos[1], player_.pos[2],
+                player_.vel[0], player_.vel[1], player_.vel[2], int(player_.onGround), int(player_.horizontalCollision),
+                player_.waterHeight, player_.lavaHeight, int(player_.eyeInWater), int(player_.swimming), int(player_.sprinting),
+                int(player_.flying), int(player_.fallFlying), int(player_.pose), player_.autoSpinAttackTicks);
         tickCameraFeedback();
         ++cooldownTick_;  // Player.tick -> ItemCooldowns.tick
         std::erase_if(cooldowns_, [&](const auto& c) { return c.second.end <= cooldownTick_; });
@@ -245,6 +243,17 @@ void Game::frame(Window& w, double dt) {
     retarget();
     handleClicks(w, dt, presses(keys.use), presses(keys.pickItem), ev.wheel);
     buildOverlay();
+}
+
+// The moving blocks the block entity layer animates, keeping each one's tick progress (keyed by its identity).
+void Game::refreshPistons() {
+    if (!pistonSource) return;
+    std::vector<Physics::Piston> fresh;
+    pistonSource(fresh);
+    for (Physics::Piston& p : fresh)
+        for (const Physics::Piston& old : physics_.pistons)
+            if (old.key == p.key) p.progress = old.progress, p.progressO = old.progressO;
+    physics_.pistons = std::move(fresh);
 }
 
 void Game::retarget() {
@@ -293,80 +302,140 @@ void Game::handleClicks(Window& w, double dt, int rightPresses, int middlePresse
     // An entity in front of the targeted block takes the click (attack / use only on a press, like the game).
     if (usingItem_ && !rightHeld) {  // Minecraft.handleKeybinds: releaseUsingItem
         usingItem_ = false;
+        if (predictRelease && use.active) predictRelease();  // Item.releaseUsing on the client (riptide)
         use.active = false;  // Player.releaseUsingItem: the client stops at once
         if (onReleaseUseItem) onReleaseUseItem();
     }
     if (doPlace && onEntityClick && onEntityClick(false, ev.right > 0, blockDistance_)) {
         repeatTimer_ = 0.3;
-        if (ev.right > 0 && !usingItem_ && onUseItem) {  // e.g. a shield raised facing a mob
-            onUseItem(nullptr, true);
-            if (predictUse) predictUse(nullptr, true);
-            usingItem_ = true;
-        }
+        if (ev.right > 0 && !usingItem_) startUseItem(true);  // the interaction passed: the held items' turn
         return;
     }
+    // Minecraft.startUseItem: a press, or every 4 ticks while held (eating the next piece of food), unless an item is
+    // in use.
+    if (doPlace && !use.active) startUseItem(false);
+}
+
+void Game::startUseItem(bool afterEntity) {
     useConsumed_ = false;
-    if (target_.hit && doPlace) {
-        repeatTimer_ = ev.right ? 0.3 : 0.2;  // the game repeats every 4 ticks while held
-        useTarget(true);
-    }
-    // Minecraft.startUseItem: a press that neither placed a block nor used the targeted one uses the held item; held,
-    // it repeats every 4 ticks once the last use has ended (eating the next piece of food).
-    if ((ev.right > 0 ? !usingItem_ : (doPlace && rightHeld)) && !dig_.active && !useConsumed_ && !use.active && onUseItem) {
-        onUseItem(target_.hit ? &target_ : nullptr, false);
-        if (predictUse) predictUse(target_.hit ? &target_ : nullptr, false);
+    for (int hand = 0; hand < 2; ++hand) {
+        if (!afterEntity && target_.hit) {
+            useOnTakesItem = placedLast_ = false;
+            const int r = useItemOn(hand);
+            if (r != kUsePass) {  // consumed (placed, used the block) or failed: done
+                useConsumed_ = true;
+                // A use that took one of the stack (a placed block, an egg...) or any use in creative
+                // (hasInfiniteMaterials) moves the hand.
+                const bool hasItem = handHasItem ? handHasItem(hand) : hand == 0;
+                if (r == kUseConsume && hasItem && (placedLast_ || useOnTakesItem || instabuild) && onItemUsed) onItemUsed(hand);
+                return;
+            }
+        }
+        const bool hasItem = handHasItem ? handHasItem(hand) : (hand == 0 && hotbar_[selected_] != 0);
+        if (!hasItem) continue;
+        if (onUseItem) onUseItem(hand);  // ServerboundUseItemPacket (sent even while the item cools down)
         usingItem_ = true;
+        if (predictItemUse && predictItemUse(hand, afterEntity || !target_.hit ? nullptr : &target_) == kUseConsume) {
+            if (onItemUsed) onItemUsed(hand);
+            return;
+        }
     }
 }
 
 bool Game::useTarget(bool place) {
     if (!target_.hit) return false;
-    EditAction action{place, target_.x, target_.y, target_.z, target_.face,
-                      {target_.point[0], target_.point[1], target_.point[2]}, {target_.x, target_.y, target_.z}, 0};
     if (!place) {
+        EditAction action{place, target_.x, target_.y, target_.z, target_.face,
+                          {target_.point[0], target_.point[1], target_.point[2]}, {target_.x, target_.y, target_.z}, 0};
         if (onEdit) onEdit(action);
         const u16 old = world_.block(target_.x, target_.y, target_.z);
         edit(target_.x, target_.y, target_.z, 0);
         if (onBlockChanged && old) onBlockChanged(false, target_.x, target_.y, target_.z, old);
-        if (onSwing) onSwing();
+        if (onSwing) onSwing(0, swingType);
         return true;
     }
-    // MultiPlayerGameMode.useItemOn: a block outside the world border fails (nothing is sent, no item use follows).
-    if (!border.blockWithinBounds(target_.x, target_.z)) {
-        useConsumed_ = true;
-        return false;
-    }
-    // Using a block that opens a screen (or acting with an item that is not a block) goes to the server as is.
-    const bool interacts = onInteract && !player_.sneaking && onInteract(target_.x, target_.y, target_.z);
-    // A held block cooling down is not placed (ItemStack.useOn is skipped); the use still goes to the server.
-    if (interacts || !hotbar_[selected_] || (mainHandOnCooldown && mainHandOnCooldown())) {
-        useConsumed_ = interacts;  // else the held item may still be used (food, buckets...)
+    useItemOn(0);
+    return placedLast_;
+}
+
+// MultiPlayerGameMode.useItemOn / performUseItemOn for a hand: the targeted block's own use (unless sneaking with
+// something in hand), else ItemStack.useOn (BlockItem.place for blocks: slabs double up, waterloggable blocks fill
+// with the water they replace, nothing goes into the player). ServerboundUseItemOnPacket goes out either way (with
+// the predicted block), except outside the world border.
+int Game::useItemOn(int hand) {
+    placedLast_ = false;
+    if (!border.blockWithinBounds(target_.x, target_.z)) return kUseFail;
+    EditAction action{true, target_.x, target_.y, target_.z, target_.face,
+                      {target_.point[0], target_.point[1], target_.point[2]}, {target_.x, target_.y, target_.z}, 0};
+    action.hand = hand;
+    action.inside = target_.inside;
+    auto send = [&](int result) {
         if (onEdit) onEdit(action);
-        return false;
-    }
+        return result;
+    };
+    if (gameMode == 3) return send(kUseConsume);
+    auto has = [&](int h) { return handHasItem ? handHasItem(h) : (h == 0 && hotbar_[selected_] != 0); };
+    const bool suppressUsingBlock = player_.lastInput.sneak && (has(0) || has(1));  // isSecondaryUseActive
+    if (!suppressUsingBlock && onInteract && onInteract(target_.x, target_.y, target_.z)) return send(kUseConsume);
+    const u16 held = hand == 0 ? hotbar_[selected_] : offhandBlock_;
+    if (!has(hand) || (handOnCooldown && handOnCooldown(hand))) return send(kUsePass);
+    if (!held) return send(predictUseOn ? predictUseOn(hand, target_) : kUsePass);  // not a block: Item.useOn
+    // BlockItem.place: BlockPlaceContext (the clicked block when it can be replaced, else the cell in front of it).
     const BlockInfo* infos = registry_.infos();
+    auto baseOf = [&](u16 id) {
+        const std::string& n = registry_.name(id);
+        return n.substr(0, n.find('['));
+    };
+    const std::string heldBase = baseOf(held);
+    auto canBeReplaced = [&](u16 state, bool replacingClicked, const int at[3]) {
+        if (baseOf(state) == heldBase && heldBase.ends_with("_slab")) {  // SlabBlock.canBeReplaced
+            const std::string_view type = registry_.property(state, "type");
+            if (type == "double") return false;
+            if (!replacingClicked) return true;
+            const bool above = target_.point[1] - at[1] > 0.5;
+            const int f = target_.face;
+            return type == "bottom" ? f == 1 || (above && f >= 2) : f == 0 || (!above && f >= 2);
+        }
+        // BlockBehaviour.canBeReplaced: replaceable, but not by the same item
+        return infos[state].replaceable && baseOf(state) != heldBase;
+    };
     int t[3] = {target_.x, target_.y, target_.z};
-    if (!infos[world_.block(t[0], t[1], t[2])].replaceable)
+    const bool replaceClicked = canBeReplaced(world_.block(t[0], t[1], t[2]), true, t);
+    if (!replaceClicked)
         for (int a = 0; a < 3; ++a) t[a] += kDir[target_.face][a];
-    if (!infos[world_.block(t[0], t[1], t[2])].replaceable || !hotbar_[selected_]) return false;
-    const u16 id = orientForPlacement(hotbar_[selected_], target_, t);
+    const u16 existing = world_.block(t[0], t[1], t[2]);
+    if (!replaceClicked && !canBeReplaced(existing, false, t)) return send(kUseFail);  // !context.canPlace()
+    u16 id;
+    if (baseOf(existing) == heldBase && heldBase.ends_with("_slab")) {  // SlabBlock: a second slab makes a double one
+        id = registry_.withProperty(registry_.withProperty(existing, "type", "double"), "waterlogged", "false");
+    } else {
+        id = orientForPlacement(held, target_, t);
+        // Waterloggable blocks placed into a water source are waterlogged (getStateForPlacement).
+        if (!registry_.property(id, "waterlogged").empty()) {
+            const Physics::Fluid f = physics_.fluid(t[0], t[1], t[2]);
+            id = registry_.withProperty(id, "waterlogged", f.type == 1 && f.source ? "true" : "false");
+        }
+    }
     const BlockInfo& b = infos[id];
     const AABB body = player_.box();
-    for (u32 i = 0; i < b.collisionCount; ++i) {
+    for (u32 i = 0; i < b.collisionCount; ++i) {  // Level.isUnobstructed: never into the player
         const Box& s = registry_.box(b.collisionFirst + i);
         const AABB a{{t[0] + s.min[0], t[1] + s.min[1], t[2] + s.min[2]}, {t[0] + s.max[0], t[1] + s.max[1], t[2] + s.max[2]}};
-        if (a.intersects(body)) return false;  // never place a block inside the player
+        if (a.intersects(body)) return send(kUseFail);
     }
-    if (onEdit) {
-        std::copy(t, t + 3, action.at);
-        action.block = id;
-        onEdit(action);
-    }
+    std::copy(t, t + 3, action.at);
+    action.block = id;
+    send(kUseConsume);
     edit(t[0], t[1], t[2], id);
-    useConsumed_ = true;
+    placedLast_ = true;
     if (onBlockChanged) onBlockChanged(true, t[0], t[1], t[2], id);
-    if (onSwing) onSwing();
-    return true;
+    if (onSwing) {  // a use swing: the used hand's interact_animation
+        const int attackSwing = swingTicks;
+        swingTicks = useSwingTicksOf[hand & 1];
+        onSwing(hand & 1, useSwingTypeOf[hand & 1]);
+        swingTicks = attackSwing;
+    }
+    return kUseConsume;
 }
 
 float Game::useFovModifier() const {
@@ -403,6 +472,7 @@ void Game::tickCameraFeedback() {
     if (dead && deathTime < 20) ++deathTime;
     if (!dead) deathTime = 0;
     ++attackStrengthTicker;  // Player.tick
+    if (kineticHitTicks >= 0) ++kineticHitTicks;
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -519,10 +589,19 @@ bool Game::continueDestroyBlock(int x, int y, int z, int face) {
 bool Game::startAttack() {
     if (missTime_ > 0 || handsBusy) return false;
     if (gameMode == 3) return true;  // spectators: no attack, no digging
+    // Player.cannotAttackWithItem: a weapon with a minimum_attack_charge waits for its charge (no swing either).
+    if (heldMinimumCharge > 0 && float(attackStrengthTicker) / attackStrengthDelay() < heldMinimumCharge) return false;
+    if (heldPiercing) {  // MultiPlayerGameMode.piercingAttack: a stab (the server finds what it hits)
+        if (onStab) onStab();
+        if (onStabEffects) onStabEffects();
+        attackStrengthTicker = 0;  // Player.onAttack
+        if (onSwing) onSwing(0, swingType);
+        return true;
+    }
     // An entity in front of the targeted block takes the press (the attack packet carries its own punch).
     if (onEntityClick && onEntityClick(true, false, blockDistance_)) {
         attackStrengthTicker = 0;  // MultiPlayerGameMode.attack -> resetAttackStrengthTicker
-        if (onSwing) onSwing();
+        if (onSwing) onSwing(0, swingType);
         return false;
     }
     bool endAttack = false;
@@ -533,17 +612,17 @@ bool Game::startAttack() {
         if (!instabuild) missTime_ = 10;  // MultiPlayerGameMode.hasMissTime: survival-like modes
         attackStrengthTicker = 0;         // resetAttackStrengthTicker
     }
-    if (onSwing) onSwing();
+    if (onSwing) onSwing(0, swingType);
     if (onPunch) onPunch();
     return endAttack;
 }
 
 void Game::continueAttack(bool down) {
     if (!down) missTime_ = 0;
-    if (missTime_ > 0 || use.active) return;
+    if (missTime_ > 0 || use.active || heldPiercing) return;  // piercing weapons do not break blocks
     if (down && target_.hit && world_.block(target_.x, target_.y, target_.z) != 0) {
         if (continueDestroyBlock(target_.x, target_.y, target_.z, target_.face)) {
-            if (onSwing) onSwing();
+            if (onSwing) onSwing(0, swingType);
             if (onPunch) onPunch();
         }
     } else {

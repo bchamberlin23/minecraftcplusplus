@@ -6,6 +6,16 @@
 
 StructuredBuffer<uint4> gQuads : register(t0);  // CubeQuad: geo, tex | ao, sky corners, block corners
 
+// Path tracing (shader model 6.5 entry points only): ray traced reflections for water and glass.
+#if __SHADER_TARGET_MAJOR > 6 || (__SHADER_TARGET_MAJOR == 6 && __SHADER_TARGET_MINOR >= 5)
+#define RT_CUBE_QUADS
+#define gRtCube gQuads
+#include "raytrace.hlsli"
+#define TRACED 1
+#else
+#define TRACED 0
+#endif
+
 static const float kShade[6] = {0.5, 1.0, 0.8, 0.8, 0.6, 0.6};
 static const float3 kNormal[6] = {
     float3(0, -1, 0), float3(0, 1, 0), float3(0, 0, -1), float3(0, 0, 1), float3(-1, 0, 0), float3(1, 0, 0)};
@@ -86,12 +96,14 @@ float4 TerrainPSOpaque(VSOut i) : SV_Target {
 }
 
 float4 TerrainPSCutout(VSOut i) : SV_Target {
+    if (fadedOut(i.pos.xy)) discard;
     float4 c = shadePixel(i);
     clip(c.a - 0.5);
     return float4(c.rgb, 1);
 }
 
 float4 TerrainPSTranslucent(VSOut i) : SV_Target {
+    if (fadedOut(i.pos.xy)) discard;
     return shadePixel(i);
 }
 
@@ -151,6 +163,7 @@ GbufTargets TerrainGbufPS(GbufVSOut i) {
 }
 
 GbufTargets TerrainGbufPSCutout(GbufVSOut i) {
+    if (fadedOut(i.pos.xy)) discard;
     float4 c = sampleTerrain(i.uvl);
     clip(c.a - 0.5);
     return gbufWrite(c.rgb * i.tint, kNormal[i.info & 7], i.light, i.info >> 4);
@@ -262,7 +275,10 @@ float4 traceReflection(float3 rel, float3 r, float2 pixel) {
     return 0;
 }
 
-float4 TerrainFwdPS(FwdVSOut i) : SV_Target {
+// traced: the path tracer's variant (TerrainFwdPtPS) - reflections and sun glints from the acceleration structure
+// within its radius, and DLSS Ray Reconstruction's guides for the water surface.
+float4 fwdShade(FwdVSOut i, bool traced) {
+    if (fadedOut(i.pos.xy)) discard;
     uint face = i.info & 7, mat = i.info >> 4;
     float2 pixel = i.pos.xy;
     float3 v = -normalize(i.rel);
@@ -321,12 +337,35 @@ float4 TerrainFwdPS(FwdVSOut i) : SV_Target {
         }
         skyRefl = skyRefl * skyCurve(i.light.x) + gBlockColor.w;
         float3 refl = skyRefl;
-        if ((gFlags.x & kFlagSsr) != 0 && fresnel > 0.04) {
+        bool rt = false;
+#if TRACED
+        rt = traced && dist < gPtParams.x;
+        if (rt) {
+            RtSurface h;
+            float3 tr;
+            float hitT = 1e4;
+            if (rtClosestThrough(i.rel + float3(0, 0.02, 0), r, gPtParams.x * 1.5, h, tr)) {
+                refl = tr * rtHitRadiance(h, dist);
+                hitT = length(h.pos - i.rel);
+            } else {
+                refl = tr * skyRefl;
+            }
+            const uint2 gp = uint2(pixel);
+            gPtRw[kPtNormalRough][gp] = float4(n, 0.05);
+            gPtRw[kPtSpecAlbedo][gp] = float4(envBrdfApprox2(0.02, 0.0025, ndv), 1);
+            gPtRw[kPtDiffAlbedo][gp] = float4(tintLin * (1 - fresnel), 1);
+            gPtHitDist[gp] = hitT;
+        }
+#endif
+        if (!rt && (gFlags.x & kFlagSsr) != 0 && fresnel > 0.04) {
             float4 ssr = traceReflection(i.rel, r, pixel);
             refl = lerp(skyRefl, ssr.rgb, ssr.a);
         }
         float shadowThick;
         float shadow = dot(gLightColor.rgb, 1) > 0 ? shadowVisibility(i.rel, float3(0, 1, 0), pixel, shadowThick) : 0;
+#if TRACED
+        if (rt) shadow = dot(gLightColor.rgb, 1) > 0 ? rtVisibility(i.rel + float3(0, 0.02, 0), gLightDir.xyz, 1e4).g : 0;
+#endif
         float3 h = normalize(gLightDir.xyz + v);
         float ndh = saturate(dot(n, h));
         float a2 = 0.02 * 0.02;
@@ -349,6 +388,15 @@ float4 TerrainFwdPS(FwdVSOut i) : SV_Target {
     float3 c = shadeSurface(s, i.rel, pixel);
     float fresnel = 0.04 + 0.96 * pow(1.0 - saturate(dot(s.n, v)), 5.0);
     float3 refl = skyColor(reflect(-v, s.n)) * skyCurve(s.sky);
+#if TRACED
+    if (traced && dist < gPtParams.x) {  // glass / ice reflect the world
+        RtSurface h;
+        float3 tr;
+        const float3 rd = reflect(-v, s.n);
+        if (rtClosestThrough(i.rel + s.n * 0.01, rd, gPtParams.x, h, tr)) refl = tr * rtHitRadiance(h, dist);
+        else refl *= tr;
+    }
+#endif
     float alpha = t.a;
     if (mat == kMatGlass || mat == kMatIce) {
         c = lerp(c, refl, fresnel * 0.6);
@@ -356,3 +404,8 @@ float4 TerrainFwdPS(FwdVSOut i) : SV_Target {
     }
     return float4(applyFog(c, i.rel, skyBehind), alpha);
 }
+
+float4 TerrainFwdPS(FwdVSOut i) : SV_Target { return fwdShade(i, false); }
+#if TRACED
+float4 TerrainFwdPtPS(FwdVSOut i) : SV_Target { return fwdShade(i, true); }
+#endif

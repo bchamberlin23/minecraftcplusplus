@@ -98,7 +98,8 @@ void AudioSystem::load() {
             stateSoundTypes_[id] = air ? -1 : game_.typeFor(key);
         }
     if (!engine_.start(bank_, config_.capture)) return;
-    for (int c = 0; c < kCategoryCount; ++c) engine_.setCategoryGain(Category(c), volumes_[c]);
+    for (int c = 0; c < kCategoryCount; ++c)
+        engine_.setCategoryGain(Category(c), config_.muted && Category(c) == Category::Master ? 0.0f : volumes_[c]);
     engine_.preload(bank_.preloadFiles());
     LOG("audio   %8.1f ms  %zu sound events, %zu files (index %.1f ms), %zu network sound ids, XAudio2%s", t.ms(),
         bank_.eventCount(), bank_.fileCount(), bankMs, protocolEvents_.size(),
@@ -116,7 +117,7 @@ double AudioSystem::captureTime() const { return nowSeconds() - engine_.captureS
 
 void AudioSystem::setVolume(Category c, float v) {
     volumes_[int(c)] = std::clamp(v, 0.0f, 1.0f);
-    engine_.setCategoryGain(c, volumes_[int(c)]);
+    engine_.setCategoryGain(c, config_.muted && c == Category::Master ? 0.0f : volumes_[int(c)]);
     saveSettings();
 }
 
@@ -559,6 +560,16 @@ void AudioSystem::tick() {
     tickAmbient(ambientEnv ? &ambientEnv->ambient : nullptr);
 }
 
+void AudioSystem::setScreenMusic(std::string_view event) {
+    const int id = event.empty() || !ready() ? -1 : bank_.eventId(event);
+    if (id < 0 && screenMusic_.event >= 0 && music_ && musicEvent_ == screenMusic_.event) {  // MusicManager.stopPlaying
+        engine_.stopHandle(music_);
+        music_ = 0, musicEvent_ = -1;
+        nextSongDelay_ = 100;
+    }
+    screenMusic_ = MusicDef{id, 0, 0, true};  // Musics.CREDITS: no delay, replaces what plays
+}
+
 // MusicManager.tick with the default music frequency.
 void AudioSystem::tickMusic(const AudioEnvironment* env, bool creative, bool underwater, float volume) {
     constexpr int kMaxFrequency = 20 * 1200;
@@ -578,12 +589,12 @@ void AudioSystem::tickMusic(const AudioEnvironment* env, bool creative, bool und
         if (musicGain_ <= 1.0E-4f) {
             engine_.stopHandle(music_);
             music_ = 0;
-            nextSongDelay_ = nextDelay(env ? env->music.select(creative, underwater) : nullptr) + 100;
+            nextSongDelay_ = nextDelay(screenMusic_.event >= 0 ? &screenMusic_ : env ? env->music.select(creative, underwater) : nullptr) + 100;
             return;
         }
         engine_.setMusicFade(musicGain_);
     }
-    const MusicDef* music = env ? env->music.select(creative, underwater) : nullptr;
+    const MusicDef* music = screenMusic_.event >= 0 ? &screenMusic_ : env ? env->music.select(creative, underwater) : nullptr;
     if (!music) {
         nextSongDelay_ = std::max(nextSongDelay_, 100);
         return;

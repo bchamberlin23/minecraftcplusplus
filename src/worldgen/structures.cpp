@@ -175,6 +175,15 @@ void StructureSystem::Impl::resolveRing(const Set& s, Ring& r) const {
         // BiomeSource.findBiomeHorizontal(x, 0, z, 112, 1, preferred, random, false)
         LegacyRandom random(r.forkSeed);
         const int ox = r.initialX * 16 + 8, oz = r.initialZ * 16 + 8;
+        if (const int fixed = env->gen.fixedBiome(); fixed >= 0) {  // FixedBiomeSource.findBiomeHorizontal
+            if (size_t(fixed) < s.placement.preferred.size() && s.placement.preferred[size_t(fixed)]) {
+                const int x = ox - 112 + random.nextInt(112 * 2 + 1), z = oz - 112 + random.nextInt(112 * 2 + 1);
+                r.x = x >> 4, r.z = z >> 4;
+            } else {
+                r.x = r.initialX, r.z = r.initialZ;
+            }
+            return;
+        }
         const int ncx = ox >> 2, ncz = oz >> 2, radius = 112 >> 2;
         DensityContext ctx;
         bool found = false;
@@ -464,6 +473,8 @@ StructureSystem::StructureSystem(const ChunkGenerator& generator, const FeatureS
         registerMonument();
         registerMansion();
         registerOceanStructures();
+        registerNetherStructures();
+        registerEndCity();
     });
     Timer t;
     Impl& im = *impl_;
@@ -515,8 +526,27 @@ StructureSystem::StructureSystem(const ChunkGenerator& generator, const FeatureS
         if (size_t(s->step) >= im.byStep.size()) im.byStep.resize(size_t(s->step) + 1);
         im.byStep[size_t(s->step)].push_back(s);
     }
-    // Structure sets with at least one structure that can be in this dimension's biomes.
+    // Structure sets with at least one structure that can be in this dimension's biomes; a flat world's only those
+    // of its structure_overrides (a set id, a list of them or a "#tag"; all when absent).
     std::vector<std::string> setIds = data.ids("structure_set");
+    i64 ringSeed = seed;
+    if (const json* flat = generator.flatSettings()) {
+        ringSeed = 0;  // ChunkGeneratorStructureState.createForFlat
+        if (const auto o = flat->find("structure_overrides"); o != flat->end()) {
+            std::vector<std::string> keep;
+            auto add = [&](const std::string& id) {
+                if (id.starts_with("#"))
+                    for (const std::string& t : data.tag("worldgen/structure_set", id.substr(1))) keep.push_back(t);
+                else
+                    keep.push_back(id.find(':') == std::string::npos ? "minecraft:" + id : id);
+            };
+            if (o->is_string()) add(o->get<std::string>());
+            else if (o->is_array())
+                for (const json& e : *o)
+                    if (e.is_string()) add(e.get<std::string>());
+            setIds = keep;  // in the override's order
+        }
+    }
     for (const std::string& id : setIds) {
         const json* def = data.worldgen("structure_set", id);
         if (!def) continue;
@@ -567,7 +597,7 @@ StructureSystem::StructureSystem(const ChunkGenerator& generator, const FeatureS
         // ChunkGeneratorStructureState.generateRingPositions: the initial positions and each one's biome search seed
         // (concentric rings seed = the level seed for normal worlds).
         LegacyRandom random(0);
-        random.setSeed(seed);
+        random.setSeed(ringSeed);
         double angle = random.nextDouble() * std::numbers::pi * 2.0;
         int positionInCircle = 0, circle = 0, spread = p.spread;
         for (int i = 0; i < p.count; ++i) {

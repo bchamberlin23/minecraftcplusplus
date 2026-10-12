@@ -3,6 +3,7 @@
 // tiled backgrounds, connections, obtained / unobtained frames, the hover box with title, progress and description,
 // dragging / wheel scrolling, select_advancements_tab and seen_advancements.
 #include "audio/audio.h"
+#include "ui/toasts.h"
 #include "ui/ui_state.h"
 
 #include <algorithm>
@@ -21,7 +22,7 @@ struct Adv {
     Text title, description;
     ItemStack icon;
     int type = 0;  // AdvancementType: task, challenge, goal
-    bool hidden = false;
+    bool hidden = false, showToast = true;
     std::string background;  // texture id path ("gui/advancements/backgrounds/stone"), "" none
     float x = 0, y = 0;
     std::vector<std::vector<std::string>> requirements;
@@ -236,7 +237,7 @@ void tabRect(int index, int& x, int& y, int& w, int& h) {
 // --- packets ----------------------------------------------------------------------------------------------------
 
 struct Update {
-    bool reset = false;
+    bool reset = false, showToasts = false;
     std::vector<Adv> added;
     std::vector<std::string> removed;
     std::vector<std::pair<std::string, Progress>> progress;
@@ -276,6 +277,7 @@ void handlers(UiState& s, net::Client& client) {
                     std::string bg(r.str());
                     a.background = bg.substr(bg.find(':') + 1);
                 }
+                a.showToast = (flags & 2) != 0;
                 a.hidden = (flags & 4) != 0;
             }
             const i32 groups = r.varInt();
@@ -304,7 +306,7 @@ void handlers(UiState& s, net::Client& client) {
             }
             u->progress.push_back(std::move(p));
         }
-        r.boolean();  // showAdvancements (toasts)
+        u->showToasts = r.boolean();  // showAdvancements (toasts)
         if (!r.ok) {
             LOG("ui: update_advancements: malformed packet");
             return;
@@ -319,7 +321,15 @@ void handlers(UiState& s, net::Client& client) {
                 if (!g.advs.count(a.id)) g.order.push_back(a.id);
                 g.advs[a.id] = std::move(a);
             }
-            for (auto& [id, p] : u->progress) g.progress[id] = std::move(p);
+            for (auto& [id, p] : u->progress) {
+                // ClientAdvancements.update: an advancement just done shows its toast (when the packet allows it).
+                const auto it = g.advs.find(id);
+                const bool wasDone = it != g.advs.end() && isDone(it->second);
+                g.progress[id] = std::move(p);
+                if (it != g.advs.end() && !u->reset && u->showToasts && !wasDone && isDone(it->second) &&
+                    it->second.hasDisplay && it->second.showToast)
+                    showAdvancementToast(it->second.title, it->second.type, it->second.icon);
+            }
             g.dirty = true;
         });
     });

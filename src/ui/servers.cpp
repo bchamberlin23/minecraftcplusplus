@@ -84,9 +84,11 @@ void openEditServer(State& s, int index) {
     f.editServer = index;
     f.serverName.text = TextField{};
     f.serverIp.text = TextField{};
+    f.editPackStatus = 0;
     if (index >= 0 && index < int(f.servers.size())) {
         f.serverName.text.value = f.servers[size_t(index)].name;
         f.serverIp.text.value = f.servers[size_t(index)].ip;
+        f.editPackStatus = f.servers[size_t(index)].packStatus;
     } else {
         f.serverName.text.value = s.res.translate("selectServer.defaultName");
     }
@@ -105,9 +107,9 @@ void saveEditServer(State& s) {
     if (f.editServer >= 0 && f.editServer < int(f.servers.size())) {
         ServerEntry& e = f.servers[size_t(f.editServer)];
         if (e.ip != ip) e.icon.clear();
-        e.name = name, e.ip = ip;
+        e.name = name, e.ip = ip, e.packStatus = f.editPackStatus;
     } else {
-        f.servers.push_back({name, ip, {}});
+        f.servers.push_back({name, ip, {}, f.editPackStatus});
         f.serverSel = int(f.servers.size()) - 1;
     }
     saveAll(s);
@@ -158,7 +160,13 @@ std::vector<ServerEntry> loadServers(const fs::path& json, const fs::path& dat) 
         const auto j = nlohmann::json::parse(bytes.begin(), bytes.end(), nullptr, false);
         if (j.is_object() && j.contains("servers") && j["servers"].is_array())
             for (const auto& e : j["servers"])
-                if (e.is_object()) out.push_back({e.value("name", ""), e.value("ip", ""), e.value("icon", "")});
+                if (e.is_object()) {
+                    ServerEntry s{e.value("name", ""), e.value("ip", ""), e.value("icon", "")};
+                    const std::string packs = e.value("resourcePack", "prompt");
+                    s.packStatus = packs == "enabled" ? 1 : packs == "disabled" ? 2 : 0;
+                    s.acceptedCodeOfConduct = e.value("acceptedCodeOfConduct", 0);
+                    out.push_back(std::move(s));
+                }
         return out;
     }
     // First run: the game's list (uncompressed NBT: servers = [{name, ip, icon, hidden}]).
@@ -172,6 +180,8 @@ std::vector<ServerEntry> loadServers(const fs::path& json, const fs::path& dat) 
                 if (const NbtValue* v = e.find("name")) s.name = v->s;
                 if (const NbtValue* v = e.find("ip")) s.ip = v->s;
                 if (const NbtValue* v = e.find("icon")) s.icon = v->s;
+                if (const NbtValue* v = e.find("acceptTextures")) s.packStatus = v->i ? 1 : 2;
+                if (const NbtValue* v = e.find("acceptedCodeOfConduct")) s.acceptedCodeOfConduct = i32(v->i);
                 if (!s.ip.empty()) out.push_back(std::move(s));
             }
     LOG("ui: imported %zu servers from %s", out.size(), utf8(dat).c_str());
@@ -185,6 +195,8 @@ void saveServers(const fs::path& json, const std::vector<ServerEntry>& servers) 
     for (const ServerEntry& e : servers) {
         nlohmann::json o{{"name", e.name}, {"ip", e.ip}};
         if (!e.icon.empty()) o["icon"] = e.icon;
+        if (e.packStatus) o["resourcePack"] = e.packStatus == 1 ? "enabled" : "disabled";
+        if (e.acceptedCodeOfConduct) o["acceptedCodeOfConduct"] = e.acceptedCodeOfConduct;
         j["servers"].push_back(std::move(o));
     }
     std::error_code ec;
@@ -463,6 +475,15 @@ void buildEditServer(State& s) {
     f.serverIp.x = x, f.serverIp.y = 106, f.serverIp.w = 200;
     f.serverIp.text.maxLength = 128;
     setFields(s, {&f.serverName, &f.serverIp}, 0);
+    // CycleButton "Server Resource Packs: Prompt / Enabled / Disabled" (ServerData.ServerPackStatus)
+    static const char* const kPackStatus[] = {"manageServer.resourcePack.prompt", "manageServer.resourcePack.enabled",
+                                              "manageServer.resourcePack.disabled"};
+    addButton(s, x, float(H / 4 + 72), 200, Text(), [p] {
+        int& st = p->fe->editPackStatus;  // the enum's order: ENABLED, DISABLED, PROMPT
+        st = st == 1 ? 2 : st == 2 ? 0 : 1;
+    }).labelFn = [p] {
+        return trf(*p, "options.generic_value", {tr(*p, "manageServer.resourcePack"), tr(*p, kPackStatus[p->fe->editPackStatus])});
+    };
     Button& done = addButton(s, x, float(H / 4 + 96 + 18), 200, tr(s, "addServer.add"), [p] { saveEditServer(*p); });
     done.labelFn = [p] { return tr(*p, "addServer.add"); };
     addButton(s, x, float(H / 4 + 120 + 18), 200, tr(s, "gui.cancel"), [p] { openServers(*p); });
@@ -481,7 +502,7 @@ void drawEditServer(State& s, Canvas& c) {
     s.drawText(c, tr(s, "manageServer.enterIp"), x, 94, 0xFFA0A0A0, true);
     // Done needs an address (ManageServerScreen.updateAddButtonStatus).
     for (Button& b : s.buttons)
-        if (b.labelFn) b.active = !f.serverIp.text.value.empty();
+        if (b.labelFn && b.y > float(s.guiH() / 4 + 72)) b.active = !f.serverIp.text.value.empty();
     drawFields(s, c);
     s.drawButtons(c);
 }

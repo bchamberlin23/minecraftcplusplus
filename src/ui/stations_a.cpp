@@ -2,7 +2,7 @@
 // enchanting table (EnchantmentScreen with its book and the galactic enchantment names), registered as StationDefs
 // (modules.h) on the generic container screen.
 #include "entity/entities.h"
-#include "ui/ui_state.h"
+#include "ui/item_ui.h"
 
 #include <cmath>
 
@@ -27,15 +27,18 @@ std::string itemName(UiState& s, const ItemStack& st) {
 }
 const Sprite* sp(UiState& s, std::string_view name) { return s.sprites.sprite(name); }
 
-// ItemCombinerMenu.quickMoveStack: result -> inventory (backwards), inputs -> inventory, inventory -> inputs.
-int combinerQuickMove(int resultSlot, int index, const std::function<bool(int, int, bool)>& moveTo) {
-    const int inv = resultSlot + 1, end = inv + 36;
+// ItemCombinerMenu.quickMoveStack: result -> inventory (backwards), inputs -> inventory, inventory -> inputs when
+// canMoveIntoInputSlots (and nothing else if they are full), else main inventory <-> hotbar.
+int combinerQuickMove(int resultSlot, int index, const std::function<bool(int, int, bool)>& moveTo, bool intoInputs = true) {
+    const int inv = resultSlot + 1, invEnd = inv + 27, end = invEnd + 9;
     if (index == resultSlot) return moveTo(inv, end, true) ? 1 : 0;
     if (index < resultSlot) return moveTo(inv, end, false) ? 1 : 0;
-    if (moveTo(0, resultSlot, false)) return 1;
-    if (index < inv + 27) return moveTo(inv + 27, end, false) ? 1 : 0;
-    return moveTo(inv, inv + 27, false) ? 1 : 0;
+    if (intoInputs && index >= inv && index < end) return moveTo(0, resultSlot, false) ? 1 : 0;
+    if (index >= inv && index < invEnd) return moveTo(invEnd, end, false) ? 1 : 0;
+    if (index >= invEnd && index < end) return moveTo(inv, invEnd, false) ? 1 : 0;
+    return 1;
 }
+bool hasComponent(UiState& s, const ItemStack& st, const char* name) { return s.items.component(st, name).present(); }
 
 // --- anvil -----------------------------------------------------------------------------------------------------
 
@@ -132,11 +135,19 @@ bool anvilInput(UiState& s, const InputEvent& e, Menu& m, const Layout&, float, 
 int anvilQuickMove(UiState&, const Menu&, int index, const ItemStack&, const std::function<bool(int, int, bool)>& moveTo) {
     return combinerQuickMove(2, index, moveTo);
 }
+bool anvilMayPickup(UiState& s, const Menu& m, int slot) {  // AnvilMenu.mayPickup: the level cost (any in creative)
+    return slot != 2 || ((s.creative() || s.xpLevel >= m.data[0]) && m.data[0] > 0);
+}
+void anvilOnTake(UiState&, Menu& m) {  // AnvilMenu.onTake: the item and the addition are used (repair counts: the server)
+    m.slots[0] = ItemStack{};
+    m.slots[1] = ItemStack{};
+    m.data[0] = 0;
+}
 
 const StationRegistrar kAnvil({"anvil"}, [] {
     StationDef d;
     d.layout = anvilLayout, d.opened = anvilOpened, d.drawBg = anvilDrawBg, d.drawFg = anvilDrawFg, d.input = anvilInput;
-    d.resultSlot = 2, d.quickMove = anvilQuickMove;
+    d.resultSlot = 2, d.quickMove = anvilQuickMove, d.mayPickup = anvilMayPickup, d.onTake = anvilOnTake;
     return d;
 }());
 
@@ -151,12 +162,27 @@ void grindDrawBg(UiState& s, Canvas& c, Menu& m, const Layout&, float left, floa
     if ((!m.slots[0].empty() || !m.slots[1].empty()) && m.slots[2].empty())
         blitSprite(c, sp(s, "container/grindstone/error"), left + 92, top + 31, 28, 21);
 }
+// GrindstoneMenu: damageable or enchanted items in; quick moves go into the inputs only while one is empty.
+bool grindMayPlace(UiState& s, const Menu&, int slot, const ItemStack& st) {
+    if (slot > 1) return true;
+    const bool damageable = hasComponent(s, st, "max_damage") && !hasComponent(s, st, "unbreakable") && hasComponent(s, st, "damage");
+    return damageable || !st.enchantList.empty() || !st.storedEnchants.empty();
+}
+int grindQuickMove(UiState&, const Menu& m, int index, const ItemStack&, const std::function<bool(int, int, bool)>& moveTo) {
+    if (index == 2) return moveTo(3, 39, true) ? 1 : 0;
+    if (index == 0 || index == 1) return moveTo(3, 39, false) ? 1 : 0;
+    if (!m.slots[0].empty() && !m.slots[1].empty()) {
+        if (index >= 3 && index < 30) return moveTo(30, 39, false) ? 1 : 0;
+        if (index >= 30 && index < 39) return moveTo(3, 30, false) ? 1 : 0;
+        return 1;
+    }
+    return moveTo(0, 2, false) ? 1 : 0;
+}
 const StationRegistrar kGrindstone({"grindstone"}, [] {
     StationDef d;
     d.layout = grindLayout, d.drawBg = grindDrawBg, d.resultSlot = 2;
-    d.quickMove = [](UiState&, const Menu&, int index, const ItemStack&, const std::function<bool(int, int, bool)>& moveTo) {
-        return combinerQuickMove(2, index, moveTo);
-    };
+    d.mayPlace = grindMayPlace, d.quickMove = grindQuickMove;
+    d.onTake = [](UiState&, Menu& m) { m.slots[0] = m.slots[1] = ItemStack{}; };
     return d;
 }());
 
@@ -238,18 +264,24 @@ void smithingDrawTop(UiState& s, Canvas& c, Menu& m, const Layout&, float left, 
     if (!key.empty()) s.drawTooltip(c, s.font.split(Text(s.res.translate(key)), 115), s.mouseX, s.mouseY);
 }
 
-bool smithingMayPlace(UiState& s, const Menu&, int slot, const ItemStack& st) {
-    const std::string n = itemName(s, st);
-    if (slot == 0) return isTemplate(n);
-    return true;
+// SmithingMenu: the server's recipe property sets for the template, base and addition slots.
+const char* const kSmithingSets[3] = {"minecraft:smithing_template", "minecraft:smithing_base", "minecraft:smithing_addition"};
+bool smithingMayPlace(UiState&, const Menu&, int slot, const ItemStack& st) {
+    return slot > 2 || inPropertySet(kSmithingSets[slot], st.item);
 }
 
 const StationRegistrar kSmithing({"smithing"}, [] {
     StationDef d;
     d.layout = smithingLayout, d.opened = smithingOpened, d.drawBg = smithingDrawBg, d.drawTop = smithingDrawTop;
-    d.resultSlot = 3, d.mayPlace = smithingMayPlace;
-    d.quickMove = [](UiState&, const Menu&, int index, const ItemStack&, const std::function<bool(int, int, bool)>& moveTo) {
-        return combinerQuickMove(3, index, moveTo);
+    d.resultSlot = 3, d.mayPlace = smithingMayPlace, d.pickAll = 0;
+    d.quickMove = [](UiState&, const Menu& m, int index, const ItemStack& st, const std::function<bool(int, int, bool)>& moveTo) {
+        bool into = false;  // canMoveIntoInputSlots: a set the stack belongs to, with that slot empty
+        for (int i = 0; i < 3; ++i) into |= inPropertySet(kSmithingSets[i], st.item) && m.slots[size_t(i)].empty();
+        return combinerQuickMove(3, index, moveTo, into);
+    };
+    d.onTake = [](UiState&, Menu& m) {  // shrinkStackInSlot 0, 1, 2
+        for (int i = 0; i < 3; ++i)
+            if (!m.slots[size_t(i)].empty()) m.slots[size_t(i)] = m.slots[size_t(i)].withCount(m.slots[size_t(i)].count - 1);
     };
     return d;
 }());
@@ -583,13 +615,14 @@ bool enchantMayPlace(UiState& s, const Menu&, int slot, const ItemStack& st) {
 int enchantQuickMove(UiState& s, const Menu&, int index, const ItemStack& st, const std::function<bool(int, int, bool)>& moveTo) {
     if (index < 2) return moveTo(2, 38, true) ? 1 : 0;
     if (itemName(s, st) == "lapis_lazuli") return moveTo(1, 2, true) ? 1 : 0;
-    return moveTo(0, 1, false) ? 1 : 0;
+    return moveTo(0, 1, false) ? 1 : 0;  // one item into the empty item slot (it holds 1)
 }
 
 const StationRegistrar kEnchanting({"enchantment"}, [] {
     StationDef d;
     d.layout = enchantLayout, d.opened = enchantOpened, d.drawBg = enchantDrawBg, d.drawTop = enchantDrawTop;
     d.input = enchantInput, d.mayPlace = enchantMayPlace, d.quickMove = enchantQuickMove;
+    d.slotMax = [](UiState&, const Menu&, int slot, const ItemStack&) { return slot == 0 ? 1 : 0; };
     return d;
 }());
 

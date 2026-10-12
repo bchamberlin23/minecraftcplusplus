@@ -139,6 +139,7 @@ struct FrameConstants {
     float atlas[4];
     float screen[4];
     u32 misc[4];
+    float fade[4];  // adapter.hlsli mcppFade
 };
 
 // Iris render stages per role.
@@ -1537,6 +1538,7 @@ struct Renderer::Packs::Frame {
             fc.screen[3] = 1.0f / float(p.height);
             fc.misc[0] = p.layerTableSize;
             std::memcpy(&fc.misc[1], p.jitter, 8);  // adapter.hlsli mcppClip: gbuffers jitter (upscaling)
+            std::memcpy(fc.fade, in.fade, sizeof(fc.fade));
             u8* dst;
             p.frameCb = uploadAlloc(sizeof(fc), &dst);
             std::memcpy(dst, &fc, sizeof(fc));

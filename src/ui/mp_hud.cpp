@@ -59,7 +59,8 @@ struct Score {
 struct Team {
     Text displayName;
     Text prefix, suffix;
-    int color = -1;  // TeamColor id (0..15), -1 none
+    int color = -1;      // TeamColor id (0..15), -1 none
+    int collision = 0;   // Team.CollisionRule: 0 always, 1 never, 2 push other teams, 3 push own team
 };
 
 // --- boss bars --------------------------------------------------------------------------------------------------
@@ -94,6 +95,17 @@ struct MpState {
 MpState g;
 
 void reset() { g = MpState{}; }
+
+}  // namespace
+
+int teamCollisionRule(const std::string& member) {
+    auto it = g.playerTeam.find(member);
+    if (it == g.playerTeam.end()) return 0;
+    auto t = g.teams.find(it->second);
+    return t == g.teams.end() ? 0 : t->second.collision;
+}
+
+namespace {
 
 const Team* teamOf(const std::string& member) {
     auto it = g.playerTeam.find(member);
@@ -345,7 +357,8 @@ void registerHandlers(UiState& s, net::Client& client) {
             t.displayName = parseComponent(r.nbt(), lang);
             t.prefix = parseComponent(r.nbt(), lang);
             t.suffix = parseComponent(r.nbt(), lang);
-            r.varInt(), r.varInt();  // name tag visibility, collision rule
+            r.varInt();  // name tag visibility
+            t.collision = r.varInt();
             if (r.boolean()) t.color = r.varInt();
             r.u8v();  // options
         }
