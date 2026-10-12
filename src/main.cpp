@@ -257,6 +257,20 @@ int wmain(int argc, wchar_t** argv) {
             else if (a == L"--create-difficulty") opt.create->difficulty = s;
             else if (a == L"--create-cheats") opt.create->cheats = v == L"1";
             else if (a == L"--create-structures") opt.create->structures = v != L"0";
+            else if (a == L"--create-type") opt.create->levelType = s;          // ui/world_create.cpp
+            else if (a == L"--create-generator") opt.create->generatorSettings = s;
+            else if (a == L"--create-biome") opt.create->singleBiome = s;
+            else if (a == L"--create-bonus") opt.create->bonusChest = v == L"1";
+            else if (a == L"--create-gamerule" && s.find('=') != std::string::npos)
+                opt.create->gameRules.emplace_back(s.substr(0, s.find('=')), s.substr(s.find('=') + 1));
+            else if (a == L"--create-packs" || a == L"--create-disabled-packs") {
+                auto& list = a == L"--create-packs" ? opt.create->enabledPacks : opt.create->disabledPacks;
+                for (size_t i = 0; i <= s.size();) {
+                    const size_t comma = std::min(s.find(',', i), s.size());
+                    if (comma > i) list.push_back(s.substr(i, comma - i));
+                    i = comma + 1;
+                }
+            }
         } else {
             usage();
             return 1;

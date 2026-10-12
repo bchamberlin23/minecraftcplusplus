@@ -13,11 +13,9 @@
 
 namespace ui {
 
-namespace {
-
 constexpr int kHeader = 49, kFooter = 60, kRowH = 36, kRowW = 270;
 
-bool readNbtGz(const fs::path& p, NbtValue& root, std::string* rootName = nullptr) {
+bool readNbtGz(const fs::path& p, NbtValue& root, std::string* rootName) {
     std::vector<u8> gz;
     if (!readFile(p, gz) || gz.size() < 18) return false;
     libdeflate_decompressor* d = libdeflate_alloc_decompressor();
@@ -52,6 +50,8 @@ bool writeNbtGz(const fs::path& p, const NbtValue& root, std::string_view rootNa
     return !ec;
 }
 
+namespace {
+
 // WorldSelectionList.DATE_FORMAT: the short localized date and time.
 std::string formatDate(i64 ms) {
     ULARGE_INTEGER u;
@@ -76,8 +76,6 @@ std::string trim(std::string s) {
     return s;
 }
 
-const char* kModes[] = {"survival", "hardcore", "creative"};
-const char* kDifficulties[] = {"peaceful", "easy", "normal", "hard"};
 
 WorldEntry* selected(State& s) {
     FrontEndState& f = *s.fe;
@@ -113,22 +111,6 @@ void playWorld(State& s, bool play) {
     if (!w || w->locked) return;
     s.fe->failTitle = Text("Could not open the world");
     startChild(s, worldArgs(*w, play), Text((play ? "Loading \"" : "Viewing \"") + w->name + "\""), Screen::Worlds, false);
-}
-
-void createWorld(State& s) {
-    FrontEndState& f = *s.fe;
-    std::string name = trim(f.createName.text.value);
-    if (name.empty()) name = s.res.translate("selectWorld.newWorld");
-    const std::string folder = worldFolderFor(f.cfg.savesDir, name);
-    std::vector<std::wstring> a = launch::stickyArguments();
-    a.insert(a.end(), {L"--play", L"--world", (f.cfg.savesDir / widen(folder)).wstring(), L"--create-name", widen(name),
-                       L"--create-seed", widen(trim(f.createSeed.text.value)), L"--create-mode", widen(kModes[f.createMode]),
-                       L"--create-difficulty", widen(kDifficulties[f.createMode == 1 ? 3 : f.createDifficulty]),
-                       L"--create-cheats", f.createCheats && f.createMode != 1 ? L"1" : L"0", L"--create-structures",
-                       f.createStructures ? L"1" : L"0"});
-    LOG("ui: creating world \"%s\" in %s", name.c_str(), folder.c_str());
-    f.failTitle = Text("Could not create the world");
-    startChild(s, a, Text("Creating \"" + name + "\""), Screen::Worlds, false);
 }
 
 void openEditWorld(State& s) {
@@ -413,81 +395,6 @@ void worldsInput(State& s, const Window::InputEvent& e) {
         return;
     }
     s.buttonsInput(e);
-}
-
-// --- create world (CreateWorldScreen, one page) -------------------------------------------------------------------
-
-void openCreateWorld(State& s) {
-    FrontEndState& f = *s.fe;
-    f.createName.text = TextField{};
-    f.createName.text.value = s.res.translate("selectWorld.newWorld");
-    f.createName.text.cursor = f.createName.text.selection = int(f.createName.text.value.size());
-    f.createName.text.maxLength = 32;
-    f.createSeed.text = TextField{};
-    f.createSeed.text.maxLength = 32;
-    f.createSeed.hint = s.res.translate("selectWorld.seedInfo");
-    f.createMode = 0, f.createDifficulty = 2, f.createCheats = false, f.createStructures = true;
-    s.openScreen(Screen::CreateWorld);
-}
-
-void buildCreateWorld(State& s) {
-    FrontEndState& f = *s.fe;
-    const int W = s.guiW(), H = s.guiH();
-    State* p = &s;
-    const float x = float(W / 2 - 100);
-    f.createName.x = x, f.createName.y = 39, f.createName.w = 200;
-    f.createSeed.x = x, f.createSeed.y = 157, f.createSeed.w = 200;
-    setFields(s, {&f.createName, &f.createSeed}, 0);
-    Button& mode = addButton(s, x, 76, 200, Text(), [p] {
-        FrontEndState& fe = *p->fe;
-        fe.createMode = (fe.createMode + 1) % 3;
-        fe.createCheats = fe.createMode == 2;  // creative worlds start with commands on, like the game's default
-        p->buildButtons();
-    });
-    mode.labelFn = [p] {
-        return trf(*p, "options.generic_value",
-                   {tr(*p, "selectWorld.gameMode"), Text(p->res.translate(std::string("selectWorld.gameMode.") + kModes[p->fe->createMode]))});
-    };
-    const bool hardcore = f.createMode == 1;
-    Button& diff = addButton(s, x, 120, 98, Text(), [p] { p->fe->createDifficulty = (p->fe->createDifficulty + 1) % 4; }, !hardcore);
-    diff.labelFn = [p] {
-        const int d = p->fe->createMode == 1 ? 3 : p->fe->createDifficulty;
-        return trf(*p, "options.generic_value",
-                   {tr(*p, "options.difficulty"), Text(p->res.translate(std::string("options.difficulty.") + kDifficulties[d]))});
-    };
-    Button& cheats = addButton(s, x + 102, 120, 98, Text(), [p] { p->fe->createCheats = !p->fe->createCheats; }, !hardcore);
-    cheats.labelFn = [p] {
-        const bool on = p->fe->createCheats && p->fe->createMode != 1;
-        return trf(*p, "options.generic_value", {Text("Commands"), tr(*p, on ? "options.on" : "options.off")});
-    };
-    Button& structures = addButton(s, x, 182, 200, Text(), [p] { p->fe->createStructures = !p->fe->createStructures; });
-    structures.labelFn = [p] {
-        return trf(*p, "options.generic_value",
-                   {tr(*p, "selectWorld.mapFeatures"), tr(*p, p->fe->createStructures ? "options.on" : "options.off")});
-    };
-    addButton(s, float(W / 2 - 155), float(H - 28), 150, tr(s, "selectWorld.create"), [p] { createWorld(*p); });
-    addButton(s, float(W / 2 + 5), float(H - 28), 150, tr(s, "gui.cancel"), [p] { openWorlds(*p); });
-    f.onBack = [p] { openWorlds(*p); };
-    f.onEnter = [p] { createWorld(*p); };
-}
-
-void drawCreateWorld(State& s, Canvas& c) {
-    FrontEndState& f = *s.fe;
-    const int W = c.guiWidth();
-    const float x = float(W / 2 - 100);
-    menuBackground(s, c);
-    s.drawCentered(c, tr(s, "selectWorld.create"), float(W / 2), 12, 0xFFFFFFFF);
-    s.drawText(c, tr(s, "selectWorld.enterName"), x, 28, 0xFFA0A0A0, true);
-    std::string name = trim(f.createName.text.value);
-    if (name.empty()) name = s.res.translate("selectWorld.newWorld");
-    s.drawText(c, Text(fitText(s.font, s.res.translate("selectWorld.resultFolder") + " " + worldFolderFor(f.cfg.savesDir, name), 200)),
-               x, 62, 0xFFA0A0A0, true);
-    const std::string mode = std::string("selectWorld.gameMode.") + kModes[f.createMode];
-    s.drawText(c, Text(s.res.translate(mode + ".line1")), x, 99, 0xFFA0A0A0, true);
-    s.drawText(c, Text(s.res.translate(mode + ".line2")), x, 108, 0xFFA0A0A0, true);
-    s.drawText(c, tr(s, "selectWorld.enterSeed"), x, 146, 0xFFA0A0A0, true);
-    drawFields(s, c);
-    s.drawButtons(c);
 }
 
 // --- edit world (EditWorldScreen: rename, open folder) ------------------------------------------------------------

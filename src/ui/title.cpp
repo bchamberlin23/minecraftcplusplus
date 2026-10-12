@@ -455,6 +455,7 @@ void frontEndInit(State& s) {
     if (f.cfg.openScreen == "worlds") openWorlds(s);
     else if (f.cfg.openScreen == "servers") openServers(s);
     else if (f.cfg.openScreen == "friends") openFriendsScreen(s);
+    else if (f.cfg.openScreen == "create") openWorlds(s), openCreateWorld(s);  // world_create.cpp (tests)
     else friendsMenuCommand(s, f.cfg.openScreen);  // friend-join:<code> (friends_screen.cpp)
 }
 
@@ -552,6 +553,7 @@ void Ui::State::frontEndInput(const Window::InputEvent& e) {
     }
     if (screen == Screen::Worlds) return worldsInput(*this, e);
     if (screen == Screen::Servers) return serversInput(*this, e);
+    if (screen == Screen::CreateWorld) return createWorldInput(*this, e);
     if (fieldsInput(*this, e)) return;
     buttonsInput(e);
 }

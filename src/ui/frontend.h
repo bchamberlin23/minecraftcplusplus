@@ -4,6 +4,7 @@
 #include "net/status.h"
 #include "platform/launch.h"
 #include "ui/ui_state.h"
+#include "world/nbt_dom.h"
 
 #include <memory>
 #include <unordered_map>
@@ -27,6 +28,9 @@ bool readWorld(const fs::path& dir, WorldEntry& out);       // level.dat summary
 std::vector<WorldEntry> scanWorlds(const fs::path& saves);  // most recently played first
 bool worldLocked(const fs::path& dir);                      // session.lock held by a running game / server
 std::string worldFolderFor(const fs::path& saves, const std::string& name);  // FileUtil.findAvailableName
+// Gzipped NBT files of a save (level.dat...); writing keeps the old file as <name>_old like the game.
+bool readNbtGz(const fs::path& p, NbtValue& root, std::string* rootName = nullptr);
+bool writeNbtGz(const fs::path& p, const NbtValue& root, std::string_view rootName);
 
 // --- servers.cpp --------------------------------------------------------------------------------------------------
 
@@ -156,7 +160,9 @@ void worldsInput(State& s, const Window::InputEvent& e);
 void openWorlds(State& s);  // rescans the saves
 void buildCreateWorld(State& s);
 void drawCreateWorld(State& s, Canvas& c);
-void openCreateWorld(State& s);
+void openCreateWorld(State& s);                         // world_create.cpp (tabs, Superflat, Single Biome, rules...)
+void createWorldInput(State& s, const Window::InputEvent& e);
+bool recreateWorld(State& s, const fs::path& dir);      // Re-Create: Create New World filled in from a world
 void buildEditWorld(State& s);
 void drawEditWorld(State& s, Canvas& c);
 void buildServers(State& s);
