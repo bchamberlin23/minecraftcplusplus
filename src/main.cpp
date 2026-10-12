@@ -108,8 +108,7 @@ void usage() {
         "                          [--connect <host[:port]> [--name <player>] [--transfer <file>]] [--play [--lan]]\n"
         "                          [--seconds <n>] [--mods-dir <dir>]\n"
         "                          [--shaders off|low|medium|high|ultra|pathtraced (default high)] [--render-scale <0.33..1>]\n"
-        "                          [--path-tracing low|medium|high|ultra (default high)]
-"
+        "                          [--path-tracing low|medium|high|ultra (default high)]\n"
         "                          [--upscaler taa|dlss|fsr|xess] [--upscale-quality native|ultraqualityplus|ultraquality|quality|\n"
         "                           balanced|performance|ultraperformance] [--sharpness 0..1]\n"
         "                          [--framegen off|dlss|dlss2x|dlss3x|dlss4x|fsr|xess] [--low-latency off|on|boost] [--fps-limit <n>]\n"
