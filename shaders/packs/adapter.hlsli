@@ -16,7 +16,19 @@ cbuffer McppFrame : register(b2) {
     float4 mcppAtlas;      // xy = one tile in atlas UV, z = tiles per row, w = 1 when gl_Color carries AO in alpha
     float4 mcppScreen;     // xy = viewport size, zw = 1 / size
     uint4 mcppMisc;        // x = layer table size, yz = gbuffers jitter (asfloat, GL NDC)
+    float4 mcppFade;       // the renderer's section cross-fade: x = clock (s), y = 1 / duration, z = frame index
 };
+
+// Sections entering / leaving the LOD cut cross-fade with complementary dither (common.hlsli fadedOut; packs
+// accumulate temporally, so the noise moves every frame).
+bool mcppFadedOut(float2 pixel, float fade) {
+    if (fade == 0 || mcppFade.y == 0) return false;
+    float t = saturate((mcppFade.x - abs(fade)) * mcppFade.y);
+    uint h = uint(pixel.x) * 1973u + uint(pixel.y) * 9277u + uint(mcppFade.z) * 26699u;
+    h = (h ^ 61u) ^ (h >> 16), h *= 9u, h ^= h >> 4, h *= 0x27d4eb2du, h ^= h >> 15;
+    float d = float(h & 0xFFFFFFu) / 16777216.0;
+    return fade > 0 ? d >= t : d < t;
+}
 struct McppDrawConstants {
     uint quadOffset;
     uint sectionIndex;
@@ -35,6 +47,7 @@ struct McppVertex {
     float4 tangent;    // at_tangent
     float4 midBlock;   // at_midBlock (xyz: block centre - vertex, 1/64 block units; w = light emission)
     float4 tile;       // atlas tile for coordinate wrapping in the fragment shader (z = 0: no wrapping)
+    float fade;        // the section's cross-fade (mcppFadedOut), 0 none
     uint vertexId;
 };
 
@@ -51,6 +64,7 @@ McppVertex mcppDefaultVertex() {
     v.tangent = float4(1, 0, 0, 1);
     v.midBlock = 0;
     v.tile = 0;
+    v.fade = 0;
     v.vertexId = 0;
     return v;
 }
@@ -121,6 +135,7 @@ McppVertex mcppPull(uint vid) {
     uint face = (q.x >> 20) & 7;
     if (((0x19u >> face) & 1u) != 0 && (corner == 1 || corner == 2)) corner ^= 3;
     int4 origin = mcppSections[mcppDraw.sectionIndex].origin;
+    v.fade = mcppSections[mcppDraw.sectionIndex].fade;
     float3 p, p1, p2;
     float2 st, st1, st2;
     mcppCubeCorner(q, corner, origin.w, p, st);
@@ -189,6 +204,7 @@ McppVertex mcppPull(uint vid) {
     float2 uv1 = float2(mcppRead16(base, 12 + c1 * 2), mcppRead16(base, 13 + c1 * 2)) / 65535.0;
     float2 uv2 = float2(mcppRead16(base, 12 + c2 * 2), mcppRead16(base, 13 + c2 * 2)) / 65535.0;
     int3 origin = mcppSections[mcppDraw.sectionIndex].origin.xyz;
+    v.fade = mcppSections[mcppDraw.sectionIndex].fade;
     float3 rel = float3(origin - mcppCamBlock.xyz) - mcppCamFrac.xyz + p;
     v.vertex = float4(rel, 1);
     // Corners are in "Z" order (0,1,2 / 2,1,3) with the renderer's front-facing winding, for which the outward normal

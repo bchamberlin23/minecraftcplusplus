@@ -1119,7 +1119,8 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
         list_->RSSetScissorRects(1, &scissor);
     } else if (packActive) {
         // The pack renders the frame (final -> back buffer); overlays and the Hud stage then draw onto it.
-        packs_->record(list_.Get(), {&cam, viewDistance, activeVa, activeCount, haveWorld, fi}, pc, bb, rtv);
+        packs_->record(list_.Get(), {&cam, viewDistance, activeVa, activeCount, haveWorld, fi, {fc.fade[0], fc.fade[1], fc.fade[2], 1.0f}},
+                       pc, bb, rtv);
         list_->SetDescriptorHeaps(1, heaps);
         list_->SetGraphicsRootSignature(rootSig_.Get());
         list_->SetGraphicsRootConstantBufferView(1, cb);
