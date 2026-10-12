@@ -1,7 +1,9 @@
-// Toasts (ToastManager + SystemToast): queued, at most as many as fit in five 32-pixel slots at once.
+// Toasts (ToastManager + SystemToast, AdvancementToast, TutorialToast): queued, at most as many as fit in five
+// 32-pixel slots at once.
 #include "ui/toasts.h"
 
 #include "audio/audio.h"
+#include "ui/items.h"
 #include "ui/modules.h"
 #include "ui/ui_state.h"
 
@@ -11,22 +13,91 @@ namespace ui {
 
 namespace {
 
-constexpr double kDisplay = 5.0, kSlide = 0.6;  // SystemToast display time, ToastInstance slide animation
+constexpr double kDisplay = 5.0, kSlide = 0.6;  // display time, ToastInstance slide animation
 constexpr int kSlots = 5;
 
+enum class Kind { System, Advancement, Tutorial };
+
 struct Toast {
+    Kind kind = Kind::System;
     Text title, message;
-    double shownAt = -1;  // clock when it started sliding in (-1: queued)
+    int type = 0;           // advancement type
+    ItemStack icon;         // advancement icon
+    std::string sprite;     // tutorial icon sprite
+    bool progressable = false;
+    float progress = 0, smoothed = 0;
+    int handle = 0;
+    bool hideRequested = false;
+    double shownAt = -1;    // clock when it started sliding in (-1: queued)
     int slot = 0, slots = 1;
-    bool hiding = false, soundOut = false;
+    bool hiding = false;
     double hideAt = 0;
 };
 
 std::deque<Toast> g_queue;
 std::vector<Toast> g_visible;
+int g_nextHandle = 1;
 
 void play(const char* event) {
     if (audio::AudioSystem* a = audio::instance()) a->playUi(event, 1.0f, 1.0f);
+}
+
+u32 alpha(u32 rgb, float a) { return (u32(std::clamp(a, 0.0f, 1.0f) * 255.0f) << 24) | (rgb & 0xFFFFFF); }
+
+// Fully visible for this long (the timers of AdvancementToast / SystemToast count from the end of the slide).
+double visibleFor(const Toast& t, double now) { return std::max(0.0, now - t.shownAt - kSlide); }
+
+void drawSystem(UiState& s, Canvas& c, const Toast& t, float x, float y, int width) {
+    blitSprite(c, s.sprites.sprite("toast/system"), x, y, float(width), 32);
+    if (t.message.empty()) {
+        s.drawText(c, t.title, x + 18, y + 12, 0xFFFFFF00, false);
+    } else {
+        s.drawText(c, t.title, x + 18, y + 7, 0xFFFFFF00, false);
+        s.drawText(c, t.message, x + 18, y + 18, 0xFFFFFFFF, false);
+    }
+}
+
+// AdvancementToast.extractRenderState
+void drawAdvancement(UiState& s, Canvas& c, const Toast& t, float x, float y, double now) {
+    blitSprite(c, s.sprites.sprite("toast/advancement"), x, y, 160, 32);
+    const std::vector<Text> lines = s.font.split(t.title, 125);
+    const u32 titleColor = t.type == 1 ? 0xFF88FF : 0xFFFF00;
+    const char* key = t.type == 1 ? "advancements.toast.challenge" : t.type == 2 ? "advancements.toast.goal" : "advancements.toast.task";
+    const Text label(s.res.translate(key));
+    if (lines.size() == 1) {
+        s.drawText(c, label, x + 30, y + 7, 0xFF000000 | titleColor, false);
+        s.drawText(c, lines[0], x + 30, y + 18, 0xFFFFFFFF, false);
+    } else {
+        const double ms = visibleFor(t, now) * 1000.0;
+        if (ms < 1500.0) {
+            s.drawText(c, label, x + 30, y + 11, alpha(titleColor, float((1500.0 - ms) / 300.0)), false);
+        } else {
+            const float a = float((ms - 1500.0) / 300.0) * 252.0f / 255.0f;
+            float ly = y + 16 - float(lines.size()) * 9 / 2;
+            for (const Text& l : lines) s.drawText(c, l, x + 30, ly, alpha(0xFFFFFF, a), false), ly += 9;
+        }
+    }
+    s.drawItem(c, t.icon, x + 8, y + 8, false);
+}
+
+// TutorialToast.extractRenderState
+void drawTutorial(UiState& s, Canvas& c, Toast& t, float x, float y) {
+    blitSprite(c, s.sprites.sprite("toast/tutorial"), x, y, 160, 32);
+    blitSprite(c, s.sprites.sprite("toast/" + t.sprite), x + 6, y + 6, 20, 20);
+    std::vector<Text> lines = s.font.split(t.title, 126);
+    for (const Text& l : s.font.split(t.message, 126)) lines.push_back(l);
+    if (lines.size() == 1) {
+        s.drawText(c, lines[0], x + 30, y + 12, 0xFF500050, false);
+    } else {
+        s.drawText(c, lines[0], x + 30, y + 7, 0xFF500050, false);
+        for (size_t i = 1; i < lines.size() && i < 3; ++i) s.drawText(c, lines[i], x + 30, y + 7 + 11 * float(i), 0xFF000000, false);
+    }
+    if (t.progressable) {  // the bar: smoothed towards the progress
+        c.fill(x + 3, y + 28, x + 157, y + 29, 0xFFFFFFFF);
+        t.smoothed += (t.progress - t.smoothed) * 0.1f;  // Mth.lerp(0.1 * partial, ...), about per frame
+        const u32 col = t.progress >= t.smoothed ? 0xFF005500 : 0xFF550000;
+        c.fill(x + 3, y + 28, x + 3 + 154 * std::clamp(t.smoothed, 0.0f, 1.0f), y + 29, col);
+    }
 }
 
 void drawToasts(UiState& s, Canvas& c) {
@@ -36,38 +107,35 @@ void drawToasts(UiState& s, Canvas& c) {
         bool used[kSlots] = {};
         for (const Toast& t : g_visible)
             for (int i = t.slot; i < t.slot + t.slots && i < kSlots; ++i) used[i] = true;
-        Toast& next = g_queue.front();
-        const int need = 1;  // 32 pixels: a title and one message line
         int at = -1;
-        for (int i = 0; i + need <= kSlots && at < 0; ++i) {
-            bool free = true;
-            for (int k = i; k < i + need; ++k) free = free && !used[k];
-            if (free) at = i;
-        }
+        for (int i = 0; i < kSlots && at < 0; ++i)
+            if (!used[i]) at = i;
         if (at < 0) break;
-        next.slot = at, next.slots = need, next.shownAt = now;
-        g_visible.push_back(std::move(next));
+        Toast next = std::move(g_queue.front());
         g_queue.pop_front();
+        next.slot = at, next.slots = 1, next.shownAt = now;
+        if (next.kind == Kind::Advancement && next.type == 1) play("ui.toast.challenge_complete");
         play("ui.toast.in");
+        g_visible.push_back(std::move(next));
     }
     const int W = c.guiWidth();
     for (Toast& t : g_visible) {
-        if (!t.hiding && now - t.shownAt >= kSlide + kDisplay) {
+        const bool done = t.kind == Kind::Tutorial ? t.hideRequested : visibleFor(t, now) >= kDisplay;
+        if (!t.hiding && done) {
             t.hiding = true, t.hideAt = now;
             play("ui.toast.out");
         }
         float f = float(std::clamp((now - (t.hiding ? t.hideAt : t.shownAt)) / kSlide, 0.0, 1.0));
         f *= f;
         const float visible = t.hiding ? 1.0f - f : f;
-        const int width = std::max(160, 30 + std::max(s.font.width(t.title), t.message.empty() ? 0 : s.font.width(t.message)));
-        const int height = 32;
+        const int width = t.kind == Kind::System
+                              ? std::max(160, 30 + std::max(s.font.width(t.title), t.message.empty() ? 0 : s.font.width(t.message)))
+                              : 160;
         const float x = float(W) - float(width) * visible, y = float(t.slot * 32);
-        blitSprite(c, s.sprites.sprite("toast/system"), x, y, float(width), float(height));
-        if (t.message.empty()) {
-            s.drawText(c, t.title, x + 18, y + 12, 0xFFFFFF00, false);
-        } else {
-            s.drawText(c, t.title, x + 18, y + 7, 0xFFFFFF00, false);
-            s.drawText(c, t.message, x + 18, y + 18, 0xFFFFFFFF, false);
+        switch (t.kind) {
+            case Kind::System: drawSystem(s, c, t, x, y, width); break;
+            case Kind::Advancement: drawAdvancement(s, c, t, x, y, now); break;
+            case Kind::Tutorial: drawTutorial(s, c, t, x, y); break;
         }
     }
     std::erase_if(g_visible, [&](const Toast& t) { return t.hiding && now - t.hideAt >= kSlide; });
@@ -75,16 +143,47 @@ void drawToasts(UiState& s, Canvas& c) {
 
 const UiModuleRegistrar g_module({.name = "toasts", .drawTop = drawToasts});
 
+Toast* byHandle(int handle) {
+    for (Toast& t : g_visible)
+        if (t.handle == handle) return &t;
+    for (Toast& t : g_queue)
+        if (t.handle == handle) return &t;
+    return nullptr;
+}
+
 }  // namespace
 
 void showToast(const Text& title, const Text& message) {
     // The same toast twice in a row (a friend flickering online) is shown once.
     for (const Toast& t : g_queue)
-        if (t.title.plain() == title.plain() && t.message.plain() == message.plain()) return;
+        if (t.kind == Kind::System && t.title.plain() == title.plain() && t.message.plain() == message.plain()) return;
     if (g_queue.size() >= 16) return;
     Toast t;
     t.title = title, t.message = message;
     g_queue.push_back(std::move(t));
+}
+
+void showAdvancementToast(const Text& title, int type, const ItemStack& icon) {
+    Toast t;
+    t.kind = Kind::Advancement, t.title = title, t.type = type, t.icon = icon;
+    g_queue.push_back(std::move(t));
+}
+
+int showTutorialToast(const std::string& icon, const Text& title, const Text& message, bool progressable) {
+    Toast t;
+    t.kind = Kind::Tutorial, t.sprite = icon, t.title = title, t.message = message, t.progressable = progressable;
+    t.handle = g_nextHandle++;
+    g_queue.push_back(t);
+    return t.handle;
+}
+
+void setTutorialToastProgress(int handle, float progress) {
+    if (Toast* t = byHandle(handle)) t->progress = progress;
+}
+
+void hideTutorialToast(int handle) {
+    if (Toast* t = byHandle(handle)) t->hideRequested = true;
+    std::erase_if(g_queue, [&](const Toast& t) { return t.handle == handle; });  // never shown: just dropped
 }
 
 }  // namespace ui
