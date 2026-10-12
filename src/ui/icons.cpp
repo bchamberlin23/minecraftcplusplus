@@ -141,7 +141,7 @@ struct ItemIcons::Impl {
         Tex& t = texCache[key];
         Image img;
         const std::string path = resPath(key, "textures", ".png");
-        if (res->image(path, img) && img.w > 0) {
+        if (atlasTextureImage(*res, key, img) && img.w > 0) {
             if (res->exists(path + ".mcmeta") && Sprites::parseAnimation(img, res->json(path + ".mcmeta"), t.anim)) {
                 t.animated = touchedAnimated = true;
                 t.w = t.anim.fw, t.h = t.anim.fh;

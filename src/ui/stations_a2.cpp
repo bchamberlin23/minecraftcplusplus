@@ -4,6 +4,7 @@
 #include "audio/audio.h"
 #include "ui/ui_state.h"
 
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <unordered_map>
@@ -51,6 +52,7 @@ struct MapImage {
     int ax = -1, ay = -1;  // GUI atlas region
     bool dirty = true;
     u32 version = 0;  // updates (mapColors: maps in item frames)
+    std::vector<MapDecor> decorations;
 };
 std::unordered_map<int, MapImage> g_maps;
 
@@ -119,11 +121,16 @@ void registerHandlers(UiState& s, net::Client& client) {
         const int id = r.varInt();
         const int scale = r.u8v();
         const bool locked = r.boolean();
-        if (r.boolean()) {  // decorations: type, x, y, rotation, optional name
+        const bool hasDecorations = r.boolean();
+        std::vector<MapDecor> decorations;
+        if (hasDecorations) {  // MapDecoration: type, x, y (signed bytes), rotation (& 15), optional name
             const i32 n = r.varInt();
             for (i32 i = 0; i < n && r.ok; ++i) {
-                r.varInt(), r.u8v(), r.u8v(), r.u8v();
-                if (r.boolean()) r.nbt();
+                MapDecor d;
+                d.type = r.varInt();
+                d.x = i8(r.u8v()), d.y = i8(r.u8v()), d.rot = r.u8v() & 15;
+                if (r.boolean()) d.name = std::string(r.nbt());
+                decorations.push_back(std::move(d));
             }
         }
         int w = r.u8v(), h = 0, x = 0, y = 0;
@@ -133,9 +140,10 @@ void registerHandlers(UiState& s, net::Client& client) {
             colors = std::string(r.byteArray());
         }
         if (!r.ok) return;
-        sp->post([id, scale, locked, w, h, x, y, colors = std::move(colors)] {
+        sp->post([id, scale, locked, w, h, x, y, colors = std::move(colors), hasDecorations, decorations = std::move(decorations)] {
             MapImage& m = g_maps[id];
             m.scale = scale, m.locked = locked;
+            if (hasDecorations) m.decorations = decorations;  // ClientboundMapItemDataPacket.applyToMap
             for (int j = 0; j < h; ++j)
                 for (int i = 0; i < w; ++i)
                     if (size_t(i + j * w) < colors.size() && x + i < 128 && y + j < 128)
@@ -561,7 +569,11 @@ int mapIdOf(UiState& s, const ItemStack& st) {
     return r.ok ? id : -1;
 }
 
-// MapRenderer: the map's 128 x 128 colours scaled into place (decorations are not drawn).
+// Map decoration sprites in the GUI atlas, by sprite path.
+std::unordered_map<std::string, std::array<int, 4>> g_decorSprites;  // x, y, w, h (w < 0: missing)
+
+// GuiGraphicsExtractor.map: the map's 128 x 128 colours scaled into place, then the decorations item frames show
+// (sprites turned by their rotation, v flipped like the game's blit) and their names on a dark background.
 void drawMap(UiState& s, Canvas& c, int id, float x, float y, float scale) {
     auto it = g_maps.find(id);
     if (it == g_maps.end()) return;
@@ -579,6 +591,45 @@ void drawMap(UiState& s, Canvas& c, int id, float x, float y, float scale) {
     const float W = float(s.guiAtlas.width()), H = float(s.guiAtlas.height());
     c.quad(x, y, x + 128 * scale, y + 128 * scale, float(m.ax) / W, float(m.ay) / H, float(m.ax + 128) / W, float(m.ay + 128) / H,
            0xFFFFFFFF, ModeGui);
+    c.push();
+    c.translate(x, y);
+    c.scaleBy(scale);
+    for (const MapDecor& d : m.decorations) {
+        bool onFrame = false;
+        const char* sprite = mapDecorationSprite(d.type, &onFrame);
+        if (!sprite || !onFrame) continue;
+        auto [it, fresh] = g_decorSprites.try_emplace(sprite, std::array<int, 4>{0, 0, -1, 0});
+        if (fresh) {
+            Image img;
+            int ax, ay;
+            if (s.res.image(std::string("assets/minecraft/textures/") + sprite + ".png", img) && img.w > 0 &&
+                s.guiAtlas.alloc(img.w, img.h, ax, ay)) {
+                s.guiAtlas.blit(ax, ay, img.w, img.h, img.rgba.data(), img.w * 4);
+                it->second = {ax, ay, img.w, img.h};
+            }
+        }
+        const auto& a = it->second;
+        c.push();
+        c.translate(float(d.x) / 2.0f + 64.0f, float(d.y) / 2.0f + 64.0f);
+        c.rotate(float(d.rot) * 22.5f * 3.14159265f / 180.0f);
+        c.scaleBy(4.0f);
+        c.translate(-0.125f, 0.125f);
+        if (a[2] > 0)
+            c.quad(-1, -1, 1, 1, float(a[0]) / W, float(a[1] + a[3]) / H, float(a[0] + a[2]) / W, float(a[1]) / H, 0xFFFFFFFF, ModeGui);
+        c.pop();
+        if (!d.name.empty()) {
+            const Text name = parseComponent(d.name, s.lang());
+            const float width = s.font.widthF(name);
+            const float sc = std::clamp(25.0f / width, 0.0f, 6.0f / 9.0f);
+            c.push();
+            c.translate(float(d.x) / 2.0f + 64.0f - width * sc / 2.0f, float(d.y) / 2.0f + 64.0f + 4.0f);
+            c.scaleBy(sc);
+            c.fill(-1, -1, width, 9, 0x80000000);  // the text's background (Integer.MIN_VALUE)
+            s.drawText(c, name, 0, 0, 0xFFFFFFFF, false);
+            c.pop();
+        }
+    }
+    c.pop();
 }
 
 void cartoLayout(const Menu&, Layout& l) {
@@ -663,5 +714,33 @@ const std::vector<u8>* mapColors(int id, u32& version) {
 }
 
 u32 mapColorRgba(u8 packed) { return mapColor(packed); }
+
+const std::vector<MapDecor>* mapDecorations(int id) {
+    auto it = g_maps.find(id);
+    return it == g_maps.end() ? nullptr : &it->second.decorations;
+}
+
+const char* mapDecorationSprite(int type, bool* onFrame) {
+    // MapDecorationTypes in registration (network id) order: asset name, showOnItemFrame.
+    static const std::pair<const char*, bool> kTypes[] = {
+        {"player", false}, {"frame", true}, {"red_marker", false}, {"blue_marker", false}, {"target_x", true},
+        {"target_point", true}, {"player_off_map", false}, {"player_off_limits", false}, {"woodland_mansion", true},
+        {"ocean_monument", true}, {"white_banner", true}, {"orange_banner", true}, {"magenta_banner", true},
+        {"light_blue_banner", true}, {"yellow_banner", true}, {"lime_banner", true}, {"pink_banner", true},
+        {"gray_banner", true}, {"light_gray_banner", true}, {"cyan_banner", true}, {"purple_banner", true},
+        {"blue_banner", true}, {"brown_banner", true}, {"green_banner", true}, {"red_banner", true}, {"black_banner", true},
+        {"red_x", true}, {"desert_village", true}, {"plains_village", true}, {"savanna_village", true},
+        {"snowy_village", true}, {"taiga_village", true}, {"jungle_temple", true}, {"swamp_hut", true},
+        {"trial_chambers", true}, {"abandoned_camp", true}, {"ancient_city", true}, {"desert_pyramid", true},
+        {"mineshaft", true}, {"warm_ocean_ruins", true}};
+    static const auto kPaths = [] {
+        std::vector<std::string> v;
+        for (auto [name, frame] : kTypes) v.push_back(std::string("map/decorations/") + name);
+        return v;
+    }();
+    if (type < 0 || size_t(type) >= std::size(kTypes)) return nullptr;
+    if (onFrame) *onFrame = kTypes[size_t(type)].second;
+    return kPaths[size_t(type)].c_str();
+}
 
 }  // namespace ui

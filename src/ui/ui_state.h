@@ -294,7 +294,10 @@ struct Ui::State {
     void drawHud(Canvas& c);
     void drawChat(Canvas& c, bool focused);
     void drawDebug(Canvas& c);
-    void drawItem(Canvas& c, const ItemStack& s, float x, float y, bool decorations = true, const char* countOverride = nullptr);
+    // playerSlot: the player inventory menu slot the stack is (item model properties compare stack identity: the
+    // selected stack, the stack in use); -1 none.
+    void drawItem(Canvas& c, const ItemStack& s, float x, float y, bool decorations = true, const char* countOverride = nullptr,
+                  int playerSlot = -1);
     void drawTooltip(Canvas& c, const std::vector<Text>& lines, float x, float y);
     void drawText(Canvas& c, const Text& t, float x, float y, u32 color, bool shadow) { font.draw(c, t, x, y, color, shadow); }
     void drawCentered(Canvas& c, const Text& t, float cx, float y, u32 color, bool shadow = true) {

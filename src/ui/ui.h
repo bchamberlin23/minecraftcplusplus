@@ -122,6 +122,16 @@ struct FrontEnd {
 // none arrived; `version` changes with every update. mapColorRgba: MapColor.getColorFromPackedId as RGBA bytes.
 const std::vector<u8>* mapColors(int id, u32& version);
 u32 mapColorRgba(u8 packed);
+// The map's decorations (MapDecoration, replaced with each update that carries them): map_decoration_type id, position
+// in half map pixels from the centre (-128..127), rotation in 16ths of a turn, name (component NBT, "" none).
+struct MapDecor {
+    int type = 0, x = 0, y = 0, rot = 0;
+    std::string name;
+};
+const std::vector<MapDecor>* mapDecorations(int id);
+// MapDecorationType: the sprite (texture below textures/: "map/decorations/player"; nullptr for an unknown type) and
+// showOnItemFrame (also what GUI maps draw).
+const char* mapDecorationSprite(int type, bool* onFrame = nullptr);
 
 // The title screen's panorama world (a cache, generated once): level.dat with the seed and the camera spot.
 bool writeTitleWorld(const fs::path& dir, i64 seed, int dataVersion, const double pos[3], float yawDeg, float pitchDeg);

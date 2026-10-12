@@ -55,7 +55,7 @@ void xfPoint(const Xf& m, const float in[3], float out[3]);
 u32 packNormal(float x, float y, float z);
 
 // None: ItemDisplayContext.NONE (no model transform, only the centring).
-enum class Display : u8 { FirstRight, FirstLeft, ThirdRight, ThirdLeft, Head, Gui, Ground, Fixed, None, Count };
+enum class Display : u8 { FirstRight, FirstLeft, ThirdRight, ThirdLeft, Head, Gui, Ground, Fixed, OnShelf, None, Count };
 
 struct ItemMesh {
     struct Part {
@@ -66,6 +66,7 @@ struct ItemMesh {
     Part parts[4];
     int partCount = 0;
     float groundMinY = 0, groundDepth = 0;  // model bounding box in the GROUND display (ItemEntityRenderer)
+    float shelfMinY = 0, shelfMaxY = 0;     // and in the ON_SHELF display (ShelfRenderer)
     bool empty() const { return partCount == 0; }
 };
 
@@ -97,6 +98,9 @@ public:
     // key of the stack data they depend on.
     bool specialQuads(const nlohmann::json& node, const ui::ItemStack& s, const Xf& local, std::vector<MeshQuad>& out);
     std::string specialKey(const nlohmann::json& node, const ui::ItemStack& s);
+    // A player head's skull model with the skin of the stack's profile (SkullBlockRenderer: player heads placed as
+    // blocks), model space, no display transform.
+    const ItemMesh& headMesh(const ui::ItemStack& s);
     struct AtlasView {
         const u8* rgba = nullptr;  // w * h * 4
         int w = 0, h = 0;

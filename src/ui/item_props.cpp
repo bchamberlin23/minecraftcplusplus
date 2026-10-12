@@ -1,6 +1,7 @@
 #include "ui/item_props.h"
 
 #include "net/client.h"
+#include "world/nbt_dom.h"
 
 #include <chrono>
 #include <cmath>
@@ -622,6 +623,67 @@ void updateItemWorld() {
     }
 }
 
+namespace {
+// atlases/*.json paletted_permutations sources: generated sprite id -> (base texture, palette key, permutation palette).
+struct Permutation {
+    std::string texture, key, palette;
+};
+std::unordered_map<std::string, Permutation> gPermutations;
+std::once_flag gPermutationsOnce;
+
+std::string idWithNs(const std::string& id) { return id.find(':') == std::string::npos ? "minecraft:" + id : id; }
+std::string idFile(const std::string& id, const char* dir) {  // "ns:path" -> "assets/ns/<dir>/path.png"
+    const std::string n = idWithNs(id);
+    const size_t c = n.find(':');
+    return "assets/" + n.substr(0, c) + "/" + dir + "/" + n.substr(c + 1) + ".png";
+}
+}  // namespace
+
+bool atlasTextureImage(const Resources& res, const std::string& id, Image& out) {
+    if (res.image(idFile(id, "textures"), out) && out.w > 0) return true;
+    std::call_once(gPermutationsOnce, [&] {
+        for (const char* atlas : {"items", "blocks", "armor_trims"}) {
+            const json j = res.json(std::string("assets/minecraft/atlases/") + atlas + ".json");
+            if (!j.is_object() || !j.contains("sources") || !j["sources"].is_array()) continue;
+            for (const json& src : j["sources"]) {
+                if (stripNs(src.value("type", "")) != "paletted_permutations" || !src.contains("textures")) continue;
+                const std::string sep = src.value("separator", "_");
+                for (const json& t : src["textures"])
+                    if (t.is_string() && src.contains("permutations") && src["permutations"].is_object())
+                        for (const auto& [suffix, palette] : src["permutations"].items())
+                            if (palette.is_string())
+                                gPermutations[idWithNs(t.get<std::string>() + sep + suffix)] = {
+                                    idWithNs(t.get<std::string>()), idWithNs(src.value("palette_key", "")),
+                                    idWithNs(palette.get<std::string>())};
+            }
+        }
+    });
+    auto it = gPermutations.find(idWithNs(id));
+    if (it == gPermutations.end()) return false;
+    Image base, key, target;
+    if (!res.image(idFile(it->second.texture, "textures"), base) || !res.image(idFile(it->second.key, "textures/palettes"), key) ||
+        !res.image(idFile(it->second.palette, "textures/palettes"), target) || key.rgba.size() != target.rgba.size())
+        return false;
+    // PaletteMapping: an opaque base colour found in the key palette becomes the target palette's colour (alpha
+    // multiplied); other colours stay.
+    std::unordered_map<u32, u32> map;
+    for (size_t i = 0; i + 3 < key.rgba.size(); i += 4) {
+        if (key.rgba[i + 3] == 0) continue;
+        const u32 k = u32(key.rgba[i]) << 16 | u32(key.rgba[i + 1]) << 8 | key.rgba[i + 2];
+        map.emplace(k, u32(target.rgba[i + 3]) << 24 | u32(target.rgba[i]) << 16 | u32(target.rgba[i + 1]) << 8 | target.rgba[i + 2]);
+    }
+    out = std::move(base);
+    for (size_t i = 0; i + 3 < out.rgba.size(); i += 4) {
+        const u8 a = out.rgba[i + 3];
+        if (a == 0) continue;
+        auto m = map.find(u32(out.rgba[i]) << 16 | u32(out.rgba[i + 1]) << 8 | out.rgba[i + 2]);
+        if (m == map.end()) continue;
+        out.rgba[i] = u8(m->second >> 16), out.rgba[i + 1] = u8(m->second >> 8), out.rgba[i + 2] = u8(m->second);
+        out.rgba[i + 3] = u8(a * (m->second >> 24) / 255);
+    }
+    return true;
+}
+
 // --- components -----------------------------------------------------------------------------------------------
 
 const std::string* findComponent(const Items& items, const ItemStack& s, std::string_view name) {
@@ -975,6 +1037,209 @@ u32 itemTint(const Items& items, const json& t, const ItemStack& s, const ItemCo
         return opaque(def("default", 0xFFFFFF));
     }
     return def("default", 0xFFFFFFFF);
+}
+
+// --- item stacks from NBT ---------------------------------------------------------------------------------------
+
+namespace {
+const NbtValue* field(const NbtValue& c, std::string_view key) {
+    if (c.type != TagCompound) return nullptr;
+    for (size_t k = 0; k < c.names.size(); ++k)
+        if (c.names[k] == key || (c.names[k].starts_with("minecraft:") && std::string_view(c.names[k]).substr(10) == key))
+            return &c.items[k];
+    return nullptr;
+}
+bool isInt(const NbtValue& v) { return v.type >= TagByte && v.type <= TagLong; }
+int dyeId(std::string_view name) {
+    for (int d = 0; d < 16; ++d)
+        if (stripNs(name) == dyeName(d)) return d;
+    return -1;
+}
+int indexOf(const std::vector<std::string>& list, std::string_view id) {
+    const std::string n = normId(id);
+    for (size_t i = 0; i < list.size(); ++i)
+        if (list[i] == n) return int(i);
+    return -1;
+}
+// An item stack compound {id, count, components} as an ItemStackTemplate (network form, no components).
+void writeTemplate(const Items& items, net::Writer& w, const NbtValue& v) {
+    const NbtValue* id = field(v, "id");
+    const NbtValue* count = field(v, "count");
+    w.varInt(items.id(id && id->type == TagString ? id->s : (v.type == TagString ? v.s : "air")));
+    w.varInt(count && isInt(*count) ? i32(count->i) : 1);
+    w.varInt(0), w.varInt(0);
+}
+}  // namespace
+
+bool itemStackFromNbt(const Items& items, const std::string& compound, ItemStack& out) {
+    out = ItemStack{};
+    NbtValue root;
+    std::string doc;  // a named root around the payload for nbtRead
+    doc.push_back(char(TagCompound)), doc.push_back(0), doc.push_back(0);
+    doc += compound;
+    if (!nbtRead(reinterpret_cast<const u8*>(doc.data()), doc.size(), root)) return false;
+    const NbtValue* id = field(root, "id");
+    if (!id || id->type != TagString) return false;
+    out.item = items.id(id->s);
+    const NbtValue* count = field(root, "count");
+    out.count = count && isInt(*count) ? int(count->i) : 1;
+    if (out.item < 0 || out.count <= 0) return false;
+    const NbtValue* comps = field(root, "components");
+    if (!comps || comps->type != TagCompound) return true;
+    for (size_t k = 0; k < comps->names.size(); ++k) {
+        const std::string name = stripNs(comps->names[k]);
+        const NbtValue& v = comps->items[k];
+        const int type = items.componentType(name);
+        if (type < 0) continue;
+        net::Writer w;
+        bool ok = true;
+        if (name == "item_model" && v.type == TagString) {
+            w.str(v.s);
+        } else if (name == "custom_model_data" && v.type == TagCompound) {
+            auto list = [&](const char* key, auto&& each) {
+                const NbtValue* l = field(v, key);
+                const size_t n = l && l->type == TagList ? l->items.size() : l && l->type == TagIntArray ? l->ints.size() : 0;
+                w.varInt(i32(n));
+                for (size_t i = 0; i < n; ++i) each(*l, i);
+            };
+            list("floats", [&](const NbtValue& l, size_t i) { w.f32(float(l.items[i].type == TagFloat || l.items[i].type == TagDouble ? l.items[i].d : double(l.items[i].i))); });
+            list("flags", [&](const NbtValue& l, size_t i) { w.boolean(l.items[i].i != 0); });
+            list("strings", [&](const NbtValue& l, size_t i) { w.str(l.items[i].s); });
+            list("colors", [&](const NbtValue& l, size_t i) {
+                if (l.type == TagIntArray) return w.u32v(u32(l.ints[i]));
+                const NbtValue& c = l.items[i];
+                if (isInt(c)) return w.u32v(u32(c.i));
+                u32 rgb = 0;  // [r, g, b] floats
+                for (size_t j = 0; j < 3 && j < c.items.size(); ++j) rgb = rgb << 8 | u32(std::clamp(c.items[j].d, 0.0, 1.0) * 255.0 + 0.5);
+                w.u32v(rgb);
+            });
+        } else if (name == "dyed_color") {
+            const NbtValue* rgb = v.type == TagCompound ? field(v, "rgb") : &v;
+            if (!rgb || !isInt(*rgb)) continue;
+            w.u32v(u32(rgb->i));
+            out.dyedColor = rgb->i & 0xFFFFFF;
+        } else if (name == "banner_patterns" && v.type == TagList) {
+            w.varInt(i32(v.items.size()));
+            for (const NbtValue& l : v.items) {
+                const NbtValue* p = field(l, "pattern");
+                const NbtValue* c = field(l, "color");
+                const int idx = p && p->type == TagString ? indexOf(items.bannerPatterns(), p->s) : -1;
+                if (idx >= 0) {
+                    w.varInt(idx + 1);
+                } else {  // inline: asset id, translation key
+                    const NbtValue* asset = p ? field(*p, "asset_id") : nullptr;
+                    const NbtValue* key = p ? field(*p, "translation_key") : nullptr;
+                    w.varInt(0), w.str(asset ? asset->s : (p ? p->s : "")), w.str(key ? key->s : "");
+                }
+                w.varInt(std::max(0, c && c->type == TagString ? dyeId(c->s) : 0));
+            }
+        } else if (name == "base_color" && v.type == TagString) {
+            w.varInt(std::max(0, dyeId(v.s)));
+        } else if (name == "profile") {  // ResolvableProfile: a name, or {name, id, properties} + skin patch
+            const NbtValue* nm = v.type == TagString ? &v : field(v, "name");
+            const NbtValue* uuid = field(v, "id");
+            const NbtValue* props = field(v, "properties");
+            w.boolean(false);  // partial
+            w.boolean(nm && nm->type == TagString);
+            if (nm && nm->type == TagString) w.str(nm->s);
+            const bool hasId = uuid && uuid->type == TagIntArray && uuid->ints.size() == 4;
+            w.boolean(hasId);
+            if (hasId)
+                for (i32 x : uuid->ints) w.u8v(u8(u32(x) >> 24)), w.u8v(u8(u32(x) >> 16)), w.u8v(u8(u32(x) >> 8)), w.u8v(u8(x));
+            const size_t n = props && props->type == TagList ? props->items.size() : 0;
+            w.varInt(i32(n));
+            for (size_t i = 0; i < n; ++i) {
+                const NbtValue* pn = field(props->items[i], "name");
+                const NbtValue* pv = field(props->items[i], "value");
+                const NbtValue* ps = field(props->items[i], "signature");
+                w.str(pn ? pn->s : ""), w.str(pv ? pv->s : "");
+                w.boolean(ps != nullptr);
+                if (ps) w.str(ps->s);
+            }
+            for (const char* key : {"texture", "cape", "elytra"}) {
+                const NbtValue* t = field(v, key);
+                w.boolean(t && t->type == TagString);
+                if (t && t->type == TagString) w.str(t->s);
+            }
+            const NbtValue* model = field(v, "model");
+            w.boolean(model && model->type == TagString);
+            if (model && model->type == TagString) w.boolean(model->s == "slim");
+        } else if (name == "potion_contents") {
+            const NbtValue* p = v.type == TagString ? &v : field(v, "potion");
+            const NbtValue* c = field(v, "custom_color");
+            const int pid = p && p->type == TagString ? items.potionId(p->s) : -1;
+            w.boolean(pid >= 0);
+            if (pid >= 0) w.varInt(pid), out.potion = pid;
+            w.boolean(c && isInt(*c));
+            if (c && isInt(*c)) w.u32v(u32(c->i)), out.potionColor = c->i & 0xFFFFFF;
+            w.varInt(0), w.boolean(false);
+        } else if (name == "block_state" && v.type == TagCompound) {
+            w.varInt(i32(v.names.size()));
+            for (size_t i = 0; i < v.names.size(); ++i) w.str(v.names[i]), w.str(v.items[i].type == TagString ? v.items[i].s : std::to_string(v.items[i].i));
+        } else if ((name == "damage" || name == "max_damage" || name == "map_id" || name == "max_stack_size") && isInt(v)) {
+            w.varInt(i32(v.i));
+            if (name == "damage") out.damage = int(v.i);
+            if (name == "max_damage") out.maxDamage = int(v.i);
+            if (name == "max_stack_size") out.maxStack = int(v.i);
+        } else if (name == "enchantment_glint_override" && isInt(v)) {
+            w.boolean(v.i != 0);
+            out.glint = v.i != 0;
+        } else if (name == "enchantments" && v.type == TagCompound) {  // the glint only (EnchantmentHelper: any level)
+            const NbtValue* levels = field(v, "levels");
+            out.enchantments = int((levels ? *levels : v).names.size());
+            continue;
+        } else if (name == "rarity" && v.type == TagString) {
+            static const char* kRarity[4] = {"common", "uncommon", "rare", "epic"};
+            int r = 0;
+            for (int i = 0; i < 4; ++i)
+                if (v.s == kRarity[i]) r = i;
+            w.varInt(r);
+            out.rarity = r;
+        } else if (name == "trim" && v.type == TagCompound) {  // the material (item models select on it); pattern by id
+            const NbtValue* m = field(v, "material");
+            const int idx = m && m->type == TagString ? indexOf(items.trimMaterials(), m->s) : -1;
+            if (idx < 0) continue;
+            w.varInt(idx + 1), w.varInt(1);
+        } else if (name == "pot_decorations" && v.type == TagList) {
+            for (size_t i = 0; i < 4; ++i) {
+                const bool has = i < v.items.size() && v.items[i].type == TagString;
+                w.boolean(has);
+                if (has) w.varInt(items.id(v.items[i].s)), w.varInt(1), w.varInt(0), w.varInt(0);
+            }
+        } else if (name == "firework_explosion" && v.type == TagCompound) {
+            static const char* kShapes[5] = {"small_ball", "large_ball", "star", "creeper", "burst"};
+            const NbtValue* shape = field(v, "shape");
+            int sh = 0;
+            for (int i = 0; i < 5; ++i)
+                if (shape && shape->type == TagString && shape->s == kShapes[i]) sh = i;
+            w.varInt(sh);
+            for (const char* key : {"colors", "fade_colors"}) {
+                const NbtValue* c = field(v, key);
+                const size_t n = c && c->type == TagIntArray ? c->ints.size() : 0;
+                w.varInt(i32(n));
+                for (size_t i = 0; i < n; ++i) w.u32v(u32(c->ints[i]));
+            }
+            const NbtValue* trail = field(v, "has_trail");
+            const NbtValue* twinkle = field(v, "has_twinkle");
+            w.boolean(trail && trail->i), w.boolean(twinkle && twinkle->i);
+        } else if ((name == "charged_projectiles" || name == "bundle_contents") && v.type == TagList) {
+            w.varInt(i32(v.items.size()));
+            for (const NbtValue& e : v.items) writeTemplate(items, w, e);
+        } else if (name == "lodestone_tracker" && v.type == TagCompound) {
+            const NbtValue* target = field(v, "target");
+            const NbtValue* dim = target ? field(*target, "dimension") : nullptr;
+            const NbtValue* pos = target ? field(*target, "pos") : nullptr;
+            const bool has = dim && dim->type == TagString && pos && pos->type == TagIntArray && pos->ints.size() == 3;
+            w.boolean(has);
+            if (has) w.str(dim->s), w.blockPos(pos->ints[0], pos->ints[1], pos->ints[2]);
+            const NbtValue* tracked = field(v, "tracked");
+            w.boolean(!tracked || tracked->i != 0);
+        } else {
+            ok = false;  // not needed by the item models
+        }
+        if (ok) out.added.push_back({type, std::string(w.buf.begin(), w.buf.end())});
+    }
+    return true;
 }
 
 }  // namespace ui

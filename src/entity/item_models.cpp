@@ -108,9 +108,9 @@ Xf displayXf(const float rot[3], const float trans[3], const float scale[3], boo
     return xfMul(m, xfTranslate(-0.5f, -0.5f, -0.5f));
 }
 
-const char* kDisplayNames[8] = {"firstperson_righthand", "firstperson_lefthand", "thirdperson_righthand",
+const char* kDisplayNames[9] = {"firstperson_righthand", "firstperson_lefthand", "thirdperson_righthand",
                                 "thirdperson_lefthand",  "head",                 "gui",
-                                "ground",                "fixed"};
+                                "ground",                "fixed",                "on_shelf"};
 const char* kFaceNames[6] = {"down", "up", "north", "south", "west", "east"};
 const float kNormals[6][3] = {{0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}};
 
@@ -141,7 +141,7 @@ struct JModel {
     struct Tr {
         float rot[3] = {0, 0, 0}, trans[3] = {0, 0, 0}, scale[3] = {1, 1, 1};
         bool set = false;
-    } display[8];
+    } display[9];
     std::string particle;
 };
 
@@ -235,7 +235,7 @@ struct ItemModels::Impl {
         if (it != textures.end()) return it->second.rect >= 0 ? &it->second : nullptr;
         Tex& t = textures[key];
         ui::Image img;
-        if (!res->image(resPath(key, "textures", ".png"), img) || img.w <= 0 || img.h <= 0) return nullptr;
+        if (!ui::atlasTextureImage(*res, key, img) || img.w <= 0 || img.h <= 0) return nullptr;
         const std::string meta = resPath(key, "textures", ".png.mcmeta");
         ui::Sprites::Animation anim;
         const bool animatedTex = res->exists(meta) && ui::Sprites::parseAnimation(img, res->json(meta), anim);
@@ -289,7 +289,7 @@ struct ItemModels::Impl {
                 }
             if (!elements && j.contains("elements") && j["elements"].is_array()) elements = &j["elements"];
             if (j.contains("display") && j["display"].is_object())
-                for (int c = 0; c < 8; ++c) {
+                for (int c = 0; c < 9; ++c) {
                     if (m->display[c].set || !j["display"].contains(kDisplayNames[c])) continue;
                     const json& d = j["display"][kDisplayNames[c]];
                     JModel::Tr& tr = m->display[c];
@@ -931,7 +931,7 @@ struct ItemModels::Impl {
             part.tfirst = base + part.count, part.tcount = u32(out.translucent.size());
             self->store_.insert(self->store_.end(), out.cutout.begin(), out.cutout.end());
             self->store_.insert(self->store_.end(), out.translucent.begin(), out.translucent.end());
-            for (int c = 0; c < 8; ++c) {
+            for (int c = 0; c < 9; ++c) {
                 const bool left = c == 1 || c == 3;
                 int src = c;
                 if (left && !m->display[c].set) src = c - 1;  // left hand defaults to the right hand transform
@@ -950,6 +950,16 @@ struct ItemModels::Impl {
                     }
             if (mesh.partCount == 1) mesh.groundMinY = lo[1], mesh.groundDepth = hi[2] - lo[2];
             else mesh.groundMinY = std::min(mesh.groundMinY, lo[1]), mesh.groundDepth = std::max(mesh.groundDepth, hi[2] - lo[2]);
+            float sLo = 1e9f, sHi = -1e9f;  // the ON_SHELF display's vertical extent
+            for (const auto* v : {&out.cutout, &out.translucent})
+                for (const MeshQuad& q : *v)
+                    for (int k = 0; k < 4; ++k) {
+                        float p[3];
+                        xfPoint(part.display[size_t(Display::OnShelf)], q.pos[k], p);
+                        sLo = std::min(sLo, p[1]), sHi = std::max(sHi, p[1]);
+                    }
+            if (mesh.partCount == 1) mesh.shelfMinY = sLo, mesh.shelfMaxY = sHi;
+            else mesh.shelfMinY = std::min(mesh.shelfMinY, sLo), mesh.shelfMaxY = std::max(mesh.shelfMaxY, sHi);
         }
         return mesh;
     }
@@ -1062,6 +1072,17 @@ bool ItemModels::specialQuads(const nlohmann::json& sm, const ui::ItemStack& s, 
     out.insert(out.end(), o.cutout.begin(), o.cutout.end());
     out.insert(out.end(), o.translucent.begin(), o.translucent.end());
     return true;
+}
+
+const ItemMesh& ItemModels::headMesh(const ui::ItemStack& s) {
+    static const json kPlayerHead = {{"type", "minecraft:player_head"}};
+    const std::string key = "head" + specialKey(kPlayerHead, s);
+    auto it = impl_->namedMeshes.find(key);
+    if (it != impl_->namedMeshes.end()) return it->second;
+    Impl::Part p;
+    p.special = &kPlayerHead;
+    p.stack = s;
+    return impl_->namedMeshes.emplace(key, impl_->build({p})).first->second;
 }
 
 ItemModels::AtlasView ItemModels::atlasView(u32 tex) const {

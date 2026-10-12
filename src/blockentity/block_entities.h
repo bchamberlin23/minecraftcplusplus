@@ -116,6 +116,8 @@ public:
         int sherds[4] = {-1, -1, -1, -1};           // decorated pot sides: back, left, right, front
         std::string items[4];                       // campfire / shelf items by slot (item names); vault display
                                                     // item, brushable block item (slot 0)
+        std::string itemNbt[4];                     // the same stacks as NBT compounds (payloads); player heads with a
+                                                    // profile: a player_head stack carrying it (slot 0)
         bool alignBottom = false;                   // shelf
         int entity = -1;                            // spawner / trial spawner display entity (protocol id)
         int delay = 20;                             // spawner Delay
@@ -126,6 +128,23 @@ public:
     // nullptr when none is known).
     static const BlockEntityRenderer* instance();
     const Data* dataAt(int x, int y, int z) const;
+
+    // Items the block entities show (campfire / shelf items, the vault's display item, a brushed item) and player
+    // heads with a profile: with an item drawer set they are left to it (the entity visuals draw them with the full
+    // item models and downloaded skins), else drawn here as simple sprites / blocks and default skins.
+    struct ShownItem {
+        const std::string* nbt = nullptr;  // Data::itemNbt of the stack
+        int kind = 0;                      // 0 an item, 1 a player head (the skull model at `m`, no display transform)
+        int context = 0;                   // ItemDisplayContext: 0 fixed, 1 on_shelf, 2 ground (+ copies by count)
+        bool shelfBottom = false;          // on_shelf: align the model's bottom (else its centre) at the origin
+        float m[12];                       // pose relative to `origin` (row-major 3x4)
+        int origin[3];                     // the block
+        u32 light;                         // sky << 4 | block
+        int seed = 0;
+    };
+    void setItemDrawer(bool on) { itemDrawer_ = on; }
+    // This frame's shown items of the tracked block entities (main thread).
+    void shownItems(std::vector<ShownItem>& out) const;
 
 private:
     struct BlockDef {
@@ -268,6 +287,10 @@ private:
     float partial_ = 0;
     u32 random_ = 0x9E3779B9u;
     bool xmas_ = false;  // Christmas chest textures
+    bool itemDrawer_ = false;
+    mutable std::vector<ShownItem>* shownOut_ = nullptr;  // shownItems: emitItem / the player heads record here
+    mutable const std::string* shownNbt_ = nullptr;      // the stack emitItem is called for
+    mutable int shownSeed_ = 0;
     double cam_[3] = {};
 
     // Network: decoded on the network thread, applied on the main thread.

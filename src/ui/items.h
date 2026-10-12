@@ -111,6 +111,12 @@ public:
     const std::vector<std::string>& trimMaterials() const { return trimMaterials_; }  // trim_material ids
     const std::string& potionName(int id) const { return entry(potions_, id); }       // "minecraft:healing", "" unknown
     const std::string& mobEffectName(int id) const { return entry(mobEffects_, id); }
+    int potionId(std::string_view name) const {  // -1 if unknown
+        const std::string n = name.find(':') == std::string_view::npos ? "minecraft:" + std::string(name) : std::string(name);
+        for (size_t i = 0; i < potions_.size(); ++i)
+            if (potions_[i] == n) return int(i);
+        return -1;
+    }
     int mobEffectId(std::string_view name) const;  // static registry protocol id, -1 if unknown
 
     // Protocol. Item stacks: ItemStack.OPTIONAL_STREAM_CODEC / OPTIONAL_UNTRUSTED (delimited components).

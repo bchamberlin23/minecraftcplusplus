@@ -650,7 +650,12 @@ void Ui::State::drawScreen(Canvas& c) {
             shown = carried.withCount(nc);
             if (nc == mx) cnt = "\xC2\xA7" "e" + std::to_string(nc), countOverride = cnt.c_str();
         }
-        drawItem(c, shown, sx, sy, true, countOverride);
+        // The player inventory slot this is: the inventory menu itself, else a container's last 36 slots (27 + hotbar).
+        int playerSlot = -1;
+        const int n = int(m.slots.size());
+        if (m.type < 0) playerSlot = int(i);
+        else if (int(i) >= n - 36) playerSlot = int(i) - (n - 36) < 27 ? 9 + int(i) - (n - 36) : 36 + int(i) - (n - 36) - 27;
+        drawItem(c, shown, sx, sy, true, countOverride, shown.sameItemSameComponents(m.slots[i]) ? playerSlot : -1);
     }
     if (hoveredSlot >= 0)
         blitSprite(c, sprites.sprite("container/slot_highlight_front"), left + float(l.slots[size_t(hoveredSlot)].x) - 4,

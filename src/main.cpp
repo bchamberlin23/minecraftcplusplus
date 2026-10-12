@@ -443,6 +443,7 @@ int wmain(int argc, wchar_t** argv) {
     // Chests, sign text, banners, heads, ...: the game's block entity renderers (same lifetime rule).
     be::BlockEntityRenderer blockEntityRenderer(world, registry, reports, entityAssets, entityRenderer);
     if (haveEntities) blockEntityRenderer.load(jar, mc);
+    blockEntityRenderer.setItemDrawer(haveEntities);  // shown items and profile heads: the entity visuals (VIS-14)
     sky::Sky sky;                                  // same
     if (!uiTask.get()) return 1;
     // --- multiplayer (--connect): log in; the world then comes from the server instead of a save ---

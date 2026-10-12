@@ -107,18 +107,18 @@ void Ui::State::tickHud() {
 
 // --- items --------------------------------------------------------------------------------------------------
 
-void Ui::State::drawItem(Canvas& c, const ItemStack& s, float x, float y, bool decorations, const char* countOverride) {
+void Ui::State::drawItem(Canvas& c, const ItemStack& s, float x, float y, bool decorations, const char* countOverride,
+                         int playerSlot) {
     if (s.empty()) return;
     // The item model context: GUI, the local player as the owner and what its state says about this stack (the game
-    // compares stack identity; slots are drawn from copies here, so equal stacks stand in for the same one).
+    // compares stack identity: the player inventory slot it is).
     const ItemWorld& w = itemWorld();
     ItemContext ctx;
     ctx.owner = w.player;
     ctx.seed = int(x) + int(y) * 1000;  // GuiGraphics.renderItem seed: varies per slot position
     auto is = [&](int slot) {
         if (slot < 0 || size_t(slot) >= inventory.slots.size()) return false;
-        const ItemStack& o = inventory.slots[size_t(slot)];
-        return &o == &s || (o.count == s.count && o.sameItemSameComponents(s));
+        return slot == playerSlot || &inventory.slots[size_t(slot)] == &s;
     };
     if (ctx.owner.present) {
         ctx.owner.selected = is(w.selectedSlot);
@@ -196,8 +196,9 @@ void Ui::State::drawHud(Canvas& c) {
         blitSprite(c, sprites.sprite("hud/hotbar_selection"), float(center - 91 - 1 + game->selectedSlot() * 20), H - 23, 24, 23);
         const ItemStack& offhand = inventory.slots[45];
         if (!offhand.empty()) blitSprite(c, sprites.sprite("hud/hotbar_offhand_left"), float(center - 91 - 29), H - 23, 29, 24);
-        for (int i = 0; i < 9; ++i) drawItem(c, inventory.slots[size_t(36 + i)], float(center - 90 + i * 20 + 2), H - 16 - 3);
-        if (!offhand.empty()) drawItem(c, offhand, float(center - 91 - 26), H - 16 - 3);
+        for (int i = 0; i < 9; ++i)
+            drawItem(c, inventory.slots[size_t(36 + i)], float(center - 90 + i * 20 + 2), H - 16 - 3, true, nullptr, 36 + i);
+        if (!offhand.empty()) drawItem(c, offhand, float(center - 91 - 26), H - 16 - 3, true, nullptr, 45);
         drawHotbarAttackIndicator(*this, c);  // gameplay_hud.cpp
     }
     // Status effect icons (Hud.extractEffects), top right: beneficial first row, the rest below.

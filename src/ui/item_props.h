@@ -8,6 +8,7 @@
 // The client level and the local player's state the properties read live in itemWorld(), filled by the game (sky
 // clock, spawn / death positions from packets, keys); the holder of a stack is described per call (ItemOwner).
 #include "ui/items.h"
+#include "ui/resources.h"
 
 #include <json/json.hpp>
 
@@ -77,6 +78,9 @@ void attachItemWorld(net::Client& client);
 void updateItemWorld();
 // The game's item component reports (default components per item: has_component, component selects).
 void setItemComponentReports(const fs::path& dir);
+// A texture of the item / block atlases by id ("minecraft:item/stick"): its png, else a sprite the atlases generate
+// (atlases/*.json paletted_permutations: armour trim overlays recoloured with a material palette).
+bool atlasTextureImage(const Resources& res, const std::string& id, Image& out);
 
 struct ItemContext {
     ItemDisplay display = ItemDisplay::Gui;
@@ -123,6 +127,9 @@ u32 potionColor(const Items& items, const ItemStack& s, u32 fallback);    // Pot
 std::vector<u32> fireworkColors(const Items& items, const ItemStack& s);  // firework_explosion colours (RGB)
 std::string trimMaterial(const Items& items, const ItemStack& s);        // trim material key, "" none / inline
 int mapId(const Items& items, const ItemStack& s);                       // map_id, -1 none
+// An item stack compound as block entities keep it ({id, count, components}: the NBT payload without its type byte):
+// the item and the components the item models read, in their network encoding.
+bool itemStackFromNbt(const Items& items, const std::string& compound, ItemStack& out);
 // DyeColor: textureDiffuseColor (RGB) and serialized name by id.
 u32 dyeDiffuse(int dye);
 const char* dyeName(int dye);
