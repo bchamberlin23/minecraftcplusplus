@@ -1,5 +1,6 @@
-// The End poem and credits (WinScreen: after leaving the End, ClientboundGameEventPacket WIN_GAME) and Credits and
-// Attribution (CreditsAndAttributionScreen, from Options: the credits alone, the attribution and licenses links).
+// The End poem and credits (WinScreen: after leaving the End, ClientboundGameEventPacket WIN_GAME), Credits and
+// Attribution (CreditsAndAttributionScreen, from Options: the credits alone, the attribution and licenses links) and
+// the server's links (the pause menu's Server Links...).
 #include "assets/asset_source.h"
 #include "audio/audio.h"
 #include "net/client.h"
@@ -255,6 +256,55 @@ void inputCredits(UiState& s, const InputEvent& e) {
 }
 
 const ScreenRegistrar kCredits({Screen::CreditsAttribution, buildCredits, drawCredits, inputCredits, nullptr});
+
+// --- Server Links (Dialogs.SERVER_LINKS: ServerLinksDialogScreen) -----------------------------------------------------
+
+const char* kKnownLinks[] = {"report_bug", "community_guidelines", "support", "status", "feedback",
+                             "community", "website", "forums", "news", "announcements"};
+
+void buildLinks(UiState& s) {
+    s.buttons.clear();
+    const int W = s.guiW(), H = s.guiH();
+    const std::vector<net::Client::ServerLink> links = s.client ? s.client->serverLinks() : std::vector<net::Client::ServerLink>{};
+    UiState* sp = &s;
+    const int listH = int(links.size()) * 24;
+    float y = float(std::max(kHeaderH + 4, (H - listH) / 2));
+    for (const auto& l : links) {
+        Button b;
+        b.x = float(W / 2 - 155), b.y = y, b.w = 310;
+        b.label = l.known >= 0 && l.known < int(std::size(kKnownLinks))
+                      ? Text(s.res.translate(std::string("known_server_link.") + kKnownLinks[l.known]))
+                      : parseComponent(l.label, &s.res.lang());
+        const std::string url = l.url;
+        b.onPress = [sp, url] {  // ClickEvent.OpenUrl from a dialog: ConfirmLinkScreen
+            showConfirm(*sp, Text(sp->res.translate("chat.link.confirm")), Text(url), sp->res.translate("chat.link.open"), [sp, url] {
+                openUrl(url);
+                sp->openScreen(Screen::ServerLinks);
+            }, Screen::ServerLinks);
+        };
+        s.buttons.push_back(std::move(b));
+        y += 24;
+    }
+    Button back;
+    back.x = float(W / 2 - 100), back.y = float(H - kFooterH + (kFooterH - 20) / 2), back.w = 200;
+    back.label = Text(s.res.translate("gui.back"));
+    back.onPress = [sp] { sp->openScreen(Screen::Pause); };
+    s.buttons.push_back(std::move(back));
+}
+
+void drawLinks(UiState& s, Canvas& c) {
+    const int W = c.guiWidth(), H = c.guiHeight();
+    c.gradient(0, 0, float(W), float(H), 0xC0101010, 0xD0101010);
+    s.drawCentered(c, Text(s.res.translate("menu.server_links.title")), float(W / 2), float((kHeaderH - 9) / 2), 0xFFFFFFFF);
+    s.drawButtons(c);
+}
+
+void inputLinks(UiState& s, const InputEvent& e) {
+    if (e.type == InputEvent::Key && e.down && e.code == VK_ESCAPE) return s.openScreen(Screen::Pause);
+    s.buttonsInput(e);
+}
+
+const ScreenRegistrar kLinks({Screen::ServerLinks, buildLinks, drawLinks, inputLinks, nullptr});
 
 // --- WIN_GAME -------------------------------------------------------------------------------------------------------
 

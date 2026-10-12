@@ -366,6 +366,21 @@ bool Client::handleCommon(Phase phase, const std::string& name, Reader& r, bool&
         auto it = lang_.find("disconnect.transfer");
         push(DisconnectEvent{it != lang_.end() ? it->second : "Transferred to another server"});
         return false;
+    } else if (name == "server_links") {  // ClientCommonPacketListenerImpl.handleServerLinks
+        std::vector<ServerLink> links;
+        const i32 n = r.varInt();
+        for (i32 i = 0; i < n && r.ok; ++i) {
+            ServerLink l;
+            if (r.boolean()) l.known = r.varInt();  // Either<KnownLinkType, Component>
+            else l.label = std::string(r.nbt());
+            l.url = std::string(r.str());
+            // Util.parseAndValidateUntrustedUri: http(s) only; others are dropped.
+            if (l.url.starts_with("http://") || l.url.starts_with("https://")) links.push_back(std::move(l));
+        }
+        if (r.ok) {
+            std::lock_guard lock(registryMutex_);
+            serverLinks_ = std::move(links);
+        }
     } else if (name == "custom_report_details") {  // shown in crash reports
         std::map<std::string, std::string> details;
         const i32 n = r.varInt();
@@ -449,6 +464,11 @@ std::string Client::serverBrand() const {
 std::map<std::string, std::string> Client::reportDetails() const {
     std::lock_guard lock(registryMutex_);
     return reportDetails_;
+}
+
+std::vector<Client::ServerLink> Client::serverLinks() const {
+    std::lock_guard lock(registryMutex_);
+    return serverLinks_;
 }
 
 std::vector<Client::RegistryEntry> Client::registryEntries(const std::string& registry) const {

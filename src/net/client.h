@@ -202,6 +202,14 @@ public:
     void disconnect(const std::string& reason);
     std::map<std::string, std::string> cookies() const;  // store_cookie (for a transfer)
     std::map<std::string, std::string> reportDetails() const;  // custom_report_details (crash reports)
+    // ClientboundServerLinksPacket: a known link type (ServerLinks.KnownLinkType id) or the label component's NBT, and
+    // the URL. Replaced as a whole by every packet.
+    struct ServerLink {
+        int known = -1;
+        std::string label;  // network NBT of the component when known < 0
+        std::string url;
+    };
+    std::vector<ServerLink> serverLinks() const;
     std::string serverBrand() const;                            // minecraft:brand ("vanilla")
     // The server's chunk cache view (set_chunk_cache_center / _radius, the login's distances) and simulation
     // distance (set_simulation_distance), in chunks; any thread.
@@ -262,6 +270,7 @@ private:
     std::unordered_map<std::string, std::unordered_map<std::string, std::vector<int>>> tags_;
     std::vector<std::string> features_;
     std::map<std::string, std::string> cookies_, reportDetails_;
+    std::vector<ServerLink> serverLinks_;
     std::string serverBrand_;
     std::atomic<int> registryVersion_{0};
     std::vector<CommonEvent> common_;  // guarded by mutex_

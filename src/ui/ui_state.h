@@ -98,7 +98,7 @@ enum class Screen {
     Sign, BookEdit, BookView, Advancements, Stats, GameModeSwitcher, InBed,
     Friends, AddFriend,  // friends_screen.cpp
     ServerPackPrompt, CodeOfConduct, Reconfiguring,  // server_config.cpp
-    Win, CreditsAttribution,  // credits.cpp
+    Win, CreditsAttribution, ServerLinks,  // credits.cpp
     // Front end (frontend.h)
     Title, Worlds, CreateWorld, EditWorld, Confirm, Servers, EditServer, DirectConnect, Loading, Message, OpenToLan
 };
