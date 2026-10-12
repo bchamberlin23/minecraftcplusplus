@@ -751,7 +751,8 @@ int wmain(int argc, wchar_t** argv) {
     if (!ui.init({&registry, &renderer, &window, &game, &world, &terrain, opt.detail})) return 1;
     if (session) ui.attachSession(netClient.get(), session.get());
     if (!opt.script.empty()) ui.loadScript(opt.script);
-    if (!packs::commandLinePack() && !ui.settings().shaderPack.empty())  // the saved shader pack (render/packs)
+    // The saved shader pack (render/packs), unless this run's command line picks a pack or a shader mode.
+    if (!packs::commandLinePack() && !opt.shadersGiven && !ui.settings().shaderPack.empty())
         packs::selectPack(renderer, ui.settings().shaderPack);
     {  // Video settings: options.txt, then this run's command line (not saved). Applies shaders, upscaler, frame gen.
         VideoSettings v = ui.settings().video;
