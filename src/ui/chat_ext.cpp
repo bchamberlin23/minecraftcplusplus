@@ -4,11 +4,10 @@
 // .handleComponentClicked / Screen.defaultHandleGameClickEvent).
 #include "assets/game_reports.h"
 #include "ui/command_tree.h"
+#include "ui/dialogs.h"
 #include "ui/frontend.h"
 #include "ui/mp_hud.h"
 #include "ui/ui_state.h"
-
-#include <shellapi.h>
 
 #include <algorithm>
 #include <cmath>
@@ -53,6 +52,7 @@ struct ChatExt {
 ChatExt cx;
 struct Commands {  // the server's command tree (ClientboundCommandsPacket); kept over ChatExt resets
     cmd::Tree tree;
+    std::vector<std::string> customCompletions;  // ClientSuggestionProvider.customCompletionSuggestions (a set)
 };
 Commands commands;
 
@@ -172,6 +172,40 @@ void updateUsage(UiState& s) {
     cx.usageX = cx.usage.empty() ? 0 : std::clamp(screenX(s, cx.ctxStart), 0, 4 + (s.guiW() - 4) - cx.usageW);
 }
 
+std::string lowerAscii(std::string v) {
+    for (char& ch : v) ch = char(std::tolower(u8(ch)));
+    return v;
+}
+
+// SharedSuggestionProvider.suggest(ClientSuggestionProvider.getCustomTabSuggestions(), builder): online player names and
+// the custom completions matching the word (matchesSubStr: at the start or after . _ /), sorted like Suggestions.create;
+// the word itself is not suggested (SuggestionsBuilder.suggest).
+std::vector<std::string> customTabSuggestions(const std::string& word) {
+    std::vector<std::string> all;
+    for (const PlayerInfoView& p : playerInfos()) all.push_back(p.name);
+    for (const std::string& c : commands.customCompletions)
+        if (std::find(all.begin(), all.end(), c) == all.end()) all.push_back(c);
+    const std::string prefix = lowerAscii(word);
+    std::vector<std::string> out;
+    for (const std::string& name : all) {
+        const std::string l = lowerAscii(name);
+        size_t index = 0;
+        bool match = false;
+        while (true) {
+            if (l.compare(index, prefix.size(), prefix) == 0) {
+                match = true;
+                break;
+            }
+            const size_t split = l.find_first_of("._/", index);
+            if (split == std::string::npos) break;
+            index = split + 1;
+        }
+        if (match && name != word) out.push_back(name);
+    }
+    std::sort(out.begin(), out.end(), [](const std::string& a, const std::string& b) { return lowerAscii(a) < lowerAscii(b); });
+    return out;
+}
+
 // Input changed (ChatScreen.onEdited -> CommandSuggestions.updateCommandInfo): complete locally from the command tree
 // (literals, booleans) or ask the server (other arguments, or no tree).
 void update(UiState& s) {
@@ -183,6 +217,18 @@ void update(UiState& s) {
     hide();
     cx.haveResult = false;
     cx.usage.clear();
+    if (!f.value.empty() && f.value[0] != '/' && s.online()) {
+        // Not a command: player names and the server's custom completions for the last word (Tab shows them).
+        cx.pendingId = -1;
+        if (f.value.find_first_not_of(" \t") == std::string::npos) return;
+        const std::string partial = f.value.substr(0, size_t(std::clamp(f.cursor, 0, int(f.value.size()))));
+        const size_t ws = partial.find_last_of(" \t");  // getLastWordIndex: after the last whitespace run
+        const int lastWord = ws == std::string::npos ? 0 : int(ws) + 1;
+        cx.haveResult = true, cx.start = lastWord, cx.length = int(partial.size()) - lastWord;
+        cx.result.clear();
+        for (const std::string& t : customTabSuggestions(partial.substr(size_t(lastWord)))) cx.result.push_back({t});
+        return;
+    }
     if (f.value.empty() || f.value[0] != '/' || f.cursor < 1 || !s.online()) {
         cx.pendingId = -1;
         return;
@@ -233,6 +279,22 @@ void registerHandlers(UiState& s, net::Client& client) {
             cx.parsed = false;
         });
     });
+    client.onPlay("custom_chat_completions", [sp](net::Reader& r) {  // ClientboundCustomChatCompletionsPacket
+        const int action = r.varInt();  // 0 add, 1 remove, 2 set
+        std::vector<std::string> entries;
+        const i32 n = r.varInt();
+        for (i32 i = 0; i < n && r.ok; ++i) entries.emplace_back(r.str());
+        if (!r.ok) return;
+        sp->post([action, entries] {  // ClientSuggestionProvider.modifyCustomCompletions
+            auto& v = commands.customCompletions;
+            if (action == 2) v.clear();
+            for (const std::string& e : entries) {
+                auto it = std::find(v.begin(), v.end(), e);
+                if (action == 1 && it != v.end()) v.erase(it);
+                else if (action != 1 && it == v.end()) v.push_back(e);
+            }
+        });
+    });
     client.onPlay("command_suggestions", [sp, lang](net::Reader& r) {
         const int id = r.varInt(), start = r.varInt(), length = r.varInt();
         const i32 n = r.varInt();
@@ -279,6 +341,23 @@ UiModuleRegistrar reg([] {
     return m;
 }());
 
+}  // namespace
+
+CommandCheck verifyCommand(const std::string& command) {  // ClientPacketListener.verifyCommand
+    const std::string input = "/" + command;
+    const cmd::Parse p = cmd::parse(commands.tree, input, 1);
+    if (!cmd::validCommand(commands.tree, p)) return CommandCheck::ParseErrors;
+    if (cmd::hasSignedArguments(commands.tree, p)) return CommandCheck::SignatureRequired;
+    if (!cmd::validCommand(commands.tree, cmd::parse(commands.tree, input, 1, false))) return CommandCheck::PermissionsRequired;
+    return CommandCheck::NoIssues;
+}
+
+bool commandHasSignedArguments(const std::string& command) {  // SignableCommand.of(...).arguments() not empty
+    return cmd::hasSignedArguments(commands.tree, cmd::parse(commands.tree, "/" + command, 1));
+}
+
+namespace {
+
 // --- chat component events ----------------------------------------------------------------------------------------
 
 // The style under GUI point (mx, my) in the open chat (ChatComponent geometry of hud.cpp drawChat); null: none.
@@ -324,11 +403,6 @@ std::vector<Text> hoverLines(UiState& s, const TextEvents& ev) {
     return lines;
 }
 
-void openUrl(const std::string& url) {
-    std::wstring w(url.begin(), url.end());
-    ShellExecuteW(nullptr, L"open", w.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-}
-
 // ChatScreen.handleComponentClicked + Screen.defaultHandleGameClickEvent.
 bool clickStyle(UiState& s, const Style& st, bool shift) {
     if (!st.events) return false;
@@ -342,29 +416,7 @@ bool clickStyle(UiState& s, const Style& st, bool shift) {
         return true;
     }
     if (ev.click.empty()) return false;
-    LOG("ui: chat click %s \"%s\"", ev.click.c_str(), ev.clickValue.c_str());
-    if (ev.click == "run_command") {
-        std::string cmd = ev.clickValue;
-        if (!cmd.empty() && cmd[0] == '/') cmd.erase(0, 1);  // Commands.trimOptionalPrefix
-        if (s.online()) {
-            net::Writer w;
-            w.str(cmd);
-            s.client->sendPlay("chat_command", w);
-        }
-    } else if (ev.click == "suggest_command") {  // insertText(value, replace)
-        f.value = ev.clickValue.substr(0, size_t(f.maxLength));
-        f.cursor = f.selection = int(f.value.size());
-    } else if (ev.click == "copy_to_clipboard") {
-        s.window->setClipboard(ev.clickValue);
-    } else if (ev.click == "open_url") {  // ConfirmLinkScreen (chatLinksPrompt)
-        const std::string url = ev.clickValue;
-        if (!url.starts_with("http://") && !url.starts_with("https://")) return true;
-        UiState* sp = &s;
-        showConfirm(s, Text(s.res.translate("chat.link.confirm")), Text(url), s.res.translate("chat.link.open"), [sp, url] {
-            openUrl(url);
-            sp->openScreen(Screen::Chat);
-        }, Screen::Chat);
-    }
+    handleGameClick(s, clickOf(ev), Screen::Chat);  // dialogs.h: Screen.defaultHandleGameClickEvent
     return true;
 }
 
@@ -458,6 +510,16 @@ void chatExtDraw(UiState& s, Canvas& c) {
         const int y = s.guiH() - 27 - 12 * int(i);
         c.fill(float(cx.usageX - 1), float(y), float(cx.usageX + cx.usageW + 1), float(y + 12), kFill);
         s.font.draw(c, cx.usage[i], float(cx.usageX), float(y + 2), 0xFFFFFFFF, true);
+    }
+    // Hovered message tag indicator (DrawingFocusedGraphicsAccess.handleTag): the tag's text.
+    const int chatBottom = s.guiH() - 40;
+    const int line = int(std::floor((float(chatBottom) - my) / 9.0f));
+    if (my < float(chatBottom) && mx >= 0 && mx < 2 && line >= 0 && line < std::min(int(s.chatLines.size()) - s.chatScroll, 20)) {
+        const ChatTag& tag = s.chatLines[size_t(line + s.chatScroll)].tag;
+        if (tag.color && !tag.key.empty()) {
+            s.drawTooltip(c, s.font.split(Text(s.res.translate(tag.key)), 210), mx, my);
+            return;
+        }
     }
     // Hovered chat component: its hover event.
     Style st;

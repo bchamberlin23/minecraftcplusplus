@@ -1,10 +1,15 @@
 #include "ui/ui.h"
 
+#include "ui/item_props.h"
+
 #include "assets/assets.h"
 #include "assets/game_reports.h"
 #include "ui/frontend.h"
+#include "ui/item_ui.h"
 #include "ui/signs_books.h"
+#include "ui/dialogs.h"
 #include "ui/gameplay_hud.h"
+#include "ui/mp_hud.h"
 #include "ui/ui_state.h"
 #include "world/terrain.h"
 
@@ -39,20 +44,6 @@ void readLpVec3(net::Reader& r, double out[3]) {
 
 std::string shortName(const std::string& n) { return n.substr(n.find(':') + 1); }
 
-// Vanilla chat types in registry order (the server sends minecraft:chat_type sorted by id).
-struct ChatType {
-    const char* key;
-    int params;  // 2: sender, content; 3: target, sender, content; -2: target, content
-    bool grayItalic;
-};
-const ChatType kChatTypes[] = {{"chat.type.text", 2, false},
-                               {"chat.type.emote", 2, false},
-                               {"commands.message.display.incoming", 2, true},
-                               {"commands.message.display.outgoing", -2, true},
-                               {"chat.type.announcement", 2, false},
-                               {"chat.type.team.text", 3, false},
-                               {"chat.type.team.sent", 3, false}};
-
 int vkFromName(std::string n) {
     for (char& c : n) c = char(std::toupper(u8(c)));
     if (n.size() == 1) {
@@ -84,6 +75,7 @@ fs::path Settings::path() {
 bool Settings::load() {
     std::ifstream f(path());
     if (!f) return false;
+    tutorialStep = "none";  // options from before the tutorial: an experienced player (a new file starts it)
     std::string line;
     while (std::getline(f, line)) {
         const size_t c = line.find(':');
@@ -94,10 +86,11 @@ bool Settings::load() {
         else if (k == "guiScale") guiScale = std::clamp(std::atoi(v.c_str()), 0, 8);
         else if (k == "mouseSensitivity") sensitivity = std::clamp(float(std::atof(v.c_str())), 0.f, 1.f);
         else if (k == "shaders") {
-            static const char* presets[] = {"off", "low", "medium", "high", "ultra"};
-            for (u8 i = 0; i < 5; ++i)
+            static const char* presets[] = {"off", "low", "medium", "high", "ultra", "pathtraced"};
+            for (u8 i = 0; i < 6; ++i)
                 if (v == presets[i]) video.shaders = i, videoSaved = true;
-        } else if (k == "upscaler") VideoSettings::parseUpscaler(v, video.upscaler);
+        } else if (k == "pathTracing") VideoSettings::parsePathTracing(v, video.pathTracing);
+        else if (k == "upscaler") VideoSettings::parseUpscaler(v, video.upscaler);
         else if (k == "upscaleQuality") VideoSettings::parseQuality(v, video.quality);
         else if (k == "sharpness") video.sharpness = std::clamp(float(std::atof(v.c_str())), 0.f, 1.f);
         else if (k == "frameGeneration") video.parseFrameGen(v);
@@ -106,11 +99,13 @@ bool Settings::load() {
         else if (k == "maxFps") video.fpsLimit = u32(std::clamp(std::atoi(v.c_str()), 0, 1000));
         else if (k == "shaderPack") shaderPack = v;
         else if (k == "bobView") bobView = v == "true";
+        else if (k == "fovEffectScale") fovEffectScale = std::clamp(float(std::atof(v.c_str())), 0.0f, 1.0f);
         else if (k == "attackIndicator") attackIndicator = ((std::atoi(v.c_str()) % 3) + 3) % 3;  // ByIdMap WRAP
         else if (k == "fullscreen") fullscreen = v == "true";
         else if (k == "toggleCrouch") toggleCrouch = v == "true";
         else if (k == "toggleSprint") toggleSprint = v == "true";
         else if (k == "autoJump") autoJump = v == "true";
+        else if (k == "sprintWindow") sprintWindow = std::clamp(std::atoi(v.c_str()), 0, 10);
         else if (k == "invertXMouse") invertMouseX = v == "true";
         else if (k == "invertYMouse") invertMouseY = v == "true";
         else if (k == "discrete_mouse_scroll") discreteMouseScroll = v == "true";
@@ -119,6 +114,7 @@ bool Settings::load() {
         else if (k == "allowServerListing") allowServerListing = v == "true";
         else if (k == "pauseOnLostFocus") pauseOnLostFocus = v == "true";
         else if (k == "advancedItemTooltips") advancedItemTooltips = v == "true";
+        else if (k == "tutorialStep") tutorialStep = v;
         else if (k.starts_with("modelPart_")) {
             for (int i = 0; i < 7; ++i)
                 if (k.substr(10) == kModelParts[i]) modelParts = v == "true" ? modelParts | (1 << i) : modelParts & ~(1 << i);
@@ -137,19 +133,22 @@ void Settings::save() const {
     std::ofstream f(path());
     f << "fov:" << fov << "\nrenderDistance:" << renderDistance << "\nguiScale:" << guiScale
       << "\nmouseSensitivity:" << sensitivity << "\n";
-    static const char* presets[] = {"off", "low", "medium", "high", "ultra"};
-    f << "shaders:" << presets[std::min<int>(video.shaders, 4)] << "\nupscaler:" << VideoSettings::upscalerKey(video.upscaler)
+    static const char* presets[] = {"off", "low", "medium", "high", "ultra", "pathtraced"};
+    f << "shaders:" << presets[std::min<int>(video.shaders, 5)] << "\npathTracing:" << VideoSettings::pathTracingKey(video.pathTracing)
+      << "\nupscaler:" << VideoSettings::upscalerKey(video.upscaler)
       << "\nupscaleQuality:" << VideoSettings::qualityKey(video.quality) << "\nsharpness:" << video.sharpness
       << "\nframeGeneration:" << video.frameGenKey() << "\nlowLatency:" << VideoSettings::lowLatencyKey(video.lowLatency)
       << "\nvsync:" << (video.vsync ? "true" : "false") << "\nmaxFps:" << video.fpsLimit << "\n";
     f << "shaderPack:" << shaderPack << "\n";
     f << "bobView:" << (bobView ? "true" : "false") << "\nattackIndicator:" << attackIndicator << "\n";
+    f << "fovEffectScale:" << fovEffectScale << "\n";
     auto b = [](bool v) { return v ? "true" : "false"; };
     f << "fullscreen:" << b(fullscreen) << "\ntoggleCrouch:" << b(toggleCrouch) << "\ntoggleSprint:" << b(toggleSprint)
-      << "\nautoJump:" << b(autoJump) << "\ninvertXMouse:" << b(invertMouseX) << "\ninvertYMouse:" << b(invertMouseY)
+      << "\nautoJump:" << b(autoJump) << "\nsprintWindow:" << sprintWindow << "\ninvertXMouse:" << b(invertMouseX) << "\ninvertYMouse:" << b(invertMouseY)
       << "\ndiscrete_mouse_scroll:" << b(discreteMouseScroll) << "\nmouseWheelSensitivity:" << mouseWheelSensitivity
       << "\nmainHand:" << (mainHand == 0 ? "left" : "right") << "\nallowServerListing:" << b(allowServerListing)
-      << "\npauseOnLostFocus:" << b(pauseOnLostFocus) << "\nadvancedItemTooltips:" << b(advancedItemTooltips) << "\n";
+      << "\npauseOnLostFocus:" << b(pauseOnLostFocus) << "\nadvancedItemTooltips:" << b(advancedItemTooltips)
+      << "\ntutorialStep:" << tutorialStep << "\n";
     for (int i = 0; i < 7; ++i) f << "modelPart_" << kModelParts[i] << ":" << b(modelParts & (1 << i)) << "\n";
     for (size_t i = 0; i < kKeyCount; ++i) f << "key_" << keyDef(Key(i)).name << ":" << keyName(keys[i]) << "\n";
 }
@@ -182,6 +181,7 @@ bool pausesGame(Screen s) {
     switch (s) {
         case Screen::None: case Screen::Chat: case Screen::Inventory: case Screen::Container: case Screen::Creative:
         case Screen::Death: case Screen::Sign: case Screen::InBed: case Screen::GameModeSwitcher: return false;
+        case Screen::Dialog: return dialogPausesGame();  // dialogs.h
         default: return true;
     }
 }
@@ -190,7 +190,7 @@ bool pausesGame(Screen s) {
 void Ui::State::updatePause() {
     // Minecraft.pauseIfInactive: half a second without the focus opens the pause menu (scripted runs drive their own
     // input and keep playing).
-    if (window->focused() || fe->cfg.menu) lastActiveTime = clock;
+    if (window->focused() || fe->cfg.menu || window->headless()) lastActiveTime = clock;  // headless: never focused
     else if (settings.pauseOnLostFocus && script.empty() && screen == Screen::None && clock - lastActiveTime > 0.5)
         openScreen(Screen::Pause);
     // Minecraft.runTick: a singleplayer world that is not open to LAN pauses with a pause screen; the integrated server
@@ -215,6 +215,7 @@ void Ui::State::applyControls() {  // the key bindings and control options the g
     game->invertMouseX = settings.invertMouseX, game->invertMouseY = settings.invertMouseY;
     game->discreteScroll = settings.discreteMouseScroll, game->wheelSensitivity = settings.mouseWheelSensitivity;
     game->player().autoJump = settings.autoJump;
+    game->player().sprintWindow = settings.sprintWindow;
 }
 
 int Ui::State::gameMode() const {
@@ -264,7 +265,7 @@ void Ui::State::closeScreen(bool sendClose) {
             client->sendPlay("container_close", w);
         }
     }
-    if (old == Screen::Container) container.reset();
+    if (old == Screen::Container) mirrorPlayerSlots(), container.reset();  // the server's inventory menu takes these
     if (old == Screen::Creative && !carried.empty()) {  // dropped into the world, like closing the creative menu
         if (online()) {
             net::Writer w;
@@ -292,14 +293,25 @@ void Ui::State::closeScreen(bool sendClose) {
     window->setMouseCaptured(true);
 }
 
-void Ui::State::addChat(const Text& message) {
-    nativeMods.chatReceived(message.plain());
-    chatMessages.insert(chatMessages.begin(), {message, guiTicks});
-    if (chatMessages.size() > 100) chatMessages.pop_back();
-    const std::vector<Text> lines = font.split(message, 320);  // ChatComponent.getWidth() at default options
+void Ui::State::addChat(const Text& message) { addChatMessage({message, guiTicks, {}, kTagSystemSinglePlayer}); }
+
+void Ui::State::addChatMessage(ChatMessage m) {
+    nativeMods.chatReceived(m.text.plain());
+    const std::vector<Text> lines = font.split(m.text, 320);  // ChatComponent.getWidth() at default options
     for (size_t i = 0; i < lines.size(); ++i) {
         if (screen == Screen::Chat && chatScroll > 0) ++chatScroll;
-        chatLines.insert(chatLines.begin(), ChatLine{lines[i], guiTicks, i == lines.size() - 1});
+        chatLines.insert(chatLines.begin(), ChatLine{lines[i], m.addedTick, i == lines.size() - 1, m.tag});
+    }
+    if (chatLines.size() > 100) chatLines.resize(100);
+    chatMessages.insert(chatMessages.begin(), std::move(m));
+    if (chatMessages.size() > 100) chatMessages.pop_back();
+}
+
+void Ui::State::refreshChatLines() {
+    chatLines.clear();
+    for (auto it = chatMessages.rbegin(); it != chatMessages.rend(); ++it) {
+        const std::vector<Text> lines = font.split(it->text, 320);
+        for (size_t i = 0; i < lines.size(); ++i) chatLines.insert(chatLines.begin(), ChatLine{lines[i], it->addedTick, i == lines.size() - 1, it->tag});
     }
     if (chatLines.size() > 100) chatLines.resize(100);
 }
@@ -317,38 +329,13 @@ void Ui::State::sendChat(const std::string& raw) {
         else addChat(translatable("chat.type.text", {Text("Player"), Text(text)}, lang()));
         return;
     }
-    if (text[0] == '/') {
-        net::Writer w;
-        w.str(text.substr(1));
-        client->sendPlay("chat_command", w);
-        LOG("[chat] sent command %s", text.c_str());
-        return;
-    }
-    // ServerboundChatPacket: unsigned (offline mode), with the message acknowledgements the server tracks.
-    static std::mt19937_64 rng(std::random_device{}());
-    net::Writer w;
-    w.str(text);
-    w.u64v(u64(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count()));
-    w.u64v(rng());
-    w.boolean(false);  // no signature
-    w.varInt(lastSeenOffset);
-    lastSeenOffset = 0;
-    u8 bits[3] = {};
-    for (int i = 0; i < 20; ++i) {
-        const int index = (lastSeenTail + i) % 20;
-        if (!lastSeen[size_t(index)]) continue;
-        bits[i / 8] |= u8(1 << (i % 8));
-        lastSeen[size_t(index)]->acknowledged = true;
-    }
-    w.bytes(bits, 3);
-    w.u8v(0);  // checksum: ignored
-    client->sendPlay("chat", w);
-    LOG("[chat] sent message %s", text.c_str());
+    if (text[0] == '/') sendChatCommand(*this, text.substr(1));  // chat_net.cpp
+    else sendChatMessage(*this, text);
 }
 
 void Ui::State::syncHotbarToGame() {
-    for (int i = 0; i < 9; ++i) {
-        const ItemStack& s = inventory.slots[size_t(36 + i)];
+    for (int i = 0; i < 10; ++i) {  // the hotbar, then the off hand (45)
+        const ItemStack& s = inventory.slots[size_t(i < 9 ? 36 + i : 45)];
         const int item = s.empty() ? -1 : s.item;
         if (item == hotbarSynced[i]) continue;
         hotbarSynced[i] = item;
@@ -368,7 +355,8 @@ void Ui::State::syncHotbarToGame() {
                 if (name == from) name = to, mapped = true;
             if (mapped || items.isBlockItem(item)) block = registry->idFor(name);
         }
-        game->setHotbarBlock(i, block);
+        if (i < 9) game->setHotbarBlock(i, block);
+        else game->setOffhandBlock(block);
     }
 }
 
@@ -451,6 +439,11 @@ bool Ui::loadImpl(const fs::path& jar, const fs::path& minecraftDir, const GameR
     s.iconAtlas.init(2048, 2048);
     if (!s.font.load(s.res, s.guiAtlas) || !s.sprites.load(s.res, s.guiAtlas)) return false;
     if (!s.items.init(reports, s.res)) LOG("warning: item registry unavailable; inventories will be empty");
+    if (const wchar_t* local = _wgetenv(L"LOCALAPPDATA")) {  // item_data.cpp: tooltip data, default components
+        const fs::path cache = fs::path(local) / "minecraftCplusplus" / "reports";
+        const std::string version = jar.stem().string();
+        s.items.loadGameData(minecraftDir, version, cache, cache / version / "reports" / "minecraft" / "components" / "item");
+    }
     for (const char* tex : {"gui/container/inventory", "gui/container/generic_54", "gui/container/crafting_table",
                             "gui/container/furnace", "gui/container/creative_inventory/tab_item_search",
                             "gui/container/creative_inventory/tab_items", "gui/container/dispenser",
@@ -458,6 +451,14 @@ bool Ui::loadImpl(const fs::path& jar, const fs::path& minecraftDir, const GameR
                             "gui/container/blast_furnace"})
         s.sprites.texture(tex);
     s.icons.init(s.res, s.items, s.iconAtlas);
+    itemWorld().keyDown = [st = &s](std::string_view name) {  // IsKeybindDown: KeyMapping.isDown by name
+        for (size_t k = 0; k < kKeyCount; ++k)
+            if (name == keyDef(Key(k)).name) {
+                const int vk = st->settings.key(Key(k));
+                return vk != 0 && st->window && st->window->keyDown(vk);
+            }
+        return false;
+    };
     s.loaded = true;
     LOG("ui      %8.1f ms  fonts, GUI sprites and %d items from the game", t.ms(), s.items.count());
     return true;
@@ -540,11 +541,15 @@ bool Ui::init(const Init& in) {
     return true;
 }
 
+static void resetConnection(Ui::State& s);
+
 void Ui::registerHandlers(net::Client& client) {
     State* s = s_.get();
+    resetConnection(*s);
     client.setInformation(clientInformation(s->settings));  // the login sends it
     const Lang* lang = &s->res.lang();
     const Items* items = &s->items;
+    attachItemWorld(client);  // item model properties: dimension, spawn, last death (item_props.h)
 
     client.onPlay("set_health", [s](net::Reader& r) {
         const float health = r.f32();
@@ -761,6 +766,7 @@ void Ui::registerHandlers(net::Client& client) {
             if (m->slots.size() < slots.size()) m->slots.resize(slots.size());
             for (size_t i = 0; i < slots.size(); ++i) m->slots[i] = slots[i];
             if (ok) s->carried = carried;
+            s->mirrorPlayerSlots(id == 0);  // one Inventory behind both menus
         });
     });
     client.onPlay("container_set_slot", [s, items](net::Reader& r) {
@@ -774,6 +780,7 @@ void Ui::registerHandlers(net::Client& client) {
             m->stateId = state;
             if (size_t(slot) >= m->slots.size()) m->slots.resize(size_t(slot) + 1);
             m->slots[size_t(slot)] = st;
+            s->mirrorPlayerSlots(id == 0);  // one Inventory behind both menus
         });
     });
     client.onPlay("container_set_data", [s](net::Reader& r) {
@@ -833,79 +840,7 @@ void Ui::registerHandlers(net::Client& client) {
             if (slot >= 0 && slot < 9) s->game->setSelectedSlot(slot);
         });
     });
-    auto chatMessage = [s](Text t) {
-        LOG("[chat] %s", t.plain().c_str());
-        s->post([s, t = std::move(t)] { s->addChat(t); });
-    };
-    client.onPlay("system_chat", [s, lang, chatMessage](net::Reader& r) {
-        Text t = parseComponent(r.nbt(), lang);
-        if (r.boolean()) {
-            s->post([s, t] {
-                s->actionbar = t;
-                s->actionbarTime = 60;
-            });
-            return;
-        }
-        chatMessage(std::move(t));
-    });
-    auto decorate = [lang](int chatType, const Text& sender, const Text* target, const Text& content) {
-        if (chatType < 0 || chatType >= int(std::size(kChatTypes))) return translatable("chat.type.text", {sender, content}, lang);
-        const ChatType& ct = kChatTypes[chatType];
-        Style st;
-        if (ct.grayItalic) st.color = 0xAAAAAA, st.italic = 1;
-        const Text tgt = target ? *target : Text();
-        if (ct.params == 3) return translatable(ct.key, {tgt, sender, content}, lang, st);
-        if (ct.params == -2) return translatable(ct.key, {tgt, content}, lang, st);
-        return translatable(ct.key, {sender, content}, lang, st);
-    };
-    client.onPlay("player_chat", [s, lang, chatMessage, decorate](net::Reader& r) {
-        r.varInt();    // global index
-        r.skip(16);    // sender
-        r.varInt();    // index
-        std::string signature;
-        if (r.boolean()) signature = std::string(r.bytes(256));
-        Text content(std::string(r.str()));
-        r.i64v(), r.i64v();  // timestamp, salt
-        const i32 seen = r.varInt();
-        for (i32 i = 0; i < seen && r.ok; ++i)
-            if (r.varInt() == 0) r.skip(256);
-        if (r.boolean()) content = parseComponent(r.nbt(), lang);
-        const int filter = r.varInt();
-        if (filter == 2) {
-            const i32 longs = r.varInt();
-            r.skip(size_t(std::max(0, longs)) * 8);
-        }
-        const int type = r.varInt() - 1;
-        if (type < 0) return;  // inline chat type: not supported
-        const Text sender = parseComponent(r.nbt(), lang);
-        Text target;
-        const bool hasTarget = r.boolean();
-        if (hasTarget) target = parseComponent(r.nbt(), lang);
-        if (!signature.empty())
-            s->post([s, signature] {  // LastSeenMessagesTracker.addPending
-                if (signature == s->lastSeenSignature) return;
-                s->lastSeenSignature = signature;
-                s->lastSeen[size_t(s->lastSeenTail)] = State::Seen{signature, false};
-                s->lastSeenTail = (s->lastSeenTail + 1) % 20;
-                if (++s->lastSeenOffset > 64 && s->online()) {
-                    net::Writer w;
-                    w.varInt(s->lastSeenOffset);
-                    s->client->sendPlay("chat_ack", w);
-                    s->lastSeenOffset = 0;
-                }
-            });
-        if (filter == 1) return;
-        chatMessage(decorate(type, sender, hasTarget ? &target : nullptr, content));
-    });
-    client.onPlay("disguised_chat", [lang, chatMessage, decorate](net::Reader& r) {
-        const Text content = parseComponent(r.nbt(), lang);
-        const int type = r.varInt() - 1;
-        const Text sender = type >= 0 ? parseComponent(r.nbt(), lang) : Text("?");
-        Text target;
-        const bool hasTarget = type >= 0 && r.boolean();
-        if (hasTarget) target = parseComponent(r.nbt(), lang);
-        chatMessage(decorate(type, sender, hasTarget ? &target : nullptr, content));
-    });
+    // Chat packets: chat_net.cpp.
     client.onPlay("set_title_text", [s, lang](net::Reader& r) {
         Text t = parseComponent(r.nbt(), lang);
         s->post([s, t] {
@@ -942,43 +877,39 @@ void Ui::registerHandlers(net::Client& client) {
         if (m.registerHandlers) m.registerHandlers(*s, client);
 }
 
-void Ui::attachSession(net::Client* client, net::Session* session) {
-    State& s = *s_;
-    s.client = client;
-    s.session = session;
-    if (session) session->creativeHotbarSync = false;  // the inventory is server-driven now
+// Per-connection state starts over: when a new client's handlers are registered (before any of its packets is
+// applied: the join completes on a worker and its first packets can be applied before attachSession) and when the
+// session goes away.
+static void resetConnection(Ui::State& s) {
     s.inventory.slots.assign(46, ItemStack{});
     s.effects.clear();
     std::fill(std::begin(s.hotbarSynced), std::end(s.hotbarSynced), -2);
     s.carried = ItemStack{};
     s.container.reset();
-    if (s.screen != Screen::None && s.screen != Screen::Chat) s.closeScreen(false);
     for (const UiModule& m : uiModules())
         if (m.attached) m.attached(s);
-    if (!session) return;
-    // Minecraft.startUseItem: the main hand first, then the off hand when the main hand's use passes. The client
-    // cannot simulate item uses, so the off hand gets its turn when the main hand holds nothing, a block or a
-    // sword / pickaxe (no use of their own): torches and shields in the off hand. After a use of an entity (which
-    // mostly passes, but feeds or trades with some) only such hands go on.
-    s.game->onUseItem = [&s, session](const RayHit* hit, bool afterEntity) {
-        const int sel = s.game->selectedSlot();
-        const ItemStack& main = s.inventory.slots[size_t(36 + sel)];
-        const ItemStack& off = s.inventory.slots[45];
-        const std::string mainName = main.empty() ? std::string() : s.items.name(main.item);
-        const bool mainPasses = main.empty() || s.items.isBlockItem(main.item) || mainName.ends_with("_sword") ||
-                                mainName.ends_with("_pickaxe");
-        if (afterEntity && !mainPasses) return;
-        if (!afterEntity) openWritableBook(s, 0);  // signs_books.cpp: book and quill (opened client side)
-        session->useItem(0);
-        if (off.empty() || !mainPasses) return;
-        if (!afterEntity) openWritableBook(s, 1);
-        if (hit) session->useItemOn(1, *hit);
-        session->useItem(1);
+}
+
+void Ui::attachSession(net::Client* client, net::Session* session) {
+    State& s = *s_;
+    s.client = client;
+    s.session = session;
+    if (session) session->creativeHotbarSync = false;  // the inventory is server-driven now
+    if (s.screen != Screen::None && s.screen != Screen::Chat) s.closeScreen(false);
+    if (!session) return resetConnection(s);
+    // Minecraft.startUseItem reached this hand's item use (Game::startUseItem decides the hands' turns from the
+    // gameplay layer's predicted results): ServerboundUseItemPacket; a book and quill opens client side.
+    s.game->onUseItem = [&s, session](int hand) {
+        openWritableBook(s, hand);  // signs_books.cpp
+        session->useItem(hand);
     };
 }
 
 void Ui::setEntities(ent::EntityWorld* entities) { s_->entities = entities; }
-void Ui::setItemModels(ent::ItemModels* models) { s_->itemModels = models; }
+void Ui::setItemModels(ent::ItemModels* models) {
+    s_->itemModels = models;
+    s_->icons.setItemModels(models);
+}
 
 int Ui::ticksFrozen() const { return s_->ticksFrozen; }
 
@@ -1060,7 +991,7 @@ void Ui::State::runScript(double) {
             const Layout l = layoutFor(m);
             const int idx = std::atoi(arg(0).c_str());
             if (idx >= 0 && size_t(idx) < l.slots.size()) {
-                const float left = float((guiW() - l.width) / 2), top = float((guiH() - l.height) / 2);
+                const float left = float(recipeBookLeft(*this, m, l.width)), top = float((guiH() - l.height) / 2);
                 int px, py;
                 toPixels(left + float(l.slots[size_t(idx)].x) + 8, top + float(l.slots[size_t(idx)].y) + 8, px, py);
                 window->setScriptedCursor(px, py);
@@ -1081,7 +1012,7 @@ void Ui::State::runScript(double) {
             game->retarget();
             game->useTarget(arg(0) != "break");
         } else if (st.verb == "useitem") {  // right click into the air: use the held item
-            if (game->onUseItem) game->onUseItem(nullptr, false);
+            game->startUseItem(false);
         } else if (st.verb == "attack") {  // left click on the entity under the crosshair
             if (game->onEntityClick) game->onEntityClick(true, false, -1.0);
         } else if (st.verb == "shot") {
@@ -1093,6 +1024,11 @@ void Ui::State::runScript(double) {
             const Player& p = game->player();
             LOG("script: %s| pos %.3f %.3f %.3f ground %d health %.1f food %d sneak %d slot %d", msg.c_str(), p.pos[0], p.pos[1],
                 p.pos[2], int(p.onGround), health, food, int(p.lastInput.sneak), game->selectedSlot());
+        } else if (st.verb == "block") {  // block x y z: logs the block state there
+            const int x = std::atoi(arg(0).c_str()), y = std::atoi(arg(1).c_str()), z = std::atoi(arg(2).c_str());
+            LOG("script: block %d %d %d = %s", x, y, z, registry->name(world->block(x, y, z)).c_str());
+        } else if (st.verb == "trace") {  // trace on|off: the player's state every tick
+            game->traceTicks = arg(0) != "off";
         } else if (st.verb == "dump") {  // logs the open menu's slots
             const Menu& m = activeMenu();
             for (size_t i = 0; i < m.slots.size(); ++i)
@@ -1107,7 +1043,8 @@ void Ui::State::runScript(double) {
                 {"pause", Screen::Pause},         {"options", Screen::Options},     {"online", Screen::Online},
                 {"skin", Screen::SkinCustomization}, {"sounds", Screen::Sounds},    {"video", Screen::Video},
                 {"videoextra", Screen::VideoExtra}, {"controls", Screen::Controls}, {"mouse", Screen::MouseSettings},
-                {"keybinds", Screen::KeyBinds},   {"accessibility", Screen::Accessibility}, {"none", Screen::None}};
+                {"keybinds", Screen::KeyBinds},   {"accessibility", Screen::Accessibility}, {"credits", Screen::CreditsAttribution},
+                {"none", Screen::None}};
             for (auto [n, sc] : kScreens)
                 if (arg(0) == n) sc == Screen::None ? closeScreen() : openScreen(sc);
         } else if (st.verb == "fullscreen") {
@@ -1121,6 +1058,7 @@ void Ui::State::runScript(double) {
 void Ui::beginFrame(double dt) {
     State& s = *s_;
     s.clock += dt;
+    itemWorld().shiftDown = s.window && s.window->keyDown(VK_SHIFT);
     {
         std::vector<std::function<void()>> pending;
         {
@@ -1130,6 +1068,8 @@ void Ui::beginFrame(double dt) {
         for (auto& fn : pending) fn();
     }
     s.frontEndFrame();  // title.cpp
+    for (const UiModule& m : uiModules())  // modules.h
+        if (m.frame) m.frame(s);
     if (s.game) s.game->bobView = s.settings.bobView;  // the View Bobbing option
     // The server's data-driven registries (enchantment / painting / instrument names, creative contents).
     if (s.client && s.client->inPlay() && !s.items.registriesSet()) s.items.setRegistries(*s.client);

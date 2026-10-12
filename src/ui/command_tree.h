@@ -15,6 +15,7 @@ namespace ui::cmd {
 struct Node {
     u8 type = 0;  // 0 root, 1 literal, 2 argument
     bool executable = false;
+    bool restricted = false;  // FLAG_RESTRICTED: only for a source with the player's elevated permissions
     int redirect = -1;
     std::vector<int> children;
     std::string name;    // literal text / argument name
@@ -67,8 +68,13 @@ struct Parse {
     bool canRead() const { return cursor < int(input.size()); }
 };
 
-// CommandDispatcher.parse from `start` (after the slash).
-Parse parse(const Tree& t, const std::string& input, int start);
+// CommandDispatcher.parse from `start` (after the slash). allowRestricted false: like the client's restricted
+// suggestion provider (restricted nodes cannot be used).
+Parse parse(const Tree& t, const std::string& input, int start, bool allowRestricted = true);
+// ClientPacketListener.isValidCommand: everything read, no errors, the last node executable.
+bool validCommand(const Tree& t, const Parse& p);
+// SignableCommand.hasSignableArguments: a minecraft:message argument was parsed.
+bool hasSignedArguments(const Tree& t, const Parse& p);
 
 // CommandDispatcher.getCompletionSuggestions: the context at the cursor. Local suggestions when every candidate
 // child is a literal or a boolean; askServer otherwise (the server completes it).

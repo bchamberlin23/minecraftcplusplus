@@ -11,6 +11,7 @@
 #include <atomic>
 #include <climits>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <unordered_map>
 
@@ -22,6 +23,7 @@ class Client;
 }
 namespace ui {
 class Items;
+struct ItemStack;
 }
 
 namespace ent {
@@ -32,6 +34,7 @@ struct MetaValue {
     i64 i = 0;          // byte / int / long / bool / enum / holder id / item id (-1 = empty) / block state
     float f[4] = {};    // float, rotations, vector, quaternion; f[0] = item count for item stacks
     i32 str = -1;       // index into the event string pool (names)
+    i32 stack = -1;     // item stacks: index into the event stack pool (the whole stack with its components)
 };
 
 enum class EventType : u8 {
@@ -64,9 +67,10 @@ struct EventQueue {
     std::vector<MetaValue> meta;
     std::vector<i32> ints;
     std::vector<std::string> strings;
+    std::vector<std::shared_ptr<const ui::ItemStack>> stacks;
     void clear() {
         events.clear(), steps.clear(), meta.clear(), ints.clear();
-        strings.clear();
+        strings.clear(), stacks.clear();
     }
 };
 
@@ -164,6 +168,8 @@ struct Entity {
     i32 equipDye[8] = {-1, -1, -1, -1, -1, -1, -1, -1};   // dyed_color (RGB) by slot, -1 none
     u8 equipFoil = 0;                                      // enchantment glint by slot (bits)
     i32 itemDye = -1;                                      // item / item frame stack: dyed_color
+    // The whole stacks (data components: item models, trims, profiles, banner patterns ...); null when unknown.
+    std::shared_ptr<const ui::ItemStack> itemStack, equipStack[8];
     bool itemFoil = false;
     int mapId = -1;             // item / item frame stack: map_id component (-1 none)
     int rotation = 0;           // item frame rotation (0..7)
@@ -173,6 +179,9 @@ struct Entity {
 
     // Animation timers (ticks).
     int age = 0, hurtTime = 0, deathTime = 0, swingTime = -1, swingDuration = 6;
+    int swingHand = 0;     // the swinging hand: 0 main, 1 off (ClientboundSwingPacket)
+    int swingType = -1;    // SwingAnimationType (0 none, 1 whack, 2 stab); -1: from the item in the swinging hand
+    int kineticHitTicks = -1;  // ticks since a KINETIC_HIT entity event (SpearAnimations hit feedback), -1 none
     float flap = 0, oFlap = 0, flapSpeed = 0, oFlapSpeed = 0, flapping = 1;
     float bobOffset = 0;
     int vehicle = -1;
@@ -277,11 +286,23 @@ public:
     // Left / right click with an entity under the crosshair (before blocks): true when an entity closer than
     // blockDistance (< 0: no block targeted) is targeted; it then takes the click (attack / use when pressed).
     bool click(const double eye[3], const double dir[3], bool attack, bool use, double blockDistance, double reach,
-               bool sneaking = false);  // sneaking: sent with interactions (sneak + use opens a mount's inventory)
+               bool sneaking = false, double minReach = 0);
+    // AttackRange.getClosesetHit for a weapon's attack_range: entities along the look from minReach to maxReach (+ the
+    // forward movement), their boxes inflated by the hitbox margin (the hit projected back onto the box unless a block
+    // is in the way); the closest to the eye. blockRay: the distance to the first block along a ray (max: none).
+    // Attacks it (true) or, with nothing in range, only the swing goes out (false).
+    using BlockRay = std::function<double(const double origin[3], const double dir[3], double max)>;
+    PickResult pickAttackRange(const double eye[3], const double dir[3], double minReach, double maxReach, double margin,
+                               double forward, const BlockRay& blockRay) const;
+    bool attackInRange(const double eye[3], const double dir[3], double minReach, double maxReach, double margin,
+                       double forward, const BlockRay& blockRay);  // sneaking: sent with interactions (sneak + use opens a
+                                                             // mount's inventory); minReach: a weapon's attack range
     // Client effects for the visuals (particles), main thread: entity events (ClientboundEntityEventPacket ids, after
     // they are applied; 17 makes a firework rocket explode) and
     // animate actions (ClientboundAnimatePacket: 0 wake up, 1 critical hit, 2 magic critical hit).
     std::function<void(const Entity&, int event)> onEntityEvent;
+    // Entity events for ids not tracked here (the local player's own, e.g. KINETIC_HIT).
+    std::function<void(int id, int event)> onUntrackedEntityEvent;
     std::function<void(const Entity&, int action)> onAnimate;
 
     struct Stats {
@@ -354,6 +375,9 @@ int defaultSkinIndex(const u8 uuid[16]);
 // ElytraAnimationState.tick. move: this tick's delta movement; fallFlying: shared flag 7 (the local player's own
 // state for the avatar).
 void tickPoseAnimation(Entity& e, const double move[3], bool fallFlying, bool crouching);
+// The entity's bounding box size (EntityDimensions with the baby / slime size / small armor stand scales, player
+// poses): width and height.
+void entitySize(const Entity& e, double& w, double& h);
 // BedBlock.getBedOrientation at a block (Direction 2D data value, -1 if it is not a bed). Caller holds the world lock.
 int bedFacingAt(const World& world, const BlockRegistry& registry, int x, int y, int z);
 // LivingEntity.isFullyFrozen.

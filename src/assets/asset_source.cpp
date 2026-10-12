@@ -14,7 +14,52 @@ std::string utf8(const fs::path& p) {
 
 fs::path fromUtf8(const std::string& s) { return fs::path(std::u8string(s.begin(), s.end())); }
 
+// PackFormat: major.minor, compared in that order.
+struct Format {
+    int major = 0, minor = 0;
+    bool operator<=(const Format& o) const { return major != o.major ? major < o.major : minor <= o.minor; }
+};
+Format gResourceFormat{97, 1}, gDataFormat{121, 0};  // 26.3 until the jar says otherwise
+
+// PackFormat.BOTTOM_CODEC / TOP_CODEC: a major, or [major, minor...]; a missing minor is 0 (min) or any (max).
+std::optional<Format> parseFormat(const nlohmann::json& j, bool top) {
+    if (j.is_number_integer()) return Format{j.get<int>(), top ? INT32_MAX : 0};
+    if (j.is_array() && !j.empty() && j[0].is_number_integer())
+        return Format{j[0].get<int>(), j.size() > 1 && j[1].is_number_integer() ? j[1].get<int>() : top ? INT32_MAX : 0};
+    return std::nullopt;
+}
+
+// OverlayEntry.isApplicable: min_format..max_format, or "formats" (majors: n, [min, max], {min_inclusive, max_inclusive}).
+bool overlayApplies(const nlohmann::json& e, const Format& version) {
+    std::optional<Format> lo, hi;
+    if (e.contains("min_format")) lo = parseFormat(e["min_format"], false);
+    if (e.contains("max_format")) hi = parseFormat(e["max_format"], true);
+    if ((!lo || !hi) && e.contains("formats")) {
+        const nlohmann::json& f = e["formats"];
+        int a = -1, b = -1;
+        if (f.is_number_integer()) a = b = f.get<int>();
+        else if (f.is_array() && f.size() == 2 && f[0].is_number_integer() && f[1].is_number_integer()) a = f[0], b = f[1];
+        else if (f.is_object() && f.contains("min_inclusive") && f.contains("max_inclusive")) a = f["min_inclusive"], b = f["max_inclusive"];
+        if (a < 0) return false;
+        lo = Format{a, 0}, hi = Format{b, INT32_MAX};
+    }
+    return lo && hi && *lo <= version && version <= *hi;
+}
+
+std::optional<std::regex> pattern(const nlohmann::json& o, const char* key) {
+    if (!o.is_object() || !o.contains(key) || !o[key].is_string()) return std::nullopt;
+    try {
+        return std::regex(o[key].get<std::string>());
+    } catch (const std::regex_error&) {
+        return std::regex("$^");  // an invalid pattern matches nothing
+    }
+}
+
 }  // namespace
+
+void AssetPack::setFormats(int resourceMajor, int resourceMinor, int dataMajor, int dataMinor) {
+    gResourceFormat = {resourceMajor, resourceMinor}, gDataFormat = {dataMajor, dataMinor};
+}
 
 // --- AssetPack ------------------------------------------------------------------------------------------------
 
@@ -36,6 +81,7 @@ std::unique_ptr<AssetPack> AssetPack::openZip(const fs::path& file, std::string 
         n.remove_prefix(prefix.size());
         pack->files_.push_back({std::string(n), u32(i), {}});
     }
+    pack->applyMeta();
     pack->finish();
     return pack;
 }
@@ -53,6 +99,7 @@ std::unique_ptr<AssetPack> AssetPack::openFolder(const fs::path& dir, std::strin
         std::replace(rel.begin(), rel.end(), '\\', '/');
         pack->files_.push_back({std::move(rel), 0, utf8(it->path())});
     }
+    pack->applyMeta();
     pack->finish();
     return pack;
 }
@@ -108,8 +155,60 @@ std::unique_ptr<AssetPack> AssetPack::openIndex(const fs::path& minecraftDir, co
     return pack;
 }
 
+// CompositePackResources: the overlay directories that apply to this version lie over the root (the last listed on
+// top), assets/ by the resource pack format and data/ by the data pack format. ResourceFilterSection: the filter.
+void AssetPack::applyMeta() {
+    const auto meta = std::find_if(files_.begin(), files_.end(), [](const File& f) { return f.path == "pack.mcmeta"; });
+    if (meta == files_.end()) return;
+    std::vector<u8> bytes;
+    if (zip_ ? !zip_->read(zip_->entries()[meta->entry], bytes) : !readFile(fromUtf8(meta->disk), bytes)) return;
+    const nlohmann::json j = nlohmann::json::parse(bytes.begin(), bytes.end(), nullptr, false);
+    if (!j.is_object()) return;
+    if (j.contains("filter") && j["filter"].is_object() && j["filter"].contains("block") && j["filter"]["block"].is_array())
+        for (const nlohmann::json& b : j["filter"]["block"]) filter_.push_back({pattern(b, "namespace"), pattern(b, "path")});
+    if (!j.contains("overlays") || !j["overlays"].is_object() || !j["overlays"].contains("entries") ||
+        !j["overlays"]["entries"].is_array())
+        return;
+    std::vector<std::pair<std::string, int>> dirs;  // overlay directory -> 1 assets, 2 data, 3 both apply
+    for (const nlohmann::json& e : j["overlays"]["entries"]) {
+        if (!e.is_object() || !e.contains("directory") || !e["directory"].is_string()) continue;
+        const int applies = (overlayApplies(e, gResourceFormat) ? 1 : 0) | (overlayApplies(e, gDataFormat) ? 2 : 0);
+        if (applies) dirs.push_back({e["directory"].get<std::string>() + "/", applies});
+    }
+    if (dirs.empty()) return;
+    std::unordered_map<std::string, size_t> at;  // path -> its file in files_ (the root's, then each overlay's)
+    for (size_t i = 0; i < files_.size(); ++i) at.emplace(files_[i].path, i);
+    std::vector<File> overlaid;
+    for (const auto& [dir, applies] : dirs)
+        for (const File& f : files_) {
+            if (!f.path.starts_with(dir)) continue;
+            std::string rest = f.path.substr(dir.size());
+            if (!((applies & 1) && rest.starts_with("assets/")) && !((applies & 2) && rest.starts_with("data/"))) continue;
+            File o = f;
+            o.path = std::move(rest);
+            overlaid.push_back(std::move(o));
+        }
+    // Later entries win: put them first, so finish()'s unique() keeps them over earlier ones and the root.
+    std::reverse(overlaid.begin(), overlaid.end());
+    overlaid.insert(overlaid.end(), files_.begin(), files_.end());
+    files_ = std::move(overlaid);
+}
+
+bool AssetPack::filters(std::string_view path) const {
+    std::string_view rest;
+    if (path.starts_with("assets/")) rest = path.substr(7);
+    else if (path.starts_with("data/")) rest = path.substr(5);
+    else return false;
+    const size_t slash = rest.find('/');
+    if (slash == std::string_view::npos) return false;
+    const std::string ns(rest.substr(0, slash)), p(rest.substr(slash + 1));
+    for (const FilterEntry& e : filter_)
+        if ((!e.ns || std::regex_match(ns, *e.ns)) && (!e.path || std::regex_match(p, *e.path))) return true;
+    return false;
+}
+
 void AssetPack::finish() {
-    std::sort(files_.begin(), files_.end(), [](const File& a, const File& b) { return a.path < b.path; });
+    std::stable_sort(files_.begin(), files_.end(), [](const File& a, const File& b) { return a.path < b.path; });
     files_.erase(std::unique(files_.begin(), files_.end(), [](const File& a, const File& b) { return a.path == b.path; }),
                  files_.end());
     index_.reserve(files_.size());
@@ -160,23 +259,28 @@ fs::path AssetPack::diskPath(std::string_view path) const {
 
 // --- AssetSource ----------------------------------------------------------------------------------------------
 
+bool AssetSource::visible(size_t pack, std::string_view path) const {
+    for (size_t j = pack + 1; j < packs_.size(); ++j)
+        if (packs_[j]->hasFilter() && packs_[j]->filters(path)) return false;
+    return true;
+}
+
 int AssetSource::find(std::string_view path) const {
     for (size_t i = packs_.size(); i-- > 0;)
-        if (packs_[i]->has(path)) return int(i);
+        if (packs_[i]->has(path)) return visible(i, path) ? int(i) : -1;
     return -1;
 }
 
 bool AssetSource::read(std::string_view path, std::vector<u8>& out) const {
-    for (size_t i = packs_.size(); i-- > 0;)
-        if (packs_[i]->has(path)) return packs_[i]->read(path, out);
-    return false;
+    const int i = find(path);
+    return i >= 0 && packs_[size_t(i)]->read(path, out);
 }
 
 std::vector<std::string> AssetSource::list(std::string_view prefix, std::string_view suffix) const {
     std::vector<std::string> out;
-    for (const auto& p : packs_)
-        p->list(prefix, [&](const std::string& f) {
-            if (std::string_view(f).ends_with(suffix)) out.push_back(f);
+    for (size_t i = 0; i < packs_.size(); ++i)
+        packs_[i]->list(prefix, [&](const std::string& f) {
+            if (std::string_view(f).ends_with(suffix) && visible(i, f)) out.push_back(f);
         });
     if (packs_.size() > 1) {
         std::sort(out.begin(), out.end());
@@ -189,7 +293,7 @@ void AssetSource::readAll(std::string_view path,
                           const std::function<void(size_t pack, const std::vector<u8>&)>& fn) const {
     std::vector<u8> bytes;
     for (size_t i = 0; i < packs_.size(); ++i)
-        if (packs_[i]->has(path) && packs_[i]->read(path, bytes)) fn(i, bytes);
+        if (packs_[i]->has(path) && visible(i, path) && packs_[i]->read(path, bytes)) fn(i, bytes);
 }
 
 std::vector<std::string> AssetSource::namespaces(std::string_view root) const {
@@ -208,11 +312,31 @@ void AssetSource::readLang(std::string_view code, std::unordered_map<std::string
             for (const auto& item : j.items())
                 if (item.value().is_string()) out[item.key()] = item.value().get<std::string>();
         });
+    // DeprecatedTranslationsInfo: the game's renamed keys (the jar's language files still use the old names).
+    std::vector<u8> bytes;
+    if (read("assets/minecraft/lang/deprecated.json", bytes)) {
+        const nlohmann::json j = nlohmann::json::parse(bytes.begin(), bytes.end(), nullptr, false);
+        if (j.is_object() && j.contains("renamed") && j["renamed"].is_object())
+            for (const auto& [from, to] : j["renamed"].items())
+                if (auto it = out.find(from); it != out.end() && to.is_string()) out[to.get<std::string>()] = it->second;
+    }
 }
 
 void AssetSource::addVanilla(AssetSource& src, const fs::path& jar, bool clientAssets) {
-    if (auto pack = AssetPack::openZip(jar, "vanilla")) src.add(std::move(pack));
-    else LOG("error: cannot read %s", jar.string().c_str());
+    if (auto pack = AssetPack::openZip(jar, "vanilla")) {
+        std::vector<u8> bytes;  // version.json pack_version: the formats pack overlays are chosen by
+        if (pack->read("version.json", bytes)) {
+            const nlohmann::json v = nlohmann::json::parse(bytes.begin(), bytes.end(), nullptr, false);
+            if (v.is_object() && v.contains("pack_version") && v["pack_version"].is_object()) {
+                const nlohmann::json& p = v["pack_version"];
+                auto num = [&](const char* k, int def) { return p.contains(k) && p[k].is_number_integer() ? p[k].get<int>() : def; };
+                AssetPack::setFormats(num("resource_major", 97), num("resource_minor", 0), num("data_major", 121), num("data_minor", 0));
+            }
+        }
+        src.add(std::move(pack));
+    } else {
+        LOG("error: cannot read %s", jar.string().c_str());
+    }
     if (!clientAssets) return;
     // versions/<v>/<v>.jar -> .minecraft
     const fs::path minecraftDir = jar.parent_path().parent_path().parent_path();

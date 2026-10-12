@@ -244,6 +244,17 @@ void detect(Entry& e, const PackVersion& pv) {
         else if (e.clientContent)
             e.warnings.push_back("adds blocks / items: its blocks are drawn from the mod's own models; its items, GUIs, "
                                  "entities and special renderers are not shown. Worlds played without it lose its blocks");
+        // Java client code (client entrypoints, client mixins) never runs here: only its data, assets and the server
+        // side do. Its screens, key bindings, HUD and renderers are missing, and a server that expects the mod's
+        // client half (a custom channel handshake) may refuse the connection.
+        bool clientCode = j.contains("entrypoints") && j["entrypoints"].is_object() && j["entrypoints"].contains("client") &&
+                          j["entrypoints"]["client"].is_array() && !j["entrypoints"]["client"].empty();
+        if (j.contains("mixins") && j["mixins"].is_array())
+            for (const auto& m : j["mixins"])
+                if (m.is_object() && m.contains("environment") && m["environment"] == "client") clientCode = true;
+        if (clientCode && e.environment != "client")
+            e.warnings.push_back("has client code (screens, key bindings, renderers): only its server side, data and "
+                                 "assets are used; servers needing its client half may refuse to connect");
         return;
     }
     if (mcmeta) {

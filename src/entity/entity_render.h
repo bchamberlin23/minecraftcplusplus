@@ -5,6 +5,7 @@
 #include "entity/entities.h"
 #include "entity/entity_anim.h"
 #include "entity/item_models.h"
+#include "game/item_rules.h"
 #include "render/pack_sink.h"
 #include "render/renderer.h"
 
@@ -21,6 +22,7 @@ public:
     // the previous frame's part matrices kept per entity).
     void prepare(const PassContext& ctx) override;
     void drawShadow(const ShadowContext& sc) override;
+    bool rtEntities(u32 frame, RtEntities& out) override;
 
     struct Stats {
         double cpuMs = 0;  // last frame: culling, animation, matrices and uploads
@@ -33,6 +35,8 @@ public:
 
     // Equipment (armor, elytra) from the item models' equipment data; dropped items are left to the visuals pass.
     void setItemModels(ItemModels* items) { items_ = items; }
+    // Item default components (spear timing for the arm poses).
+    void setRules(ItemRules* rules) { rules_ = rules; }
     void setItemEntitiesExternal(bool external) { externalItems_ = external; }  // the visuals pass draws item entities
     // The local player, drawn like any other player while the camera is detached (F5); nullptr: not drawn.
     void setLocalPlayer(const Entity* e) { localPlayer_ = e; }
@@ -138,6 +142,7 @@ private:
     std::unordered_map<u64, CachedLayers> layerCache_;  // resolved layers by type + variant state
     int equipmentLayers(const Entity& e, const TypeDef& d, Layer* out, int max);
     ItemModels* items_ = nullptr;
+    ItemRules* rules_ = nullptr;
     bool externalItems_ = false;
     const Entity* localPlayer_ = nullptr;
     const Entity* localShadow_ = nullptr;
@@ -166,6 +171,7 @@ private:
     std::vector<Attachment> attachments_;
     std::vector<int> ridden_;  // entities with a passenger this frame (EquineSaddleModel riding lines)
     int elytraModel_ = -1, elytraBabyModel_ = -1;
+    int spinModel_ = -1, spinTex_ = -1;  // SpinAttackEffectLayer (riptide)
 
     // Shader packs (PassContext::pack): vanilla-style vertices per entity for the pack's gbuffers_entities programs.
     PackSink* pack_ = nullptr;

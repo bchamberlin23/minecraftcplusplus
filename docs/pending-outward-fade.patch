@@ -1,0 +1,105 @@
+diff --git a/src/main.cpp b/src/main.cpp
+index 031bc81..a449385 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -831,6 +831,9 @@ int wmain(int argc, wchar_t** argv) {
+     };
+     bool escWas = false;
+     const double loopStart = nowSeconds();
++    const bool smoothReveal = !opt.bench && !opt.selftest && !menu;
++    if (smoothReveal) renderer.beginWorldReveal(cam.x, cam.z);
++    double previousStreamX = cam.x, previousStreamZ = cam.z;
+     Timer frameEnd;  // window.pump() + anything between frames
+     for (int frame = 0; window.pump(); ++frame) {
+         const double pumpMs = frameEnd.ms();
+@@ -875,6 +878,10 @@ int wmain(int argc, wchar_t** argv) {
+             netMs = t.ms();
+         }
+         if (session && session->dimension().name != lastDimension) {
++            if (smoothReveal && (!lastDimension.empty() || session->dimension().name != "minecraft:overworld")) {
++                renderer.beginWorldReveal(game.player().pos[0], game.player().pos[2]);
++                previousStreamX = game.player().pos[0], previousStreamZ = game.player().pos[2];
++            }
+             lastDimension = session->dimension().name;
+             renderer.resetTemporal();
+         }
+@@ -908,6 +915,10 @@ int wmain(int argc, wchar_t** argv) {
+                                session ? std::string_view(session->dimension().name) : "minecraft:overworld"});
+
+         const double preMs = frameTop.ms();
++        // Only a discontinuous move restarts the entrance wave; walking does not.
++        const double stepX = cam.x - previousStreamX, stepZ = cam.z - previousStreamZ;
++        if (smoothReveal && stepX * stepX + stepZ * stepZ > 128.0 * 128.0) renderer.beginWorldReveal(cam.x, cam.z);
++        previousStreamX = cam.x, previousStreamZ = cam.z;
+         Timer phase;
+         double genMs = 0, terrainMs = 0;
+         if (genService && (!session || session->dimension().name == "minecraft:overworld") && !(menu && ui.switching())) {
+diff --git a/src/render/renderer.cpp b/src/render/renderer.cpp
+index 1c47c33..c02e602 100644
+--- a/src/render/renderer.cpp
++++ b/src/render/renderer.cpp
+@@ -13,6 +13,7 @@
+ #include <chrono>
+ #include <cmath>
+ #include <cstddef>
++#include <cstdlib>
+ #include <unordered_map>
+
+ #include "CullCS.h"
+@@ -771,6 +772,25 @@ void Renderer::setFade(u32 slot, float fade) {
+     stage(sections_.Get(), u64(slot) * sizeof(GpuSection) + offsetof(GpuSection, fade), &fade, sizeof(fade));
+ }
+
++float Renderer::entranceTime(const Slot& slot, float now) const {
++    if (fadeSeconds_ <= 0) return 0;
++    if (revealStart_ <= 0 || now >= revealStart_ + 1.5f) return now;
++    const double width = double(16 << slot.origin[3]);
++    const double dx = std::max({double(slot.origin[0]) - revealX_, 0.0, revealX_ - (slot.origin[0] + width)});
++    const double dz = std::max({double(slot.origin[2]) - revealZ_, 0.0, revealZ_ - (slot.origin[2] + width)});
++    // Immediate surroundings appear first; the reveal reaches farther terrain over 1.5 s.
++    const float delay = std::clamp(float((std::sqrt(dx * dx + dz * dz) - 48.0) / 512.0), 0.0f, 1.5f);
++    return std::max(now, revealStart_ + delay);
++}
++
++void Renderer::beginWorldReveal(double x, double z) {
++    revealX_ = x, revealZ_ = z;
++    revealStart_ = fadeNow();
++    for (u32 slot : active_)
++        if (slot < slotCapacity_ && slots_[slot].inCut) setFade(slot, entranceTime(slots_[slot], revealStart_));
++    if (std::getenv("MCPP_STREAM_PROFILE")) LOG("world reveal: centre %.1f %.1f, outward fade over 1.5 s", x, z);
++}
++
+ void Renderer::setActive(const std::vector<u32>& slots) {
+     const float now = fadeNow();
+     if (cutMark_.size() < slotCapacity_) cutMark_.resize(slotCapacity_, 0);
+@@ -801,7 +821,7 @@ void Renderer::setActive(const std::vector<u32>& slots) {
+             std::erase_if(retiring_, [&](const Retiring& r) { return r.slot == s; });
+             setFade(s, now - (1.0f - fadeProgress(e.fade, now)) * fadeSeconds_);
+         } else {
+-            setFade(s, fadeSeconds_ > 0 ? now : 0.0f);
++            setFade(s, entranceTime(e, now));
+         }
+     }
+     for (auto& [k, s] : leaving) {
+diff --git a/src/render/renderer.h b/src/render/renderer.h
+index 580ebe1..5cd4eee 100644
+--- a/src/render/renderer.h
++++ b/src/render/renderer.h
+@@ -209,6 +209,7 @@ public:
+     // by one at the same place and level (an edit, new light) swaps at once.
+     void setActive(const std::vector<u32>& slots);
+     void setFadeSeconds(float seconds) { fadeSeconds_ = std::max(seconds, 0.0f); }
++    void beginWorldReveal(double x, double z);  // stagger entrance fades outward on join/large teleport
+     void flushUploads();  // submit staged copies now (used while loading)
+
+     // HUD and world overlays for the next frame.
+@@ -380,6 +381,9 @@ private:
+     std::vector<u32> cutMark_;
+     u32 cutStamp_ = 0;
+     float fadeSeconds_ = 0.75f;  // the game's chunkSectionFadeInTime default
++    float revealStart_ = 0;
++    double revealX_ = 0, revealZ_ = 0;
++    float entranceTime(const Slot& slot, float now) const;
+     std::vector<u32> translucent_;
+     u64 activeVersion_ = 0, sortedVersion_ = ~u64(0);
+     double sortedCam_[3] = {};

@@ -71,10 +71,32 @@ Layout layoutFor(const Menu& m);
 // What the client tells the server about its options (main hand, skin parts, server listing).
 net::Client::Information clientInformation(const Settings& s);
 
+// GuiMessageTag: the indicator left of a chat message (0: none) and its tooltip's translation key.
+struct ChatTag {
+    u32 color = 0;
+    std::string key;
+};
+inline const ChatTag kTagSystemSinglePlayer{0xD0D0D0, "chat.tag.system_single_player"};
+inline const ChatTag kTagSystem{0xD0D0D0, "chat.tag.system"};
+inline const ChatTag kTagNotSecure{0xD0D0D0, "chat.tag.not_secure"};
+inline const ChatTag kTagError{0xFF5555, "chat.tag.error"};
+// A tooltip's image component (ClientTooltipComponent.extractImage, e.g. a bundle's contents), after the first line.
+struct TooltipImage {
+    int width = 0, height = 0;
+    std::function<void(Canvas& c, float x, float y, int tooltipWidth)> draw;
+};
+
 struct ChatLine {
     Text text;
     int addedTick = 0;
     bool endOfEntry = true;
+    ChatTag tag;
+};
+struct ChatMessage {  // GuiMessage
+    Text text;
+    int addedTick = 0;
+    std::string signature;  // MessageSignature (256 bytes), "" none
+    ChatTag tag;
 };
 
 struct Button {
@@ -97,6 +119,9 @@ enum class Screen {
     // Registered screens (modules.h ScreenDef): signs and books, advancements, statistics, game mode switcher, bed
     Sign, BookEdit, BookView, Advancements, Stats, GameModeSwitcher, InBed,
     Friends, AddFriend,  // friends_screen.cpp
+    Dialog,              // dialogs.cpp: server dialogs and their confirmation / waiting screens
+    ServerPackPrompt, CodeOfConduct, Reconfiguring,  // server_config.cpp
+    Win, CreditsAttribution,  // credits.cpp
     // Front end (frontend.h)
     Title, Worlds, CreateWorld, EditWorld, Confirm, Servers, EditServer, DirectConnect, Loading, Message, OpenToLan
 };
@@ -179,7 +204,7 @@ struct Ui::State {
     Menu inventory;                   // 46 slots, container 0
     std::unique_ptr<Menu> container;  // open server container
     ItemStack carried;
-    int hotbarSynced[9] = {-2, -2, -2, -2, -2, -2, -2, -2, -2};
+    int hotbarSynced[10] = {-2, -2, -2, -2, -2, -2, -2, -2, -2, -2};  // hotbar items, then the off hand
 
     // HUD
     bool hudHidden = false, debug = false;
@@ -201,19 +226,11 @@ struct Ui::State {
 
     // Chat
     std::vector<ChatLine> chatLines;  // newest first, wrapped
-    std::vector<std::pair<Text, int>> chatMessages;  // newest first: message, added tick
+    std::vector<ChatMessage> chatMessages;  // newest first (ChatComponent.allMessages)
     std::vector<std::string> sentHistory;
     int historyPos = -1;
     std::string historyDraft;
     int chatScroll = 0;
-    // Message acknowledgements (LastSeenMessagesTracker): signatures of signed messages.
-    struct Seen {
-        std::string signature;
-        bool acknowledged = false;
-    };
-    std::vector<std::optional<Seen>> lastSeen = std::vector<std::optional<Seen>>(20);
-    int lastSeenTail = 0, lastSeenOffset = 0;
-    std::string lastSeenSignature;
 
     // Text field (chat input, creative search).
     struct TextField {
@@ -284,7 +301,9 @@ struct Ui::State {
     void updatePause();
     void closeScreen(bool sendClose = true);
     void syncHotbarToGame();
-    void addChat(const Text& message);
+    void addChat(const Text& message);  // a client / server system message (ChatComponent.addClientSystemMessage)
+    void addChatMessage(ChatMessage m);  // ChatComponent.addMessage
+    void refreshChatLines();             // ChatComponent.refreshTrimmedMessages
     void sendChat(const std::string& text);
     const Lang* lang() const { return &res.lang(); }
     void runScript(double dt);
@@ -294,8 +313,11 @@ struct Ui::State {
     void drawHud(Canvas& c);
     void drawChat(Canvas& c, bool focused);
     void drawDebug(Canvas& c);
-    void drawItem(Canvas& c, const ItemStack& s, float x, float y, bool decorations = true, const char* countOverride = nullptr);
-    void drawTooltip(Canvas& c, const std::vector<Text>& lines, float x, float y);
+    // playerSlot: the player inventory menu slot the stack is (item model properties compare stack identity: the
+    // selected stack, the stack in use); -1 none.
+    void drawItem(Canvas& c, const ItemStack& s, float x, float y, bool decorations = true, const char* countOverride = nullptr,
+                  int playerSlot = -1);
+    void drawTooltip(Canvas& c, const std::vector<Text>& lines, float x, float y, const TooltipImage* image = nullptr);
     void drawText(Canvas& c, const Text& t, float x, float y, u32 color, bool shadow) { font.draw(c, t, x, y, color, shadow); }
     void drawCentered(Canvas& c, const Text& t, float cx, float y, u32 color, bool shadow = true) {
         font.draw(c, t, cx - float(font.width(t) / 2), y, color, shadow);
@@ -314,6 +336,9 @@ struct Ui::State {
     Menu& activeMenu() { return container ? *container : inventory; }
     void containerClick(int slot, int button, int input);  // simulates locally and sends container_click
     void creativeSetSlot(int menuSlot, const ItemStack& s);
+    // The open container's player slots and the inventory menu are one Inventory (Java shares it): copy them across
+    // (toContainer: inventory menu -> container).
+    void mirrorPlayerSlots(bool toContainer = false);
     void dropSelected(bool all);
     void swapHands();
     int menuSlotForInventory(const Menu& m, int inventoryIndex) const;  // Inventory index (0-8 hotbar, 40 offhand)

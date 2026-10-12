@@ -2,6 +2,7 @@
 
 #include "assets/asset_source.h"
 #include "assets/assets.h"
+#include "blockentity/block_entities.h"
 #include "assets/game_reports.h"
 #include "core/math.h"
 #include "entity/entities.h"
@@ -159,6 +160,7 @@ struct Visuals::Impl {
 
     Game* game = nullptr;
     ui::Ui* ui = nullptr;
+    ItemRules* rules = nullptr;
     std::string playerName;
     std::function<int()> gameMode;
 
@@ -240,7 +242,8 @@ struct Visuals::Impl {
     } mainHand, offHand;
     int itemSwapTicker = 0, lastMainItem = -2;
     bool swinging = false;
-    int swingTime = 0;
+    int swingTime = 0, swingTicks = 6;  // swingTicks: this swing's duration (the weapon's attack_animation)
+    int swingHand = 0, swingType = 1;   // the swinging hand (0 main, 1 off) and its SwingAnimationType
     float attackAnim = 0, oAttackAnim = 0;
     float xBob = 0, yBob = 0, xBobO = 0, yBobO = 0, walkDist = 0, walkDistO = 0, bob = 0, bobO = 0;
     double tickClock = 0;
@@ -251,6 +254,11 @@ struct Visuals::Impl {
     std::vector<i8> skullCache;  // item id -> 1 skull, 0 not, -1 unknown
     std::vector<const ItemMesh*> skullMeshes;  // item id -> worn skull model
     const ItemMesh* frameMeshes[4] = {};       // item / glow frame, without / with a map
+    // Text quads in the static store (name tags, map decoration names): background quad, then the glyphs.
+    struct Tag {
+        u32 first = UINT32_MAX, glyphs = 0;
+        float width = 0;
+    };
     // Maps in item frames: the map image in the item atlas and its quad (MapRenderer), by map id.
     struct MapTex {
         int ax = -1, ay = -1;
@@ -258,13 +266,14 @@ struct Visuals::Impl {
     };
     std::unordered_map<int, MapTex> mapTextures;
     const MapTex* mapTexture(int id);  // nullptr: no map data (yet)
+    // MapRenderer.render after the map image: decoration sprites (frameOnly: those item frames show) and their names,
+    // as dynamic quads; `im` maps the map's 0..128 space.
+    void pushMapDecorations(List& cut, List& tr, const Xf& im, int mapId, bool frameOnly, u32 light);
+    std::unordered_map<std::string, Tag> mapLabels;  // decoration names (component NBT) -> text quads
+    const Tag& mapLabel(const std::string& nbt);
     std::vector<Xf> armMats;                   // scratch: arm part matrices
 
     // Name tags: text quads per name in the static store.
-    struct Tag {
-        u32 first = UINT32_MAX, glyphs = 0;
-        float width = 0;
-    };
     std::unordered_map<std::string, Tag> tags;
     // Text displays: the laid out text per entity (background quad first, then the glyphs, font units), drawn from
     // the per-frame quads; rebuilt when the text, line width or style changes.
@@ -326,6 +335,18 @@ struct Visuals::Impl {
     const PaintingInfo* painting(int id);
     void heldStack(int slot, int& item, i32& dye, bool& foil) const;
     int chargeOf(int menuSlot) const;
+    // Item model contexts (ItemModelResolver.updateForLiving / updateForNonLiving): the stack an entity shows (its
+    // whole stack when the packets carried one) and the entity as the item's owner.
+    ui::ItemStack plainScratch;
+    const ui::ItemStack& stackOf(const std::shared_ptr<const ui::ItemStack>& full, int item, i32 dye);
+    ui::ItemContext contextOf(const Entity& e, ui::ItemDisplay display, float pt) const;
+    void updateItemOwner(float pt);  // ui::itemWorld().player and the local player's per-stack state
+    net::Client* client = nullptr;
+    // Block entity items (campfire / shelf / vault / brushed items, player heads with profiles): their stacks from
+    // the block entity NBT (cached by the NBT), this frame's list.
+    std::unordered_map<std::string, ui::ItemStack> nbtStacks;
+    std::vector<be::BlockEntityRenderer::ShownItem> shownItems;
+    void buildBlockEntityItems(const double cam[3]);
 
     // --- shader packs (PassContext::pack): lists and particles as vanilla-style vertices -----------------
     std::vector<MeshQuad> cpuStore;  // CPU copy of the static quad store (packs pull quads on the CPU)
@@ -356,6 +377,8 @@ bool Visuals::load(const fs::path& jar, const fs::path& minecraftDir, const Game
     std::vector<std::string> names(size_t(std::max(0, m.items->count())));
     for (int i = 0; i < m.items->count(); ++i) names[size_t(i)] = m.items->name(i);
     m.models.init(*m.res, m.assets, names, componentReports);
+    m.models.setItems(m.items.get());
+    ui::setItemComponentReports(componentReports);
     m.er.setItemModels(&m.models);
     m.glintRect = m.models.texture("misc/enchanted_glint_item");
     m.fontAtlas.init(1024, 1024);
@@ -388,6 +411,7 @@ bool Visuals::load(const fs::path& jar, const fs::path& minecraftDir, const Game
 }
 
 void Visuals::attach(net::Client& client) {
+    impl_->client = &client;
     if (impl_->particles) impl_->particles->attach(client);
 }
 
@@ -403,6 +427,11 @@ bool Visuals::addPasses(Renderer& renderer) {
     return true;
 }
 
+void Visuals::setItemRules(ItemRules* rules) {
+    impl_->rules = rules;
+    impl_->er.setRules(rules);
+}
+
 void Visuals::setPlayer(Game& game, ui::Ui& ui, const std::string& name, std::function<int()> gameMode) {
     Impl& m = *impl_;
     m.game = &game;
@@ -410,8 +439,11 @@ void Visuals::setPlayer(Game& game, ui::Ui& ui, const std::string& name, std::fu
     ui.setItemModels(&m.models);
     m.playerName = name;
     m.gameMode = std::move(gameMode);
-    game.onSwing = [&m] {  // LivingEntity.swing
-        if (!m.swinging || m.swingTime >= 3 || m.swingTime < 0) m.swingTime = -1, m.swinging = true;
+    game.onItemUsed = [&m](int hand) { (hand == 0 ? m.mainHand : m.offHand).height = 0; };  // itemUsed
+    game.onSwing = [&m](int hand, int type) {  // LivingEntity.swing: SwingState.startIfAble (not in a swing's first half)
+        if (!m.swinging || m.swingTime > m.swingTicks / 2 || m.swingTime <= 0)
+            m.swingTime = -1, m.swinging = true, m.swingTicks = std::max(m.game->swingTicks, 1), m.swingHand = hand,
+            m.swingType = type;
     };
     game.onBlockChanged = [&m, prev = std::move(game.onBlockChanged)](bool place, int x, int y, int z, u16 state) {
         if (prev) prev(place, x, y, z, state);
@@ -419,6 +451,11 @@ void Visuals::setPlayer(Game& game, ui::Ui& ui, const std::string& name, std::fu
             std::shared_lock lock(m.world.world().mutex());
             m.particles->blockDestroyed(x, y, z, state);
         }
+    };
+    game.onParticle = [&m](std::string_view type, const double pos[3], const double vel[3]) {
+        if (!m.particles) return;
+        std::shared_lock lock(m.world.world().mutex());
+        m.particles->spawn(type, pos[0], pos[1], pos[2], vel[0], vel[1], vel[2]);
     };
     game.onItemParticle = [&m](int item, const double pos[3], const double vel[3]) {  // eating: item shards
         if (!m.particles) return;
@@ -1086,6 +1123,226 @@ void Visuals::Impl::heldStack(int slot, int& item, i32& dye, bool& foil) const {
     }
 }
 
+// CampfireRenderer (FIXED), ShelfRenderer (ON_SHELF, the model's bounding box aligned), VaultRenderer and
+// BrushableBlockRenderer items with their whole stacks, and SkullBlockRenderer player heads with their profile's skin.
+void Visuals::Impl::buildBlockEntityItems(const double cam[3]) {
+    const be::BlockEntityRenderer* ber = be::BlockEntityRenderer::instance();
+    if (!ber || !items) return;
+    shownItems.clear();
+    ber->shownItems(shownItems);
+    if (nbtStacks.size() > 4096) nbtStacks.clear();
+    for (const be::BlockEntityRenderer::ShownItem& si : shownItems) {
+        auto it = nbtStacks.find(*si.nbt);
+        if (it == nbtStacks.end()) {
+            ui::ItemStack st;
+            if (!ui::itemStackFromNbt(*items, *si.nbt, st)) st = ui::ItemStack{};
+            it = nbtStacks.emplace(*si.nbt, std::move(st)).first;
+        }
+        const ui::ItemStack& st = it->second;
+        if (st.empty()) continue;
+        Xf m;
+        std::copy(si.m, si.m + 12, m.m);
+        for (int a = 0; a < 3; ++a) m.m[a * 4 + 3] += float(double(si.origin[a]) - cam[a]);
+        worldLists.begin((u64(u32(si.origin[0] * 31 + si.origin[2])) << 20 ^ u64(u32(si.origin[1])) << 4 ^ u64(si.seed)) | 3);
+        if (si.kind == 1) {  // a placed player head
+            pushRaw(worldLists, models.headMesh(st), m, si.light);
+            continue;
+        }
+        ui::ItemContext c;
+        c.display = si.context == 0 ? ui::ItemDisplay::Fixed : si.context == 1 ? ui::ItemDisplay::OnShelf : ui::ItemDisplay::Ground;
+        c.seed = si.seed;
+        const ItemMesh& mesh = models.mesh(st, c);
+        if (mesh.empty()) continue;
+        const Display d = si.context == 0 ? Display::Fixed : si.context == 1 ? Display::OnShelf : Display::Ground;
+        if (si.context == 1) {  // ShelfRenderer: bottom (or centre) of the model's box at the slot
+            float offsetY = -mesh.shelfMinY;
+            if (!si.shelfBottom) offsetY -= (mesh.shelfMaxY - mesh.shelfMinY) / 2.0f;
+            m = xfMul(m, xfTranslate(0, offsetY, 0));
+        }
+        const bool foil = items->foil(st);
+        if (si.context != 2) {
+            pushItem(worldLists, mesh, d, m, si.light, foil);
+            continue;
+        }
+        // VaultRenderer: ItemEntityRenderer.renderMultipleFromCount (copies by the stack's count, like dropped items).
+        const int amount = st.count > 48 ? 5 : st.count > 32 ? 4 : st.count > 16 ? 3 : st.count > 1 ? 2 : 1;
+        u32 rng = u32(st.item) * 2654435761u + 7;
+        auto rnd = [&] {
+            rng = rng * 1664525u + 1013904223u;
+            return float(rng >> 8) / float(1 << 24) * 2.0f - 1.0f;
+        };
+        if (mesh.groundDepth > 0.0625f) {
+            pushItem(worldLists, mesh, d, m, si.light, foil);
+            for (int i = 1; i < amount; ++i)
+                pushItem(worldLists, mesh, d, xfMul(m, xfTranslate(rnd() * 0.15f, rnd() * 0.15f, rnd() * 0.15f)), si.light, foil);
+        } else {
+            const float offsetZ = mesh.groundDepth * 1.5f;
+            m = xfMul(m, xfTranslate(0, 0, -(offsetZ * float(amount - 1) / 2.0f)));
+            pushItem(worldLists, mesh, d, m, si.light, foil);
+            m = xfMul(m, xfTranslate(0, 0, offsetZ));
+            for (int i = 1; i < amount; ++i) {
+                pushItem(worldLists, mesh, d, xfMul(m, xfTranslate(rnd() * 0.075f, rnd() * 0.075f, 0)), si.light, foil);
+                m = xfMul(m, xfTranslate(0, 0, offsetZ));
+            }
+        }
+    }
+}
+
+void Visuals::Impl::pushMapDecorations(List& cut, List& tr, const Xf& im, int mapId, bool frameOnly, u32 light) {
+    const std::vector<ui::MapDecor>* decorations = ui::mapDecorations(mapId);
+    if (!decorations) return;
+    int count = 0;
+    for (const ui::MapDecor& d : *decorations) {
+        bool onFrame = false;
+        const char* sprite = ui::mapDecorationSprite(d.type, &onFrame);
+        if (!sprite || (frameOnly && !onFrame)) continue;
+        const int rect = models.texture(sprite);
+        if (rect >= 0 && dyn.size() < kMaxDynamic) {
+            Xf m = xfMul(im, xfTranslate(float(d.x) / 2.0f + 64.0f, float(d.y) / 2.0f + 64.0f, -0.02f));
+            m = xfMul(m, xfRotZ(float(d.rot) * 22.5f * kDeg));
+            m = xfMul(m, xfScale(4.0f, 4.0f, 3.0f));
+            m = xfMul(m, xfTranslate(-0.125f, 0.125f, 0));
+            const ItemModels::Rect& r = models.rect(rect);
+            const float z = float(count) * -0.001f;
+            MeshQuad q{};
+            const float pos[4][3] = {{-1, 1, z}, {1, 1, z}, {1, -1, z}, {-1, -1, z}};
+            const float uv[4][2] = {{r.u0, r.v0}, {r.u0 + r.du, r.v0}, {r.u0 + r.du, r.v0 + r.dv}, {r.u0, r.v0 + r.dv}};
+            std::memcpy(q.pos, pos, sizeof(pos)), std::memcpy(q.uv, uv, sizeof(uv));
+            q.normal = packNormal(0, 0, -1), q.color = 0xFFFFFFFF, q.tex = kTexItems, q.flags = kQuadNoShade;
+            const u32 first = u32(dyn.size());
+            dyn.push_back(q);
+            cut.add(m, first, 1, light, 0xFFFFFFFF, 1);
+        }
+        if (!d.name.empty()) {  // the name centred below, at most 6 / 9 scale, on the text background
+            const Tag& t = mapLabel(d.name);
+            if (t.first != UINT32_MAX && t.width > 0) {
+                const float sc = std::clamp(25.0f / t.width, 0.0f, 6.0f / 9.0f);
+                Xf m = xfMul(im, xfTranslate(float(d.x) / 2.0f + 64.0f - t.width * sc / 2.0f, float(d.y) / 2.0f + 64.0f + 4.0f, -0.025f));
+                m = xfMul(m, xfScale(sc, sc, -1.0f));
+                m = xfMul(m, xfTranslate(0, 0, 0.1f));
+                tr.add(m, t.first, 1, light, 0x80000000u, 0);
+                tr.add(m, t.first + 1, t.glyphs, light, 0xFFFFFFFF, 0);
+            }
+        }
+        ++count;
+    }
+}
+
+// A map decoration's name as text quads (font units, left aligned at 0; the background quad first, then the glyphs).
+const Visuals::Impl::Tag& Visuals::Impl::mapLabel(const std::string& nbt) {
+    auto it = mapLabels.find(nbt);
+    if (it != mapLabels.end()) return it->second;
+    Tag t;
+    if (font && mapLabels.size() < 1024) {
+        canvas.begin(1u << 14, 1u << 14, 1);
+        const ui::Text text = ui::parseComponent(nbt, &res->lang());
+        t.width = font->widthF(text);
+        font->draw(canvas, text, 0, 0, 0xFFFFFFFF, false);
+        std::vector<MeshQuad> quads;
+        MeshQuad bg{};  // Font background: x - 1 .. x + width, y - 1 .. y + 9, behind the glyphs
+        const float corners[4][2] = {{-1, -1}, {-1, 9}, {t.width, 9}, {t.width, -1}};
+        for (int k = 0; k < 4; ++k) bg.pos[k][0] = corners[k][0], bg.pos[k][1] = corners[k][1], bg.pos[k][2] = 0.01f;
+        bg.normal = packNormal(0, 0, -1), bg.color = 0xFFFFFFFF, bg.tex = kTexSolid, bg.flags = kQuadNoShade;
+        quads.push_back(bg);
+        const auto& v = canvas.vertices();
+        for (size_t k = 0; k + 5 < v.size(); k += 6) {
+            const ui::UiVertex* c[4] = {&v[k], &v[k + 1], &v[k + 2], &v[k + 5]};
+            MeshQuad q{};
+            for (int j = 0; j < 4; ++j) {
+                q.pos[j][0] = c[j]->x, q.pos[j][1] = c[j]->y, q.pos[j][2] = 0;
+                q.uv[j][0] = c[j]->u, q.uv[j][1] = c[j]->v;
+            }
+            q.normal = packNormal(0, 0, -1);
+            q.color = c[0]->color;
+            q.tex = c[0]->mode == ui::ModeSolid ? kTexSolid : kTexFont;
+            q.flags = kQuadNoShade;
+            quads.push_back(q);
+        }
+        t.first = models.addQuads(quads.data(), u32(quads.size()));
+        t.glyphs = u32(quads.size() - 1);
+    }
+    return mapLabels.emplace(nbt, t).first->second;
+}
+
+const ui::ItemStack& Visuals::Impl::stackOf(const std::shared_ptr<const ui::ItemStack>& full, int item, i32 dye) {
+    if (full && full->item == item) return *full;
+    plainScratch = ItemModels::plainStack(item, dye);
+    return plainScratch;
+}
+
+ui::ItemContext Visuals::Impl::contextOf(const Entity& e, ui::ItemDisplay display, float pt) const {
+    ui::ItemContext c;
+    c.display = display;
+    if (e.id == EntityRenderer::kLocalPlayerId) {
+        c.owner = ui::itemWorld().player;
+        c.seed = ui::itemWorld().localId + int(display);
+        return c;
+    }
+    ui::ItemOwner& o = c.owner;
+    o.present = true;
+    o.id = e.id;
+    o.type = e.info ? e.info->name : std::string();
+    o.living = e.category == Category::Living || e.category == Category::Player;
+    o.player = e.category == Category::Player;
+    o.local = false;
+    o.viewEntity = e.id == world.viewEntity;
+    for (int a = 0; a < 3; ++a) o.pos[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt;
+    o.mainArm = e.mainArm;
+    static const int frame = assets.typeId("minecraft:item_frame"), glowFrame = assets.typeId("minecraft:glow_item_frame");
+    if (o.living) {  // LivingEntity.getVisualRotationYInDegrees: the body rotation
+        o.yaw = e.prevBodyYaw + (e.bodyYaw - e.prevBodyYaw) * pt;
+    } else if (e.type == frame || e.type == glowFrame) {  // ItemFrame.getVisualRotationYInDegrees
+        static const int k2d[6] = {-1, -1, 2, 0, 1, 3};  // Direction 3D -> 2D data value (down / up: -1)
+        const int dir = std::clamp(e.direction, 0, 5);
+        const int correction = dir == 0 ? -90 : dir == 1 ? 90 : 0;
+        o.yaw = wrapDegrees(float(180 + k2d[dir] * 90 + e.rotation * 45 + correction));
+    } else if (e.category == Category::Item) {  // ItemEntity: 180 - getSpin(age + 0.5) in degrees
+        o.yaw = 180.0f - ((float(e.age) + 0.5f) / 20.0f + e.bobOffset) / (2.0f * kPi) * 360.0f;
+    } else {
+        o.yaw = e.prevYaw + (e.yaw - e.prevYaw) * pt;
+    }
+    c.seed = o.living ? e.id + int(display) : e.id;
+    return c;
+}
+
+void Visuals::Impl::updateItemOwner(float pt) {
+    ui::ItemWorld& w = ui::itemWorld();
+    ui::updateItemWorld();
+    if (client && items && client->inPlay() && !items->registriesSet()) items->setRegistries(*client);
+    ui::ItemOwner& o = w.player;
+    if (!game || !avatarReady) {
+        o.present = false;
+        return;
+    }
+    o.present = true;
+    o.living = o.player = o.local = true;
+    o.id = w.localId;
+    o.type = "minecraft:player";
+    std::copy(avatar.pos, avatar.pos + 3, o.pos);
+    o.yaw = avatar.prevBodyYaw + (avatar.bodyYaw - avatar.prevBodyYaw) * pt;
+    o.mainArm = avatar.mainArm;
+    o.viewEntity = world.viewEntity < 0 || world.viewEntity == w.localId;
+    o.usingThis = o.fishing = o.selected = o.carried = false;  // per stack
+    w.selectedSlot = 36 + game->selectedSlot();
+    w.useSlot = game->use.active ? (game->use.hand ? 45 : w.selectedSlot) : -1;
+    w.useTicks = float(game->use.ticksUsing());
+    w.useRemaining = float(game->use.remaining);
+    // FishingHookRenderer.getHoldingArm: the main hand when it holds a fishing rod, else the off hand; only while our
+    // hook is out.
+    w.fishingSlot = -1;
+    static const int bobber = assets.typeId("minecraft:fishing_bobber");
+    for (const auto& [id, e] : world.entities())
+        if (e.type == bobber && e.direction == w.localId && w.localId >= 0) {
+            int item;
+            i32 dye;
+            bool foil;
+            heldStack(w.selectedSlot, item, dye, foil);
+            w.fishingSlot = models.itemName(item) == "fishing_rod" ? w.selectedSlot : 45;
+            break;
+        }
+    w.cooldown = [g = game, it = items.get(), pt](const ui::ItemStack& s) { return g->cooldownPercent(it->cooldownGroup(s), pt); };
+}
+
 const Visuals::Impl::PaintingInfo* Visuals::Impl::painting(int id) {
     if (id < 0 || id > 4096) return nullptr;
     if (paintings.size() <= size_t(id)) paintings.resize(size_t(id) + 1);
@@ -1234,14 +1491,14 @@ const Visuals::Impl::TextBlock& Visuals::Impl::textBlock(int id, const DisplaySt
 
 void Visuals::Impl::tickLocal() {
     Player& p = game->player();
-    // LivingEntity.updateSwingTime (swing duration 6).
+    // LivingEntity.SwingState.tick (the swing's duration: 6, or the weapon's attack_animation).
     oAttackAnim = attackAnim;
     if (swinging) {
-        if (++swingTime >= 6) swingTime = 0, swinging = false;
+        if (++swingTime >= swingTicks) swingTime = 0, swinging = false;
     } else {
         swingTime = 0;
     }
-    attackAnim = float(swingTime) / 6.0f;
+    attackAnim = float(swingTime) / float(swingTicks);
     // LocalPlayer.aiStep: hand sway follows the view.
     const float yawDeg = p.yaw / kDeg, pitchDeg = p.pitch / kDeg;
     xBobO = xBob, yBobO = yBob;
@@ -1347,7 +1604,8 @@ void Visuals::Impl::update() {
         e.headYaw = e.prevHeadYaw = e.yaw;
         e.pitch = e.prevPitch = p.pitch / kDeg;
         // Pose: crouching 5, swimming / crawling 3, gliding 1 (net.minecraft.world.entity.Pose).
-        e.pose = p.pose == Player::Pose::Crouching ? 5 : p.pose == Player::Pose::Swimming ? 3 : p.pose == Player::Pose::FallFlying ? 1 : 0;
+        e.pose = p.pose == Player::Pose::Crouching ? 5 : p.pose == Player::Pose::Swimming ? 3 : p.pose == Player::Pose::FallFlying ? 1
+                 : p.pose == Player::Pose::SpinAttack ? 4 : 0;
         e.sharedFlags = u8(p.pose == Player::Pose::FallFlying ? 0x80 : 0);
         e.ticksFrozen = ui ? ui->ticksFrozen() : 0;
         e.inWater = p.inWater;
@@ -1362,17 +1620,23 @@ void Visuals::Impl::update() {
         }
         e.vehicle = game->vehicleId;  // the sitting pose
         // The item use (third-person arm poses): LivingEntity flags and ticks using the item.
-        e.livingFlags = game->use.active ? u8(1 | (game->use.hand ? 2 : 0)) : 0;
+        e.livingFlags = u8((game->use.active ? 1 | (game->use.hand ? 2 : 0) : 0) | (p.spinFlag ? 4 : 0));
         e.useTicks = game->use.ticksUsing();
         e.chargedCrossbow = u8((chargeOf(36 + game->selectedSlot()) ? 1 : 0) | (chargeOf(45) ? 2 : 0));
         e.swingTime = swinging ? std::max(swingTime, 0) : -1;
-        e.swingDuration = 6;
+        e.swingDuration = swingTicks;
+        e.swingHand = swingHand, e.swingType = swingType;
+        e.kineticHitTicks = game->kineticHitTicks;
+        e.mainArm = ui ? ui->settings().mainHand : 1;
         if (const PlayerInfo* info = world.playerNamed(playerName)) e.skin = info->skin, e.slim = info->slim;
         else if (e.skin < 0) e.skin = assets.texture("entity/player/wide/steve"), e.slim = false;
         auto equip = [&](int slot, int menuSlot) {
             bool foil;
             heldStack(menuSlot, e.equipment[slot], e.equipDye[slot], foil);
             e.equipFoil = u8((e.equipFoil & ~(1 << slot)) | (foil ? 1 << slot : 0));
+            const ui::ItemStack* st = ui ? ui->playerSlot(menuSlot) : nullptr;
+            if (!st) e.equipStack[slot] = nullptr;
+            else if (!e.equipStack[slot] || !e.equipStack[slot]->sameItemSameComponents(*st)) e.equipStack[slot] = std::make_shared<ui::ItemStack>(*st);
         };
         equip(0, 36 + game->selectedSlot());
         equip(1, 45);
@@ -1381,6 +1645,7 @@ void Visuals::Impl::update() {
         er.setLocalPlayer(avatarReady && game->cameraMode != 0 && !spectator ? &avatar : nullptr);
         er.setLocalPlayerShadow(avatarReady && game->cameraMode == 0 && !spectator ? &avatar : nullptr);  // first person
     }
+    updateItemOwner(partial);
     animClock += dt;
     models.tick(u64(animClock * 20.0));  // animated textures in the item atlas (block items, vibration particles)
     // FireworkRocketEntity.tick on the client: a spark behind the rocket every tick.
@@ -1422,15 +1687,63 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
             const int slot = (k == 0) == rightHanded ? 0 : 1;  // right arm holds the main hand when right handed
             const int item = e->equipment[slot];
             if (item < 0) continue;
+            ui::ItemContext ic = contextOf(*e, k == 0 ? ui::ItemDisplay::ThirdRight : ui::ItemDisplay::ThirdLeft, pt);
+            ic.owner.usingThis = (e->livingFlags & 1) && ((e->livingFlags & 2) ? 1 : 0) == slot;
+            ic.owner.useTicks = float(e->useTicks);
+            if (e->id == EntityRenderer::kLocalPlayerId) {  // the local player: its own use state
+                const ui::ItemWorld& w = ui::itemWorld();
+                ic.owner.usingThis = w.useSlot >= 0 && w.useSlot == (slot == 0 ? w.selectedSlot : 45);
+                ic.owner.useTicks = w.useTicks, ic.owner.remaining = w.useRemaining;
+                ic.owner.fishing = w.fishingSlot >= 0 && w.fishingSlot == (slot == 0 ? w.selectedSlot : 45);
+                ic.owner.selected = slot == 0;
+            }
             Xf m;
             std::memcpy(m.m, a.hand[k], sizeof(m.m));
             m = xfMul(m, xfRotX(-90.0f * kDeg));
             m = xfMul(m, xfRotY(180.0f * kDeg));
             const float ox = a.babyOffset ? 0.0f : 1.0f, oy = a.babyOffset ? 1.0f : 2.0f, oz = a.babyOffset ? -4.5f : -10.0f;
             m = xfMul(m, xfTranslate((k == 1 ? -1.0f : 1.0f) * ox / 16.0f, oy / 16.0f, oz / 16.0f));
+            {
+                const bool armRight = k == 0;
+                const float swingAnim = e->swingTime >= 0 ? (float(e->swingTime) + pt) / float(std::max(e->swingDuration, 1)) : 0.0f;
+                auto kineticOf = [&](int s) {
+                    KineticParams p;
+                    if (rules && e->equipment[s] >= 0) {
+                        const ItemRules::Components& c = rules->components(models.itemName(e->equipment[s]));
+                        p = {c.kineticValid, c.kineticDelay, c.kineticDismount, c.kineticKnockback, c.kineticDamage, c.kineticForward};
+                    }
+                    return p;
+                };
+                const bool swingArmRight = (e->swingHand == 0) == rightHanded;
+                const int type = e->swingType >= 0 ? e->swingType : models.itemName(e->equipment[e->swingHand & 1]).ends_with("_spear") ? 2 : 1;
+                if (swingAnim > 0 && type == 2 && swingArmRight == armRight) {  // thirdPersonAttackItem
+                    const float attack = ease::inQuad(ease::progress(swingAnim, 0.05f, 0.2f));
+                    const float retract = ease::inOutExpo(ease::progress(swingAnim, 0.4f, 1.0f));
+                    m = xfMul(m, xfMul(xfTranslate(0, -0.125f, 0.125f), xfMul(xfRotX(-70.0f * (attack - retract) * kDeg),
+                                                                              xfTranslate(0, 0.125f, -0.125f))));
+                    m = xfMul(m, xfTranslate(0, kineticOf(0).forward * (attack - retract), 0));
+                }
+                const bool using_ = (e->livingFlags & 1) != 0;
+                const bool useArmRight = ((e->livingFlags & 2) != 0) != rightHanded;
+                const KineticParams kp = kineticOf(slot);
+                if (using_ && useArmRight == armRight && kp.valid) {  // ArmPose.SPEAR.animateUseItem: thirdPersonUseItem
+                    const float timeHeld = float(e->useTicks) + pt;
+                    const float attack = ease::inQuad(ease::progress(swingAnim, 0.05f, 0.2f));
+                    const float retract = ease::inOutExpo(ease::progress(swingAnim, 0.4f, 1.0f));
+                    const SpearUse u = spearUse(kp, timeHeld);
+                    const float inv = armRight ? 1.0f : -1.0f;
+                    const float raiseModified = 1.0f - ease::outBack(1.0f - u.raise);
+                    const float hit = spearHitFeedback(e->kineticHitTicks >= 0 ? float(e->kineticHitTicks) + pt : -1.0f);
+                    m = xfMul(m, xfTranslate(0, -hit * 0.4f, -kp.forward * (raiseModified - u.raiseBack) + hit));
+                    const float xr = 70.0f * (u.raise - u.raiseBack) - 40.0f * (attack - retract);
+                    m = xfMul(m, xfMul(xfTranslate(0, -0.03125f, 0.125f), xfMul(xfRotX(-xr * kDeg), xfTranslate(0, 0.03125f, -0.125f))));
+                    const float yr = inv * 90.0f * (u.raise - u.sway + 3.0f * retract + attack);
+                    m = xfMul(m, xfMul(xfTranslate(0, 0, 0.125f), xfMul(xfRotY(yr * kDeg), xfTranslate(0, 0, -0.125f))));
+                }
+            }
             L.begin((u64(u32(a.entity)) << 4 | u64(k)) + 1);
-            pushItem(L, models.mesh(item, e->equipDye[slot], false), k == 0 ? Display::ThirdRight : Display::ThirdLeft,
-                     m, a.light, (e->equipFoil >> slot) & 1);
+            pushItem(L, models.mesh(stackOf(e->equipStack[slot], item, e->equipDye[slot]), ic),
+                     k == 0 ? Display::ThirdRight : Display::ThirdLeft, m, a.light, (e->equipFoil >> slot) & 1);
         }
         if (a.valid & 8) {  // HoldingEntityRenderState: the main hand item with the ground transform
             Xf m;
@@ -1459,11 +1772,13 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
                     m = xfMul(m, xfTranslate(0, -0.25f + a.headY, 0));
                     m = xfMul(m, xfRotY(180.0f * kDeg));
                     m = xfMul(m, xfScale(0.625f, -0.625f, -0.625f));
-                    pushItem(L, models.mesh(head, e->equipDye[5], false), Display::Head, m, a.light, (e->equipFoil >> 5) & 1);
+                    pushItem(L, models.mesh(stackOf(e->equipStack[5], head, e->equipDye[5]), contextOf(*e, ui::ItemDisplay::Head, pt)),
+                             Display::Head, m, a.light, (e->equipFoil >> 5) & 1);
                 }
             }
         }
     }
+    buildBlockEntityItems(cam);
     // Item frames, paintings, dropped items.
     static int frameType = -2, glowFrameType = -2, paintingType = -2;
     static const int ominousType = assets.typeId("minecraft:ominous_item_spawner");
@@ -1521,11 +1836,11 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
                 continue;
             static const Display kContext[10] = {Display::None,  Display::ThirdLeft, Display::ThirdRight, Display::FirstLeft,
                                                  Display::FirstRight, Display::Head, Display::Gui,     Display::Ground,
-                                                 Display::Fixed, Display::None};
+                                                 Display::Fixed, Display::OnShelf};
             const Display ctxt = kContext[std::clamp(s.itemContext, 0, 9)];
-            const bool flat = ctxt == Display::Gui || ctxt == Display::Ground || ctxt == Display::Fixed;
             worldLists.begin(u64(u32(id)) << 4 | 3);
-            pushItem(worldLists, models.mesh(e.itemId, e.itemDye, flat), ctxt, xfMul(m, xfRotY(kPi)),
+            const ui::ItemContext ic = contextOf(e, ui::ItemDisplay(std::clamp(s.itemContext, 0, 9)), pt);
+            pushItem(worldLists, models.mesh(stackOf(e.itemStack, e.itemId, e.itemDye), ic), ctxt, xfMul(m, xfRotY(kPi)),
                      displayLight(e, lightAt(e.pos[0], e.pos[1], e.pos[2])), e.itemFoil);
             continue;
         }
@@ -1588,11 +1903,13 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
                 im = xfMul(im, xfScale(1.0f / 128, 1.0f / 128, 1.0f / 128));
                 im = xfMul(im, xfTranslate(-64, -64, -1));
                 L.cut.add(im, mapTex->quad, 1, (glow ? 0xFDu : frameLight) | 512u, 0xFFFFFFFF, 0, L.next());
+                pushMapDecorations(L.cut, L.tr, im, e.mapId, true, (glow ? 0xFDu : frameLight) | 512u);
             } else if (e.itemId >= 0) {
                 Xf im = xfMul(m, xfTranslate(0, 0, invisible ? 0.5f : 0.4375f));
                 im = xfMul(im, xfRotZ(float(e.rotation % 8) * 45.0f * kDeg));
                 im = xfMul(im, xfScale(0.5f, 0.5f, 0.5f));
-                pushItem(L, models.mesh(e.itemId, e.itemDye, true), Display::Fixed, im, glow ? 0xFFu : light, e.itemFoil);
+                pushItem(L, models.mesh(stackOf(e.itemStack, e.itemId, e.itemDye), contextOf(e, ui::ItemDisplay::Fixed, pt)),
+                         Display::Fixed, im, glow ? 0xFFu : light, e.itemFoil);
             }
             continue;
         }
@@ -1624,7 +1941,7 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
         }
         // ItemEntityRenderer: bob, spin and several copies for larger stacks (GROUND display).
         if (e.itemId < 0) continue;
-        const ItemMesh& mesh = models.mesh(e.itemId, e.itemDye, true);
+        const ItemMesh& mesh = models.mesh(stackOf(e.itemStack, e.itemId, e.itemDye), contextOf(e, ui::ItemDisplay::Ground, pt));
         if (mesh.empty()) continue;
         const float age = float(e.age) + pt;
         Xf m;
@@ -1636,6 +1953,10 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
         } else {
             const float bobY = std::sin(age / 10.0f + e.bobOffset) * 0.1f + 0.1f;
             const float spin = age / 20.0f + e.bobOffset;
+            // The game draws item entities back-face culled, so from inside one nothing of it shows: a dropped item
+            // starts at the dropper's eyes (eye height - 0.3) and would otherwise fill the screen for a moment.
+            const float cy = ry + bobY + 0.2f;
+            if (rx * rx + cy * cy + rz * rz < 0.3f * 0.3f) continue;
             m = xfTranslate(rx, ry + bobY + (-mesh.groundMinY + 0.0625f), rz);
             m = xfMul(m, xfRotY(spin));
         }
@@ -2005,22 +2326,8 @@ void Visuals::Impl::buildHand(const PassContext& ctx, float viewProj[16], bool j
         attack = swinging || swingTime > 0 || attackAnim > 0 ? oAttackAnim + diff * pt : 0.0f;
     }
 
-    auto renderArm = [&](Xf ps, float inverseArmHeight, float att, bool rightArm) {
-        // renderPlayerArm + AvatarRenderer.renderHand.
-        const float inv = rightArm ? 1.0f : -1.0f;
-        const float sq = std::sqrt(att);
-        const float xs = -0.3f * std::sin(sq * kPi), ys = 0.4f * std::sin(sq * kPi * 2), zs = -0.4f * std::sin(att * kPi);
-        ps = xfMul(ps, xfTranslate(inv * (xs + 0.64000005f), ys - 0.6f + inverseArmHeight * -0.6f, zs - 0.71999997f));
-        ps = xfMul(ps, xfRotY(inv * 45.0f * kDeg));
-        const float zRot = std::sin(att * att * kPi), yRot = std::sin(sq * kPi);
-        ps = xfMul(ps, xfRotY(inv * yRot * 70.0f * kDeg));
-        ps = xfMul(ps, xfRotZ(inv * zRot * -20.0f * kDeg));
-        ps = xfMul(ps, xfTranslate(inv * -1.0f, 3.6f, 3.5f));
-        ps = xfMul(ps, xfRotZ(inv * 120.0f * kDeg));
-        ps = xfMul(ps, xfRotX(200.0f * kDeg));
-        ps = xfMul(ps, xfRotY(inv * -135.0f * kDeg));
-        ps = xfMul(ps, xfTranslate(inv * 5.6f, 0, 0));
-        // The arm part with its sleeve (resetPose, zRot = +-0.1).
+    // AvatarRenderer.renderRightHand / renderLeftHand: the arm part with its sleeve (resetPose, zRot = +-0.1).
+    auto drawHand = [&](const Xf& ps, bool rightArm) {
         const int mi = assets.model(avatar.slim ? "player_slim#main" : "player#main");
         if (mi < 0 || avatar.skin < 0) return;
         const Model& model = assets.modelAt(mi);
@@ -2064,6 +2371,84 @@ void Visuals::Impl::buildHand(const PassContext& ctx, float viewProj[16], bool j
         }
         hudLists.cut.add(ps, first, u32(dyn.size()) - first, light, 0xFFFFFFFF, 1, hudLists.next());
     };
+    auto renderArm = [&](Xf ps, float inverseArmHeight, float att, bool rightArm) {
+        // renderPlayerArm + AvatarRenderer.renderHand.
+        const float inv = rightArm ? 1.0f : -1.0f;
+        const float sq = std::sqrt(att);
+        const float xs = -0.3f * std::sin(sq * kPi), ys = 0.4f * std::sin(sq * kPi * 2), zs = -0.4f * std::sin(att * kPi);
+        ps = xfMul(ps, xfTranslate(inv * (xs + 0.64000005f), ys - 0.6f + inverseArmHeight * -0.6f, zs - 0.71999997f));
+        ps = xfMul(ps, xfRotY(inv * 45.0f * kDeg));
+        const float zRot = std::sin(att * att * kPi), yRot = std::sin(sq * kPi);
+        ps = xfMul(ps, xfRotY(inv * yRot * 70.0f * kDeg));
+        ps = xfMul(ps, xfRotZ(inv * zRot * -20.0f * kDeg));
+        ps = xfMul(ps, xfTranslate(inv * -1.0f, 3.6f, 3.5f));
+        ps = xfMul(ps, xfRotZ(inv * 120.0f * kDeg));
+        ps = xfMul(ps, xfRotX(200.0f * kDeg));
+        ps = xfMul(ps, xfRotY(inv * -135.0f * kDeg));
+        ps = xfMul(ps, xfTranslate(inv * 5.6f, 0, 0));
+        drawHand(ps, rightArm);
+    };
+    // Maps in hand (FirstPersonHandsAndItemsRenderer.renderMap): the background (checkerboard when the map has data),
+    // the map image and all its decorations, 0.38 blocks wide.
+    auto renderMap = [&](Xf ps, int mapId) {
+        ps = xfMul(ps, xfRotY(kPi));
+        ps = xfMul(ps, xfRotZ(kPi));
+        ps = xfMul(ps, xfScale(0.38f, 0.38f, 0.38f));
+        ps = xfMul(ps, xfTranslate(-0.5f, -0.5f, 0));
+        ps = xfMul(ps, xfScale(1.0f / 128, 1.0f / 128, 1.0f / 128));
+        const MapTex* data = mapId >= 0 ? mapTexture(mapId) : nullptr;
+        const int bgRect = models.texture(data ? "map/map_background_checkerboard" : "map/map_background");
+        if (bgRect >= 0 && dyn.size() < kMaxDynamic) {
+            const ItemModels::Rect& r = models.rect(bgRect);
+            MeshQuad q{};
+            const float pos[4][3] = {{-7, 135, 0}, {135, 135, 0}, {135, -7, 0}, {-7, -7, 0}};
+            const float uv[4][2] = {{r.u0, r.v0 + r.dv}, {r.u0 + r.du, r.v0 + r.dv}, {r.u0 + r.du, r.v0}, {r.u0, r.v0}};
+            std::memcpy(q.pos, pos, sizeof(pos)), std::memcpy(q.uv, uv, sizeof(uv));
+            q.normal = packNormal(0, 0, -1), q.color = 0xFFFFFFFF, q.tex = kTexItems, q.flags = kQuadNoShade;
+            const u32 first = u32(dyn.size());
+            dyn.push_back(q);
+            hudLists.cut.add(ps, first, 1, light | 512u, 0xFFFFFFFF, 1, hudLists.next());
+        }
+        if (!data) return;
+        hudLists.cut.add(ps, data->quad, 1, light | 512u, 0xFFFFFFFF, 0, hudLists.next());
+        pushMapDecorations(hudLists.cut, hudLists.tr, ps, mapId, false, light | 512u);
+    };
+    // renderTwoHandedMap: the map held with both hands, tilted up as the player looks down.
+    auto renderTwoHandedMap = [&](Xf ps, float inverseArmHeight, float att, int mapId) {
+        const float sq = std::sqrt(att);
+        const float ySwing = -0.2f * std::sin(att * kPi), zSwing = -0.4f * std::sin(sq * kPi);
+        ps = xfMul(ps, xfTranslate(0, -ySwing / 2.0f, zSwing));
+        float tilt = std::clamp(1.0f - (p.pitch / kDeg) / 45.0f + 0.1f, 0.0f, 1.0f);  // calculateMapTilt
+        tilt = -std::cos(tilt * kPi) * 0.5f + 0.5f;
+        ps = xfMul(ps, xfTranslate(0, 0.04f + inverseArmHeight * -1.2f + tilt * -0.5f, -0.72f));
+        ps = xfMul(ps, xfRotX(tilt * -85.0f * kDeg));
+        if (!(avatar.sharedFlags & 0x20)) {
+            const Xf hands = xfMul(ps, xfRotY(90.0f * kDeg));
+            for (int k = 0; k < 2; ++k) {  // renderMapHand: right, then left
+                const float inv = k == 0 ? 1.0f : -1.0f;
+                Xf h = xfMul(hands, xfRotY(92.0f * kDeg));
+                h = xfMul(h, xfRotX(45.0f * kDeg));
+                h = xfMul(h, xfRotZ(inv * -41.0f * kDeg));
+                h = xfMul(h, xfTranslate(inv * 0.3f, -1.1f, 0.45f));
+                drawHand(h, k == 0);
+            }
+        }
+        ps = xfMul(ps, xfRotX(std::sin(sq * kPi) * 20.0f * kDeg));
+        ps = xfMul(ps, xfScale(2.0f, 2.0f, 2.0f));
+        renderMap(ps, mapId);
+    };
+    // renderOneHandedMap: the arm, and the map beside it.
+    auto renderOneHandedMap = [&](Xf ps, float inverseArmHeight, float att, bool rightArm, int mapId) {
+        const float inv = rightArm ? 1.0f : -1.0f;
+        ps = xfMul(ps, xfTranslate(inv * 0.125f, -0.125f, 0));
+        if (!(avatar.sharedFlags & 0x20)) renderArm(xfMul(ps, xfRotZ(inv * 10.0f * kDeg)), inverseArmHeight, att, rightArm);
+        ps = xfMul(ps, xfTranslate(inv * 0.51f, -0.08f + inverseArmHeight * -1.2f, -0.75f));
+        const float sq = std::sqrt(att), xSwing = std::sin(sq * kPi);
+        ps = xfMul(ps, xfTranslate(inv * -0.5f * xSwing, 0.4f * std::sin(sq * kPi * 2) - 0.3f * xSwing, -0.3f * std::sin(att * kPi)));
+        ps = xfMul(ps, xfRotX(xSwing * -45.0f * kDeg));
+        ps = xfMul(ps, xfRotY(inv * xSwing * -30.0f * kDeg));
+        renderMap(ps, mapId);
+    };
     // FirstPersonHandsAndItemsRenderer.submitArmWithItem: the item use animations (eat / drink, bow, crossbow,
     // trident, brush, blocking with other items), else the attack swing of the swinging hand.
     const Game::ItemUse& use = game->use;
@@ -2090,21 +2475,58 @@ void Visuals::Impl::buildHand(const PassContext& ctx, float viewProj[16], bool j
         ps = xfMul(ps, xfScale(1.0f, 1.0f, 1.0f + power * 0.2f));
         ps = xfMul(ps, xfRotY(-float(inv) * 45.0f * kDeg));
     };
+    // SpearAnimations.firstPersonUse / firstPersonAttack.
+    auto spearFirstPersonUse = [&](Xf& ps, int inv, float timeHeld, const KineticParams& k) {
+        if (!k.valid) return;
+        const SpearUse u = spearUse(k, timeHeld);
+        const float fi = float(inv);
+        ps = xfMul(ps, xfTranslate(fi * (u.raise * 0.15f + u.raiseEnd * -0.05f + u.sway * -0.1f + u.swaySlow * 0.005f),
+                                   u.raise * -0.075f + u.raiseMiddle * 0.075f + u.swayFast * 0.01f,
+                                   u.raiseStart * 0.05f + u.raiseEnd * -0.05f + u.swaySlow * 0.005f));
+        const float xr = -65.0f * ease::inOutBack(u.raise) - 35.0f * u.lower + 100.0f * u.raiseBack - 0.5f * u.swayFast;
+        ps = xfMul(ps, xfMul(xfTranslate(0, 0.1f, 0), xfMul(xfRotX(xr * kDeg), xfTranslate(0, -0.1f, 0))));
+        const float yr = fi * (-90.0f * ease::progress(u.raise, 0.5f, 0.55f) + 90.0f * u.sway + 2.0f * u.swaySlow);
+        ps = xfMul(ps, xfMul(xfTranslate(fi * 0.15f, 0, 0), xfMul(xfRotY(-yr * kDeg), xfTranslate(-fi * 0.15f, 0, 0))));
+        const float hitTicks = game->kineticHitTicks >= 0 ? float(game->kineticHitTicks) + pt : -1.0f;
+        ps = xfMul(ps, xfTranslate(0, -spearHitFeedback(hitTicks), 0));
+    };
+    auto spearFirstPersonAttack = [&](Xf& ps, int inv, float att) {
+        const float start = ease::inOutSine(ease::progress(att, 0.0f, 0.05f));
+        const float middle = ease::outBack(ease::progress(att, 0.05f, 0.2f));
+        const float end = ease::inOutExpo(ease::progress(att, 0.4f, 1.0f));
+        ps = xfMul(ps, xfTranslate(float(inv) * 0.1f * (start - middle), -0.075f * (start - end), 0.65f * (start - middle)));
+        ps = xfMul(ps, xfRotX(-70.0f * (start - end) * kDeg));
+        ps = xfMul(ps, xfTranslate(0, 0, -0.25f * (end - middle)));
+    };
     auto renderItem = [&](Xf ps, const HandState& h, float inverseArmHeight, float att, bool rightArm, int hand) {
+        if (const ui::ItemStack* held = ui->playerSlot(hand == 0 ? 36 + game->selectedSlot() : 45);
+            held && held->item == h.item && ui::findComponent(*items, *held, "map_id")) {  // itemStack.has(MAP_ID)
+            const int mapId = ui::mapId(*items, *held);
+            if (hand == 0 && offHand.item < 0) renderTwoHandedMap(ps, inverseArmHeight, att, mapId);
+            else renderOneHandedMap(ps, inverseArmHeight, att, rightArm, mapId);
+            return;
+        }
         const int inv = rightArm ? 1 : -1;
         const std::string name = models.itemName(h.item);
         const int charge = chargeOf(hand == 0 ? 36 + game->selectedSlot() : 45);
         // isUsingItem && useItemRemainingTicks > 0 && the use is this hand's
         const bool usingThis = use.active && use.remaining > 0 && use.hand == hand && use.item == h.item;
         const float remaining = float(use.remaining), duration = float(use.duration);
-        ItemModels::UseState us;  // the item model's using_item / use_duration / crossbow/pull / use_cycle
-        if (use.active && use.hand == hand && use.item == h.item) {
-            us.usingItem = true;
-            us.useTicks = float(use.ticksUsing());
-            us.pull = us.useTicks / 25.0f;  // CrossbowItem.getChargeDuration (no Quick Charge)
-            us.remaining = remaining;
-        }
-        us.charge = charge;
+        // The item model's context: the local player holding this hand's stack (using_item, use_duration, crossbow/pull,
+        // use_cycle, fishing_rod/cast, compass needles ...).
+        const ui::ItemWorld& w = ui::itemWorld();
+        const int menuSlot = hand == 0 ? 36 + game->selectedSlot() : 45;
+        const ui::ItemStack* live = ui->playerSlot(menuSlot);
+        const ui::ItemStack& stack = live && live->item == h.item ? *live : stackOf(nullptr, h.item, h.dye);
+        ui::ItemContext ic;
+        ic.display = rightArm ? ui::ItemDisplay::FirstRight : ui::ItemDisplay::FirstLeft;
+        ic.owner = w.player;
+        ic.seed = w.localId + int(ic.display);
+        if (use.active && use.hand == hand && use.item == h.item)
+            ic.owner.usingThis = true, ic.owner.useTicks = float(use.ticksUsing()), ic.owner.remaining = remaining;
+        ic.owner.fishing = w.fishingSlot == menuSlot;
+        ic.owner.selected = hand == 0;
+        ic.owner.cooldown = w.cooldown ? w.cooldown(stack) : 0.0f;
         if (name == "crossbow") {
             applyItemArm(ps, inv, inverseArmHeight);
             if (usingThis && !charge) {
@@ -2184,15 +2606,24 @@ void Visuals::Impl::buildHand(const PassContext& ctx, float viewProj[16], bool j
                     break;
                 }
                 case ItemRules::Anim::Bundle: swingArm(ps, inv, att); break;
-                case ItemRules::Anim::Spear: ps = xfMul(ps, xfTranslate(float(inv) * 0.56f, -0.52f, -0.72f)); break;
+                case ItemRules::Anim::Spear: {
+                    ps = xfMul(ps, xfTranslate(float(inv) * 0.56f, -0.52f, -0.72f));
+                    spearFirstPersonUse(ps, inv, duration - (remaining - pt + 1.0f), game->kinetic[hand & 1]);
+                    break;
+                }
                 default: break;
             }
+        } else if (game->player().spinFlag) {  // isAutoSpinAttack (riptide)
+            applyItemArm(ps, inv, inverseArmHeight);
+            ps = xfMul(ps, xfTranslate(float(inv) * -0.4f, 0.8f, 0.3f));
+            ps = xfMul(ps, xfRotY(float(inv) * 65.0f * kDeg));
+            ps = xfMul(ps, xfRotZ(float(inv) * -85.0f * kDeg));
         } else {
             applyItemArm(ps, inv, inverseArmHeight);
-            if (att > 0) swingArm(ps, inv, att);
+            if (att > 0 && swingType == 1) swingArm(ps, inv, att);
+            else if (att > 0 && swingType == 2) spearFirstPersonAttack(ps, inv, att);
         }
-        pushItem(hudLists, models.mesh(h.item, h.dye, false, us), rightArm ? Display::FirstRight : Display::FirstLeft, ps, light,
-                 h.foil);
+        pushItem(hudLists, models.mesh(stack, ic), rightArm ? Display::FirstRight : Display::FirstLeft, ps, light, h.foil);
     };
     // LocalPlayer.isScoping: the spyglass overlay replaces the hands.
     if (use.active && ItemRules::Anim(use.anim) == ItemRules::Anim::Spyglass) return;
@@ -2219,11 +2650,14 @@ void Visuals::Impl::buildHand(const PassContext& ctx, float viewProj[16], bool j
     const float offSwap = offHand.item >= 0 ? models.handInfo(offHand.item).swapScale : 1.0f;
     const float mainInv = mainSwap * (1.0f - (mainHand.oHeight + (mainHand.height - mainHand.oHeight) * pt));
     const float offInv = offSwap * (1.0f - (offHand.oHeight + (offHand.height - offHand.oHeight) * pt));
+    // The attack swing belongs to the swinging hand; the main hand is on the main arm (Main Hand option).
+    const bool mainRight = !ui || ui->settings().mainHand != 0;
+    const float mainAttack = swingHand == 0 ? attack : 0.0f, offAttack = swingHand == 1 ? attack : 0.0f;
     if (drawMain) {
-        if (mainHand.item < 0) renderArm(pose, mainInv, attack, true);
-        else renderItem(pose, mainHand, mainInv, attack, true, 0);
+        if (mainHand.item < 0) renderArm(pose, mainInv, mainAttack, mainRight);
+        else renderItem(pose, mainHand, mainInv, mainAttack, mainRight, 0);
     }
-    if (drawOff && offHand.item >= 0) renderItem(pose, offHand, offInv, 0.0f, false, 1);
+    if (drawOff && offHand.item >= 0) renderItem(pose, offHand, offInv, offAttack, !mainRight, 1);
 }
 
 // CrossbowItem.isCharged / the charge_type property of a player inventory menu slot: 0 none, 1 arrow, 2 rocket.

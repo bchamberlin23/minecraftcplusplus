@@ -60,9 +60,12 @@ private:
     void swimFlyTick(ent::Entity& e);  // happy ghast, nautilus
     void sendVehicleMove(const ent::Entity& e);
     // Moves an axis-aligned box (vehicle) by delta with block collisions and an optional step up; returns the
-    // movement done and the collision flags.
+    // movement done and the collision flags. Landing on a bouncy block bounces like Entity.restituteMovementAfter-
+    // Collisions (gravity: the vehicle's; living: full block restitution, others 0.8 of it). extraBoxes: more
+    // colliders (a strider's lava surface).
     void collideMove(ent::Entity& e, double width, double height, double step, double delta[3], bool& onGround,
-                     bool& hCollision);
+                     bool& hCollision, double gravity = 0, bool living = false);
+    std::vector<AABB> extraBoxes_;
 
     Gameplay& gameplay_;
     Game& game_;

@@ -3,6 +3,7 @@
 // CreeperModel, SpiderModel, IronGolemModel, VillagerModel, ArmorStandModel, ShulkerModel), every other species in
 // species_anim.cpp, with a KeyframeAnimation player for the models driven by AnimationDefinitions.
 #include "entity/entity_assets.h"
+#include "entity/spear_anim.h"
 
 namespace ent {
 
@@ -28,7 +29,11 @@ struct AnimState {
     float flap = 0, flapSpeed = 0;     // chicken
     bool baby = false, crouching = false, riding = false, aggressive = false;
     bool rightItem = false, leftItem = false;  // something held in the right / left hand
-    bool swingLeft = false;
+    bool swingLeft = false;            // the swinging arm is the left one
+    bool leftHanded = false;           // the main arm is the left one
+    int swingType = 1;                 // SwingAnimationType of the swing: 0 none, 1 whack, 2 stab
+    KineticParams rightKinetic, leftKinetic;  // each arm's spear (SpearAnimations.thirdPersonHandUse)
+    bool holdingBow = false;           // skeletons: a bow in the main hand (SkeletonModel)
     // Arm poses (AvatarRenderer.getArmPose); without them rightItem / leftItem give ITEM / EMPTY.
     bool havePoses = false;
     ArmPose rightPose = ArmPose::Empty, leftPose = ArmPose::Empty;

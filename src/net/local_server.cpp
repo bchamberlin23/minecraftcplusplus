@@ -151,6 +151,57 @@ int gameWorldVersion(const fs::path& jar) {
     return 0;
 }
 
+// The data pack format of the installed game (version.json pack_version.data_major).
+int gameDataFormat(const fs::path& jar) {
+    ZipArchive zip;
+    if (!zip.open(jar)) return 0;
+    for (const auto& e : zip.entries())
+        if (e.name == "version.json") {
+            std::vector<u8> bytes;
+            if (!zip.read(e, bytes)) return 0;
+            const auto j = nlohmann::json::parse(bytes.begin(), bytes.end(), nullptr, false);
+            return j.is_object() && j.contains("pack_version") ? j["pack_version"].value("data_major", 0) : 0;
+        }
+    return 0;
+}
+
+// Single Biome (CreateBuffetWorldScreen): a dedicated server only knows the preset's own biome, so a data pack in the
+// new world overrides the single_biome_surface preset while the world is made (removed again in finishNewWorld; the
+// world keeps its dimensions in its generation settings).
+constexpr const char* kBiomePack = "mcpp_single_biome";
+
+bool writeSingleBiomePack(const fs::path& world, const fs::path& jar, const std::string& biome) {
+    const fs::path dir = world / "datapacks" / kBiomePack;
+    std::error_code ec;
+    fs::create_directories(dir / "data" / "minecraft" / "worldgen" / "world_preset", ec);
+    const int format = gameDataFormat(jar);
+    nlohmann::json meta = {{"pack", {{"description", "Single Biome world creation (minecraftCplusplus)"},
+                                     {"min_format", format}, {"max_format", format}}}};
+    auto noise = [](nlohmann::json source, const char* settings) {
+        return nlohmann::json{{"type", "minecraft:noise"}, {"biome_source", std::move(source)}, {"settings", settings}};
+    };
+    nlohmann::json preset = {
+        {"dimensions",
+         {{"minecraft:overworld", {{"type", "minecraft:overworld"},
+                                   {"generator", noise({{"type", "minecraft:fixed"}, {"biome", biome}}, "minecraft:overworld")}}},
+          {"minecraft:the_nether", {{"type", "minecraft:the_nether"},
+                                    {"generator", noise({{"type", "minecraft:multi_noise"}, {"preset", "minecraft:nether"}},
+                                                        "minecraft:nether")}}},
+          {"minecraft:the_end",
+           {{"type", "minecraft:the_end"}, {"generator", noise({{"type", "minecraft:the_end"}}, "minecraft:end")}}}}}};
+    std::ofstream m(dir / "pack.mcmeta", std::ios::trunc), p(dir / "data" / "minecraft" / "worldgen" / "world_preset" /
+                                                                 "single_biome_surface.json", std::ios::trunc);
+    m << meta.dump(2) << "\n";
+    p << preset.dump(2) << "\n";
+    return m && p;
+}
+
+std::string joined(const std::vector<std::string>& v) {
+    std::string s;
+    for (const std::string& x : v) s += (s.empty() ? "" : ",") + x;
+    return s;
+}
+
 const char* gameModeName(i64 m) {
     switch (m) {
     case 1: return "creative";
@@ -350,9 +401,21 @@ void LocalServer::finishNewWorld() {
     const std::string& m = config_.create->gameMode;
     mode.i = m == "creative" ? 1 : m == "adventure" ? 2 : m == "spectator" ? 3 : 0;
     data->set("GameType", std::move(mode));
+    if (!config_.create->singleBiome.empty()) {  // the preset override pack is not part of the world
+        std::error_code ec;
+        fs::remove_all(config_.world / "datapacks" / kBiomePack, ec);
+        if (NbtValue* packs = data->find("DataPacks"))
+            if (NbtValue* enabled = packs->find("Enabled"))
+                std::erase_if(enabled->items, [](const NbtValue& v) { return v.s == std::string("file/") + kBiomePack; });
+    }
     if (writeNbtGz(config_.world / "level.dat", root, rootName))
         LOG("server  new world \"%s\" set up for singleplayer (cheats %s)", levelName.c_str(),
             config_.create->cheats ? "on" : "off");
+}
+
+std::string LocalServer::upgradeStatus() const {
+    std::lock_guard lock(statusMutex_);
+    return upgradeStatus_;
 }
 
 bool LocalServer::start(const Config& config) {
@@ -405,6 +468,13 @@ bool LocalServer::start(const Config& config) {
             hostUuid_ = id.substr(0, 8) + "-" + id.substr(8, 4) + "-" + id.substr(12, 4) + "-" + id.substr(16, 4) + "-" +
                         id.substr(20);
         fs::create_directories(config.world, existsEc);
+        if (!config.create->singleBiome.empty() &&
+            writeSingleBiomePack(config.world, config.minecraftDir / "versions" / config.version / (config.version + ".jar"),
+                                 config.create->singleBiome)) {
+            auto& packs = config_.create->enabledPacks;
+            if (packs.empty()) packs.push_back("vanilla");
+            packs.push_back(std::string("file/") + kBiomePack);
+        }
     } else {
         exportHostPlayer();
     }
@@ -447,9 +517,15 @@ bool LocalServer::start(const Config& config) {
           << "gamemode=" << (creating_ ? config.create->gameMode : gameModeName(num("GameType", 0))) << "\n"
           << "difficulty=" << (creating_ ? config.create->difficulty : difficulty) << "\n"
           << "hardcore=" << ((creating_ ? config.create->hardcore : hardcore) ? "true" : "false") << "\n";
-        if (creating_)
-            p << "level-seed=" << propertyValue(config.create->seed) << "\n"
-              << "generate-structures=" << (config.create->structures ? "true" : "false") << "\n";
+        if (creating_) {
+            const Config::Create& c = *config_.create;
+            p << "level-seed=" << propertyValue(c.seed) << "\n"
+              << "generate-structures=" << (c.structures ? "true" : "false") << "\n";
+            if (!c.levelType.empty()) p << "level-type=" << propertyValue(c.levelType) << "\n";
+            if (!c.generatorSettings.empty()) p << "generator-settings=" << propertyValue(c.generatorSettings) << "\n";
+            if (!c.enabledPacks.empty()) p << "initial-enabled-packs=" << propertyValue(joined(c.enabledPacks)) << "\n";
+            if (!c.disabledPacks.empty()) p << "initial-disabled-packs=" << propertyValue(joined(c.disabledPacks)) << "\n";
+        }
         p << "motd=" << config.world.filename().string() << " (minecraftCplusplus)\n";
         // Cheats on in the save: the player may run commands, as in singleplayer.
         std::ofstream ops(work / "ops.json", std::ios::trunc);
@@ -475,6 +551,8 @@ bool LocalServer::start(const Config& config) {
     std::wstring cmd = L"\"" + java.wstring() + L"\" -Xms1G -Xmx4G" + jvmExtra + L" -jar \"" + jar.wstring() +
                        L"\" --nogui --universe \"" + config.world.parent_path().wstring() + L"\" --world \"" +
                        config.world.filename().wstring() + L"\" --port " + std::to_wstring(port_);
+    if (creating_ && config.create->bonusChest) cmd += L" --bonusChest";
+    if (config.forceUpgrade) cmd += config.eraseCache ? L" --forceUpgrade --eraseCache" : L" --forceUpgrade";
     const BOOL ok = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | CREATE_SUSPENDED,
                                    nullptr, work.c_str(), &si, &pi);
     CloseHandle(stdinRead);
@@ -509,7 +587,24 @@ void LocalServer::readOutput() {
             pending.erase(0, nl + 1);
             if (!line.empty() && line.back() == '\r') line.pop_back();
             if (line.find("Done (") != std::string::npos) {
+                if (creating_)  // Create World's game rules, before anyone joins (the console runs them next tick)
+                    for (const auto& [rule, value] : config_.create->gameRules) command("gamerule " + rule + " " + value);
                 ready_ = true;
+                LOG("server: %s", line.c_str());
+            } else if (config_.forceUpgrade && upgradePercent_ < 100 &&
+                       (line.find("Forcing world upgrade") != std::string::npos || line.find("% completed (") != std::string::npos ||
+                        line.find("[main/INFO]") != std::string::npos || line.find("[Server Main/INFO]") != std::string::npos)) {
+                // Optimize World: WorldUpgrader's status lines and "<n>% completed (<done> / <total> chunks)...".
+                const size_t s = line.find("]: ");
+                const std::string msg = s == std::string::npos ? line : line.substr(s + 3);
+                if (const size_t pc = msg.find("% completed ("); pc != std::string::npos) {
+                    upgradePercent_ = std::atoi(msg.c_str());
+                } else if (msg.starts_with("Starting minecraft server") || msg.starts_with("Loading properties")) {
+                    if (upgradePercent_ >= 0 || msg.starts_with("Starting")) upgradePercent_ = 100;
+                } else if (!msg.starts_with("Forcing")) {
+                    std::lock_guard lock(statusMutex_);
+                    upgradeStatus_ = msg;
+                }
                 LOG("server: %s", line.c_str());
             } else if (const size_t j = line.find(" joined the game"); j != std::string::npos) {
                 const size_t s = line.rfind("]: ", j);

@@ -56,7 +56,8 @@ struct Text {
 // Style click_event / hover_event / insertion (ClickEvent, HoverEvent).
 struct TextEvents {
     std::string click;       // "open_url", "run_command", "suggest_command", "copy_to_clipboard", "change_page"...; "" none
-    std::string clickValue;  // url / command / value / page number
+    std::string clickValue;  // url / command / value / page number / custom id
+    std::string clickNbt;    // show_dialog dialog (id string or inline compound) / custom payload: network NBT
     std::string hover;       // "show_text", "show_item", "show_entity"; "" none
     Text hoverText;          // show_text value; show_entity name
     std::string hoverId;     // show_item item id / show_entity type id
@@ -74,6 +75,8 @@ Style colorStyle(u32 rgb);
 // Chat components from the network (NBT: type byte + payload) and JSON.
 Text parseComponent(std::string_view nbt, const Lang* lang);
 Text parseJsonComponent(const nlohmann::json& j, const Lang* lang);
+// Style.Serializer as network NBT (a component's style fields: colour, flags, events).
+Style parseStyle(std::string_view nbt, const Lang* lang);
 // Translatable text with plain arguments.
 Text translatable(const std::string& key, const std::vector<Text>& args, const Lang* lang, Style style = {});
 std::string formatJava(const std::string& fmt, const std::vector<std::string>& args);
