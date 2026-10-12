@@ -220,6 +220,7 @@ void Client::run() {
 void Client::disconnect(const std::string& reason) {
     if (disconnected_.exchange(true)) return;
     push(DisconnectEvent{reason});
+    quit_ = true;
     connection_.close();
 }
 
@@ -435,12 +436,6 @@ void Client::sendPackStatus(const std::string& id, int action) {
 }
 
 void Client::acceptCodeOfConduct() { send(Configuration, "accept_code_of_conduct", Writer{}); }
-
-void Client::disconnect(const std::string& reason) {
-    push(DisconnectEvent{reason});
-    quit_ = true;
-    connection_.close();
-}
 
 std::map<std::string, std::string> Client::cookies() const {
     std::lock_guard lock(registryMutex_);

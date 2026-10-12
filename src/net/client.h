@@ -209,8 +209,6 @@ public:
     // 3 accepted, 4 downloaded, 5 invalid URL, 6 failed reload, 7 discarded).
     void sendPackStatus(const std::string& id, int action);
     void acceptCodeOfConduct();
-    // Closes the connection on the client's side (Connection.disconnect): the reason shows as a DisconnectEvent.
-    void disconnect(const std::string& reason);
     std::map<std::string, std::string> cookies() const;  // store_cookie (for a transfer)
     std::map<std::string, std::string> reportDetails() const;  // custom_report_details (crash reports)
     std::string serverBrand() const;                            // minecraft:brand ("vanilla")
