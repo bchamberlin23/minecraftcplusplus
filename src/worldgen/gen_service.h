@@ -28,11 +28,12 @@ public:
     GenService(const ChunkGenerator& generator, const FeatureSystem* features, ExistsFn exists, LoadFn load,
                unsigned threads);
     ~GenService();
+    void stop();  // signal exit without waiting for the workers (destructor joins)
 
     // Chunks to deliver, nearest first; replaces the previous request. Work far from the
     // first entry is dropped.
     void setWanted(const std::vector<std::pair<int, int>>& chunks);
-    std::vector<std::unique_ptr<GenChunk>> take(size_t max);
+    std::vector<std::unique_ptr<GenChunk>> take(size_t max, int centerCx, int centerCz);
     size_t pending() const;
     double averageMs() const;
     std::string debugCounts() const;  // states of the tracked chunks (profiling)

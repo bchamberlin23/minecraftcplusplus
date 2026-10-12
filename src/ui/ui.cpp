@@ -94,10 +94,11 @@ bool Settings::load() {
         else if (k == "guiScale") guiScale = std::clamp(std::atoi(v.c_str()), 0, 8);
         else if (k == "mouseSensitivity") sensitivity = std::clamp(float(std::atof(v.c_str())), 0.f, 1.f);
         else if (k == "shaders") {
-            static const char* presets[] = {"off", "low", "medium", "high", "ultra"};
-            for (u8 i = 0; i < 5; ++i)
+            static const char* presets[] = {"off", "low", "medium", "high", "ultra", "pathtraced"};
+            for (u8 i = 0; i < 6; ++i)
                 if (v == presets[i]) video.shaders = i, videoSaved = true;
-        } else if (k == "upscaler") VideoSettings::parseUpscaler(v, video.upscaler);
+        } else if (k == "pathTracing") VideoSettings::parsePathTracing(v, video.pathTracing);
+        else if (k == "upscaler") VideoSettings::parseUpscaler(v, video.upscaler);
         else if (k == "upscaleQuality") VideoSettings::parseQuality(v, video.quality);
         else if (k == "sharpness") video.sharpness = std::clamp(float(std::atof(v.c_str())), 0.f, 1.f);
         else if (k == "frameGeneration") video.parseFrameGen(v);
@@ -106,11 +107,13 @@ bool Settings::load() {
         else if (k == "maxFps") video.fpsLimit = u32(std::clamp(std::atoi(v.c_str()), 0, 1000));
         else if (k == "shaderPack") shaderPack = v;
         else if (k == "bobView") bobView = v == "true";
+        else if (k == "fovEffectScale") fovEffectScale = std::clamp(float(std::atof(v.c_str())), 0.0f, 1.0f);
         else if (k == "attackIndicator") attackIndicator = ((std::atoi(v.c_str()) % 3) + 3) % 3;  // ByIdMap WRAP
         else if (k == "fullscreen") fullscreen = v == "true";
         else if (k == "toggleCrouch") toggleCrouch = v == "true";
         else if (k == "toggleSprint") toggleSprint = v == "true";
         else if (k == "autoJump") autoJump = v == "true";
+        else if (k == "sprintWindow") sprintWindow = std::clamp(std::atoi(v.c_str()), 0, 10);
         else if (k == "invertXMouse") invertMouseX = v == "true";
         else if (k == "invertYMouse") invertMouseY = v == "true";
         else if (k == "discrete_mouse_scroll") discreteMouseScroll = v == "true";
@@ -137,16 +140,18 @@ void Settings::save() const {
     std::ofstream f(path());
     f << "fov:" << fov << "\nrenderDistance:" << renderDistance << "\nguiScale:" << guiScale
       << "\nmouseSensitivity:" << sensitivity << "\n";
-    static const char* presets[] = {"off", "low", "medium", "high", "ultra"};
-    f << "shaders:" << presets[std::min<int>(video.shaders, 4)] << "\nupscaler:" << VideoSettings::upscalerKey(video.upscaler)
+    static const char* presets[] = {"off", "low", "medium", "high", "ultra", "pathtraced"};
+    f << "shaders:" << presets[std::min<int>(video.shaders, 5)] << "\npathTracing:" << VideoSettings::pathTracingKey(video.pathTracing)
+      << "\nupscaler:" << VideoSettings::upscalerKey(video.upscaler)
       << "\nupscaleQuality:" << VideoSettings::qualityKey(video.quality) << "\nsharpness:" << video.sharpness
       << "\nframeGeneration:" << video.frameGenKey() << "\nlowLatency:" << VideoSettings::lowLatencyKey(video.lowLatency)
       << "\nvsync:" << (video.vsync ? "true" : "false") << "\nmaxFps:" << video.fpsLimit << "\n";
     f << "shaderPack:" << shaderPack << "\n";
     f << "bobView:" << (bobView ? "true" : "false") << "\nattackIndicator:" << attackIndicator << "\n";
+    f << "fovEffectScale:" << fovEffectScale << "\n";
     auto b = [](bool v) { return v ? "true" : "false"; };
     f << "fullscreen:" << b(fullscreen) << "\ntoggleCrouch:" << b(toggleCrouch) << "\ntoggleSprint:" << b(toggleSprint)
-      << "\nautoJump:" << b(autoJump) << "\ninvertXMouse:" << b(invertMouseX) << "\ninvertYMouse:" << b(invertMouseY)
+      << "\nautoJump:" << b(autoJump) << "\nsprintWindow:" << sprintWindow << "\ninvertXMouse:" << b(invertMouseX) << "\ninvertYMouse:" << b(invertMouseY)
       << "\ndiscrete_mouse_scroll:" << b(discreteMouseScroll) << "\nmouseWheelSensitivity:" << mouseWheelSensitivity
       << "\nmainHand:" << (mainHand == 0 ? "left" : "right") << "\nallowServerListing:" << b(allowServerListing)
       << "\npauseOnLostFocus:" << b(pauseOnLostFocus) << "\nadvancedItemTooltips:" << b(advancedItemTooltips) << "\n";
@@ -215,6 +220,7 @@ void Ui::State::applyControls() {  // the key bindings and control options the g
     game->invertMouseX = settings.invertMouseX, game->invertMouseY = settings.invertMouseY;
     game->discreteScroll = settings.discreteMouseScroll, game->wheelSensitivity = settings.mouseWheelSensitivity;
     game->player().autoJump = settings.autoJump;
+    game->player().sprintWindow = settings.sprintWindow;
 }
 
 int Ui::State::gameMode() const {
@@ -347,8 +353,8 @@ void Ui::State::sendChat(const std::string& raw) {
 }
 
 void Ui::State::syncHotbarToGame() {
-    for (int i = 0; i < 9; ++i) {
-        const ItemStack& s = inventory.slots[size_t(36 + i)];
+    for (int i = 0; i < 10; ++i) {  // the hotbar, then the off hand (45)
+        const ItemStack& s = inventory.slots[size_t(i < 9 ? 36 + i : 45)];
         const int item = s.empty() ? -1 : s.item;
         if (item == hotbarSynced[i]) continue;
         hotbarSynced[i] = item;
@@ -368,7 +374,8 @@ void Ui::State::syncHotbarToGame() {
                 if (name == from) name = to, mapped = true;
             if (mapped || items.isBlockItem(item)) block = registry->idFor(name);
         }
-        game->setHotbarBlock(i, block);
+        if (i < 9) game->setHotbarBlock(i, block);
+        else game->setOffhandBlock(block);
     }
 }
 
@@ -956,28 +963,16 @@ void Ui::attachSession(net::Client* client, net::Session* session) {
     for (const UiModule& m : uiModules())
         if (m.attached) m.attached(s);
     if (!session) return;
-    // Minecraft.startUseItem: the main hand first, then the off hand when the main hand's use passes. The client
-    // cannot simulate item uses, so the off hand gets its turn when the main hand holds nothing, a block or a
-    // sword / pickaxe (no use of their own): torches and shields in the off hand. After a use of an entity (which
-    // mostly passes, but feeds or trades with some) only such hands go on.
-    s.game->onUseItem = [&s, session](const RayHit* hit, bool afterEntity) {
-        const int sel = s.game->selectedSlot();
-        const ItemStack& main = s.inventory.slots[size_t(36 + sel)];
-        const ItemStack& off = s.inventory.slots[45];
-        const std::string mainName = main.empty() ? std::string() : s.items.name(main.item);
-        const bool mainPasses = main.empty() || s.items.isBlockItem(main.item) || mainName.ends_with("_sword") ||
-                                mainName.ends_with("_pickaxe");
-        if (afterEntity && !mainPasses) return;
-        if (!afterEntity) openWritableBook(s, 0);  // signs_books.cpp: book and quill (opened client side)
-        session->useItem(0);
-        if (off.empty() || !mainPasses) return;
-        if (!afterEntity) openWritableBook(s, 1);
-        if (hit) session->useItemOn(1, *hit);
-        session->useItem(1);
+    // Minecraft.startUseItem reached this hand's item use (Game::startUseItem decides the hands' turns from the
+    // gameplay layer's predicted results): ServerboundUseItemPacket; a book and quill opens client side.
+    s.game->onUseItem = [&s, session](int hand) {
+        openWritableBook(s, hand);  // signs_books.cpp
+        session->useItem(hand);
     };
 }
 
 void Ui::setEntities(ent::EntityWorld* entities) { s_->entities = entities; }
+void Ui::setEquipmentRule(std::function<int(const ItemStack&, bool&)> rule) { s_->equipmentRule = std::move(rule); }
 void Ui::setItemModels(ent::ItemModels* models) { s_->itemModels = models; }
 
 int Ui::ticksFrozen() const { return s_->ticksFrozen; }
@@ -1081,7 +1076,7 @@ void Ui::State::runScript(double) {
             game->retarget();
             game->useTarget(arg(0) != "break");
         } else if (st.verb == "useitem") {  // right click into the air: use the held item
-            if (game->onUseItem) game->onUseItem(nullptr, false);
+            game->startUseItem(false);
         } else if (st.verb == "attack") {  // left click on the entity under the crosshair
             if (game->onEntityClick) game->onEntityClick(true, false, -1.0);
         } else if (st.verb == "shot") {
@@ -1093,6 +1088,11 @@ void Ui::State::runScript(double) {
             const Player& p = game->player();
             LOG("script: %s| pos %.3f %.3f %.3f ground %d health %.1f food %d sneak %d slot %d", msg.c_str(), p.pos[0], p.pos[1],
                 p.pos[2], int(p.onGround), health, food, int(p.lastInput.sneak), game->selectedSlot());
+        } else if (st.verb == "block") {  // block x y z: logs the block state there
+            const int x = std::atoi(arg(0).c_str()), y = std::atoi(arg(1).c_str()), z = std::atoi(arg(2).c_str());
+            LOG("script: block %d %d %d = %s", x, y, z, registry->name(world->block(x, y, z)).c_str());
+        } else if (st.verb == "trace") {  // trace on|off: the player's state every tick
+            game->traceTicks = arg(0) != "off";
         } else if (st.verb == "dump") {  // logs the open menu's slots
             const Menu& m = activeMenu();
             for (size_t i = 0; i < m.slots.size(); ++i)

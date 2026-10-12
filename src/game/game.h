@@ -1,5 +1,6 @@
 #pragma once
 #include "core/common.h"
+#include "entity/spear_anim.h"
 #include "game/player.h"
 #include "game/tick_rate.h"
 #include "render/renderer.h"
@@ -37,10 +38,20 @@ public:
     // gives that entity's eye position and view rotation at the partial tick (false: unknown, the player's view).
     int cameraEntity = -1;
     std::function<bool(int id, CameraState& out)> entityView;
-    // The player's arm swings (attack press, block broken / placed): drives the hand animation.
-    std::function<void()> onSwing;
+    // The player's arm swings (attack press, block broken / placed): drives the hand animation. hand: 0 main, 1 off;
+    // type: the item's SwingAnimationType (0 none, 1 whack, 2 stab).
+    std::function<void(int hand, int type)> onSwing;
+    // LocalPlayer.itemUsed: a use of the hand's item went through (Minecraft.startUseItem); its hand drops for the
+    // re-equip motion.
+    std::function<void(int hand)> onItemUsed;
+    bool useOnTakesItem = false;  // the last predicted Item.useOn used up one of the stack (set by the gameplay layer)
     std::string status() const;
     Player& player() { return player_; }
+    Physics& physics() { return physics_; }
+    // Moving blocks of pistons (the block entity layer) for the player's collisions and pushes, every tick; and the
+    // entities pushing the player after its tick (living entities' pushEntities, boats).
+    std::function<void(std::vector<Physics::Piston>& out)> pistonSource;
+    std::function<void(Player& player)> entityPush;
 
     // Used by input handling and by the scripted self-test.
     void retarget();
@@ -72,6 +83,8 @@ public:
         // locally (predicted). START / STOP carry a prediction sequence; ABORT / CHANGE_DIRECTION do not.
         int action = kStartDestroy;
         bool predicted = true;
+        int hand = 0;         // use_item_on: 0 main hand, 1 off hand
+        bool inside = false;  // use_item_on: BlockHitResult.isInside (the eyes inside the targeted shape)
     };
     static constexpr int kStartDestroy = 0, kChangeDestroyDirection = 1, kAbortDestroy = 2, kStopDestroy = 3;
     std::function<void(const EditAction&)> onEdit;
@@ -110,7 +123,7 @@ public:
     // onUseItem gets the targeted block (nullptr: none) for the off hand's turn (Minecraft.startUseItem tries
     // the main hand, then the off hand); afterEntity: the press was also sent as a use of an entity.
     std::function<void()> onPunch, onReleaseUseItem;
-    std::function<void(const RayHit* target, bool afterEntity)> onUseItem;
+    std::function<void(int hand)> onUseItem;  // ServerboundUseItemPacket for a hand
     void setHotbarBlock(int slot, u16 id) { hotbar_[slot] = id; }
 
     // --- Mining: MultiPlayerGameMode digging driven by Minecraft.startAttack / continueAttack at 20 Hz. ---
@@ -150,8 +163,19 @@ public:
     // Every tick while an item is in use, before the count down (LivingEntity.updatingUsingItem: the gameplay layer
     // stops the use when the hand changed, plays eating particles / sounds).
     std::function<void()> onUseTick;
-    // After a use press went to the server (onUseItem): the client's own prediction (Item.use -> startUsingItem).
-    std::function<void(const RayHit* target, bool afterEntity)> predictUse;
+    // Minecraft.startUseItem: each hand in turn uses the targeted block (useItemOn) then its item (useItem) until one
+    // consumes the click or fails. The gameplay layer predicts the item parts from the stacks' components:
+    // predictItemUse (ItemStack.use: starts the use, cooldowns, buckets), predictUseOn (ItemStack.useOn of items that
+    // are not blocks); handHasItem / handOnCooldown describe the hands; predictRelease (Item.releaseUsing: riptide).
+    static constexpr int kUsePass = 0, kUseConsume = 1, kUseFail = 2;
+    void startUseItem(bool afterEntity);
+    int useItemOn(int hand);
+    std::function<int(int hand, const RayHit* target)> predictItemUse;
+    std::function<int(int hand, const RayHit& hit)> predictUseOn;
+    std::function<bool(int hand)> handHasItem, handOnCooldown;
+    std::function<void()> predictRelease;
+    void setOffhandBlock(u16 id) { offhandBlock_ = id; }  // the off hand's block (0: not a block item)
+    void predictBlock(int x, int y, int z, u16 id) { edit(x, y, z, id); }  // a client-side block change of an item use
     // --- Item cooldowns: Player.getCooldowns (ItemCooldowns) by cooldown group ("minecraft:ender_pearl"), set by the
     // server's cooldown packets and counted in player ticks. While the main hand's group cools down, a right click
     // does not predict its use (MultiPlayerGameMode.useItemOn / useItem pass). ---
@@ -159,9 +183,10 @@ public:
     void removeCooldown(const std::string& group) { cooldowns_.erase(group); }
     void clearCooldowns() { cooldowns_.clear(); }
     float cooldownPercent(const std::string& group, float partial) const;  // ItemCooldowns.getCooldownPercent
-    std::function<bool()> mainHandOnCooldown;
     // Item shards (eating): ParticleTypes.ITEM at a position with a velocity.
     std::function<void(int item, const double pos[3], const double vel[3])> onItemParticle;
+    // A particle of a type by name ("minecraft:large_smoke") at a position with a velocity (the client's own effects).
+    std::function<void(std::string_view type, const double pos[3], const double vel[3])> onParticle;
     bool usePressed() const { return usingItem_; }  // the use key is held after a use press
     // AbstractClientPlayer.getFieldOfViewModifier, item part: drawing a bow narrows the view (x 0.85 at full draw);
     // scoping with a spyglass in first person sets it to 0.1.
@@ -189,6 +214,22 @@ public:
     void hurt() { hurtTime = hurtDuration = 10; }                         // handleDamageEvent / LocalPlayer.hurtTo
     int attackStrengthTicker = 0;
     float attackSpeed = 4.0f;          // the attack_speed attribute (with the held item)
+    // The main hand's weapon components (gameplay layer): piercing_weapon (Minecraft.startAttack stabs instead:
+    // ServerboundPlayerActionPacket STAB through onStab, no block breaking), minimum_attack_charge
+    // (Player.cannotAttackWithItem), attack_range (entities hit only from min to max reach; max < 0: none) and the
+    // swing's duration (attack_animation with Haste / Mining Fatigue, LivingEntity.getModifiedSwingDuration).
+    bool heldPiercing = false;
+    float heldMinimumCharge = 0;
+    double attackMinReach = 0, attackMaxReach = -1, attackMargin = 0;
+    std::string playerName;  // our name (scoreboard team membership)  // attack_range: reaches (-1 none), hitbox margin
+    int swingTicks = 6, useSwingTicks = 6;  // attack / interact swings (onSwing reads swingTicks)
+    int swingType = 1;                      // the main hand's attack_animation type
+    int useSwingTicksOf[2] = {6, 6}, useSwingTypeOf[2] = {1, 1};  // each hand's interact_animation
+    ent::KineticParams kinetic[2];          // each hand's kinetic_weapon timing (spear use animations)
+    // LivingEntity.getTicksSinceLastKineticHitFeedback: ticks since the server's KINETIC_HIT event, -1 none.
+    int kineticHitTicks = -1;
+    std::function<void()> onStab;
+    std::function<void()> onStabEffects;  // PiercingWeapon.makeSound for the local player (gameplay layer)
     bool crosshairOnLiving = false;    // a living entity is under the crosshair (Minecraft.crosshairPickEntity)
     float attackStrengthScale(float a) const {
         const float delay = 20.0f / std::max(attackSpeed, 1e-4f);
@@ -208,12 +249,14 @@ public:
     float destroyProgressValue() const { return dig_.progress; }
     void setSelectedSlot(int slot) { selected_ = slot; }
     void simulate(const PlayerInput& input, int ticks);
+    bool traceTicks = false;  // logs the player's state every tick (the script's "trace on")
     void buildOverlay();
 
 private:
     PlayerInput readInput(Window& window);
     bool held(Window& window, int vk) const;  // a bound key / button is down while the mouse is captured
     void handleClicks(Window& window, double dt, int rightPresses, int middlePresses, int wheel);
+    void refreshPistons();
     void tickAttack(bool down);  // Minecraft.handleKeybinds: queued attack presses, then continueAttack
     void tickCameraFeedback();
     bool startAttack();
@@ -241,9 +284,11 @@ private:
     u16 hotbar_[9] = {};
     int selected_ = 0;
     double repeatTimer_ = 0;
-    double lastJumpPress_ = -1, clock_ = 0;
+    double clock_ = 0;
     bool escWasDown_ = false;
-    bool useConsumed_ = false;  // the last useTarget(place) placed a block or used the targeted block
+    bool useConsumed_ = false;  // the last use press placed a block, used the targeted block or failed
+    bool placedLast_ = false;   // the last useItemOn placed a block
+    u16 offhandBlock_ = 0;
     bool usingItem_ = false;    // onUseItem sent, the use key not yet released
     bool crouchToggled_ = false, sprintToggled_ = false;
     double scrollAccum_ = 0;  // ScrollWheelHandler.accumulatedScrollY

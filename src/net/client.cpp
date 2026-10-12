@@ -15,7 +15,7 @@ namespace net {
 
 namespace {
 constexpr const char* kPhaseNames[] = {"login", "configuration", "play"};
-constexpr float kChunksPerTick = 25.0f;  // asked for in chunk batch acks; the main thread applies ~8 per frame
+constexpr float kChunksPerTick = 25.0f;  // asked for in chunk batch acks; main-thread application has a 4 ms budget
 
 // Offline-mode player UUID: name-based (version 3) UUID of "OfflinePlayer:<name>", like the game.
 void offlineUuid(const std::string& name, u8 out[16]) {
@@ -47,7 +47,15 @@ Dimension parseDimensionType(const std::string& id, std::string_view nbt) {
     while (r.field(tag, name)) {
         if (tag == TagInt && name == "min_y") d.minY = r.i32v();
         else if (tag == TagInt && name == "height") d.height = r.i32v();
-        else r.skip(tag);
+        else if (tag == TagCompound && name == "attributes") {  // environment attributes: gameplay/fast_lava
+            u8 t;
+            std::string_view n;
+            while (r.field(t, n)) {
+                if (t == TagByte && n == "minecraft:gameplay/fast_lava") d.fastLava = r.u8v() != 0;
+                else if (t == TagByte && n == "minecraft:gameplay/water_evaporates") d.waterEvaporates = r.u8v() != 0;
+                else r.skip(t);
+            }
+        } else r.skip(tag);
     }
     return d;
 }
@@ -451,6 +459,7 @@ bool Client::handlePlay(const std::string& name, Reader& r) {
         push(e);
     } else if (name == "login" || name == "respawn") {
         JoinEvent e;
+        e.receivedAt = nowSeconds();
         e.respawn = name == "respawn";
         if (!e.respawn) {
             e.entityId = r.i32v();
@@ -574,14 +583,14 @@ void Client::sendPlayerAction(int action, int x, int y, int z, int face, int seq
     send(Play, "player_action", w);
 }
 
-void Client::sendUseItemOn(int x, int y, int z, int face, const float cursor[3], int sequence, int hand) {
+void Client::sendUseItemOn(int x, int y, int z, int face, const float cursor[3], int sequence, int hand, bool inside) {
     Writer w;
     w.varInt(hand);  // 0 main, 1 off hand
     w.blockPos(x, y, z);
     w.varInt(face);
     for (int a = 0; a < 3; ++a) w.f32(cursor[a]);
-    w.boolean(false);  // inside
-    w.boolean(false);  // world border hit
+    w.boolean(inside);
+    w.boolean(false);  // world border hit (BlockHitResult.hitBorder is never used)
     w.varInt(sequence);
     send(Play, "use_item_on", w);
 }

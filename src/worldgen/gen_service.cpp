@@ -23,13 +23,17 @@ GenService::GenService(const ChunkGenerator& generator, const FeatureSystem* fea
 }
 
 GenService::~GenService() {
+    stop();
+    for (auto& t : threads_) t.join();
+}
+
+void GenService::stop() {
     {
         std::lock_guard lock(mutex_);
         quit_ = true;
     }
     terrainCv_.notify_all();
     decorateCv_.notify_all();
-    for (auto& t : threads_) t.join();
 }
 
 GenService::Entry* GenService::find(int cx, int cz) {
@@ -116,6 +120,7 @@ void GenService::applyWanted(std::vector<std::pair<int, int>> chunks) {
 // Runs after every finished job, under mutex_: starts from the first unfinished wanted chunk and looks at a
 // bounded number of unfinished ones, so it stays cheap however many chunks are wanted.
 void GenService::schedule() {
+    if (quit_) return;
     {  // Backpressure: the main thread applies a few chunks per frame; generating far ahead of it only queued
        // copies (they reached 20000 chunks / 4 GB while travelling). take() asks for more once there is room.
         std::lock_guard mail(mailMutex_);
@@ -192,11 +197,18 @@ void GenService::schedule() {
     decorateCv_.notify_all();
 }
 
-std::vector<std::unique_ptr<GenChunk>> GenService::take(size_t max) {
+std::vector<std::unique_ptr<GenChunk>> GenService::take(size_t max, int centerCx, int centerCz) {
     std::vector<std::unique_ptr<GenChunk>> out;
     {
         std::lock_guard mail(mailMutex_);
         const bool full = done_.size() >= kDoneLimit;
+        std::sort(done_.begin(), done_.end(), [&](const auto& a, const auto& b) {
+            auto distance = [&](const auto& c) {
+                const i64 dx = i64(c->cx) - centerCx, dz = i64(c->cz) - centerCz;
+                return dx * dx + dz * dz;
+            };
+            return distance(a) > distance(b);  // take the nearest completed chunks from the back
+        });
         while (!done_.empty() && out.size() < max) {
             out.push_back(std::move(done_.back()));
             done_.pop_back();

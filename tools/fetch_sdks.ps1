@@ -41,7 +41,8 @@ function Expand-Selected([string]$zip, [hashtable]$map) {
     } finally { $z.Dispose() }
 }
 
-# ---- NVIDIA Streamline 2.14.1 (DLSS 4 SR/DLAA, DLSS Frame Generation / Multi Frame Generation, Reflex, PCL) ----
+# ---- NVIDIA Streamline 2.14.1 (DLSS 4 SR/DLAA, DLSS Ray Reconstruction, DLSS Frame Generation / Multi Frame
+# Generation, Reflex, PCL) ----
 # https://github.com/NVIDIA-RTX/Streamline/releases/tag/v2.14.1 (digest published by GitHub for the release asset)
 $sl = Join-Path $cache "streamline-sdk-v2.14.1.zip"
 Get-Verified "https://github.com/NVIDIA-RTX/Streamline/releases/download/v2.14.1/streamline-sdk-v2.14.1.zip" `
@@ -51,8 +52,8 @@ Expand-Selected $sl @{ "include/" = "$slDir\include"; "lib/x64/" = "$slDir\lib" 
 $z = [IO.Compression.ZipFile]::OpenRead($sl)
 try {
     # Production (signed) binaries only: the interposer, the common plugin and the features we use + NGX models.
-    $want = "sl.interposer.dll", "sl.common.dll", "sl.dlss.dll", "sl.dlss_g.dll", "sl.reflex.dll", "sl.pcl.dll",
-            "nvngx_dlss.dll", "nvngx_dlssg.dll"
+    $want = "sl.interposer.dll", "sl.common.dll", "sl.dlss.dll", "sl.dlss_d.dll", "sl.dlss_g.dll", "sl.reflex.dll",
+            "sl.pcl.dll", "nvngx_dlss.dll", "nvngx_dlssd.dll", "nvngx_dlssg.dll"
     foreach ($e in $z.Entries) {
         $n = $e.FullName
         if ($n -like "bin/x64/*" -and $n.Split("/").Count -eq 3 -and $want -contains $e.Name) {

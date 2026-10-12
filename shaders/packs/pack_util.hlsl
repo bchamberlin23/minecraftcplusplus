@@ -31,6 +31,7 @@ void PackMipCS(uint2 id : SV_DispatchThreadID) {
 struct Section {
     int4 origin;
     uint2 ranges[19];
+    float fade, pad;
 };
 StructuredBuffer<Section> uSections : register(t1);
 StructuredBuffer<uint> uActive : register(t2);

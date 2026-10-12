@@ -145,11 +145,26 @@ void humanoid(const Parts& P, const AnimState& s) {
                     arm->yRot = h->yRot - sign * kPi / 6;
                     break;
                 case ArmPose::Brush: arm->xRot = arm->xRot * 0.5f - kPi / 5, arm->yRot = 0; break;
-                case ArmPose::Spear: arm->xRot = arm->xRot * 0.5f - kPi / 10, arm->yRot = 0; break;  // simplified
+                case ArmPose::Spear: {  // SpearAnimations.thirdPersonHandUse
+                    arm->yRot = -0.1f * sign + h->yRot;
+                    arm->xRot = -kPi / 2 + h->xRot + 0.8f;
+                    if (s.fallFlying || s.swimAmount > 0) arm->xRot -= 0.9599311f;
+                    arm->yRot = kDeg * std::clamp(arm->yRot / kDeg, -60.0f, 60.0f);
+                    arm->xRot = kDeg * std::clamp(arm->xRot / kDeg, -120.0f, 30.0f);
+                    const KineticParams& k = right ? s.rightKinetic : s.leftKinetic;
+                    if (k.valid && s.useTicks > 0 && (!s.usingItem || s.useRight == right)) {
+                        const SpearUse u = spearUse(k, s.useTicks);
+                        arm->yRot += -sign * u.swayFast * kDeg * u.swayIntensity;
+                        arm->zRot += -sign * u.swaySlow * kDeg * u.swayIntensity * 0.5f;
+                        arm->xRot += kDeg * (-40.0f * u.raiseStart + 30.0f * u.raiseMiddle - 20.0f * u.raiseEnd + 20.0f * u.lower +
+                                             10.0f * u.raiseBack + 0.6f * u.swaySlow * u.swayIntensity);
+                    }
+                    break;
+                }
             }
         };
-        // The off hand is the left arm for right-handed players (s.swingLeft marks left-handed ones).
-        const bool offIsLeft = !s.swingLeft;
+        // The off hand is the left arm for right-handed players.
+        const bool offIsLeft = !s.leftHanded;
         const ArmPose offPose = offIsLeft ? s.leftPose : s.rightPose;
         const bool prioritiseRight = s.usingItem ? s.useRight : (twoHanded(offPose) ? offIsLeft : !offIsLeft);
         if (prioritiseRight) {
@@ -160,7 +175,7 @@ void humanoid(const Parts& P, const AnimState& s) {
             if (!affectsOther(s.leftPose)) pose(true);
         }
     }
-    // setupAttackAnimation (WHACK swing).
+    // setupAttackAnimation: the body turn, then the swing type's arm (WHACK, STAB; NONE moves no arm).
     if (s.swing > 0 && body && ra && la) {
         float by = std::sin(std::sqrt(s.swing) * kPi * 2.0f) * 0.2f;
         if (s.swingLeft) by = -by;
@@ -169,6 +184,16 @@ void humanoid(const Parts& P, const AnimState& s) {
         ra->z = std::sin(by) * 5.0f * ageScale, ra->x = -std::cos(by) * 5.0f * ageScale;
         la->z = -std::sin(by) * 5.0f * ageScale, la->x = std::cos(by) * 5.0f * ageScale;
         ra->yRot += by, la->yRot += by, la->xRot += by;
+    }
+    if (s.swing > 0 && body && ra && la && s.swingType == 2) {  // SpearAnimations.thirdPersonAttackHand
+        ra->yRot -= body->yRot, la->yRot -= body->yRot, la->xRot -= body->yRot;
+        const float prepare = ease::inOutSine(ease::progress(s.swing, 0.0f, 0.05f));
+        const float attack = ease::inQuad(ease::progress(s.swing, 0.05f, 0.2f));
+        const float retract = ease::inOutExpo(ease::progress(s.swing, 0.4f, 1.0f));
+        (s.swingLeft ? la : ra)->xRot += (90.0f * prepare - 120.0f * attack + 30.0f * retract) * kDeg;
+    }
+    if (s.swing > 0 && body && ra && la && s.swingType == 1) {
+        const float by = body->yRot;
         const float aa = std::sin(outQuart(s.swing) * kPi);
         const float bb = std::sin(s.swing * kPi) * -((h ? h->xRot : 0) - 0.7f) * 0.75f;
         PartPose* arm = s.swingLeft ? la : ra;
@@ -192,6 +217,9 @@ void humanoid(const Parts& P, const AnimState& s) {
 // AnimationUtils.animateZombieArms.
 void zombieArms(const Parts& P, const AnimState& s) {
     PartPose *ra = P[RightArm], *la = P[LeftArm];
+    // AnimationUtils.animateZombieArms: not with a spear; a trident thrower's right arm keeps its pose.
+    if (s.havePoses && (s.rightPose == ArmPose::Spear || s.leftPose == ArmPose::Spear)) return;
+    if (s.havePoses && s.rightPose == ArmPose::ThrowTrident) ra = nullptr;
     const bool raise = !s.baby || !s.rightItem;
     const float drop = raise ? -kPi / (s.aggressive ? 1.5f : 2.25f) : 0.0f;
     const float ay = (raise ? 1.0f : -1.0f) * std::sin(s.swing * kPi);
@@ -228,11 +256,18 @@ u64 animate(Anim kind, const AnimState& s, const Model& model, PartPose* poses) 
         case Anim::Zombie:
             humanoid(P, s);
             if (kind == Anim::Zombie) zombieArms(P, s);
-            if (kind == Anim::Skeleton && s.aggressive && s.rightItem) {  // BOW_AND_ARROW
-                PartPose *h = P[Head], *ra = P[RightArm], *la = P[LeftArm];
-                if (h && ra && la) {
-                    ra->yRot = -0.1f + h->yRot, la->yRot = 0.1f + h->yRot + 0.4f;
-                    ra->xRot = -kPi / 2 + h->xRot, la->xRot = -kPi / 2 + h->xRot;
+            if (kind == Anim::Skeleton && s.aggressive && !s.holdingBow) {  // SkeletonModel: arms out to strike
+                PartPose *ra = P[RightArm], *la = P[LeftArm];
+                if (ra && la) {
+                    const float swing2 = std::sin(s.swing * kPi);
+                    const float swing = std::sin((1.0f - (1.0f - s.swing) * (1.0f - s.swing)) * kPi);
+                    ra->zRot = la->zRot = 0;
+                    ra->yRot = -(0.1f - swing2 * 0.6f), la->yRot = 0.1f - swing2 * 0.6f;
+                    ra->xRot = la->xRot = -kPi / 2;
+                    ra->xRot -= swing2 * 1.2f - swing * 0.4f;
+                    la->xRot -= swing2 * 1.2f - swing * 0.4f;
+                    bob(ra, s.age, 1.0f);
+                    bob(la, s.age, -1.0f);
                 }
             }
             // Player model customisation: hat 6, jacket 1, sleeves 2/3, pants 4/5.

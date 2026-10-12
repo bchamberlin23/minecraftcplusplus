@@ -23,6 +23,8 @@ namespace net {
 struct Dimension {
     std::string name;  // e.g. "minecraft:overworld"
     int minY = -64, height = 384;
+    bool fastLava = false;  // EnvironmentAttributes.FAST_LAVA (the nether): lava currents push harder
+    bool waterEvaporates = false;  // EnvironmentAttributes.WATER_EVAPORATES (the nether): buckets cannot place water
 };
 
 // login (respawn = false) or respawn: the world must be cleared on respawn.
@@ -30,6 +32,7 @@ struct JoinEvent {
     bool respawn = false;
     int entityId = 0, gameMode = 0, viewDistance = 0;
     Dimension dimension;
+    double receivedAt = 0;  // time the login/respawn packet was decoded, for destination readiness timing
 };
 struct ChunkEvent {
     int cx = 0, cz = 0, firstSy = 0;  // sections[i] is section y firstSy + i (light included)
@@ -125,7 +128,8 @@ public:
     void sendTickEnd();
     void sendPlayerLoaded();
     void sendPlayerAction(int action, int x, int y, int z, int face, int sequence);  // 0 start, 3 stop destroy
-    void sendUseItemOn(int x, int y, int z, int face, const float cursor[3], int sequence, int hand = 0);
+    // inside: BlockHitResult.isInside; the world border flag is never set by the client (hitBorder is unused).
+    void sendUseItemOn(int x, int y, int z, int face, const float cursor[3], int sequence, int hand = 0, bool inside = false);
     void sendCarriedItem(int slot);
     void sendCreativeSlot(int slot, int itemId, int count);  // inventory menu slot; itemId < 0 = empty
     // Any thread; before start() it only sets what the login sends. Options.broadcastOptions in the play phase.

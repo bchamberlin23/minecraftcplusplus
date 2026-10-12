@@ -239,6 +239,7 @@ private:
                     if (--depth == 0 && funcBody_) {  // end of a function body
                         funcBody_ = false;
                         stmt.clear();
+                        if (!funcs_.empty() && funcs_.back().bodyEnd == 0) funcs_.back().bodyEnd = i;
                     }
                 }
                 continue;
@@ -253,6 +254,19 @@ private:
                     for (size_t k = 1; k < stmt.size(); ++k)
                         if (text(toks_[stmt[k]]) == "(" && toks_[stmt[k - 1]].k == K::Ident) {
                             userFunctions_.insert(std::string(text(toks_[stmt[k - 1]])));
+                            // Its sampler2D parameters (by position), for atlas sampling through helpers.
+                            FuncInfo f;
+                            f.name = std::string(text(toks_[stmt[k - 1]]));
+                            int param = 0;
+                            for (size_t q = k + 1; q < stmt.size(); ++q) {
+                                const std::string_view x = text(toks_[stmt[q]]);
+                                if (x == ")") break;
+                                if (x == ",") ++param;
+                                else if (x == "sampler2D" && q + 1 < stmt.size() && toks_[stmt[q + 1]].k == K::Ident)
+                                    f.samplers.push_back({param, std::string(text(toks_[stmt[q + 1]]))});
+                            }
+                            f.bodyBegin = i;
+                            if (!f.samplers.empty()) funcs_.push_back(std::move(f));
                             break;
                         }
                     funcBody_ = true;
@@ -278,6 +292,62 @@ private:
         for (const std::string& f : userFunctions_)
             if (auto it = bis.find(f); it != bis.end() && v < it->second) renames_[f] = "mcpp_u_" + f;
         if (textureIsSampler_) renames_["texture"] = "gtexture";
+        if (opt_.atlasWrap && opt_.stage == ShaderStage::Fragment) findAtlasParams();
+    }
+
+    // Helpers that sample through a sampler2D parameter (Bliss: texture2D_POMSwitch(sampler2D sampler, ...)): the
+    // parameter is the atlas when every call passes an atlas sampler for it, so its sampling wraps to the tile too.
+    void findAtlasParams() {
+        for (FuncInfo& f : funcs_) {
+            std::vector<int> calls(f.samplers.size(), 0), other(f.samplers.size(), 0);
+            for (size_t i = 0; i < toks_.size(); ++i) {
+                if (toks_[i].k != K::Ident || text(toks_[i]) != f.name) continue;
+                const size_t open = nextSig(toks_, i);
+                if (open >= toks_.size() || text(toks_[open]) != "(") continue;
+                if (i < f.bodyBegin && f.bodyBegin - i < 64) {  // the definition's own header
+                    bool header = true;
+                    for (size_t k = open; k < f.bodyBegin; ++k)
+                        if (text(toks_[k]) == ";") header = false;
+                    if (header) continue;
+                }
+                // Arguments at depth 1: a single identifier each for the sampler positions.
+                int depth = 0, arg = 0;
+                std::vector<std::string> idents;
+                std::vector<int> count;
+                idents.resize(64), count.resize(64, 0);
+                for (size_t k = open; k < toks_.size(); ++k) {
+                    if (!significant(toks_[k])) continue;
+                    const std::string_view x = text(toks_[k]);
+                    if (x == "(" || x == "[") {
+                        if (depth++ == 0) continue;
+                    } else if (x == ")" || x == "]") {
+                        if (--depth == 0) break;
+                    } else if (x == "," && depth == 1) {
+                        if (++arg >= 64) break;
+                        continue;
+                    }
+                    if (depth == 1 && arg < 64) {
+                        ++count[size_t(arg)];
+                        if (toks_[k].k == K::Ident) idents[size_t(arg)] = std::string(x);
+                    }
+                }
+                for (size_t p = 0; p < f.samplers.size(); ++p) {
+                    const int a = f.samplers[p].first;
+                    if (a >= 64) continue;
+                    ++calls[p];
+                    std::string name = count[size_t(a)] == 1 ? idents[size_t(a)] : std::string();
+                    if (auto rn = renames_.find(name); rn != renames_.end()) name = rn->second;
+                    if (!opt_.atlasSamplers.count(name)) ++other[p];
+                }
+            }
+            for (size_t p = 0; p < f.samplers.size(); ++p)
+                if (calls[p] > 0 && other[p] == 0) f.atlas.insert(f.samplers[p].second);
+        }
+    }
+    bool atlasParamAt(size_t token, const std::string& sampler) const {
+        for (const FuncInfo& f : funcs_)
+            if (token > f.bodyBegin && token < f.bodyEnd) return f.atlas.count(sampler) != 0;
+        return false;
     }
 
     void globalStatement(const std::vector<size_t>& stmt, size_t semicolon) {
@@ -494,7 +564,7 @@ private:
                     if (n2 < v.size() && v[n2].k == K::Ident && n3 < v.size() && text(v, s, n3) == ",") {
                         std::string sampler(text(v, s, n2));
                         if (auto rn = renames_.find(sampler); rn != renames_.end()) sampler = rn->second;
-                        if (opt_.atlasSamplers.count(sampler)) {
+                        if (opt_.atlasSamplers.count(sampler) || (main && atlasParamAt(i, sampler))) {
                             name = "mcpp_atlas_" + name;
                             use("mcpp_atlas");
                         }
@@ -688,6 +758,13 @@ private:
     std::set<int> fragData_;
     std::set<int> usedLocations_;
     std::unordered_set<std::string> userFunctions_, declared_, usedIdents_;
+    struct FuncInfo {
+        std::string name;
+        std::vector<std::pair<int, std::string>> samplers;  // sampler2D parameters: position, name
+        size_t bodyBegin = 0, bodyEnd = 0;                   // '{' and '}' token indices
+        std::set<std::string> atlas;                         // parameters only ever given the block atlas
+    };
+    std::vector<FuncInfo> funcs_;
     std::unordered_set<std::string> keywordCandidates_;
     std::unordered_map<std::string, std::string> renames_;
     std::unordered_map<size_t, std::string> insertBefore_;
