@@ -1749,7 +1749,8 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
             Xf m;
             std::memcpy(m.m, a.item, sizeof(m.m));
             L.begin((u64(u32(a.entity)) << 4 | 3) + 1);
-            pushItem(L, models.mesh(e->equipment[0], e->equipDye[0], false), Display::Ground, m, a.light, e->equipFoil & 1);
+            pushItem(L, models.mesh(stackOf(e->equipStack[0], e->equipment[0], e->equipDye[0]), contextOf(*e, ui::ItemDisplay::Ground, pt)),
+                     Display::Ground, m, a.light, e->equipFoil & 1);
         }
         const int head = e->equipment[5];
         if ((a.valid & 4) && head >= 0) {
