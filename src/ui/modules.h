@@ -75,5 +75,7 @@ const StationDef* stationFor(const std::string& menuType);  // "anvil" (minecraf
 
 // Sends ServerboundContainerButtonClickPacket for the open container.
 void sendContainerButton(UiState& s, int buttonId);
+// F3 + I: the recreate command of the block / entity under the crosshair to the clipboard (debug_packets.cpp).
+void copyRecreateCommand(UiState& s, bool pullFromServer);
 
 }  // namespace ui

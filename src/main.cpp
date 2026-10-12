@@ -878,8 +878,9 @@ int wmain(int argc, wchar_t** argv) {
                 if (localServer) session->setKeepForgotten(true);  // unloaded server chunks stay visible
                 session->attach(game, terrain);
                 ui.attachSession(netClient.get(), session.get());
-                LOG("server  %8.1f ms  playing through %s as %s", joinTimer.ms(), localServer ? "the local server" : opt.connect.c_str(),
-                    opt.name.c_str());
+                if (joined)
+                    LOG("server  %8.1f ms  playing through %s as %s", joinTimer.ms(),
+                        localServer ? "the local server" : opt.connect.c_str(), opt.name.c_str());
             } else {
                 joinFailed = true;
                 joiningSession.reset();

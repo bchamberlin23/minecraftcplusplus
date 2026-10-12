@@ -4,6 +4,7 @@
 #include "assets/game_reports.h"
 #include "assets/asset_source.h"
 #include "assets/zip.h"
+#include "platform/crash.h"
 #include "world/nbt.h"
 
 #include <windows.h>
@@ -365,6 +366,9 @@ bool Client::handleCommon(Phase phase, const std::string& name, Reader& r, bool&
             details[key] = std::string(r.str());
         }
         if (r.ok) {
+            std::string text;
+            for (const auto& [key, value] : details) text += "\t" + key + ": " + value + "\n";
+            setCrashDetails(text);
             std::lock_guard lock(registryMutex_);
             reportDetails_ = std::move(details);
         }
@@ -528,6 +532,13 @@ bool Client::handleConfiguration(const std::string& name, Reader& r, bool& handl
     } else if (name == "code_of_conduct") {  // answered by the main thread (ui/server_config.cpp)
         pushCommon(CodeOfConductEvent{std::string(r.str())});
     } else if (name == "finish_configuration") {
+        {
+            std::lock_guard lock(registryMutex_);
+            size_t tags = 0;
+            for (const auto& [registry, t] : tags_) tags += t.size();
+            LOG("net: configuration finished: %zu registries, %zu tags in %zu registries, features %zu", registries_.size(),
+                tags, tags_.size(), features_.size());
+        }
         ++registryVersion_;
         switchPhase(Configuration, "finish_configuration", Play);
         pushCommon(ConfigurationEvent{false});

@@ -459,7 +459,7 @@ void promptBuild(State& s) {
     const float y = float(promptTop(s, lines) + 9 + 8 + lines * 9 + 8 + 16);
     State* p = &s;
     addButton(s, float(s.guiW() / 2 - 152), y, 150, tr(s, g.required ? "gui.proceed" : "gui.yes"), [p] { packAnswer(*p, true); });
-    addButton(s, float(s.guiW() / 2 + 2), y, 150, tr(s, g.required ? "gui.disconnect" : "gui.no"), [p] { packAnswer(*p, false); });
+    addButton(s, float(s.guiW() / 2 + 2), y, 150, tr(s, g.required ? "menu.disconnect" : "gui.no"), [p] { packAnswer(*p, false); });
 }
 
 void promptDraw(State& s, Canvas& c) {
@@ -534,7 +534,7 @@ void cocBuild(State& s) {
     const CocLayout l = cocLayout(s);
     State* p = &s;
     addButton(s, float(s.guiW() / 2 - 154), float(l.buttonsY), 150, tr(s, "gui.acknowledge"), [p] { cocAnswer(*p, true); });
-    addButton(s, float(s.guiW() / 2 + 4), float(l.buttonsY), 150, tr(s, "gui.disconnect"), [p] { cocAnswer(*p, false); });
+    addButton(s, float(s.guiW() / 2 + 4), float(l.buttonsY), 150, tr(s, "menu.disconnect"), [p] { cocAnswer(*p, false); });
 }
 
 void cocDraw(State& s, Canvas& c) {
@@ -583,7 +583,7 @@ const ScreenRegistrar kCocScreen({Screen::CodeOfConduct, cocBuild, cocDraw, cocI
 // ServerReconfigScreen: the title and a Disconnect button that turns active after 30 seconds.
 void reconfigBuild(State& s) {
     State* p = &s;
-    Button& b = addButton(s, float(s.guiW() / 2 - 75), float(s.guiH() / 2 - 10 + 10), 150, tr(s, "gui.disconnect"),
+    Button& b = addButton(s, float(s.guiW() / 2 - 75), float(s.guiH() / 2 - 10 + 10), 150, tr(s, "menu.disconnect"),
                           [p] { disconnect(*p, "connect.aborted"); });
     b.active = s.clock - g.reconfigStart >= 30.0;
 }
