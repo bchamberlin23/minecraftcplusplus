@@ -58,6 +58,9 @@ public:
     // the world darkening ramps in (GameRenderer.bossOverlayWorldDarkening) and darkens the lightmap and fog colour;
     // the world fog closes the fog in to 10..96 blocks and hides the sky.
     void setBossOverlay(bool darkenScreen, bool worldFog) { bossDarken_ = darkenScreen, bossFog_ = worldFog; }
+    // Options.getEffectiveRenderDistance (chunks): what the fog formulas are given (sky fog colour, the sky end,
+    // blindness / darkness / spectator fog).
+    void setRenderDistance(int chunks) { renderDistance_ = std::max(2, chunks); }
     // The level's world border, before update(): its wall (WorldBorderRenderer) is drawn after the weather when the
     // camera is within renderDistance blocks of it. nullptr: none.
     void setWorldBorder(const WorldBorder* border, float partialTick, float renderDistance) {
@@ -119,6 +122,7 @@ private:
     std::vector<Bolt> bolts_;
     int flashTime_ = 0;  // ClientLevel.skyFlashTime
     bool bossDarken_ = false, bossFog_ = false;
+    int renderDistance_ = 32;
     const WorldBorder* border_ = nullptr;
     float borderPartial_ = 0, borderRange_ = 512;
     double tickRate_ = 20.0;

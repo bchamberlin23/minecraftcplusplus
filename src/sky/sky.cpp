@@ -26,7 +26,6 @@ namespace sky {
 namespace {
 
 constexpr float kPi = 3.14159265358979f;
-constexpr int kRenderDistance = 32;  // chunks: the view distance the vanilla fog formulas are given
 
 u32 packColor(float r, float g, float b, float a) {
     auto c = [](float v) { return u32(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
@@ -626,7 +625,7 @@ void Sky::update(const CameraState& cam, double dt) {
         const float lookingAtSun = forward[0] * (std::sin(sunAngle) > 0.0f ? -1.0f : 1.0f);
         if (lookingAtSun > 0.0f && sunrise[3] > 0.0f)
             for (int k = 0; k < 3; ++k) fog[k] += (sunrise[k] - fog[k]) * lookingAtSun * sunrise[3];
-        const float skyFogEnd = std::min(a[int(Attr::SkyFogEnd)][0] / 16.0f, float(kRenderDistance));
+        const float skyFogEnd = std::min(a[int(Attr::SkyFogEnd)][0] / 16.0f, float(renderDistance_));
         const float mix = 1.0f - std::pow(0.25f + 0.75f * std::clamp(skyFogEnd / 32.0f, 0.0f, 1.0f), 0.25f);
         for (int k = 0; k < 3; ++k) fog[k] += (skyDark[k] - fog[k]) * mix;
     }
@@ -653,10 +652,10 @@ void Sky::update(const CameraState& cam, double dt) {
     std::copy(fog, fog + 3, f.fogColor);
     f.fogColor[3] = 1.0f;
     std::copy(a[int(Attr::SkyColor)].begin(), a[int(Attr::SkyColor)].begin() + 3, f.skyColor);
-    f.skyEnd = std::min(float(kRenderDistance * 16), a[int(Attr::SkyFogEnd)][0]);
+    f.skyEnd = std::min(float(renderDistance_ * 16), a[int(Attr::SkyFogEnd)][0]);
     // FogRenderer.setupFog: the first applicable environment sets the fog distances. The atmosphere's own are beyond
     // the view distance except under a boss bar's world fog (start <= 10, end <= 96, sky end = end).
-    const float renderDistance = float(kRenderDistance * 16);
+    const float renderDistance = float(renderDistance_ * 16);
     float envStart = 1e30f, envEnd = 1e30f, skyEnd = 1e30f;
     // LevelRenderer.addSkyPass: no sky in lava or powder snow, or with blindness / darkness.
     bool hideSky = fogType == FogType::Lava || fogType == FogType::PowderSnow || fx_.blindFog >= 0.0f || fx_.darkness;
