@@ -18,6 +18,9 @@ public:
     // Entity.setViewScale (LevelRenderer: clamp(render distance / 8, 1, 2.5) x the Entity Distance option): how far
     // entities are drawn (shouldRenderAtSqrDistance).
     void setViewScale(float scale) { viewScale_ = scale; }
+    // EntityRenderer.extractShadow: the Entity Shadows option, Level.getSkyDarken and the dimension's ambient light
+    // (Lightmap.getBrightness) for the shadows' strength.
+    void setShadows(bool on, int skyDarken, float ambientLight) { blobShadows_ = on, skyDarken_ = skyDarken, ambient_ = ambientLight; }
     bool create(Renderer& renderer) override;
     void draw(const PassContext& ctx) override;
     // Shader pipeline: entities are posed once in prepare (camera-visible ones and shadow casters inside the updated
@@ -125,6 +128,7 @@ private:
     ComPtr<ID3D12PipelineState> psoCutout_, psoTranslucent_, psoFree_, psoGlint_, psoAdditive_, psoAdditiveMv_;
     // Shader pipeline: with a motion target (PassContext::motionRtv) and shadow casters (depth only).
     ComPtr<ID3D12PipelineState> psoCutoutMv_, psoTranslucentMv_, psoFreeMv_, psoGlintMv_, psoShadow_, psoShadowFree_;
+    ComPtr<ID3D12PipelineState> psoBlob_, psoBlobMv_;  // entity shadows (RenderTypes.entityShadow)
     ComPtr<ID3D12Resource> quads_, atlas_, upload_;
     u8* mapped_ = nullptr;
     u32 atlasDescriptor_ = 0;
@@ -154,6 +158,17 @@ private:
     // Last build: reference ranges. Refs: [cutout: camera | shadow only][translucent: camera | shadow only][glint].
     bool prepared_ = false, built_ = false, shadowOnly_ = false;
     u32 cutoutRefs_ = 0, glintRefs_ = 0, additiveRefs_ = 0, camCutout_ = 0, camTranslucent_ = 0, camFree_ = 0;
+    // Entity shadows: the drawn entities' (position, radius, strength), their quads in the free range below.
+    struct BlobShadow {
+        double pos[3];
+        float radius, strength;
+    };
+    std::vector<BlobShadow> blobs_;
+    u32 blobFirst_ = 0, blobCount_ = 0;
+    bool blobShadows_ = true;
+    int skyDarken_ = 0;
+    float ambient_ = 0;
+    void emitBlobShadows(const double cam[3]);
     struct Caster {  // one entity's geometry for the shadow maps (camera-relative bounding sphere)
         float c[3], r;
         u32 ref, refN, tr, trN, free, freeN;

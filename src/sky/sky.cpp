@@ -688,6 +688,7 @@ void Sky::update(const CameraState& cam, double dt) {
     // getHorizonHeight: 63 unless the world is flat (not tracked here); not drawn underwater.
     f.darkDisc = cam.y - 63.0 < 0.0;
     renderer_->setAtmosphere(f.fogColor, a[int(Attr::SkyLightFactor)][0]);
+    skyDarken_ = int(15.0f - a[int(Attr::SkyLightLevel)][0]);
     {  // the game's lightmap inputs (LightmapRenderStateExtractor)
         Lightmap lm;
         for (int c = 0; c < 3; ++c) {

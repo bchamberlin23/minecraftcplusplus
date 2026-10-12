@@ -35,6 +35,7 @@ enum class Attr : u8 {
     WaterFogStart,
     WaterFogEnd,
     NightVisionColor,
+    SkyLightLevel,  // gameplay/sky_light_level
     Count
 };
 constexpr int kAttrCount = int(Attr::Count);

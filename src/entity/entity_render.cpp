@@ -67,6 +67,34 @@ struct FreeQuad {
 };
 static_assert(sizeof(FreeQuad) == 128);
 
+// EntityRenderer.shadowRadius by entity type (the renderers' constructors); types not listed cast none.
+float shadowRadiusOf(std::string_view id) {
+    static const std::unordered_map<std::string_view, float> kRadius = {
+        {"allay", 0.4f}, {"armadillo", 0.4f}, {"axolotl", 0.5f}, {"bat", 0.25f}, {"bee", 0.4f}, {"blaze", 0.5f},
+        {"bogged", 0.5f}, {"breeze", 0.5f}, {"camel", 0.7f}, {"camel_husk", 0.7f}, {"cat", 0.4f}, {"cave_spider", 0.56f},
+        {"chicken", 0.3f}, {"cod", 0.3f}, {"copper_golem", 0.5f}, {"cow", 0.7f}, {"creaking", 0.6f}, {"creeper", 0.5f},
+        {"dolphin", 0.7f}, {"donkey", 0.75f}, {"drowned", 0.5f}, {"elder_guardian", 1.2f}, {"enderman", 0.5f},
+        {"endermite", 0.3f}, {"ender_dragon", 0.5f}, {"end_crystal", 0.5f}, {"evoker", 0.5f}, {"experience_orb", 0.15f},
+        {"falling_block", 0.5f}, {"fox", 0.4f}, {"frog", 0.3f}, {"ghast", 1.5f}, {"giant", 3.0f}, {"glow_squid", 0.7f},
+        {"goat", 0.7f}, {"guardian", 0.5f}, {"happy_ghast", 2.0f}, {"hoglin", 0.7f}, {"horse", 0.75f}, {"husk", 0.5f},
+        {"illusioner", 0.5f}, {"iron_golem", 0.7f}, {"item", 0.15f}, {"llama", 0.7f}, {"mooshroom", 0.7f}, {"mule", 0.75f},
+        {"nautilus", 0.7f}, {"ocelot", 0.4f}, {"panda", 0.9f}, {"parched", 0.5f}, {"parrot", 0.3f}, {"phantom", 0.75f},
+        {"pig", 0.7f}, {"piglin", 0.5f}, {"piglin_brute", 0.5f}, {"pillager", 0.5f}, {"player", 0.5f}, {"polar_bear", 0.9f},
+        {"pufferfish", 0.2f}, {"rabbit", 0.3f}, {"ravager", 1.1f}, {"salmon", 0.4f}, {"sheep", 0.7f}, {"silverfish", 0.3f},
+        {"skeleton", 0.5f}, {"skeleton_horse", 0.75f}, {"sniffer", 1.1f}, {"snow_golem", 0.5f}, {"spider", 0.8f},
+        {"squid", 0.7f}, {"stray", 0.5f}, {"strider", 0.5f}, {"tadpole", 0.14f}, {"tnt", 0.5f}, {"trader_llama", 0.7f},
+        {"tropical_fish", 0.15f}, {"turtle", 0.7f}, {"vex", 0.3f}, {"villager", 0.5f}, {"vindicator", 0.5f},
+        {"wandering_trader", 0.5f}, {"warden", 0.9f}, {"witch", 0.5f}, {"wither", 1.0f}, {"wither_skeleton", 0.5f},
+        {"wolf", 0.5f}, {"zoglin", 0.7f}, {"zombie", 0.5f}, {"zombie_horse", 0.75f}, {"zombie_nautilus", 0.7f},
+        {"zombie_villager", 0.5f}, {"zombified_piglin", 0.5f}, {"minecart", 0.7f}, {"chest_minecart", 0.7f},
+        {"command_block_minecart", 0.7f}, {"furnace_minecart", 0.7f}, {"hopper_minecart", 0.7f},
+        {"spawner_minecart", 0.7f}, {"tnt_minecart", 0.7f}};
+    if (id.starts_with("minecraft:")) id.remove_prefix(10);
+    if (id.ends_with("_boat") || id.ends_with("_raft")) return 0.8f;
+    const auto it = kRadius.find(id);
+    return it == kRadius.end() ? 0.0f : it->second;
+}
+
 // DyeColor.getTextureDiffuseColor, by dye id.
 constexpr u32 kDye[16] = {0xF9FFFE, 0xF9801D, 0xC74EBD, 0x3AB3DA, 0xFED83D, 0x80C71F, 0xF38BAA, 0x474F52,
                           0x9D9D97, 0x169C9C, 0x8932B8, 0x3C44AA, 0x835432, 0x5E7C16, 0xB02E26, 0x1D1D21};
@@ -735,6 +763,8 @@ bool EntityRenderer::create(Renderer& r) {
         !pso(SH(EntityModelVS), SH(EntityGlintPS), true, noCull, psoGlintMv_, 3) ||
         !pso(SH(EntityModelVS), SH(EntityTranslucentPS), true, noCull, psoAdditive_, 1, true) ||
         !pso(SH(EntityModelVS), SH(EntityTranslucentPS), true, noCull, psoAdditiveMv_, 3, true) ||
+        !pso(SH(EntityFreeVS), SH(EntityTranslucentPS), true, noCull, psoBlob_) ||
+        !pso(SH(EntityFreeVS), SH(EntityTranslucentPS), true, noCull, psoBlobMv_, 3) ||
         !pso(SH(EntityShadowVS), SH(EntityShadowPS), false, noCull, psoShadow_, 0) ||
         !pso(SH(EntityShadowFreeVS), SH(EntityShadowPS), false, noCull, psoShadowFree_, 0))
         return false;
@@ -1859,6 +1889,76 @@ void EntityRenderer::emitFree(const float pos[4][3], const float uv[4][2], const
     std::memcpy(frameBase_ + kFreeOffset + u64(freeCount_++) * sizeof(FreeQuad), &q, sizeof(FreeQuad));
 }
 
+// EntityRenderer.extractShadow / ShadowFeatureRenderer: misc/shadow on the tops of the full blocks under each drawn
+// entity, fading with the distance to the camera (16 blocks), the depth below the entity and the light there.
+void EntityRenderer::emitBlobShadows(const double cam[3]) {
+    static const int tex = assets_.texture("misc/shadow");
+    if (blobs_.empty() || tex < 0) return;
+    const TexRect& t = assets_.rect(tex);
+    const World& world = world_.world();
+    const BlockRegistry& registry = world_.registry();
+    const int minY = world.minSectionY() * 16, maxY = (world.maxSectionY() + 1) * 16;
+    auto brightness = [&](int level) {  // Lightmap.getBrightness
+        const float f = float(level) / 15.0f, g = f / (4.0f - 3.0f * f);
+        return g + (1.0f - g) * ambient_;
+    };
+    static constexpr float kUp[3] = {0, 1, 0};
+    for (const BlobShadow& b : blobs_) {
+        const double dx = b.pos[0] - cam[0], dy = b.pos[1] - cam[1], dz = b.pos[2] - cam[2];
+        const float pow = float((1.0 - (dx * dx + dy * dy + dz * dz) / 256.0) * b.strength);
+        if (pow <= 0.0f) continue;
+        const float r = b.radius;
+        const int x0 = int(std::floor(b.pos[0] - r)), x1 = int(std::floor(b.pos[0] + r));
+        const int z0 = int(std::floor(b.pos[2] - r)), z1 = int(std::floor(b.pos[2] + r));
+        const float depth = std::min(pow / 0.5f - 1.0f, r);
+        const int y0 = int(std::floor(b.pos[1] - depth)), y1 = int(std::floor(b.pos[1]));
+        for (int z = z0; z <= z1; ++z)
+            for (int x = x0; x <= x1; ++x)
+                for (int y = y0; y <= y1; ++y) {
+                    if (y - 1 < minY || y >= maxY) continue;
+                    const float power = pow - float(b.pos[1] - y) * 0.5f;
+                    const u16 below = world.block(x, y - 1, z);
+                    const BlockInfo& info = registry.infos()[below];
+                    if (info.kind == KindAir) continue;  // RenderShape.INVISIBLE
+                    const std::string& name = registry.name(below);
+                    if (name.starts_with("minecraft:barrier") || name.starts_with("minecraft:light[") ||
+                        name.starts_with("minecraft:structure_void"))
+                        continue;
+                    const u8 lit = world.light(x >> 4, y >> 4, z >> 4).at(x & 15, y & 15, z & 15);
+                    const int level = std::max(int(lit >> 4) - skyDarken_, int(lit & 15));  // getMaxLocalRawBrightness
+                    if (level <= 3) continue;
+                    // isCollisionShapeFullBlock, then the outline's bounds.
+                    if (info.collisionCount != 1) continue;
+                    const Box& cb = registry.box(info.collisionFirst);
+                    if (cb.min[0] > 0 || cb.min[1] > 0 || cb.min[2] > 0 || cb.max[0] < 1 || cb.max[1] < 1 || cb.max[2] < 1) continue;
+                    float lo[3] = {0, 0, 0}, hi[3] = {1, 1, 1};
+                    if (info.selectionCount) {
+                        for (int a = 0; a < 3; ++a) lo[a] = 1e9f, hi[a] = -1e9f;
+                        for (u32 i = 0; i < info.selectionCount; ++i) {
+                            const Box& s = registry.box(info.selectionFirst + i);
+                            for (int a = 0; a < 3; ++a) lo[a] = std::min(lo[a], s.min[a]), hi[a] = std::max(hi[a], s.max[a]);
+                        }
+                    }
+                    const float alpha = std::clamp(power * 0.5f * brightness(level), 0.0f, 1.0f);
+                    const float rx = float(x - b.pos[0]), ry = float(y - b.pos[1]), rz = float(z - b.pos[2]);
+                    // Clipped to the shadow's square: beyond it the texture is clamped transparent, while the atlas
+                    // would show its neighbours.
+                    const float x01 = std::max(rx + lo[0], -r), x11 = std::min(rx + hi[0], r), y01 = ry + lo[1];
+                    const float z01 = std::max(rz + lo[2], -r), z11 = std::min(rz + hi[2], r);
+                    if (x01 >= x11 || z01 >= z11) continue;
+                    const float u0 = -x01 / 2.0f / r + 0.5f, u1 = -x11 / 2.0f / r + 0.5f;
+                    const float v0 = -z01 / 2.0f / r + 0.5f, v1 = -z11 / 2.0f / r + 0.5f;
+                    // Camera-relative corners, lifted a hair above the block top (RenderTypes: view offset layering).
+                    const float ex = float(b.pos[0] - cam[0]), ey = float(b.pos[1] - cam[1]) + 0.0015f, ez = float(b.pos[2] - cam[2]);
+                    const float pos[4][3] = {{ex + x01, ey + y01, ez + z01}, {ex + x01, ey + y01, ez + z11},
+                                             {ex + x11, ey + y01, ez + z11}, {ex + x11, ey + y01, ez + z01}};
+                    const float uv[4][2] = {{t.u0 + u0 * t.du, t.v0 + v0 * t.dv}, {t.u0 + u0 * t.du, t.v0 + v1 * t.dv},
+                                            {t.u0 + u1 * t.du, t.v0 + v1 * t.dv}, {t.u0 + u1 * t.du, t.v0 + v0 * t.dv}};
+                    emitFree(pos, uv, kUp, 0xFFFFFFFF, (u32(alpha * 255.0f) << 24) | 0xFFFFFF, 256, 0);
+                }
+    }
+}
+
 // One block model in block-local [0,1] space transformed by m (cubes: the 6 faces with the terrain's UV rules).
 void EntityRenderer::emitBlock(u16 block, const Mat34& mm, u32 light, u32 overlay) {
     const M34& m = *reinterpret_cast<const M34*>(&mm);
@@ -2057,6 +2157,7 @@ void EntityRenderer::build(const PassContext& ctx) {
     translucent_.clear();
     additive_.clear();
     glint_.clear();
+    blobs_.clear();
     ++buildFrame_;
 
     // Frustum planes from the camera-relative view-projection (column-major memory, like the renderer's).
@@ -2185,6 +2286,16 @@ void EntityRenderer::build(const PassContext& ctx) {
             drawn = true;
         }
         stats_.drawn += drawn && !shadowOnly_;
+        if (drawn && !shadowOnly_ && !pack_ && blobShadows_ && !(e.sharedFlags & 0x20)) {
+            // getShadowRadius: slimes by size, mobs by their scale and age (babies half), items and orbs weaker.
+            const std::string& id = e.info->name;
+            float radius = shadowRadiusOf(id), strength = 1.0f;
+            if (d.special == SpSlime || d.special == SpSulfurCube) radius = 0.25f * float(e.size);
+            else if (e.baby) radius *= 0.5f;
+            if (id == "minecraft:item" || id == "minecraft:experience_orb") strength = 0.75f;
+            if (radius > 0)
+                blobs_.push_back({{c[0] + cam[0], c[1] + cam[1], c[2] + cam[2]}, std::min(radius, 32.0f), strength});
+        }
         if (pack_) {
             packFlush(e);
             return;
@@ -2229,6 +2340,9 @@ void EntityRenderer::build(const PassContext& ctx) {
     if (localPlayer_) visit(*localPlayer_);
     if (localShadow_ && !pack_) visit(*localShadow_);
     camCutout_ = refCount_, camFree_ = freeCount_, camTranslucent_ = u32(translucent_.size() / 2);
+    blobFirst_ = freeCount_;
+    if (!pack_) emitBlobShadows(cam);
+    blobCount_ = freeCount_ - blobFirst_;
     shadowOnly_ = true;
     for (const auto& [e, s] : shadowOnly) drawEntity(*e, s.data());
     shadowOnly_ = false;
@@ -2335,6 +2449,7 @@ void EntityRenderer::record(const PassContext& ctx) {
     }
     drawRange((mv ? psoCutoutMv_ : psoCutout_).Get(), 0, camCutout_);
     drawRange((mv ? psoFreeMv_ : psoFree_).Get(), 0, camFree_);
+    drawRange((mv ? psoBlobMv_ : psoBlob_).Get(), blobFirst_, blobCount_);
     drawRange((mv ? psoTranslucentMv_ : psoTranslucent_).Get(), cutoutRefs_, camTranslucent_);
     drawRange((mv ? psoAdditiveMv_ : psoAdditive_).Get(), additiveRefs_, glintRefs_ - additiveRefs_);
     if (assets_.texture("misc/enchanted_glint_armor") >= 0)

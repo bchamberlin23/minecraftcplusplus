@@ -61,6 +61,7 @@ public:
     // Options.getEffectiveRenderDistance (chunks): what the fog formulas are given (sky fog colour, the sky end,
     // blindness / darkness / spectator fog).
     void setRenderDistance(int chunks) { renderDistance_ = std::max(2, chunks); }
+    int skyDarken() const { return skyDarken_; }  // Level.getSkyDarken: 15 - the sky light level (0 day, 11 night)
     // The level's world border, before update(): its wall (WorldBorderRenderer) is drawn after the weather when the
     // camera is within renderDistance blocks of it. nullptr: none.
     void setWorldBorder(const WorldBorder* border, float partialTick, float renderDistance) {
@@ -123,6 +124,7 @@ private:
     int flashTime_ = 0;  // ClientLevel.skyFlashTime
     bool bossDarken_ = false, bossFog_ = false;
     int renderDistance_ = 32;
+    int skyDarken_ = 0;
     const WorldBorder* border_ = nullptr;
     float borderPartial_ = 0, borderRange_ = 512;
     double tickRate_ = 20.0;

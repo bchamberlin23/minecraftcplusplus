@@ -27,6 +27,7 @@ struct Dimension {
     int minY = -64, height = 384;
     bool fastLava = false;  // EnvironmentAttributes.FAST_LAVA (the nether): lava currents push harder
     bool waterEvaporates = false;  // EnvironmentAttributes.WATER_EVAPORATES (the nether): buckets cannot place water
+    float ambientLight = 0;  // DimensionType.ambientLight (the nether 0.1): Lightmap.getBrightness
 };
 
 // login (respawn = false) or respawn: the world must be cleared on respawn.
