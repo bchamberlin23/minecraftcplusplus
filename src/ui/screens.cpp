@@ -4,6 +4,7 @@
 #include "render/renderer.h"
 #include "ui/entity_preview.h"
 #include "ui/frontend.h"
+#include "ui/dialogs.h"
 #include "ui/mp_hud.h"
 #include "ui/ui_state.h"
 #include "world/terrain.h"
@@ -419,7 +420,10 @@ void Ui::State::buildButtons() {
     if (frontEndScreen()) return buildFrontEndButtons();     // title.cpp
     if (const ScreenDef* d = screenDef(screen); d && d->build) return d->build(*this);  // modules.h
     if (screen == Screen::Pause) {
-        const int gridW = 212, gridH = 50 + 20 + 4 * 24;
+        Text dialogLabel;  // dialogs.h: custom options / server links
+        std::function<void()> openDialog;
+        const bool dialogButton = pauseMenuDialogButton(*this, dialogLabel, openDialog);
+        const int gridW = 212, gridH = 50 + 20 + (dialogButton ? 5 : 4) * 24;
         const int left = (W - gridW) / 2, top = int(float(H - gridH) * 0.25f);
         auto full = [&](int y, Text label, std::function<void()> fn, bool active = true) {
             Button b;
@@ -442,6 +446,11 @@ void Ui::State::buildButtons() {
         half(1, y, Text(), [this] { openFriendsScreen(*this); });  // friends_screen.cpp
         buttons.back().labelFn = friendsButtonLabel;
         y += 24;
+        if (dialogButton) {
+            full(y, dialogLabel, openDialog);
+            buttons.back().tooltip = [this] { return Text(res.translate("menu.custom_options.tooltip")); };
+            y += 24;
+        }
         half(0, y, tr("menu.options"), [this] { openScreen(Screen::Options); });
         if (fe->cfg.singleplayer)  // title.cpp
             half(1, y, tr("menu.shareToLan"), [this] { openToLanScreen(*this); }, fe->lanOpenPort == 0);
@@ -570,6 +579,9 @@ void Ui::State::drawScreen(Canvas& c) {
             c.gradient(0, 0, float(W), float(H), 0xC0101010, 0xD0101010);
             drawCentered(c, Text(res.translate("menu.game")), float(W / 2), 40.f, 0xFFFFFFFF);
             drawButtons(c);
+            for (const Button& b : buttons)  // the custom options button's tooltip
+                if (b.tooltip && mouseX >= b.x && mouseY >= b.y && mouseX < b.x + b.w && mouseY < b.y + b.h)
+                    drawTooltip(c, font.split(b.tooltip(), 170), mouseX, mouseY);
             return;
         }
         default: break;

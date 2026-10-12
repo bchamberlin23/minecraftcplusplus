@@ -4,11 +4,10 @@
 // .handleComponentClicked / Screen.defaultHandleGameClickEvent).
 #include "assets/game_reports.h"
 #include "ui/command_tree.h"
+#include "ui/dialogs.h"
 #include "ui/frontend.h"
 #include "ui/mp_hud.h"
 #include "ui/ui_state.h"
-
-#include <shellapi.h>
 
 #include <algorithm>
 #include <cmath>
@@ -404,11 +403,6 @@ std::vector<Text> hoverLines(UiState& s, const TextEvents& ev) {
     return lines;
 }
 
-void openUrl(const std::string& url) {
-    std::wstring w(url.begin(), url.end());
-    ShellExecuteW(nullptr, L"open", w.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-}
-
 // ChatScreen.handleComponentClicked + Screen.defaultHandleGameClickEvent.
 bool clickStyle(UiState& s, const Style& st, bool shift) {
     if (!st.events) return false;
@@ -422,29 +416,7 @@ bool clickStyle(UiState& s, const Style& st, bool shift) {
         return true;
     }
     if (ev.click.empty()) return false;
-    LOG("ui: chat click %s \"%s\"", ev.click.c_str(), ev.clickValue.c_str());
-    if (ev.click == "run_command") {
-        std::string cmd = ev.clickValue;
-        if (!cmd.empty() && cmd[0] == '/') cmd.erase(0, 1);  // Commands.trimOptionalPrefix
-        if (s.online()) {
-            net::Writer w;
-            w.str(cmd);
-            s.client->sendPlay("chat_command", w);
-        }
-    } else if (ev.click == "suggest_command") {  // insertText(value, replace)
-        f.value = ev.clickValue.substr(0, size_t(f.maxLength));
-        f.cursor = f.selection = int(f.value.size());
-    } else if (ev.click == "copy_to_clipboard") {
-        s.window->setClipboard(ev.clickValue);
-    } else if (ev.click == "open_url") {  // ConfirmLinkScreen (chatLinksPrompt)
-        const std::string url = ev.clickValue;
-        if (!url.starts_with("http://") && !url.starts_with("https://")) return true;
-        UiState* sp = &s;
-        showConfirm(s, Text(s.res.translate("chat.link.confirm")), Text(url), s.res.translate("chat.link.open"), [sp, url] {
-            openUrl(url);
-            sp->openScreen(Screen::Chat);
-        }, Screen::Chat);
-    }
+    handleGameClick(s, clickOf(ev), Screen::Chat);  // dialogs.h: Screen.defaultHandleGameClickEvent
     return true;
 }
 

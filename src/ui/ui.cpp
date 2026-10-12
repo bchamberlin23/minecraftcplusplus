@@ -4,6 +4,7 @@
 #include "assets/game_reports.h"
 #include "ui/frontend.h"
 #include "ui/signs_books.h"
+#include "ui/dialogs.h"
 #include "ui/gameplay_hud.h"
 #include "ui/mp_hud.h"
 #include "ui/ui_state.h"
@@ -169,6 +170,7 @@ bool pausesGame(Screen s) {
     switch (s) {
         case Screen::None: case Screen::Chat: case Screen::Inventory: case Screen::Container: case Screen::Creative:
         case Screen::Death: case Screen::Sign: case Screen::InBed: case Screen::GameModeSwitcher: return false;
+        case Screen::Dialog: return dialogPausesGame();  // dialogs.h
         default: return true;
     }
 }
