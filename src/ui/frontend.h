@@ -22,6 +22,7 @@ struct WorldEntry {
     i64 lastPlayed = -1;  // ms since 1970
     int gameMode = 0, dataVersion = 0;
     bool hardcore = false, cheats = false, locked = false;
+    bool broken = false;  // level.dat unreadable (LevelSummary.CorruptedLevelSummary): Play recovers it
     Image icon;  // icon.png (64x64), empty when the world has none
 };
 bool readWorld(const fs::path& dir, WorldEntry& out);       // level.dat summary; false: not a world
@@ -116,6 +117,7 @@ struct FrontEndState {
     float progress = 0;
     double loadingStart = 0;
     bool loadingCancel = false;
+    std::function<void()> loadingCancelFn;  // Cancel on the loading screen when it is not a starting instance
     Screen failBack = Screen::Title;
     Text failTitle;
     Text messageTitle, messageText;
@@ -165,6 +167,8 @@ void createWorldInput(State& s, const Window::InputEvent& e);
 bool recreateWorld(State& s, const fs::path& dir);      // Re-Create: Create New World filled in from a world
 void buildEditWorld(State& s);
 void drawEditWorld(State& s, Canvas& c);
+void editWorldInput(State& s, const Window::InputEvent& e);
+void worldsFrame(State& s);  // Edit World's backups and optimizations running in the background
 void buildServers(State& s);
 void drawServers(State& s, Canvas& c);
 void serversInput(State& s, const Window::InputEvent& e);

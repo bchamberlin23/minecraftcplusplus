@@ -85,10 +85,12 @@ void buildLoading(State& s) {
     if (f.loadingCancel) {
         addButton(s, float(s.guiW() / 2 - 100), float(s.guiH() / 2 + 40), 200, tr(s, "gui.cancel"), [p] {
             FrontEndState& fe = *p->fe;
-            if (fe.child) fe.child->cancel();
+            if (auto fn = fe.loadingCancelFn) fn();
+            else if (fe.child) fe.child->cancel();
         });
         f.onBack = [p] {
-            if (p->fe->child) p->fe->child->cancel();
+            if (auto fn = p->fe->loadingCancelFn) fn();
+            else if (p->fe->child) p->fe->child->cancel();
         };
     }
 }
@@ -554,6 +556,7 @@ void Ui::State::frontEndInput(const Window::InputEvent& e) {
     if (screen == Screen::Worlds) return worldsInput(*this, e);
     if (screen == Screen::Servers) return serversInput(*this, e);
     if (screen == Screen::CreateWorld) return createWorldInput(*this, e);
+    if (screen == Screen::EditWorld) return editWorldInput(*this, e);
     if (fieldsInput(*this, e)) return;
     buttonsInput(e);
 }
@@ -585,6 +588,7 @@ void Ui::State::frontEndFrame() {
         }
     }
     serversFrame(*this);
+    worldsFrame(*this);
     // In a world: the server closed the connection (kicked, stopped, crashed).
     if (!f.cfg.menu && session && !session->connected() && !f.leaving && !f.titleRequested && screen != Screen::Message) {
         const bool multiplayer = !f.cfg.singleplayer;
