@@ -78,6 +78,10 @@ public:
     // The block entity tag at p ({"id", "x", "y", "z"} when first asked for; null outside the region), like
     // WorldGenRegion.getBlockEntity creating it, for what a feature or piece configures on it.
     NbtValue* blockEntity(const BlockPos& p, std::string_view id);
+    // RandomizableContainer.setBlockEntityLootTable (LootTable + LootTableSeed) on the block entity `id` at p.
+    void setLootTable(const BlockPos& p, std::string_view id, std::string_view table, i64 seed);
+    // SpawnerBlockEntity.setEntityId: BaseSpawner's defaults with the entity as the next spawn.
+    void setSpawner(const BlockPos& p, std::string_view entity);
     // WorldGenRegion.addFreshEntity: the entity tag (with its "Pos") goes to the chunk it is in.
     void addEntity(NbtValue tag);
     void markPostProcess(const BlockPos& p);  // ChunkAccess.markPosForPostProcessing

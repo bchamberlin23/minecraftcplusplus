@@ -1626,7 +1626,8 @@ public:
         for (const BlockPos& p : sides) rocks += valid(p) ? 1 : 0;
         for (const BlockPos& p : sides) holes += level.isEmpty(p) ? 1 : 0;
         if (rocks != rockCount_ || holes != holeCount_) return false;
-        level.setBlock(o, state_);  // (plus a scheduled fluid tick)
+        level.setBlock(o, state_);
+        level.scheduleTick(o, state_, 0, true);
         return true;
     }
 
@@ -1988,11 +1989,15 @@ public:
                     if (c_.solid(level.block(rel(chestPos, d)))) ++wallCount;
                 if (wallCount != 1) continue;
                 safeSet(chestPos, reorient(level, chestPos, chest_));
-                if (c_.is(level.block(chestPos), "minecraft:chest")) r.nextLong();  // loot table seed
+                if (c_.is(level.block(chestPos), "minecraft:chest"))
+                    level.setLootTable(chestPos, "minecraft:chest", "minecraft:chests/simple_dungeon", r.nextLong());
                 break;
             }
         safeSet(o, spawner_);
-        if (c_.is(level.block(o), "minecraft:spawner")) r.nextInt(4);  // spawner mob (skeleton, zombie x2, spider)
+        if (c_.is(level.block(o), "minecraft:spawner")) {
+            static constexpr const char* kMobs[4] = {"minecraft:skeleton", "minecraft:zombie", "minecraft:zombie", "minecraft:spider"};
+            level.setSpawner(o, kMobs[r.nextInt(4)]);
+        }
         return true;
     }
 
@@ -2648,7 +2653,8 @@ public:
                 const u16 s = level.block(p);
                 if (!level.isEmpty(p) && blocksCollision(s)) continue;
                 level.setBlock(p, chest_);
-                if (c_.is(level.block(p), "minecraft:chest")) r.nextLong();  // loot table seed
+                if (c_.is(level.block(p), "minecraft:chest"))
+                    level.setLootTable(p, "minecraft:chest", "minecraft:chests/spawn_bonus_chest", r.nextLong());
                 for (Direction d : kHorizontal) {
                     const BlockPos t = rel(p, d);
                     if (c_.canSurvive(level, torch_, t)) level.setBlock(t, torch_);

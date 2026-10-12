@@ -345,4 +345,62 @@ void GenService::decorationWorker() {
     }
 }
 
+NbtValue saveExtras(const GenChunk& c, const std::function<std::string(u16 state)>& stateName) {
+    auto list = [](u8 type) {
+        NbtValue l = NbtValue::make(TagList);
+        l.listType = type;
+        return l;
+    };
+    auto integer = [](i64 v) {
+        NbtValue n = NbtValue::make(TagInt);
+        n.i = v;
+        return n;
+    };
+    auto text = [](std::string s) {
+        NbtValue n = NbtValue::make(TagString);
+        n.s = std::move(s);
+        return n;
+    };
+    NbtValue out = NbtValue::make(TagCompound);
+    NbtValue blockEntities = list(TagCompound);
+    for (const auto& [index, tag] : c.blockEntities) blockEntities.items.push_back(tag);
+    out.set("block_entities", std::move(blockEntities));
+    NbtValue entities = list(TagCompound);
+    entities.items = c.entities;
+    out.set("entities", std::move(entities));
+    // SavedTick: {i: the block or fluid, x, y, z, t: delay, p: priority (NORMAL)}.
+    NbtValue blockTicks = list(TagCompound), fluidTicks = list(TagCompound);
+    for (const GenChunk::Tick& t : c.ticks) {
+        const std::string state = stateName(t.state);
+        const std::string block = state.substr(0, state.find('['));
+        std::string type = block;
+        if (t.fluid) {  // the state's fluid: a source or flowing water / lava, or a waterlogged block's water
+            const bool lava = block == "minecraft:lava";
+            const bool source = (block != "minecraft:water" && !lava) || state.find("level=0") != std::string::npos;
+            type = std::string("minecraft:") + (source ? "" : "flowing_") + (lava ? "lava" : "water");
+        }
+        NbtValue tick = NbtValue::make(TagCompound);
+        tick.set("i", text(type));
+        tick.set("x", integer(c.cx * 16 + int(t.index & 15)));
+        tick.set("y", integer(c.minY + int(t.index >> 8)));
+        tick.set("z", integer(c.cz * 16 + int((t.index >> 4) & 15)));
+        tick.set("t", integer(t.delay));
+        tick.set("p", integer(0));
+        (t.fluid ? fluidTicks : blockTicks).items.push_back(std::move(tick));
+    }
+    out.set("block_ticks", std::move(blockTicks));
+    out.set("fluid_ticks", std::move(fluidTicks));
+    // PostProcessing: per section, ProtoChunk.packOffsetCoordinates (x | y << 4 | z << 8 within the section).
+    NbtValue post = list(TagList);
+    post.items.assign(size_t(c.height / 16), list(TagShort));
+    for (u32 index : c.postProcess) {
+        const int x = int(index & 15), z = int((index >> 4) & 15), y = int(index >> 8);
+        NbtValue s = NbtValue::make(TagShort);
+        s.i = x | (y & 15) << 4 | z << 8;
+        if (size_t(y >> 4) < post.items.size()) post.items[size_t(y >> 4)].items.push_back(s);
+    }
+    out.set("PostProcessing", std::move(post));
+    return out;
+}
+
 }  // namespace wg

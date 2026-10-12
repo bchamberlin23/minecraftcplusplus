@@ -1,5 +1,6 @@
 #pragma once
 #include "core/common.h"
+#include "world/nbt_dom.h"
 
 #include <array>
 #include <deque>
@@ -144,6 +145,13 @@ public:
     void clearDirtyChunks() { dirtyChunks_.clear(); }
     void clearDirtyChunk(int cx, int cz) { dirtyChunks_.erase(chunkKey(cx, cz)); }
     void markChunkDirty(int cx, int cz) { dirtyChunks_.insert(chunkKey(cx, cz)); }  // saved like an edited chunk
+    // What a chunk generated this session saves besides its blocks (a compound with block_entities, entities,
+    // block_ticks, fluid_ticks and PostProcessing, in the game's chunk format); WorldSaver::newChunk writes it.
+    void setGenExtras(int cx, int cz, NbtValue extras) { genExtras_[chunkKey(cx, cz)] = std::move(extras); }
+    const NbtValue* genExtras(int cx, int cz) const {
+        const auto it = genExtras_.find(chunkKey(cx, cz));
+        return it == genExtras_.end() ? nullptr : &it->second;
+    }
     // Generated chunks regenerate identically from the seed, so lighting them is not a change.
     void setTrackChanges(bool track) { trackChanges_ = track; }
     static u64 chunkKey(int cx, int cz) { return (u64(u32(cx)) << 32) | u32(cz); }
@@ -190,6 +198,7 @@ private:
     int minSy_ = 0, maxSy_ = 0;
     mutable std::shared_mutex mutex_;
     std::unordered_set<u64> dirtyChunks_;
+    std::unordered_map<u64, NbtValue> genExtras_;
     bool trackChanges_ = true;
     std::unordered_map<u64, std::vector<BlockEntityNbt>> blockEntities_;
     std::vector<u64> blockChanges_;

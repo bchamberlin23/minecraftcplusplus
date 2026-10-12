@@ -150,13 +150,17 @@ void ChunkGenerator::fill(GenChunk& chunk, DensityContext& ctx, AquiferSampler& 
     density.resize(size_t(v.size()));
     noise_->sampleVolume(finalDensity_, ctx, v, density.data());
     if (beardifier) beardifier->add(v, density.data());  // final_density's "minecraft:beardifier" term
+    const BlockInfo* infos = blocks_.infos();
     for (int z = 0; z < 16; ++z)
         for (int x = 0; x < 16; ++x)
             for (int y = v.sizeY - 1; y >= 0; --y) {
                 const int by = lo + y;
                 u16 state = aquifer.computeSubstance(v.blockX(x), by, v.blockZ(z), density[size_t(v.index(x, y, z))]);
                 if (state == AquiferSampler::kDefaultBlock) state = defaultBlock_;
-                if (state != GenChunk::kAir) chunk.set(x, by, z, state);
+                if (state == GenChunk::kAir) continue;
+                chunk.set(x, by, z, state);
+                // A fluid the aquifer wants updated flows once the chunk is a full chunk (postProcessGeneration).
+                if (infos[state].fluid && aquifer.shouldScheduleFluidUpdate()) chunk.markPostProcess(x, by, z);
             }
 }
 
@@ -175,6 +179,7 @@ void ChunkGenerator::applyCarvingMask(GenChunk& chunk, DensityContext& ctx, cons
             const u16 state = aquifer.computeSubstance(worldX, y, worldZ, 0.0f);
             if (state == AquiferSampler::kDefaultBlock) continue;
             chunk.set(x, y, z, state);
+            if (blocks_.infos()[state].fluid && aquifer.shouldScheduleFluidUpdate()) chunk.markPostProcess(x, y, z);
             if (hasGrass && chunk.get(x, y - 1, z) == dirt_) {
                 const bool fluid = blocks_.infos()[state].fluid;
                 if (auto top = materials_->topMaterial(chunk, ctx, *zoom_, noiseBiome, x, y - 1, z, fluid))

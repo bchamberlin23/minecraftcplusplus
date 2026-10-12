@@ -1094,6 +1094,7 @@ int wmain(int argc, wchar_t** argv) {
                     std::unique_lock lock(world.mutex());
                     waitMs = ct.ms();
                     if (!world.insertChunk(c->cx, c->cz, c->minY, c->height, c->blocks.data())) continue;
+                    world.setGenExtras(c->cx, c->cz, wg::saveExtras(*c, [&registry](u16 s) { return registry.name(s); }));
                     if (menu) world.markChunkDirty(c->cx, c->cz);  // the title screen's world keeps what it generates
                     insertMs = ct.ms();
                     u8 surface[16];  // surface biome of each 4x4 column, for biome colours

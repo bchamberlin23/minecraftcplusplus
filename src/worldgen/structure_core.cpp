@@ -486,39 +486,10 @@ bool Piece::createDispenser(PlaceCtx& c, const BBox& chunkBB, RandomSource& r, i
 }
 
 void PlaceCtx::setLootTable(const BlockPos& p, std::string_view table, i64 seed) const {
-    if (table.empty()) return;
-    NbtValue* be = level.blockEntity(p, blockEntityId(b.blockName(level.block(p))));
-    if (!be) return;
-    NbtValue t = NbtValue::make(TagString);
-    t.s = table;
-    be->set("LootTable", std::move(t));
-    NbtValue s = NbtValue::make(TagLong);
-    s.i = seed;
-    be->set("LootTableSeed", std::move(s));
+    level.setLootTable(p, blockEntityId(b.blockName(level.block(p))), table, seed);
 }
 
-void PlaceCtx::setSpawner(const BlockPos& p, std::string_view entity) const {
-    NbtValue* be = level.blockEntity(p, "minecraft:mob_spawner");
-    if (!be) return;
-    // BaseSpawner's defaults as it saves them, with the entity as the next spawn.
-    for (const auto& [k, v] : {std::pair{"Delay", 20}, std::pair{"MinSpawnDelay", 200}, std::pair{"MaxSpawnDelay", 800},
-                               std::pair{"SpawnCount", 4}, std::pair{"MaxNearbyEntities", 6}, std::pair{"RequiredPlayerRange", 16},
-                               std::pair{"SpawnRange", 4}}) {
-        NbtValue n = NbtValue::make(TagShort);
-        n.i = v;
-        be->set(k, std::move(n));
-    }
-    NbtValue id = NbtValue::make(TagString);
-    id.s = entity;
-    NbtValue e = NbtValue::make(TagCompound);
-    e.set("id", std::move(id));
-    NbtValue data = NbtValue::make(TagCompound);
-    data.set("entity", std::move(e));
-    be->set("SpawnData", std::move(data));
-    NbtValue potentials = NbtValue::make(TagList);
-    potentials.listType = TagCompound;
-    be->set("SpawnPotentials", std::move(potentials));
-}
+void PlaceCtx::setSpawner(const BlockPos& p, std::string_view entity) const { level.setSpawner(p, entity); }
 
 void PlaceCtx::addEntity(NbtValue tag) const { level.addEntity(std::move(tag)); }
 

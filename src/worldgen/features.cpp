@@ -121,6 +121,39 @@ bool GenRegion::setBlock(const BlockPos& p, u16 id) {
     return true;
 }
 
+void GenRegion::setLootTable(const BlockPos& p, std::string_view id, std::string_view table, i64 seed) {
+    NbtValue* be = table.empty() ? nullptr : blockEntity(p, id);
+    if (!be) return;
+    NbtValue t = NbtValue::make(TagString);
+    t.s = table;
+    be->set("LootTable", std::move(t));
+    NbtValue s = NbtValue::make(TagLong);
+    s.i = seed;
+    be->set("LootTableSeed", std::move(s));
+}
+
+void GenRegion::setSpawner(const BlockPos& p, std::string_view entity) {
+    NbtValue* be = blockEntity(p, "minecraft:mob_spawner");
+    if (!be) return;
+    for (const auto& [k, v] : {std::pair{"Delay", 20}, std::pair{"MinSpawnDelay", 200}, std::pair{"MaxSpawnDelay", 800},
+                               std::pair{"SpawnCount", 4}, std::pair{"MaxNearbyEntities", 6}, std::pair{"RequiredPlayerRange", 16},
+                               std::pair{"SpawnRange", 4}}) {
+        NbtValue n = NbtValue::make(TagShort);
+        n.i = v;
+        be->set(k, std::move(n));
+    }
+    NbtValue id = NbtValue::make(TagString);
+    id.s = entity;
+    NbtValue e = NbtValue::make(TagCompound);
+    e.set("id", std::move(id));
+    NbtValue data = NbtValue::make(TagCompound);
+    data.set("entity", std::move(e));
+    be->set("SpawnData", std::move(data));
+    NbtValue potentials = NbtValue::make(TagList);
+    potentials.listType = TagCompound;
+    be->set("SpawnPotentials", std::move(potentials));
+}
+
 NbtValue* GenRegion::blockEntity(const BlockPos& p, std::string_view id) {
     GenChunk* c = chunk(p.x >> 4, p.z >> 4);
     if (!c || !c->inside(p.y)) return nullptr;

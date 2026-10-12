@@ -594,6 +594,7 @@ void World::removeChunk(int cx, int cz) {
     Column& c = r->columns[((cz & 31) << 5) | (cx & 31)];
     if (!c.count) return;
     c = Column{};
+    genExtras_.erase(chunkKey(cx, cz));
     noteBlockChange(cx, cz);
     // Dropped columns leave garbage in the region's pools; rebuild them once it dominates.
     size_t live = 0;
@@ -602,6 +603,7 @@ void World::removeChunk(int cx, int cz) {
 }
 
 void World::clearChunks() {
+    genExtras_.clear();
     for (auto& r : regions_) {
         for (int idx = 0; idx < 1024; ++idx) {
             if (r->columns[idx].count) noteBlockChange(r->rx * 32 + (idx & 31), r->rz * 32 + (idx >> 5));

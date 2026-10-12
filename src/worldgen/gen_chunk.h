@@ -14,6 +14,11 @@ namespace wg {
 // Block state key ("minecraft:stone", "minecraft:grass_block[snowy=false]") -> registry id.
 using BlockLookup = std::function<u16(std::string_view stateKey)>;
 
+struct GenChunk;
+// SerializableChunkData's view of what generation left besides the blocks: block_entities, entities, block_ticks,
+// fluid_ticks and PostProcessing, for saving the chunk as a proto chunk past its features.
+NbtValue saveExtras(const GenChunk& c, const std::function<std::string(u16 state)>& stateName);
+
 struct GenChunk {
     static constexpr u16 kAir = 0;
     int cx = 0, cz = 0;         // chunk coordinates
