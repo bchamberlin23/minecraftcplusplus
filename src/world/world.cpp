@@ -595,11 +595,29 @@ void World::removeChunk(int cx, int cz) {
     Column& c = r->columns[((cz & 31) << 5) | (cx & 31)];
     if (!c.count) return;
     c = Column{};
+    genExtras_.erase(chunkKey(cx, cz));
     noteBlockChange(cx, cz);
     // Dropped columns leave garbage in the region's pools; rebuild them once it dominates.
     size_t live = 0;
     for (const Column& col : r->columns) live += col.count;
     if (r->sections.size() > live * 2 + 256) compact(*r);
+}
+
+void World::clearChunks() {
+    genExtras_.clear();
+    for (auto& r : regions_) {
+        for (int idx = 0; idx < 1024; ++idx) {
+            if (r->columns[idx].count) noteBlockChange(r->rx * 32 + (idx & 31), r->rz * 32 + (idx >> 5));
+            r->columns[idx] = Column{};
+        }
+        std::fill(std::begin(r->biomes), std::end(r->biomes), kUnknownBiome);
+        std::vector<Section>().swap(r->sections);
+        std::vector<u16>().swap(r->palettes);
+        std::vector<u64>().swap(r->words);
+        std::deque<LightArray>().swap(r->lightArrays);
+    }
+    blockEntities_.clear();
+    dirtyChunks_.clear();
 }
 
 void World::compact(Region& r) {

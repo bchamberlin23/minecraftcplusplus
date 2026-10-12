@@ -57,6 +57,7 @@ std::string varyingsStruct(const StageReflection& fs) {
              (v.arraySize ? "[" + std::to_string(v.arraySize) + "]" : "") + " : MCPPV" + std::to_string(i) + "X;\n";
     }
     if (hasTileInput(fs)) s += "    nointerpolation float4 tile : MCPPTILE;\n";
+    s += "    nointerpolation float fade : MCPPFADE;\n";
     s += "};\n";
     return s;
 }
@@ -198,6 +199,7 @@ std::string vertexWrapper(const StageReflection& vs, const StageReflection& fs, 
         else s += "    " + dst + " = (" + f.hlslType + ")" + src->hlslName + ";\n";
     }
     if (hasTileInput(fs)) s += "    o.tile = v.tile;\n";
+    s += "    o.fade = v.fade;\n";
     s += "    return o;\n}\n";
     return s;
 }
@@ -221,6 +223,7 @@ std::string pixelWrapper(const StageReflection& fs, int depthMode, bool final, c
         if (v.glslName == "mcpp_tile") s += "    " + v.hlslName + " = i.tile;\n";
         else s += "    " + v.hlslName + " = i.v" + std::to_string(k) + ";\n";
     }
+    s += "    if (mcppFadedOut(i.pos.xy, i.fade)) discard;\n";
     s += "    mcpp_spirv_entry_inner();\n    McppTargets o = (McppTargets)0;\n";
     auto outAt = [&](u32 loc, std::string& expr, std::string& type) -> bool {
         for (const StageVar& v : fs.outputs) {

@@ -3,6 +3,9 @@
 #include "worldgen/climate_tree.h"
 #include "worldgen/rng.h"
 
+#include <deque>
+#include <stdexcept>
+
 namespace wg {
 
 // ---- BiomeTable ---------------------------------------------------------------------------
@@ -36,37 +39,112 @@ size_t BiomeTable::size() const {
     return names_.size();
 }
 
-// ---- OverworldBiomeSource -----------------------------------------------------------------
+// ---- BiomeSource ------------------------------------------------------------------------------
+
+// ChunkAccess.fillBiomesFromNoise with the source's plain resolver.
+void BiomeSource::fillBiomes(GenChunk& chunk, DensityContext& ctx) const {
+    const int quartMinX = chunk.minBlockX() >> 2, quartMinZ = chunk.minBlockZ() >> 2, quartMinY = chunk.minY >> 2;
+    const int quartHeight = chunk.height >> 2;
+    for (int qy = 0; qy < quartHeight; ++qy)
+        for (int x = 0; x < 4; ++x)
+            for (int z = 0; z < 4; ++z)
+                chunk.biomes[(size_t(qy) * 4 + z) * 4 + x] = noiseBiome(ctx, quartMinX + x, quartMinY + qy, quartMinZ + z);
+}
+
+// ---- MultiNoiseBiomeSource ------------------------------------------------------------------
 
 namespace {
-// RTree.lastResult is a ThreadLocal on the (shared) overworld parameter list; same here.
-thread_local int tLastLeaf = -1;
+// RTree.lastResult is a ThreadLocal of each (shared) parameter list's tree; same here, per tree.
+int& lastLeaf(const climate::Tree* tree) {
+    thread_local std::vector<std::pair<const climate::Tree*, int>> hints;
+    for (auto& h : hints)
+        if (h.first == tree) return h.second;
+    hints.push_back({tree, -1});
+    return hints.back().second;
+}
+
+// MultiNoiseBiomeSourceParameterList.Preset.NETHER
+const climate::Tree& netherTree() {
+    static const climate::Tree tree([] {
+        using namespace climate;
+        auto e = [](float t, float h, float o, const char* biome) {
+            Entry x{};
+            const float v[kDims] = {t, h, 0, 0, 0, 0, o};
+            for (int d = 0; d < kDims; ++d) x.space[d] = {quantize(v[d]), quantize(v[d])};
+            x.biome = biome;
+            return x;
+        };
+        return std::vector<Entry>{e(0.0f, 0.0f, 0.0f, "minecraft:nether_wastes"), e(0.0f, -0.5f, 0.0f, "minecraft:soul_sand_valley"),
+                                  e(0.4f, 0.0f, 0.0f, "minecraft:crimson_forest"), e(0.0f, 0.5f, 0.375f, "minecraft:warped_forest"),
+                                  e(-0.5f, 0.0f, 0.175f, "minecraft:basalt_deltas")};
+    }());
+    return tree;
+}
+
+// Climate.Parameter.CODEC: a number (a point), [min, max] or {"min", "max"}.
+climate::Param parameter(const nlohmann::json& j) {
+    if (j.is_number()) return {climate::quantize(j.get<float>()), climate::quantize(j.get<float>())};
+    if (j.is_array() && j.size() == 2) return {climate::quantize(j[0].get<float>()), climate::quantize(j[1].get<float>())};
+    if (j.is_object()) return {climate::quantize(j.at("min").get<float>()), climate::quantize(j.at("max").get<float>())};
+    throw std::runtime_error("bad climate parameter " + j.dump());
+}
 }  // namespace
 
-struct OverworldBiomeSource::Impl {
+struct MultiNoiseBiomeSource::Impl {
     const NoiseState& noise;
     DensityRef fn[6];  // temperature, vegetation, continents, erosion, depth, ridges (Climate.Sampler order)
-    const climate::Tree& tree = climate::overworldTree();
-    std::vector<u16> ids;  // tree biome index -> BiomeTable id
+    const climate::Tree* tree = nullptr;
+    std::unique_ptr<climate::Tree> owned;  // a data pack's own list
+    std::deque<std::string> names;         // its biome names (the tree keeps pointers)
+    std::vector<u16> ids;                  // tree biome index -> BiomeTable id
 
     u16 lookup(const float v[6]) const {
         const i64 target[climate::kDims] = {climate::quantize(v[0]), climate::quantize(v[1]), climate::quantize(v[2]),
                                             climate::quantize(v[3]), climate::quantize(v[4]), climate::quantize(v[5]),
                                             0};
-        return ids[tree.search(target, tLastLeaf)];
+        return ids[tree->search(target, lastLeaf(tree))];
     }
 };
 
-OverworldBiomeSource::OverworldBiomeSource(const NoiseState& noise, const nlohmann::json& router, BiomeTable& table)
+MultiNoiseBiomeSource::MultiNoiseBiomeSource(const NoiseState& noise, const nlohmann::json& router, BiomeTable& table,
+                                             const nlohmann::json& source)
     : impl_(std::make_unique<Impl>(Impl{noise})) {
     static const char* const keys[6] = {"temperature", "vegetation", "continents", "erosion", "depth", "ridges"};
     for (int i = 0; i < 6; ++i) impl_->fn[i] = noise.parse(router.at(keys[i]));
-    for (const char* name : impl_->tree.names()) impl_->ids.push_back(table.id(name));
+    if (const auto p = source.find("preset"); p != source.end()) {
+        // A multi_noise_biome_source_parameter_list entry (or its inline {"preset": ...} form) names a code preset.
+        std::string preset = p->is_string() ? p->get<std::string>() : p->value("preset", std::string());
+        if (p->is_string())
+            if (const nlohmann::json* list = noise.data().worldgen("multi_noise_biome_source_parameter_list", preset))
+                preset = list->value("preset", preset);
+        preset = DataPack::normalize(preset);
+        if (preset == "overworld") impl_->tree = &climate::overworldTree();
+        else if (preset == "nether") impl_->tree = &netherTree();
+        else throw std::runtime_error("unknown multi-noise preset " + preset);
+    } else {
+        std::vector<climate::Entry> entries;
+        for (const nlohmann::json& e : source.at("biomes")) {
+            climate::Entry x{};
+            const nlohmann::json& p = e.at("parameters");
+            static const char* const dims[6] = {"temperature", "humidity", "continentalness", "erosion", "depth", "weirdness"};
+            for (int d = 0; d < 6; ++d) x.space[d] = parameter(p.at(dims[d]));
+            const i64 offset = climate::quantize(p.value("offset", 0.0f));
+            x.space[6] = {offset, offset};
+            std::string biome = e.at("biome").get<std::string>();
+            if (biome.find(':') == std::string::npos) biome = "minecraft:" + biome;
+            x.biome = impl_->names.emplace_back(std::move(biome)).c_str();
+            entries.push_back(x);
+        }
+        if (entries.empty()) throw std::runtime_error("empty multi-noise biome list");
+        impl_->owned = std::make_unique<climate::Tree>(entries);
+        impl_->tree = impl_->owned.get();
+    }
+    for (const char* name : impl_->tree->names()) impl_->ids.push_back(table.id(name));
 }
 
-OverworldBiomeSource::~OverworldBiomeSource() = default;
+MultiNoiseBiomeSource::~MultiNoiseBiomeSource() = default;
 
-u16 OverworldBiomeSource::noiseBiome(DensityContext& ctx, int quartX, int quartY, int quartZ) const {
+u16 MultiNoiseBiomeSource::noiseBiome(DensityContext& ctx, int quartX, int quartY, int quartZ) const {
     // QuartPos.toBlock (int shift, wrapping)
     const int x = i32(u32(quartX) << 2), y = i32(u32(quartY) << 2), z = i32(u32(quartZ) << 2);
     float v[6];
@@ -74,12 +152,12 @@ u16 OverworldBiomeSource::noiseBiome(DensityContext& ctx, int quartX, int quartY
     return impl_->lookup(v);
 }
 
-std::vector<u16> OverworldBiomeSource::possibleBiomes() const { return impl_->ids; }
+std::vector<u16> MultiNoiseBiomeSource::possibleBiomes() const { return impl_->ids; }
 
 // ChunkGenerator.doCreateBiomes: MultiNoiseBiomeSource.createResolverForChunk samples the six
 // climate functions over the column's quart grid, then ChunkAccess.fillBiomesFromNoise resolves
 // section by section, x / y / z within each (the order matters for the RTree's last-result hint).
-void OverworldBiomeSource::fillBiomes(GenChunk& chunk, DensityContext& ctx) const {
+void MultiNoiseBiomeSource::fillBiomes(GenChunk& chunk, DensityContext& ctx) const {
     const int quartMinX = chunk.minBlockX() >> 2, quartMinZ = chunk.minBlockZ() >> 2;
     const int quartMinY = chunk.minY >> 2, quartHeight = chunk.height >> 2;
     Volume volume;
@@ -105,6 +183,98 @@ void OverworldBiomeSource::fillBiomes(GenChunk& chunk, DensityContext& ctx) cons
             }
         }
     }
+}
+
+// ---- The End, fixed and checkerboard sources ----------------------------------------------------
+
+namespace {
+
+class TheEndBiomeSource final : public BiomeSource {
+public:
+    TheEndBiomeSource(const NoiseState& noise, const nlohmann::json& router, BiomeTable& table)
+        : noise_(noise), erosion_(noise.parse(router.at("erosion"))) {
+        for (const char* b : {"the_end", "end_highlands", "end_midlands", "small_end_islands", "end_barrens"})
+            ids_.push_back(table.id(std::string("minecraft:") + b));
+    }
+    u16 noiseBiome(DensityContext& ctx, int quartX, int quartY, int quartZ) const override {
+        const int blockX = i32(u32(quartX) << 2), blockY = i32(u32(quartY) << 2), blockZ = i32(u32(quartZ) << 2);
+        const int chunkX = blockX >> 4, chunkZ = blockZ >> 4;
+        if (i64(chunkX) * chunkX + i64(chunkZ) * chunkZ <= 4096) return ids_[0];
+        const int weirdX = ((blockX >> 4) * 2 + 1) * 8, weirdZ = ((blockZ >> 4) * 2 + 1) * 8;
+        const double height = noise_.sample(erosion_, ctx, weirdX, blockY, weirdZ);
+        if (height > 0.25) return ids_[1];
+        if (height >= -0.0625) return ids_[2];
+        return height < -0.21875 ? ids_[3] : ids_[4];
+    }
+    std::vector<u16> possibleBiomes() const override { return ids_; }
+
+private:
+    const NoiseState& noise_;
+    DensityRef erosion_;
+    std::vector<u16> ids_;  // end, highlands, midlands, islands, barrens
+};
+
+class FixedBiomeSource final : public BiomeSource {
+public:
+    explicit FixedBiomeSource(u16 biome) : biome_(biome) {}
+    u16 noiseBiome(DensityContext&, int, int, int) const override { return biome_; }
+    void fillBiomes(GenChunk& chunk, DensityContext&) const override { std::fill(chunk.biomes.begin(), chunk.biomes.end(), biome_); }
+    std::vector<u16> possibleBiomes() const override { return {biome_}; }
+    int fixedBiome() const override { return biome_; }
+
+private:
+    u16 biome_;
+};
+
+class CheckerboardBiomeSource final : public BiomeSource {
+public:
+    CheckerboardBiomeSource(std::vector<u16> biomes, int scale) : biomes_(std::move(biomes)), shift_(scale + 2) {}
+    u16 noiseBiome(DensityContext&, int quartX, int, int quartZ) const override {
+        const int n = int(biomes_.size());
+        return biomes_[size_t((((quartX >> shift_) + (quartZ >> shift_)) % n + n) % n)];  // Math.floorMod
+    }
+    std::vector<u16> possibleBiomes() const override {
+        std::vector<u16> out;
+        for (u16 b : biomes_)
+            if (std::find(out.begin(), out.end(), b) == out.end()) out.push_back(b);
+        return out;
+    }
+
+private:
+    std::vector<u16> biomes_;
+    int shift_;
+};
+
+std::string qualified(std::string id) { return id.find(':') == std::string::npos ? "minecraft:" + id : id; }
+
+}  // namespace
+
+std::unique_ptr<BiomeSource> makeBiomeSource(const nlohmann::json& source, const NoiseState& noise, const nlohmann::json& router,
+                                             BiomeTable& table) {
+    const std::string type = DataPack::normalize(source.value("type", std::string("multi_noise")));
+    if (type == "multi_noise") return std::make_unique<MultiNoiseBiomeSource>(noise, router, table, source);
+    if (type == "the_end") return std::make_unique<TheEndBiomeSource>(noise, router, table);
+    if (type == "fixed") {
+        const nlohmann::json& b = source.at("biome");
+        return std::make_unique<FixedBiomeSource>(table.id(qualified(b.is_string() ? b.get<std::string>() : b.value("id", std::string()))));
+    }
+    if (type == "checkerboard") {
+        // Biome.LIST_CODEC: a biome id, a list of them or a "#tag"
+        std::vector<u16> ids;
+        const nlohmann::json& b = source.at("biomes");
+        auto add = [&](const std::string& id) {
+            if (id.starts_with("#"))
+                for (const std::string& t : noise.data().tag("worldgen/biome", id.substr(1))) ids.push_back(table.id(t));
+            else
+                ids.push_back(table.id(qualified(id)));
+        };
+        if (b.is_string()) add(b.get<std::string>());
+        else
+            for (const nlohmann::json& e : b) add(e.get<std::string>());
+        if (ids.empty()) throw std::runtime_error("empty checkerboard biome list");
+        return std::make_unique<CheckerboardBiomeSource>(std::move(ids), source.value("scale", 2));
+    }
+    throw std::runtime_error("unknown biome source type " + type);
 }
 
 // ---- BiomeZoom ----------------------------------------------------------------------------

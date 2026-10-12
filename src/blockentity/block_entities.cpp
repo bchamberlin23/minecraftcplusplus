@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <ctime>
 #include <functional>
 #include <shared_mutex>
@@ -804,11 +805,10 @@ void BlockEntityRenderer::attach(net::Client& client) {
 void BlockEntityRenderer::applyNetwork() {
     std::vector<NetChunk> chunks;
     std::vector<NetBlockEntity> data;
-    std::vector<NetEvent> events;
     {
         std::lock_guard lock(netMutex_);
-        if (netChunks_.empty() && netData_.empty() && netEvents_.empty()) return;
-        chunks.swap(netChunks_), data.swap(netData_), events.swap(netEvents_);
+        if (netChunks_.empty() && netData_.empty()) return;
+        chunks.swap(netChunks_), data.swap(netData_);  // block events: applyBlockEvents (pistons need them too)
     }
     for (NetChunk& c : chunks) {
         std::vector<World::BlockEntityNbt> list;
@@ -817,7 +817,6 @@ void BlockEntityRenderer::applyNetwork() {
         world_.setChunkBlockEntities(c.cx, c.cz, std::move(list));
     }
     for (NetBlockEntity& e : data) world_.setBlockEntity({e.x, e.y, e.z, std::move(e.nbt)});
-    for (const NetEvent& e : events) handleEvent(e.x, e.y, e.z, e.type, e.param);
 }
 
 void BlockEntityRenderer::handleEvent(int x, int y, int z, int type, int param) {
@@ -1314,6 +1313,31 @@ void BlockEntityRenderer::pistonEvent(int px, int py, int pz, int type, int para
         }
     }
     if (!edits.empty()) blockSink_(edits);
+}
+
+void BlockEntityRenderer::pistonMovers(std::vector<Physics::Piston>& out) {
+    out.clear();
+    for (const Moving& m : moving_) {
+        if (m.gone >= 0 || !registry_.name(world_.block(m.x, m.y, m.z)).starts_with("minecraft:moving_piston")) continue;
+        Physics::Piston p;
+        p.x = m.x, p.y = m.y, p.z = m.z, p.moved = m.moved, p.dir = m.dir, p.extending = m.extending, p.source = m.source;
+        u64 bits;
+        std::memcpy(&bits, &m.start, sizeof(bits));
+        p.key = bits ^ (u64(u32(m.x)) * 0x9E3779B97F4A7C15ull) ^ (u64(u32(m.y)) << 20) ^ (u64(u32(m.z)) << 40);
+        const std::string facing = kDirNames[m.dir];
+        for (int s = 0; s < 2; ++s)
+            p.head[s] = registry_.idFor("minecraft:piston_head[facing=" + facing + ",short=" + (s ? "true" : "false") + ",type=normal]");
+        const std::string& moved = registry_.name(m.moved);
+        if (m.source && (moved.starts_with("minecraft:piston[") || moved.starts_with("minecraft:sticky_piston["))) {
+            const std::string own(registry_.property(m.moved, "facing"));
+            const bool sticky = moved.starts_with("minecraft:sticky_piston");
+            for (int s = 0; s < 2; ++s)
+                p.headMoved[s] = registry_.idFor("minecraft:piston_head[facing=" + own + ",short=" + (s ? "true" : "false") +
+                                                 ",type=" + (sticky ? "sticky" : "normal") + "]");
+            p.extendedBase = registry_.withProperty(m.moved, "extended", "true");
+        }
+        out.push_back(p);
+    }
 }
 
 float BlockEntityRenderer::movingProgress(const Moving& m, double now) const {

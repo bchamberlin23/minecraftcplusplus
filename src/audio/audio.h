@@ -34,6 +34,7 @@ public:
         fs::path dataDir;  // %LOCALAPPDATA%\minecraftCplusplus: settings and the block sound cache
         const GameReports* reports = nullptr;
         fs::path capture;  // debug: WAV of the final mix (+ .json log of every sound started)
+        bool muted = false;  // automated runs: master gain 0 (the saved volumes stay as they are)
     };
 
     AudioSystem() = default;

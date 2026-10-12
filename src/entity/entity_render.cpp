@@ -35,7 +35,7 @@ constexpr u64 kRefOffset = kInstOffset + u64(kMaxInstances) * 32;
 constexpr u64 kFreeOffset = kRefOffset + u64(kMaxRefs) * 8;
 constexpr u64 kFrameBytes = (kFreeOffset + u64(kMaxFree) * 128 + 65535) & ~u64(65535);
 
-enum LayerFlags : u8 { Emissive = 1, Translucent = 2, TintWool = 8, TintCollar = 16, Armor = 32, Elytra = 64, Glint = 128 };
+enum LayerFlags : u8 { Emissive = 1, Translucent = 2, SpinFx = 4, TintWool = 8, TintCollar = 16, Armor = 32, Elytra = 64, Glint = 128 };
 enum Special : u8 {
     SpNone, SpCow, SpPig, SpChicken, SpSheep, SpWolf, SpCat, SpHorse, SpLlama, SpRabbit, SpParrot, SpFox, SpAxolotl,
     SpPanda, SpMooshroom, SpVillager, SpZombieVillager, SpSlime, SpPlayer, SpFrog, SpArmorStand, SpCreeper, SpBoat,
@@ -338,6 +338,7 @@ void EntityRenderer::buildDefs() {
         if (d.kind == Kind::Sprite && d.sprite < 0) d.kind = Kind::Box;
     }
     elytraModel_ = M("elytra#main"), elytraBabyModel_ = M("elytra_baby#main");
+    spinModel_ = M("spin_attack#main"), spinTex_ = T("trident/trident_riptide");
     u32 boxes = 0;
     std::string names;
     for (size_t i = 0; i < defs_.size(); ++i)
@@ -784,7 +785,9 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
     if (!layerCount) return false;
     if (e.category == Category::Living || e.category == Category::Player)
         layerCount += equipmentLayers(e, d, layers + layerCount, 16 - layerCount);
-
+    // SpinAttackEffectLayer: the riptide swirl around a spinning player.
+    if (d.special == SpPlayer && (e.livingFlags & 4) && spinModel_ >= 0 && spinTex_ >= 0 && layerCount < 16)
+        layers[layerCount++] = {spinModel_, spinTex_, kWhite, SpinFx};
     double p[3];
     for (int a = 0; a < 3; ++a) p[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt - cam[a];
     const float yaw = lerpAngle(pt, e.prevYaw, e.yaw), pitch = e.prevPitch + (e.pitch - e.prevPitch) * pt;
@@ -935,7 +938,38 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         const bool rightHanded = e.mainArm != 0;
         s.rightItem = rightHanded ? e.equipment[0] >= 0 : e.equipment[1] >= 0;
         s.leftItem = rightHanded ? e.equipment[1] >= 0 : e.equipment[0] >= 0;
-        s.swingLeft = !rightHanded;
+        s.leftHanded = !rightHanded;
+        s.swingLeft = (e.swingHand == 0) != rightHanded;  // the main hand swings the main arm
+        auto nameOf = [&](int slot) { return e.equipment[slot] >= 0 && items_ ? items_->itemName(e.equipment[slot]) : std::string(); };
+        auto isSpear = [&](int slot) { return nameOf(slot).ends_with("_spear"); };  // ItemTags.SPEARS
+        s.swingType = e.swingType >= 0 ? e.swingType : isSpear(e.swingHand) ? 2 : 1;
+        {
+            KineticParams k[2];
+            for (int slot = 0; slot < 2 && rules_; ++slot)
+                if (const std::string n = nameOf(slot); !n.empty()) {
+                    const ItemRules::Components& c = rules_->components(n);
+                    k[slot] = {c.kineticValid, c.kineticDelay, c.kineticDismount, c.kineticKnockback, c.kineticDamage, c.kineticForward};
+                }
+            s.rightKinetic = rightHanded ? k[0] : k[1], s.leftKinetic = rightHanded ? k[1] : k[0];
+        }
+        // HumanoidMobRenderer.usesSpearPose: the hand's STAB swing, or a spear in it.
+        auto spearPose = [&](int slot) { return (e.swingTime >= 0 && s.swingType == 2 && e.swingHand == slot) || isSpear(slot); };
+        if (e.category != Category::Player && items_ && (d.anim == Anim::Zombie || d.anim == Anim::Skeleton)) {
+            // HumanoidMobRenderer.getArmPose: SPEAR or EMPTY (skeletons draw an aggressive main-hand bow, the drowned
+            // an aggressive main-hand trident).
+            const bool drowned = e.info && e.info->name == "minecraft:drowned";
+            auto mobPose = [&](int slot) {
+                const std::string n = nameOf(slot);
+                if (slot == 0 && s.aggressive && d.anim == Anim::Skeleton && n == "bow") return ArmPose::BowAndArrow;
+                if (slot == 0 && s.aggressive && drowned && n == "trident") return ArmPose::ThrowTrident;
+                return spearPose(slot) ? ArmPose::Spear : ArmPose::Empty;
+            };
+            const ArmPose mainPose = mobPose(0), offPose = mobPose(1);
+            s.havePoses = true;
+            s.rightPose = rightHanded ? mainPose : offPose;
+            s.leftPose = rightHanded ? offPose : mainPose;
+            s.holdingBow = nameOf(0) == "bow";
+        }
         if (e.category == Category::Player && items_) {
             // AvatarRenderer.getArmPose: the use animation of the hand in use, a charged crossbow, else ITEM / EMPTY.
             auto poseFor = [&](int slot) {
@@ -953,7 +987,7 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
                     if (n == "brush") return ArmPose::Brush;
                     if (n.ends_with("_spear")) return ArmPose::Spear;
                 }
-                return ArmPose::Item;
+                return spearPose(slot) ? ArmPose::Spear : ArmPose::Item;
             };
             ArmPose mainPose = poseFor(0), offPose = poseFor(1);
             if (mainPose == ArmPose::BowAndArrow || mainPose == ArmPose::CrossbowCharge || mainPose == ArmPose::CrossbowHold)
@@ -963,7 +997,7 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
             s.leftPose = rightHanded ? offPose : mainPose;
             s.usingItem = (e.livingFlags & 1) != 0;
             s.useRight = ((e.livingFlags & 2) != 0) != rightHanded;
-            s.useTicks = float(e.useTicks) + (s.usingItem ? pt : 0.0f);
+            s.useTicks = s.usingItem ? float(e.useTicks) + pt : 0.0f;
         }
         s.standFlags = e.standFlags;
         s.standPose = e.standPose;
@@ -1009,7 +1043,14 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
                 if (side == 1) poses_[i].yRot = kPi - poses_[i].yRot;
             }
         }
-        if (L.flags & Elytra) {  // WingsLayer: translate(0, 0, 0.125); ElytraModel.setupAnim (ElytraAnimationState)
+        if (L.flags & SpinFx) {  // SpinAttackEffectModel.setupAnim: box i turns at -(45 + 5 (i + 1)) degrees per tick
+            for (size_t i = 0; i < parts; ++i)
+                if (m.parts[i].name == "box0" || m.parts[i].name == "box1") {
+                    const float rate = 45.0f + float(m.parts[i].name == "box0" ? 1 : 2) * 5.0f;
+                    const float deg = (float(e.age) + pt) * -rate;
+                    poses_[i].yRot = (deg - 360.0f * std::floor((deg + 180.0f) / 360.0f)) * kDeg;  // Mth.wrapDegrees
+                }
+        } else if (L.flags & Elytra) {  // WingsLayer: translate(0, 0, 0.125); ElytraModel.setupAnim (ElytraAnimationState)
             layerRoot = mul(root, translate(0, 0, 0.125f));
             const i16 lw = m.role(LeftWing), rw = m.role(RightWing);
             float r[3];
@@ -1633,6 +1674,14 @@ void EntityRenderer::record(const PassContext& ctx) {
     if (assets_.texture("misc/enchanted_glint_armor") >= 0)
         drawRange((mv ? psoGlintMv_ : psoGlint_).Get(), glintRefs_, refCount_ - glintRefs_);
     if (mv) list->OMSetRenderTargets(1, &ctx.colorRtv, FALSE, &ctx.dsv);
+}
+
+bool EntityRenderer::rtEntities(u32 frame, RtEntities& out) {
+    if (!quads_ || !upload_ || (!cutoutRefs_ && !freeCount_)) return false;
+    const u64 base = u64(frame) * kFrameBytes;
+    out = {quads_.Get(), upload_.Get(), base + kMatOffset, base + kInstOffset, base + kRefOffset, base + kFreeOffset,
+           cutoutRefs_, freeCount_};
+    return true;
 }
 
 void EntityRenderer::drawShadow(const ShadowContext& sc) {

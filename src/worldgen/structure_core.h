@@ -203,6 +203,8 @@ private:
 
 // Loot containers: RandomizableContainer block entities (their template NBT gets a LootTableSeed).
 bool isRandomizableContainer(std::string_view blockName);
+// The block entity type id of a block that has one ("minecraft:spawner" -> "minecraft:mob_spawner").
+std::string blockEntityId(std::string_view blockName);
 
 // The block helpers of the structure environment working on this thread (set while starts are generated and pieces
 // are placed), for the transliterated piece code: B("minecraft:stone").with("facing", North).
@@ -277,6 +279,12 @@ struct PlaceCtx {
     int minY() const { return level.minY(); }
     int maxY() const { return level.maxY(); }  // exclusive
     void markPostProcess(const BlockPos& p) const;  // ChunkAccess.markPosForPostProcessing
+    // Block entity data of what a piece placed, saved with the chunk: RandomizableContainer.setBlockEntityLootTable
+    // (LootTable + LootTableSeed) and SpawnerBlockEntity.setEntityId (SpawnData; consumes no randomness).
+    void setLootTable(const BlockPos& p, std::string_view table, i64 seed) const;
+    void setSpawner(const BlockPos& p, std::string_view entity) const;
+    // WorldGenRegion.addFreshEntity: an entity tag ({"id", "Pos", ...}) saved with the chunk it is in.
+    void addEntity(NbtValue tag) const;
     RandomSource& random() const;                   // WorldGenRegion.getRandom()
     i64 seed() const;
 };
@@ -355,11 +363,14 @@ protected:
                                  bool skipAir);
     void fillColumnDown(PlaceCtx& c, u16 s, int x, int startY, int z, const BBox& chunkBB);
     bool isReplaceableByStructures(PlaceCtx& c, u16 s) const;
-    bool createChest(PlaceCtx& c, const BBox& chunkBB, RandomSource& r, int x, int y, int z) {
-        return createChest(c, chunkBB, r, worldPos(x, y, z), std::nullopt);
+    // StructurePiece.createChest: a chest (reoriented against walls unless `state`) with its loot table and a seed from r.
+    bool createChest(PlaceCtx& c, const BBox& chunkBB, RandomSource& r, int x, int y, int z, std::string_view lootTable = {}) {
+        return createChest(c, chunkBB, r, worldPos(x, y, z), std::nullopt, lootTable);
     }
-    bool createChest(PlaceCtx& c, const BBox& chunkBB, RandomSource& r, const BlockPos& p, std::optional<u16> state);
-    bool createDispenser(PlaceCtx& c, const BBox& chunkBB, RandomSource& r, int x, int y, int z, Direction facing);
+    bool createChest(PlaceCtx& c, const BBox& chunkBB, RandomSource& r, const BlockPos& p, std::optional<u16> state,
+                     std::string_view lootTable = {});
+    bool createDispenser(PlaceCtx& c, const BBox& chunkBB, RandomSource& r, int x, int y, int z, Direction facing,
+                         std::string_view lootTable = {});
     static u16 reorient(PlaceCtx& c, const BlockPos& p, u16 state);
 
 private:
@@ -450,6 +461,8 @@ void registerStronghold();      // pieces_stronghold.cpp
 void registerMonument();        // pieces_monument.cpp
 void registerMansion();         // pieces_mansion.cpp
 void registerOceanStructures(); // pieces_ocean.cpp (ocean ruins, shipwrecks, ruined portals, buried treasure)
+void registerNetherStructures(); // pieces_nether.cpp (nether fortresses, nether fossils)
+void registerEndCity();          // pieces_end.cpp
 
 // ---- shared world facts for structures --------------------------------------------------------------------
 class StructureEnv {
@@ -469,6 +482,9 @@ public:
     int minY() const { return gen.minY(); }
     int height() const { return gen.height(); }
     int seaLevel() const { return gen.seaLevel(); }
+    // WorldGenerationContext(generator, level): the generator's range within the level's (height providers).
+    int genMinY() const { return std::max(gen.minY(), gen.genMinY()); }
+    int genDepth() const { return std::min(gen.height(), gen.genDepth()); }
     BiomeTable& biomes() const { return const_cast<ChunkGenerator&>(gen).biomes(); }
     std::vector<bool> biomeSet(const json& holderSet) const;  // "#minecraft:tag", "minecraft:x", [..]
     bool biomeInTag(u16 biome, std::string_view tag) const;   // "minecraft:mineshaft_blocking" (cached)

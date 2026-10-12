@@ -35,6 +35,12 @@ struct Template {
     };
     std::vector<Palette> palettes;
     bool hasEntities = false;
+    struct EntityInfo {  // StructureTemplate.StructureEntityInfo
+        double pos[3];
+        BlockPos blockPos;
+        const NbtValue* nbt;  // in nbtStore
+    };
+    std::vector<EntityInfo> entities;
     std::vector<std::unique_ptr<NbtValue>> nbtStore;
 
     // StructureTemplate.getSize(rotation)

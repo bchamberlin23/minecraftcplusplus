@@ -18,16 +18,18 @@ bool Window::create(const wchar_t* title, int width, int height, const Placement
     RECT r{0, 0, width, height};
     AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
     const bool placed = placement && placement->width > 0;
-    hwnd_ = CreateWindowExW(0, wc.lpszClassName, title, WS_OVERLAPPEDWINDOW, placed ? placement->x : CW_USEDEFAULT,
-                            placed ? placement->y : CW_USEDEFAULT, r.right - r.left, r.bottom - r.top, nullptr, nullptr,
-                            wc.hInstance, this);
+    int x = placed ? placement->x : CW_USEDEFAULT, y = placed ? placement->y : CW_USEDEFAULT;
+    if (headless_)  // left of every monitor, never activated, no taskbar button
+        x = GetSystemMetrics(SM_XVIRTUALSCREEN) - (r.right - r.left) - 64, y = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    hwnd_ = CreateWindowExW(headless_ ? WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW : 0, wc.lpszClassName, title, WS_OVERLAPPEDWINDOW,
+                            x, y, r.right - r.left, r.bottom - r.top, nullptr, nullptr, wc.hInstance, this);
     if (!hwnd_) return false;
     if (cloaked) {  // rendered to while invisible (the instance showing its loading screen stays in front)
         const BOOL on = TRUE;
         DwmSetWindowAttribute(hwnd_, DWMWA_CLOAK, &on, sizeof(on));
         cloaked_ = true;
     }
-    if (placed && placement->maximized) ShowWindow(hwnd_, SW_SHOWMAXIMIZED);
+    if (placed && placement->maximized && !headless_) ShowWindow(hwnd_, SW_SHOWMAXIMIZED);
     RECT client;
     GetClientRect(hwnd_, &client);
     width_ = u32(client.right), height_ = u32(client.bottom);
@@ -38,7 +40,7 @@ bool Window::create(const wchar_t* title, int width, int height, const Placement
     rid.hwndTarget = hwnd_;
     RegisterRawInputDevices(&rid, 1, sizeof(rid));
 
-    if (!(placed && placement->maximized)) ShowWindow(hwnd_, cloaked ? SW_SHOWNOACTIVATE : SW_SHOW);
+    if (!(placed && placement->maximized) || headless_) ShowWindow(hwnd_, cloaked || headless_ ? SW_SHOWNOACTIVATE : SW_SHOW);
     return true;
 }
 
@@ -47,6 +49,7 @@ void Window::reveal() {
     const BOOL off = FALSE;
     DwmSetWindowAttribute(hwnd_, DWMWA_CLOAK, &off, sizeof(off));
     cloaked_ = false;
+    if (headless_) return;
     SetWindowPos(hwnd_, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
     SetForegroundWindow(hwnd_);
 }
@@ -107,7 +110,7 @@ void Window::setFullscreen(bool on) {
         SetWindowPos(hwnd_, nullptr, 0, 0, 0, 0,
                      SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_SHOWWINDOW);
     }
-    if (captured_) {  // the cursor stays confined to the new client area
+    if (captured_ && !headless_) {  // the cursor stays confined to the new client area
         RECT r;
         GetClientRect(hwnd_, &r);
         MapWindowPoints(hwnd_, nullptr, reinterpret_cast<POINT*>(&r), 2);
@@ -127,6 +130,7 @@ void Window::cursorPos(int& x, int& y) const {
 }
 
 void Window::centerCursor() {
+    if (headless_) return;
     POINT p{LONG(width_ / 2), LONG(height_ / 2)};
     ClientToScreen(hwnd_, &p);
     SetCursorPos(p.x, p.y);
@@ -187,7 +191,8 @@ void Window::setClipboard(const std::string& utf8) {
 void Window::setMouseCaptured(bool captured) {
     if (captured == captured_) return;
     captured_ = captured;
-    if (captured) {
+    if (headless_) {
+    } else if (captured) {
         RECT r;
         GetClientRect(hwnd_, &r);
         MapWindowPoints(hwnd_, nullptr, reinterpret_cast<POINT*>(&r), 2);

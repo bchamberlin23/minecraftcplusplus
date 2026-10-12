@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <ctime>
 #include <map>
+#include <span>
 #include <unordered_map>
 
 namespace {
@@ -185,7 +186,10 @@ bool WorldSaver::saveRegion(int rx, int rz, const std::vector<int>& chunks) {
     }
 
     // Raw stored payloads ([length][compression][data]) for every chunk present (an external chunk: its stub).
-    std::vector<std::vector<u8>> payload(1024);
+    // Unchanged chunks point into the file buffer. Only edited chunks need owned payloads;
+    // copying every stored chunk first used a second region-sized buffer on every save.
+    std::vector<std::span<const u8>> payload(1024);
+    std::vector<std::vector<u8>> changed(1024);
     int typeCount[128] = {};
     for (int idx = 0; idx < 1024; ++idx) {
         const u32 sector = be32(&old[size_t(idx) * 4]) >> 8;
@@ -194,7 +198,7 @@ bool WorldSaver::saveRegion(int rx, int rz, const std::vector<int>& chunks) {
         if (pos + 5 > old.size()) continue;
         const u32 len = be32(&old[pos]);
         if (len < 1 || pos + 4 + len > old.size()) continue;
-        payload[idx].assign(old.begin() + pos, old.begin() + pos + 4 + len);
+        payload[idx] = std::span<const u8>(old.data() + pos, size_t(4) + len);
         ++typeCount[old[pos + 4] & 127];
     }
     // New chunks use the compression this region is stored with (region-file-compression), else the default.
@@ -205,15 +209,18 @@ bool WorldSaver::saveRegion(int rx, int rz, const std::vector<int>& chunks) {
     bool ok = true;
     std::vector<int> nowInline;  // chunks that were external and fit the region again (their .mcc goes)
     for (int idx : chunks) {
-        std::vector<u8>& p = payload[idx];
+        const std::span<const u8> p = payload[idx];
         const int cx = rx * 32 + (idx & 31), cz = rz * 32 + (idx >> 5);
         NbtValue root;
         std::string rootName;
         int type = regionType;
+        bool external = false;
         if (p.size() < 5) {
-            // Generated this session: write a chunk at the "terrain" status, which the game
-            // finishes (features, light) when it loads it, keeping our edits.
-            if (!biomeName_) continue;
+            // Generated this session (newChunk).
+            if (!biomeName_) {
+                ok = false;
+                continue;
+            }
             root = newChunk(cx, cz);
         } else {
             type = p[4] & 127;
@@ -223,13 +230,13 @@ bool WorldSaver::saveRegion(int rx, int rz, const std::vector<int>& chunks) {
                     ok = false;
                     continue;
                 }
-                nowInline.push_back(idx);
+                external = true;
             } else {
                 stream.assign(p.begin() + 5, p.end());
             }
             std::vector<u8> raw;
             if (!region::decode(type, stream.data(), stream.size(), raw) || !nbtRead(raw.data(), raw.size(), root, &rootName)) {
-                ok = false;  // custom compression or damaged: left as it is
+                ok = false;  // custom compression or damaged: left as it is, the edit stays dirty for a retry
                 continue;
             }
         }
@@ -290,24 +297,26 @@ bool WorldSaver::saveRegion(int rx, int rz, const std::vector<int>& chunks) {
             ok = false;
             continue;
         }
-        p.assign(5, 0);
-        putBe32(p.data(), u32(packed.size() + 1));
-        p[4] = u8(type);
-        p.insert(p.end(), packed.begin(), packed.end());
-        if ((p.size() + 4095) / 4096 >= 256) {
+        std::vector<u8>& replacement = changed[idx];
+        if ((packed.size() + 5 + 4095) / 4096 >= 256) {
             // RegionFile.write: 256 sectors or more go to an external file, the region keeps a stub.
             const fs::path ext = region::externalChunk(regionDir_, cx, cz);
             if (!writeFileAtomically(ext, packed)) {
                 LOG("error: could not write the oversized chunk %s", ext.string().c_str());
-                ok = false;
-                p.clear();
+                ok = false;  // the stored chunk stays as it was
                 continue;
             }
-            p.assign(5, 0);
-            putBe32(p.data(), 1);
-            p[4] = u8(type | region::kExternalFlag);
-            std::erase(nowInline, idx);
+            replacement.assign(5, 0);
+            putBe32(replacement.data(), 1);
+            replacement[4] = u8(type | region::kExternalFlag);
+        } else {
+            replacement.assign(5, 0);
+            putBe32(replacement.data(), u32(packed.size() + 1));
+            replacement[4] = u8(type);
+            replacement.insert(replacement.end(), packed.begin(), packed.end());
+            if (external) nowInline.push_back(idx);
         }
+        payload[idx] = replacement;
     }
 
     // Re-pack every chunk into fresh sectors behind the two header sectors.
@@ -315,7 +324,7 @@ bool WorldSaver::saveRegion(int rx, int rz, const std::vector<int>& chunks) {
     std::memcpy(&out[4096], &old[4096], 4096);  // timestamps
     const u32 now = u32(std::time(nullptr));
     for (int idx = 0; idx < 1024; ++idx) {
-        const std::vector<u8>& p = payload[idx];
+        const std::span<const u8> p = payload[idx];
         if (p.empty()) continue;
         const size_t sectors = (p.size() + 4095) / 4096;
         const u32 start = u32(out.size() / 4096);
@@ -370,27 +379,37 @@ bool WorldSaver::savePlayer(const SavedPlayer& pl) {
     return writeFileAtomically(file, packed);
 }
 
-// Skeleton of a chunk generated by this engine: biomes per section, everything else empty.
-// Blocks and light are filled in by the normal section update.
+// A chunk generated by this engine, as a proto chunk past its features (its blocks include them): biomes per section
+// and what generation left (World::genExtras); the blocks are filled in by the normal section update. The game lights
+// it, spawns its mobs and makes it a full chunk when it loads it. Structure starts are not written (the structures'
+// blocks are), so the game knows of no structure there.
 NbtValue WorldSaver::newChunk(int cx, int cz) {
     NbtValue root = NbtValue::make(TagCompound);
     root.set("DataVersion", scalar(TagInt, dataVersion_));
     root.set("xPos", scalar(TagInt, cx));
     root.set("zPos", scalar(TagInt, cz));
     root.set("yPos", scalar(TagInt, world_.minSectionY()));
-    root.set("Status", string("minecraft:terrain"));
+    root.set("Status", string("minecraft:features"));
     root.set("LastUpdate", scalar(TagLong, 0));
     root.set("InhabitedTime", scalar(TagLong, 0));
-    root.set("isLightOn", scalar(TagByte, 1));
+    root.set("isLightOn", scalar(TagByte, 0));  // lit by the game's light engine (initialize_light, light)
     NbtValue structures = NbtValue::make(TagCompound);
     structures.set("starts", NbtValue::make(TagCompound));
     structures.set("References", NbtValue::make(TagCompound));
     root.set("structures", std::move(structures));
-    for (const char* list : {"block_entities", "block_ticks", "fluid_ticks"}) {
+    for (const char* list : {"block_entities", "entities", "block_ticks", "fluid_ticks"}) {
         NbtValue l = NbtValue::make(TagList);
         l.listType = TagCompound;
         root.set(list, std::move(l));
     }
+    if (const NbtValue* extras = world_.genExtras(cx, cz))
+        for (size_t k = 0; k < extras->names.size(); ++k) {
+            // PostProcessing has one list per section of the chunk.
+            if (extras->names[k] == "PostProcessing" &&
+                extras->items[k].items.size() != size_t(world_.maxSectionY() - world_.minSectionY() + 1))
+                continue;
+            root.set(extras->names[k], extras->items[k]);
+        }
     NbtValue sections = NbtValue::make(TagList);
     sections.listType = TagCompound;
     for (int sy = world_.minSectionY(); sy <= world_.maxSectionY(); ++sy) {
@@ -443,12 +462,12 @@ SaveStats WorldSaver::save(const SavedPlayer* player) {
         if (saveRegion(rc.first, rc.second, chunks)) {
             ++st.regions;
             st.chunks += chunks.size();
+            for (int idx : chunks) world_.clearDirtyChunk(rc.first * 32 + (idx & 31), rc.second * 32 + (idx >> 5));
         } else {
             st.ok = false;
         }
     }
     if (player && !savePlayer(*player)) st.ok = false;
-    world_.clearDirtyChunks();
     st.ms = t.ms();
     return st;
 }
