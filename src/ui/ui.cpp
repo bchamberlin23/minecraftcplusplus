@@ -3,6 +3,7 @@
 #include "assets/assets.h"
 #include "assets/game_reports.h"
 #include "ui/frontend.h"
+#include "ui/item_ui.h"
 #include "ui/signs_books.h"
 #include "ui/gameplay_hud.h"
 #include "ui/ui_state.h"
@@ -264,7 +265,7 @@ void Ui::State::closeScreen(bool sendClose) {
             client->sendPlay("container_close", w);
         }
     }
-    if (old == Screen::Container) container.reset();
+    if (old == Screen::Container) mirrorPlayerSlots(), container.reset();  // the server's inventory menu takes these
     if (old == Screen::Creative && !carried.empty()) {  // dropped into the world, like closing the creative menu
         if (online()) {
             net::Writer w;
@@ -451,6 +452,11 @@ bool Ui::loadImpl(const fs::path& jar, const fs::path& minecraftDir, const GameR
     s.iconAtlas.init(2048, 2048);
     if (!s.font.load(s.res, s.guiAtlas) || !s.sprites.load(s.res, s.guiAtlas)) return false;
     if (!s.items.init(reports, s.res)) LOG("warning: item registry unavailable; inventories will be empty");
+    if (const wchar_t* local = _wgetenv(L"LOCALAPPDATA")) {  // item_data.cpp: tooltip data, default components
+        const fs::path cache = fs::path(local) / "minecraftCplusplus" / "reports";
+        const std::string version = jar.stem().string();
+        s.items.loadGameData(minecraftDir, version, cache, cache / version / "reports" / "minecraft" / "components" / "item");
+    }
     for (const char* tex : {"gui/container/inventory", "gui/container/generic_54", "gui/container/crafting_table",
                             "gui/container/furnace", "gui/container/creative_inventory/tab_item_search",
                             "gui/container/creative_inventory/tab_items", "gui/container/dispenser",
@@ -761,6 +767,7 @@ void Ui::registerHandlers(net::Client& client) {
             if (m->slots.size() < slots.size()) m->slots.resize(slots.size());
             for (size_t i = 0; i < slots.size(); ++i) m->slots[i] = slots[i];
             if (ok) s->carried = carried;
+            s->mirrorPlayerSlots(id == 0);  // one Inventory behind both menus
         });
     });
     client.onPlay("container_set_slot", [s, items](net::Reader& r) {
@@ -774,6 +781,7 @@ void Ui::registerHandlers(net::Client& client) {
             m->stateId = state;
             if (size_t(slot) >= m->slots.size()) m->slots.resize(size_t(slot) + 1);
             m->slots[size_t(slot)] = st;
+            s->mirrorPlayerSlots(id == 0);  // one Inventory behind both menus
         });
     });
     client.onPlay("container_set_data", [s](net::Reader& r) {
@@ -1060,7 +1068,7 @@ void Ui::State::runScript(double) {
             const Layout l = layoutFor(m);
             const int idx = std::atoi(arg(0).c_str());
             if (idx >= 0 && size_t(idx) < l.slots.size()) {
-                const float left = float((guiW() - l.width) / 2), top = float((guiH() - l.height) / 2);
+                const float left = float(recipeBookLeft(*this, m, l.width)), top = float((guiH() - l.height) / 2);
                 int px, py;
                 toPixels(left + float(l.slots[size_t(idx)].x) + 8, top + float(l.slots[size_t(idx)].y) + 8, px, py);
                 window->setScriptedCursor(px, py);

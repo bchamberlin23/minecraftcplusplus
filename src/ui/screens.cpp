@@ -4,6 +4,7 @@
 #include "render/renderer.h"
 #include "ui/entity_preview.h"
 #include "ui/frontend.h"
+#include "ui/item_ui.h"
 #include "ui/mp_hud.h"
 #include "ui/ui_state.h"
 #include "world/terrain.h"
@@ -24,24 +25,6 @@ void playerSlots(Layout& l, int start, int mainY, int hotbarY) {
     for (int c = 0; c < 9; ++c) l.slots.push_back({8 + c * 18, hotbarY});
 }
 
-int equipmentSlot(const std::string& n) {  // inventory menu armor slot for an item (5 head .. 8 feet), -1 none
-    if (n.ends_with("_helmet") || n == "turtle_helmet" || n == "carved_pumpkin" || n.ends_with("_head") || n.ends_with("_skull"))
-        return 5;
-    if (n.ends_with("_chestplate") || n == "elytra") return 6;
-    if (n.ends_with("_leggings")) return 7;
-    if (n.ends_with("_boots")) return 8;
-    return -1;
-}
-
-bool isFuel(const std::string& n) {
-    static const char* fuels[] = {"coal", "charcoal", "coal_block", "lava_bucket", "blaze_rod", "stick", "dried_kelp_block",
-                                  "bamboo", "scaffolding", "bowl"};
-    for (const char* f : fuels)
-        if (n == f) return true;
-    return n.ends_with("_log") || n.ends_with("_planks") || n.ends_with("_wood") || n.ends_with("_sapling") ||
-           n.ends_with("_stem") || n.ends_with("_hyphae") || n.ends_with("_slab") && n.find("wood") != std::string::npos ||
-           n.ends_with("_boat") || n.ends_with("_fence") || n.ends_with("_wool") || n.ends_with("_carpet");
-}
 }  // namespace
 
 Layout layoutFor(const Menu& m) {
@@ -113,32 +96,90 @@ Layout layoutFor(const Menu& m) {
 // --- click simulation (AbstractContainerMenu.doClick) -------------------------------------------------------
 
 namespace {
+// The player's Inventory.add for prediction: stack onto matching stacks, then the first empty slot (hotbar first).
+void addToPlayer(Ui::State& s, Menu& m, ItemStack st, int playerStart) {
+    if (st.empty() || playerStart < 0) return;
+    const int hotbar = playerStart + 27;
+    std::vector<int> order;
+    for (int i = 0; i < 9; ++i) order.push_back(hotbar + i);
+    for (int i = 0; i < 27; ++i) order.push_back(playerStart + i);
+    for (int i : order) {
+        if (size_t(i) >= m.slots.size()) continue;
+        ItemStack& t = m.slots[size_t(i)];
+        if (t.empty() || !t.sameItemSameComponents(st)) continue;
+        const int n = std::min(st.count, s.items.maxStack(t) - t.count);
+        if (n > 0) t.count += n, st.count -= n;
+        if (st.count <= 0) return;
+    }
+    for (int i : order)
+        if (size_t(i) < m.slots.size() && m.slots[size_t(i)].empty()) {
+            m.slots[size_t(i)] = st;
+            return;
+        }
+}
+
+// AbstractContainerMenu.doClick over the client's copy of a menu: each Slot's rules (mayPlace, mayPickup,
+// getMaxStackSize, tryRemove, onTake) per menu type, the menu's quickMoveStack, canTakeItemForPickAll, canDragTo.
 struct Sim {
     Ui::State& s;
     Menu& m;
     ItemStack& carried;
     bool creative;
     const StationDef* station = nullptr;  // modules.h
-    int resultSlot = -1;          // crafting / furnace output
-    std::vector<int> craftGrid;   // consumed when the result is taken
+    int resultSlot = -1;                  // crafting / furnace / station output
+    bool partialResult = false;           // the result container gives part of its stack (furnace)
+    int pickAll = 0;                      // canTakeItemForPickAll: 1 every slot, 0 not the result, -1 none
+    std::vector<int> craftGrid;           // consumed when the result is taken (ResultSlot.onTake)
+    int playerStart = 0;                  // first player inventory slot (27 main + 9 hotbar)
+    bool inventoryMenu() const { return m.type < 0; }
+    bool furnace() const { return m.typeName == "furnace" || m.typeName == "smoker" || m.typeName == "blast_furnace"; }
+    bool own(int slot) const { return playerStart < 0 || slot < playerStart || slot >= playerStart + 36; }
 
     int maxStack(const ItemStack& st) const { return s.items.maxStack(st); }
     std::string name(const ItemStack& st) const { return shortName(s.items.name(st.item)); }
+    // AbstractFurnaceMenu.isFuel: the cooking_fuel component.
+    bool isFuel(const ItemStack& st) const { return s.items.component(st, "cooking_fuel").present(); }
     bool mayPlace(int slot, const ItemStack& st) const {
         if (slot == resultSlot) return false;
-        if (station && station->mayPlace && slot < int(m.slots.size()) - 36 && !station->mayPlace(s, m, slot, st)) return false;
-        if (m.type < 0 && slot >= 5 && slot <= 8) return equipmentSlot(name(st)) == slot;
+        if (inventoryMenu() && slot >= 5 && slot <= 8)  // ArmorSlot(HEAD .. FEET): Player.isEquippableInSlot
+            return s.items.equipmentSlot(st) == 4 - (slot - 5) && s.items.canBeEquippedBy(st, "player");
+        if (furnace() && slot == 1) return isFuel(st) || name(st) == "bucket";  // FurnaceFuelSlot
+        if (station && station->mayPlace && own(slot) && !station->mayPlace(s, m, slot, st)) return false;
         return true;
     }
-    int slotMax(int slot, const ItemStack& st) const {
-        if (m.type < 0 && slot >= 5 && slot <= 8) return 1;
-        return std::min(64, maxStack(st));
+    bool mayPickup(int slot) const {
+        if (slot < 0 || size_t(slot) >= m.slots.size()) return false;
+        if (inventoryMenu() && slot >= 5 && slot <= 8 && !creative &&  // ArmorSlot: curse of binding
+            s.items.hasEnchantmentEffect(m.slots[size_t(slot)], "minecraft:prevent_armor_change"))
+            return false;
+        if (station && station->mayPickup && own(slot) && !station->mayPickup(s, m, slot)) return false;
+        return true;
+    }
+    bool allowModification(int slot) const { return mayPickup(slot) && mayPlace(slot, m.slots[size_t(slot)]); }
+    int slotMax(int slot, const ItemStack& st) const {  // Slot.getMaxStackSize(stack)
+        if (inventoryMenu() && slot >= 5 && slot <= 8) return 1;
+        if (furnace() && slot == 1 && name(st) == "bucket") return 1;
+        if (station && station->slotMax && own(slot))
+            if (const int mx = station->slotMax(s, m, slot, st); mx > 0) return std::min(mx, maxStack(st));
+        return std::min(99, maxStack(st));  // Container.DEFAULT_MAX_STACK_SIZE
     }
     ItemStack& at(int i) { return m.slots[size_t(i)]; }
-    void takeResult(int slot) {
-        if (slot != resultSlot || craftGrid.empty()) return;
-        for (int g : craftGrid)
-            if (!at(g).empty()) at(g) = at(g).withCount(at(g).count - 1);
+    // The result slot's onTake: the crafting grid (with remainders) or the station's inputs.
+    void onTake(int slot) {
+        if (slot != resultSlot) return;
+        if (station && station->onTake) station->onTake(s, m);
+        for (int g : craftGrid) {
+            ItemStack& in = at(g);
+            if (in.empty()) continue;
+            const int remainder = s.items.craftingRemainder(in.item);
+            in = in.withCount(in.count - 1);
+            if (remainder < 0) continue;
+            ItemStack rest;
+            rest.item = remainder, rest.count = 1;
+            if (in.empty()) in = rest;
+            else if (in.sameItemSameComponents(rest)) in.count += 1;
+            else addToPlayer(s, m, rest, playerStart);
+        }
     }
     // Slot.safeInsert
     ItemStack safeInsert(int slot, ItemStack st, int amount) {
@@ -151,20 +192,27 @@ struct Sim {
         else return st;
         return st.withCount(st.count - n);
     }
-    // Slot.tryRemove (results only all-or-nothing)
-    ItemStack tryRemove(int slot, int amount, int room) {
+    // Slot.tryRemove: a ResultContainer gives its whole stack whatever the amount.
+    ItemStack tryRemove(int slot, int amount, int maxAmount) {
+        if (!mayPickup(slot)) return {};
         ItemStack& cur = at(slot);
         if (cur.empty()) return {};
-        if (slot == resultSlot && cur.count > room) return {};
-        const int n = std::min(std::min(amount, room), cur.count);
+        if (!allowModification(slot) && maxAmount < cur.count) return {};
+        int n = std::min(std::min(amount, maxAmount), cur.count);
+        if (slot == resultSlot && !partialResult) n = cur.count;
         ItemStack taken = cur.withCount(n);
         cur = cur.withCount(cur.count - n);
-        if (slot == resultSlot) takeResult(slot), cur = ItemStack{};
         return taken;
     }
+    ItemStack safeTake(int slot, int amount, int maxAmount) {
+        ItemStack taken = tryRemove(slot, amount, maxAmount);
+        if (!taken.empty()) onTake(slot);
+        return taken;
+    }
+    // AbstractContainerMenu.moveItemStackTo
     bool moveTo(ItemStack& st, int start, int end, bool backwards) {
         bool changed = false;
-        if (maxStack(st) > 1) {
+        if (maxStack(st) > 1 && !(st.damage > 0 && s.items.maxDamage(st) > 0)) {  // ItemStack.isStackable
             for (int i = backwards ? end - 1 : start; !st.empty() && (backwards ? i >= start : i < end); i += backwards ? -1 : 1) {
                 ItemStack& t = at(i);
                 if (t.empty() || !t.sameItemSameComponents(st)) continue;
@@ -188,6 +236,7 @@ struct Sim {
         if (st.count <= 0) st = ItemStack{};
         return changed;
     }
+    // quickMoveStack of each menu
     ItemStack quickMove(int index) {
         if (at(index).empty()) return {};
         ItemStack st = at(index);
@@ -195,12 +244,13 @@ struct Sim {
         const int n = int(m.slots.size());
         const std::string& t = m.typeName;
         bool ok = true;
-        if (m.type < 0) {
-            const int eq = equipmentSlot(name(st));
+        if (inventoryMenu()) {  // InventoryMenu: armour and the off hand by the equippable slot
+            int eq = s.items.equipmentSlot(st);
+            if (eq == 6 || eq == 7) eq = 0;  // body / saddle: not the player's (canUseSlot)
             if (index == 0) ok = moveTo(st, 9, 45, true);
             else if (index >= 1 && index < 9) ok = moveTo(st, 9, 45, false);
-            else if (eq >= 0 && at(eq).empty()) ok = moveTo(st, eq, eq + 1, false);
-            else if (name(st) == "shield" && at(45).empty()) ok = moveTo(st, 45, 46, false);
+            else if (eq >= 1 && eq <= 4 && at(8 - (eq - 1)).empty()) ok = moveTo(st, 8 - (eq - 1), 9 - (eq - 1), false);
+            else if (eq == 5 && at(45).empty()) ok = moveTo(st, 45, 46, false);
             else if (index >= 9 && index < 36) ok = moveTo(st, 36, 45, false);
             else if (index >= 36 && index < 45) ok = moveTo(st, 9, 36, false);
             else ok = moveTo(st, 9, 45, false);
@@ -209,35 +259,48 @@ struct Sim {
             else if (index >= 10 && index < 46) {
                 if (!moveTo(st, 1, 10, false)) ok = index < 37 ? moveTo(st, 37, 46, false) : moveTo(st, 10, 37, false);
             } else ok = moveTo(st, 10, 46, false);
-        } else if (t == "furnace" || t == "smoker" || t == "blast_furnace") {
+        } else if (furnace()) {  // AbstractFurnaceMenu: the recipe property set, then fuel
+            static const std::pair<const char*, const char*> kInputs[] = {
+                {"furnace", "minecraft:furnace_input"}, {"smoker", "minecraft:smoker_input"}, {"blast_furnace", "minecraft:blast_furnace_input"}};
+            const char* set = "";
+            for (auto [type, key] : kInputs)
+                if (t == type) set = key;
             if (index == 2) ok = moveTo(st, 3, 39, true);
             else if (index != 0 && index != 1) {
-                if (isFuel(name(st))) ok = moveTo(st, 1, 2, false);
-                else ok = moveTo(st, 0, 1, false);
-                if (!ok) ok = index < 30 ? moveTo(st, 30, 39, false) : moveTo(st, 3, 30, false);
+                if (inPropertySet(set, st.item)) ok = moveTo(st, 0, 1, false);
+                else if (isFuel(st)) ok = moveTo(st, 1, 2, false);
+                else if (index >= 3 && index < 30) ok = moveTo(st, 30, 39, false);
+                else if (index >= 30 && index < 39) ok = moveTo(st, 3, 30, false);
             } else ok = moveTo(st, 3, 39, false);
         } else {
             int r = -1;
             if (station && station->quickMove)
                 r = station->quickMove(s, m, index, clicked, [&](int a, int b, bool back) { return moveTo(st, a, b, back); });
+            if (r == 3) {  // moved, and the shift-click stops here (quickMoveStack returned EMPTY after moving)
+                at(index) = st;
+                onTake(index);
+                return {};
+            }
             if (r >= 0) {
                 ok = r == 1;
-            } else {
-                const int own = n - 36;
+            } else {  // ChestMenu, DispenserMenu, HopperMenu, ShulkerBoxMenu: container <-> inventory
+                const int own = playerStart < 0 ? n : playerStart;
                 ok = index < own ? moveTo(st, own, n, true) : moveTo(st, 0, own, false);
             }
         }
         if (!ok) return {};
         at(index) = st;
-        if (index == resultSlot) takeResult(index), at(index) = ItemStack{};
         if (st.count == clicked.count) return {};
+        onTake(index);
         return clicked;
     }
+    // canItemQuickReplace(slot, stack, true)
     bool canQuickReplace(int slot, const ItemStack& st) {
         const ItemStack& cur = at(slot);
         if (cur.empty()) return true;
         return cur.sameItemSameComponents(st) && cur.count <= maxStack(st);
     }
+    bool canPickAll(int slot) const { return pickAll > 0 || (pickAll == 0 && slot != resultSlot); }
 };
 }  // namespace
 
@@ -250,15 +313,18 @@ static std::vector<int> qcSlots;
 void Ui::State::containerClick(int slot, int button, int input) {
     Menu& m = activeMenu();
     const std::vector<ItemStack> before = m.slots;
-    const ItemStack carriedBefore = carried;
     Sim sim{*this, m, carried, creative()};
+    sim.playerStart = layoutFor(m).playerStart;
     if (m.type < 0) sim.resultSlot = 0, sim.craftGrid = {1, 2, 3, 4};
     else if (m.typeName == "crafting") sim.resultSlot = 0, sim.craftGrid = {1, 2, 3, 4, 5, 6, 7, 8, 9};
-    else if (m.typeName == "furnace" || m.typeName == "smoker" || m.typeName == "blast_furnace") sim.resultSlot = 2;
+    else if (sim.furnace()) sim.resultSlot = 2, sim.partialResult = true, sim.pickAll = 1;
     if (m.type >= 0)
-        if (const StationDef* d = stationFor(m.typeName)) sim.station = d, sim.resultSlot = d->resultSlot;
+        if (const StationDef* d = stationFor(m.typeName)) {
+            sim.station = d, sim.resultSlot = d->resultSlot, sim.partialResult = d->partialResult, sim.pickAll = d->pickAll;
+        }
     const int n = int(m.slots.size());
     auto valid = [&](int i) { return i >= 0 && i < n; };
+    bundleSlotClicked(*this, m, slot, input);  // item_ui.h: BundleMouseActions.onSlotClicked
 
     enum { Pickup, QuickMove, Swap, Clone, Throw, QuickCraft, PickupAll };
     if (input == QuickCraft) {
@@ -311,68 +377,94 @@ void Ui::State::containerClick(int slot, int button, int input) {
         if (slot == -999) {
             if (!carried.empty()) carried = button == 0 ? ItemStack{} : carried.withCount(carried.count - 1);
         } else if (input == QuickMove) {
-            if (valid(slot)) {
+            if (valid(slot) && sim.mayPickup(slot)) {
                 ItemStack moved = sim.quickMove(slot);
                 for (int guard = 0; !moved.empty() && guard < 64 && m.slots[size_t(slot)].item == moved.item; ++guard)
                     moved = sim.quickMove(slot);
             }
         } else if (valid(slot)) {
-            ItemStack clicked = m.slots[size_t(slot)];
-            if (clicked.empty()) {
+            ItemStack& clicked = m.slots[size_t(slot)];
+            SlotOps ops;  // item_ui.h: the slot as BundleItem's overrides see it
+            ops.mayPlace = [&](const ItemStack& st) { return sim.mayPlace(slot, st); };
+            ops.safeInsert = [&](ItemStack st) {
+                const int count = st.count;
+                return sim.safeInsert(slot, st, count);
+            };
+            ops.safeTake = [&](int amount, int max) { return sim.safeTake(slot, amount, max); };
+            ops.allowModification = sim.allowModification(slot);
+            if (bundleClickOverride(*this, clicked, carried, button, ops)) {
+            } else if (clicked.empty()) {
                 if (!carried.empty()) carried = sim.safeInsert(slot, carried, button == 0 ? carried.count : 1);
-            } else if (carried.empty()) {
-                const int amount = button == 0 ? clicked.count : (clicked.count + 1) / 2;
-                carried = sim.tryRemove(slot, amount, 1 << 30);
-            } else if (sim.mayPlace(slot, carried)) {
-                if (clicked.sameItemSameComponents(carried)) {
-                    carried = sim.safeInsert(slot, carried, button == 0 ? carried.count : 1);
-                } else if (carried.count <= sim.slotMax(slot, carried)) {
-                    std::swap(carried, m.slots[size_t(slot)]);
+            } else if (sim.mayPickup(slot)) {
+                if (carried.empty()) {
+                    const int amount = button == 0 ? clicked.count : (clicked.count + 1) / 2;
+                    carried = sim.tryRemove(slot, amount, 1 << 30);
+                    if (!carried.empty()) sim.onTake(slot);
+                } else if (sim.mayPlace(slot, carried)) {
+                    if (clicked.sameItemSameComponents(carried)) {
+                        carried = sim.safeInsert(slot, carried, button == 0 ? carried.count : 1);
+                    } else if (carried.count <= sim.slotMax(slot, carried)) {
+                        std::swap(carried, m.slots[size_t(slot)]);
+                    }
+                } else if (clicked.sameItemSameComponents(carried)) {
+                    ItemStack taken = sim.tryRemove(slot, clicked.count, sim.maxStack(carried) - carried.count);
+                    if (!taken.empty()) carried.count += taken.count, sim.onTake(slot);
                 }
-            } else if (clicked.sameItemSameComponents(carried)) {
-                ItemStack taken = sim.tryRemove(slot, clicked.count, sim.maxStack(carried) - carried.count);
-                if (!taken.empty()) carried.count += taken.count;
             }
         }
     } else if (input == Swap && valid(slot) && ((button >= 0 && button < 9) || button == 40)) {
+        // The source is the player's Inventory slot: in the menu, or (the off hand in a container) the inventory menu's.
         const int src = menuSlotForInventory(m, button);
-        if (valid(src)) {
-            ItemStack& a = m.slots[size_t(src)];
+        ItemStack* source = valid(src) ? &m.slots[size_t(src)] : button == 40 && &m != &inventory ? &inventory.slots[45] : nullptr;
+        if (source) {
+            ItemStack& a = *source;
             ItemStack& b = m.slots[size_t(slot)];
             if (a.empty() && !b.empty()) {
-                a = b, b = ItemStack{};
-                if (slot == sim.resultSlot) sim.takeResult(slot);
+                if (sim.mayPickup(slot)) {
+                    a = b, b = ItemStack{};
+                    sim.onTake(slot);
+                }
             } else if (!a.empty() && b.empty()) {
                 if (sim.mayPlace(slot, a)) {
                     const int mx = sim.slotMax(slot, a);
                     if (a.count > mx) b = a.withCount(mx), a = a.withCount(a.count - mx);
                     else b = a, a = ItemStack{};
                 }
-            } else if (!a.empty() && !b.empty() && sim.mayPlace(slot, a) && a.count <= sim.slotMax(slot, a)) {
-                std::swap(a, b);
+            } else if (!a.empty() && !b.empty() && sim.mayPickup(slot) && sim.mayPlace(slot, a)) {
+                const int mx = sim.slotMax(slot, a);
+                if (a.count > mx) {
+                    const ItemStack old = b;
+                    b = a.withCount(mx), a = a.withCount(a.count - mx);
+                    sim.onTake(slot);
+                    addToPlayer(*this, m, old, sim.playerStart);  // Inventory.add (or dropped)
+                } else {
+                    std::swap(a, b);
+                    sim.onTake(slot);
+                }
             }
         }
     } else if (input == Clone && creative() && carried.empty() && valid(slot)) {
         const ItemStack& st = m.slots[size_t(slot)];
         if (!st.empty()) carried = st.withCount(sim.maxStack(st));
     } else if (input == Throw && carried.empty() && valid(slot)) {
-        ItemStack& st = m.slots[size_t(slot)];
-        if (!st.empty()) {
-            if (slot == sim.resultSlot) sim.takeResult(slot), st = ItemStack{};
-            else st = button == 0 ? st.withCount(st.count - 1) : ItemStack{};
-        }
-    } else if (input == PickupAll && valid(slot) && !carried.empty()) {
+        const int amount = button == 0 ? 1 : m.slots[size_t(slot)].count;
+        ItemStack thrown = sim.safeTake(slot, amount, 1 << 30);
+        for (int guard = 0; button == 1 && !thrown.empty() && guard < 64 && m.slots[size_t(slot)].item == thrown.item; ++guard)
+            thrown = sim.safeTake(slot, amount, 1 << 30);
+    } else if (input == PickupAll && valid(slot) && !carried.empty() &&
+               (m.slots[size_t(slot)].empty() || !sim.mayPickup(slot))) {
         const int start = button == 0 ? 0 : n - 1, step = button == 0 ? 1 : -1;
         for (int pass = 0; pass < 2; ++pass)
             for (int i = start; i >= 0 && i < n && carried.count < sim.maxStack(carried); i += step) {
                 ItemStack& t = m.slots[size_t(i)];
-                if (t.empty() || i == sim.resultSlot || !t.sameItemSameComponents(carried)) continue;
+                if (t.empty() || !sim.canQuickReplace(i, carried) || !sim.mayPickup(i) || !sim.canPickAll(i)) continue;
                 if (pass == 0 && t.count == sim.maxStack(t)) continue;
-                const int take = std::min(t.count, sim.maxStack(carried) - carried.count);
-                carried.count += take;
-                t = t.withCount(t.count - take);
+                const ItemStack removed = sim.safeTake(i, t.count, sim.maxStack(carried) - carried.count);
+                carried.count += removed.count;
             }
     }
+    mirrorPlayerSlots();
+    recipeBookSlotClicked(*this, m, slot);  // item_ui.h: a crafting slot clears the ghost recipe
 
     if (!online()) return;
     // ServerboundContainerClickPacket with the slots our prediction changed.
@@ -395,7 +487,18 @@ void Ui::State::containerClick(int slot, int button, int input) {
     }
     items.writeHashed(w, carried);
     client->sendPlay("container_click", w);
-    (void)carriedBefore;
+}
+
+void Ui::State::mirrorPlayerSlots(bool toContainer) {
+    if (!container) return;
+    const int start = layoutFor(*container).playerStart;
+    if (start < 0) return;
+    for (int i = 0; i < 36 && size_t(start + i) < container->slots.size() && size_t(9 + i) < inventory.slots.size(); ++i) {
+        ItemStack& c = container->slots[size_t(start + i)];
+        ItemStack& inv = inventory.slots[size_t(9 + i)];
+        if (toContainer) c = inv;
+        else inv = c;
+    }
 }
 
 void Ui::State::creativeSetSlot(int menuSlot, const ItemStack& st) {
@@ -582,7 +685,7 @@ void Ui::State::drawScreen(Canvas& c) {
     Menu& m = activeMenu();
     const Layout l = layoutFor(m);
     if (m.slots.size() < l.slots.size()) m.slots.resize(l.slots.size());
-    const float left = float((W - l.width) / 2), top = float((H - l.height) / 2);
+    const float left = float(recipeBookLeft(*this, m, l.width)), top = float((H - l.height) / 2);  // item_ui.h
     const Sprite* bg = l.background.empty() ? nullptr : sprites.texture(l.background);
     if (!bg) {
     } else if (l.chestRows) {
@@ -610,6 +713,7 @@ void Ui::State::drawScreen(Canvas& c) {
             drawEntityFollowsMouse(*this, c, pe, int(left) + 26, int(top) + 8, int(left) + 75, int(top) + 78, 30, 0.0625f, mouseX, mouseY);
     }
     if (station && station->drawBg) station->drawBg(*this, c, m, l, left, top);
+    recipeBookDrawBackground(*this, c, m, left);  // item_ui.h: the recipe book button
     // Slots.
     hoveredSlot = -1;
     for (size_t i = 0; i < l.slots.size(); ++i) {
@@ -652,6 +756,7 @@ void Ui::State::drawScreen(Canvas& c) {
         }
         drawItem(c, shown, sx, sy, true, countOverride);
     }
+    recipeBookDrawGhosts(*this, c, m, l, left, top);  // item_ui.h
     if (hoveredSlot >= 0)
         blitSprite(c, sprites.sprite("container/slot_highlight_front"), left + float(l.slots[size_t(hoveredSlot)].x) - 4,
                    top + float(l.slots[size_t(hoveredSlot)].y) - 4, 24, 24);
@@ -661,6 +766,7 @@ void Ui::State::drawScreen(Canvas& c) {
     if (l.titleY > -1000) drawText(c, title, left + tx, top + float(l.titleY), kLabel, false);
     if (l.invLabelY > -1000) drawText(c, Text(res.translate("container.inventory")), left + float(l.invLabelX), top + float(l.invLabelY), kLabel, false);
     if (station && station->drawFg) station->drawFg(*this, c, m, l, left, top);
+    recipeBookDraw(*this, c, m);  // item_ui.h: over the menu
     // Carried item, then the tooltip.
     if (!carried.empty()) {
         std::string remaining;
@@ -674,9 +780,16 @@ void Ui::State::drawScreen(Canvas& c) {
             remaining = left2 <= 0 ? "\xC2\xA7" "e0" : std::to_string(left2);
         }
         drawItem(c, carried, mouseX - 8, mouseY - 8, true, remaining.empty() ? nullptr : remaining.c_str());
-    } else if (hoveredSlot >= 0 && size_t(hoveredSlot) < m.slots.size() && !m.slots[size_t(hoveredSlot)].empty()) {
-        drawTooltip(c, items.tooltip(m.slots[size_t(hoveredSlot)], settings.advancedItemTooltips), mouseX, mouseY);
     }
+    bundleHovered(*this, m, hoveredSlot);  // item_ui.h: leaving a bundle's slot clears its selection
+    // The tooltip (over the carried item only for tooltips shown with an item in hand: bundles).
+    if (hoveredSlot >= 0 && size_t(hoveredSlot) < m.slots.size() && !m.slots[size_t(hoveredSlot)].empty()) {
+        const ItemStack& st = m.slots[size_t(hoveredSlot)];
+        TooltipImage image;
+        if (carried.empty() || bundleTooltipImage(*this, st, image))
+            drawItemTooltip(*this, c, st, items.tooltip(st, settings.advancedItemTooltips), mouseX, mouseY);
+    }
+    recipeBookTooltip(*this, c, m, hoveredSlot);  // item_ui.h
     if (station && station->drawTop) station->drawTop(*this, c, m, l, left, top);
 }
 
@@ -732,7 +845,8 @@ void Ui::State::screenInput(const Window::InputEvent& e) {
     // Inventory / containers (AbstractContainerScreen).
     Menu& m = activeMenu();
     const Layout l = layoutFor(m);
-    const float left = float((guiW() - l.width) / 2), top = float((guiH() - l.height) / 2);
+    const float left = float(recipeBookLeft(*this, m, l.width)), top = float((guiH() - l.height) / 2);
+    if (recipeBookInput(*this, e, m, left)) return;  // item_ui.h
     if (m.type >= 0)  // station widgets first (text fields take E)
         if (const StationDef* d = stationFor(m.typeName); d && d->input && d->input(*this, e, m, l, left, top)) return;
     auto slotAt = [&](float x, float y) {
@@ -743,8 +857,13 @@ void Ui::State::screenInput(const Window::InputEvent& e) {
         return -1;
     };
     const int slot = slotAt(mouseX, mouseY);
-    const bool outside = mouseX < left || mouseY < top || mouseX >= left + l.width || mouseY >= top + l.height;
+    const bool outside = (mouseX < left || mouseY < top || mouseX >= left + l.width || mouseY >= top + l.height) &&
+                         !recipeBookCovers(m, mouseX, mouseY, left, top, l.height);
     enum { Pickup, QuickMove, Swap, Clone, Throw, QuickCraft, PickupAll };
+    if (e.type == E::Wheel) {  // ItemSlotMouseAction: a bundle selects an item
+        bundleScroll(*this, m, slot, e.code);
+        return;
+    }
     if (e.type == E::Key && e.down) {
         if (e.code == VK_ESCAPE || isKey(Key::Inventory, e)) return closeScreen();
         if (carried.empty() && slot >= 0) {  // checkHotbarKeyPressed

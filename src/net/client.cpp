@@ -305,6 +305,21 @@ const std::vector<Client::RegistryEntry>& Client::registryEntries(const std::str
     return it == registries_.end() ? kNone : it->second;
 }
 
+bool Client::readTags(Reader& r, std::unordered_map<std::string, TagMap>& out) {
+    const i32 registries = r.varInt();  // registry -> TagNetworkSerialization.NetworkPayload (tag -> ids)
+    for (i32 i = 0; i < registries && r.ok; ++i) {
+        TagMap& tags = out[std::string(r.str())];
+        tags.clear();
+        const i32 n = r.varInt();
+        for (i32 k = 0; k < n && r.ok; ++k) {
+            std::vector<int>& ids = tags[std::string(r.str())];
+            const i32 c = r.varInt();
+            for (i32 j = 0; j < c && r.ok; ++j) ids.push_back(r.varInt());
+        }
+    }
+    return r.ok;
+}
+
 bool Client::handleConfiguration(const std::string& name, Reader& r) {
     if (name == "select_known_packs") {
         // Claim no packs, so the server sends every registry entry in full (dimension types included).
@@ -316,7 +331,8 @@ bool Client::handleConfiguration(const std::string& name, Reader& r) {
         const i32 n = r.varInt();
         if (registry == "minecraft:worldgen/biome") biomeBits_ = std::max(1, ceilLog2(u32(n)));
         static const char* const kKept[] = {"minecraft:enchantment", "minecraft:painting_variant", "minecraft:instrument",
-                                            "minecraft:banner_pattern"};
+                                            "minecraft:banner_pattern", "minecraft:jukebox_song", "minecraft:trim_material",
+                                            "minecraft:trim_pattern"};
         std::vector<RegistryEntry>* kept = nullptr;
         for (const char* k : kKept)
             if (registry == k) kept = &registries_[registry], kept->clear();
@@ -330,6 +346,12 @@ bool Client::handleConfiguration(const std::string& name, Reader& r) {
                 biomeIds_.push_back(World::biomeId(id));
             }
         }
+    } else if (name == "update_tags") {
+        readTags(r, tags_);
+    } else if (name == "update_enabled_features") {
+        enabledFeatures_.clear();
+        const i32 n = r.varInt();
+        for (i32 i = 0; i < n && r.ok; ++i) enabledFeatures_.emplace_back(r.str());
     } else if (name == "custom_payload") {  // Fabric servers' handshake (net/fabric_sync.h)
         const std::string channel(r.str());
         Writer w;

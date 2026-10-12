@@ -148,6 +148,12 @@ public:
         std::string nbt;  // network NBT (nameless root)
     };
     const std::vector<RegistryEntry>& registryEntries(const std::string& registry) const;
+    // Tags (ClientboundUpdateTagsPacket of the configuration phase): registry -> tag name -> network ids; enabled
+    // feature flags (update_enabled_features). Complete once inPlay(). readTags decodes the packet (also sent in play).
+    using TagMap = std::unordered_map<std::string, std::vector<int>>;
+    const std::unordered_map<std::string, TagMap>& tags() const { return tags_; }
+    const std::vector<std::string>& enabledFeatures() const { return enabledFeatures_; }
+    static bool readTags(Reader& r, std::unordered_map<std::string, TagMap>& out);
     bool inPlay() const { return phase_ == Play; }
     // The server's chunk cache view (set_chunk_cache_center / _radius, the login's distances) and simulation
     // distance (set_simulation_distance), in chunks; any thread.
@@ -200,6 +206,8 @@ private:
     int biomeBits_ = 7;
     std::vector<u8> biomeIds_;  // the server's biome registry order -> World biome ids
     std::unordered_map<std::string, std::vector<RegistryEntry>> registries_;  // written in configuration only
+    std::unordered_map<std::string, TagMap> tags_;                           // same
+    std::vector<std::string> enabledFeatures_;                               // same
     Dimension dimension_;
 };
 

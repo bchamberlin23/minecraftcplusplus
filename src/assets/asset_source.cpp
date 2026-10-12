@@ -208,6 +208,14 @@ void AssetSource::readLang(std::string_view code, std::unordered_map<std::string
             for (const auto& item : j.items())
                 if (item.value().is_string()) out[item.key()] = item.value().get<std::string>();
         });
+    // DeprecatedTranslationsInfo: the game's renamed keys (the jar's language files still use the old names).
+    std::vector<u8> bytes;
+    if (read("assets/minecraft/lang/deprecated.json", bytes)) {
+        const nlohmann::json j = nlohmann::json::parse(bytes.begin(), bytes.end(), nullptr, false);
+        if (j.is_object() && j.contains("renamed") && j["renamed"].is_object())
+            for (const auto& [from, to] : j["renamed"].items())
+                if (auto it = out.find(from); it != out.end() && to.is_string()) out[to.get<std::string>()] = it->second;
+    }
 }
 
 void AssetSource::addVanilla(AssetSource& src, const fs::path& jar, bool clientAssets) {

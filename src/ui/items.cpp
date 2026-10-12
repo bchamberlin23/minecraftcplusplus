@@ -138,15 +138,40 @@ void Items::setRegistries(const net::Client& client) {
             if (auto it = f.find("height"); it != f.end()) info.height = nbtInt(it->second, 0);
             info.hasTitle = text("title", info.title);
             info.hasAuthor = text("author", info.author);
+            if (auto it = f.find("translation_key"); it != f.end() && it->second.size() > 3)  // TAG_String: type, length
+                info.translationKey = it->second.substr(3);
+            if (auto it = f.find("asset_id"); it != f.end() && it->second.size() > 3) info.assetId = it->second.substr(3);
             out.push_back(std::move(info));
         }
     };
     load("minecraft:enchantment", enchantments_);
     load("minecraft:painting_variant", paintings_);
     load("minecraft:instrument", instruments_);
+    for (const char* r : {"minecraft:jukebox_song", "minecraft:trim_material", "minecraft:trim_pattern", "minecraft:banner_pattern"})
+        load(r, otherRegistries_[r]);
+    enchantmentNbt_.clear();
+    for (const net::Client::RegistryEntry& e : client.registryEntries("minecraft:enchantment")) enchantmentNbt_[e.id] = e.nbt;
     bannerPatterns_.clear();
     for (const net::Client::RegistryEntry& e : client.registryEntries("minecraft:banner_pattern")) bannerPatterns_.push_back(e.id);
+    setTags(client.tags());
+    enabledFeatures_ = client.enabledFeatures();
     registriesSet_ = true;
+}
+
+const std::vector<Items::RegistryInfo>& Items::registry(const std::string& name) const {
+    static const std::vector<RegistryInfo> kNone;
+    auto it = otherRegistries_.find(name);
+    return it == otherRegistries_.end() ? kNone : it->second;
+}
+
+const std::string& Items::mobEffectName(int id) const {
+    static const std::string kNone;
+    return id >= 0 && size_t(id) < mobEffects_.size() ? mobEffects_[size_t(id)] : kNone;
+}
+
+const std::string& Items::potionName(int id) const {
+    static const std::string kNone;
+    return id >= 0 && size_t(id) < potions_.size() ? potions_[size_t(id)] : kNone;
 }
 
 int Items::mobEffectId(std::string_view name) const {
@@ -163,6 +188,7 @@ bool ItemStack::sameItemSameComponents(const ItemStack& o) const {
 
 bool Items::init(const GameReports& reports, const Resources& res) {
     lang_ = &res.lang();
+    reports_ = &reports;
     const nlohmann::json& reg = reports.registries();
     auto load = [&](const char* key, std::vector<std::string>& names, std::unordered_map<std::string, int>& ids) {
         if (!reg.is_object() || !reg.contains(key)) return false;
@@ -204,6 +230,10 @@ int Items::componentType(std::string_view name) const {
     return it == componentIds_.end() ? -1 : it->second;
 }
 
+std::string Items::componentName(int type) const {
+    return type >= 0 && size_t(type) < componentNames_.size() ? shortName(componentNames_[size_t(type)]) : std::string();
+}
+
 std::string Items::cooldownGroup(const ItemStack& s) const {
     const int type = componentType("use_cooldown");
     for (const ItemStack::Component& c : s.added) {
@@ -221,117 +251,17 @@ std::string Items::cooldownGroup(const ItemStack& s) const {
 
 int Items::maxStack(const ItemStack& s) const {
     if (s.maxStack > 0) return s.maxStack;
+    if (auto it = defaults(s.item).find("minecraft:max_stack_size"); it != defaults(s.item).end() && it->is_number_integer())
+        return it->get<int>();
     if (s.maxDamage > 0 || s.damage > 0) return 1;
     return defaultMaxStack(shortName(name(s.item)));
 }
 
 int Items::maxDamage(const ItemStack& s) const {
-    return s.maxDamage >= 0 ? s.maxDamage : toolDurability(shortName(name(s.item)));
-}
-
-Text Items::displayName(const ItemStack& s) const {
-    if (s.hasCustomName) return s.customName.withStyle([] {
-        Style st;
-        st.italic = 1;
-        return st;
-    }());
-    if (s.hasItemName) return s.itemName;
-    const std::string n = shortName(name(s.item));
-    for (const char* prefix : {"item.minecraft.", "block.minecraft."})
-        if (auto it = lang_->find(prefix + n); it != lang_->end()) {
-            if (s.potion >= 0 && n.find("potion") != std::string::npos) break;
-            return Text(it->second);
-        }
-    // Potions and tipped arrows: item.minecraft.<item>.effect.<potion>.
-    if (s.potion >= 0) {
-        if (s.potion < int(potions_.size()))
-            if (auto it = lang_->find("item.minecraft." + n + ".effect." + shortName(potions_[size_t(s.potion)]));
-                it != lang_->end())
-                return Text(it->second);
-    }
-    if (auto it = lang_->find("item.minecraft." + n); it != lang_->end()) return Text(it->second);
-    return Text(n);
-}
-
-Text Items::hoverName(const ItemStack& s) const {
-    // Rarity colour (common white, uncommon yellow, rare aqua, epic light purple), raised one step when enchanted.
-    int rarity = s.rarity >= 0 ? s.rarity : 0;
-    if (s.enchantments > 0) rarity = rarity <= 1 ? 2 : 3;
-    static const u32 kRarity[4] = {0xFFFFFF, 0xFFFF55, 0x55FFFF, 0xFF55FF};
-    return displayName(s).withStyle(colorStyle(kRarity[std::clamp(rarity, 0, 3)]));
-}
-
-std::vector<Text> Items::tooltip(const ItemStack& s, bool advanced, bool creative) const {
-    if (s.hideTooltip && !creative) return {};  // ItemStack.getTooltipLines
-    std::vector<Text> lines{hoverName(s)};
-    auto shown = [&](const char* component) {
-        const int t = componentType(component);
-        return std::find(s.hiddenTooltip.begin(), s.hiddenTooltip.end(), t) == s.hiddenTooltip.end();
-    };
-    auto tr = [&](const std::string& key, const std::string& fallback) {
-        auto it = lang_->find(key);
-        return it == lang_->end() ? fallback : it->second;
-    };
-    const Style gray = colorStyle(0xAAAAAA);
-    // InstrumentComponent.addToTooltip: the description in gray.
-    if (s.instrument >= 0 && size_t(s.instrument) < instruments_.size() && shown("instrument"))
-        lines.push_back(instruments_[size_t(s.instrument)].description.withStyle(gray));
-    // SuspiciousStewEffects (creative tooltips): PotionContents.addPotionTooltip without the attribute lines.
-    if (!s.stewEffects.empty() && shown("suspicious_stew_effects")) {
-        static const char* const kHarmful[] = {"slowness", "mining_fatigue", "instant_damage", "nausea", "blindness", "hunger",
-                                               "weakness", "poison", "wither", "levitation", "unluck", "darkness", "infested",
-                                               "oozing", "weaving", "wind_charged"};
-        for (auto [effect, ticks] : s.stewEffects) {
-            if (effect < 0 || size_t(effect) >= mobEffects_.size()) continue;
-            const std::string n = mobEffects_[size_t(effect)].substr(mobEffects_[size_t(effect)].find(':') + 1);
-            bool harmful = false;
-            for (const char* h : kHarmful) harmful |= n == h;
-            std::string line = tr("effect.minecraft." + n, n);
-            if (ticks > 20) {
-                const int secs = ticks / 20;
-                char dur[16];
-                std::snprintf(dur, sizeof(dur), "%d:%02d", secs / 60, secs % 60);
-                line = formatJava(tr("potion.withDuration", "%s (%s)"), {line, dur});
-            }
-            lines.push_back(Text(line, colorStyle(harmful ? 0xFF5555 : 0x5555FF)));
-        }
-    }
-    // ItemEnchantments.addToTooltip (stored first, as on books): Enchantment.getFullname.
-    for (const auto* list : {&s.storedEnchants, &s.enchantList}) {
-        if (!shown(list == &s.storedEnchants ? "stored_enchantments" : "enchantments")) continue;
-        for (auto [id, level] : *list) {
-            if (id < 0 || size_t(id) >= enchantments_.size()) continue;
-            const RegistryInfo& e = enchantments_[size_t(id)];
-            const bool curse = e.id.find("curse") != std::string::npos;  // EnchantmentTags.CURSE (vanilla members)
-            const Style st = colorStyle(curse ? 0xFF5555 : 0xAAAAAA);
-            Text t = e.description.withStyle(st);
-            if (level != 1 || e.maxLevel != 1) t.append(" " + tr("enchantment.level." + std::to_string(level), std::to_string(level)), st);
-            lines.push_back(t);
-        }
-    }
-    // HangingEntityItem.appendHoverText: a painting variant's title, author and size.
-    if (s.painting >= 0 && size_t(s.painting) < paintings_.size() && shown("painting/variant")) {
-        const RegistryInfo& p = paintings_[size_t(s.painting)];
-        if (p.hasTitle) lines.push_back(p.title);
-        if (p.hasAuthor) lines.push_back(p.author);
-        lines.push_back(Text(formatJava(tr("painting.dimensions", "%sx%s"), {std::to_string(p.width), std::to_string(p.height)})));
-    }
-    if (shown("lore"))
-        for (const Text& l : s.lore) {
-            Style st = colorStyle(0xAA00AA);
-            st.italic = 1;
-            lines.push_back(l.withStyle(st));
-        }
-    // ItemStack.addDetailsToTooltip, advanced: durability while damaged, then the item id in dark gray. (The component
-    // count line needs the item's default components, which the client does not have.)
-    if (!advanced) return lines;
-    const int md = maxDamage(s);
-    if (s.damage > 0 && md > 0 && shown("damage")) {
-        lines.push_back(Text(formatJava(lang_->count("item.durability") ? lang_->at("item.durability") : "Durability: %s / %s",
-                                        {std::to_string(md - s.damage), std::to_string(md)})));
-    }
-    lines.push_back(Text(name(s.item), colorStyle(0x555555)));
-    return lines;
+    if (s.maxDamage >= 0) return s.maxDamage;
+    if (auto it = defaults(s.item).find("minecraft:max_damage"); it != defaults(s.item).end() && it->is_number_integer())
+        return it->get<int>();
+    return toolDurability(shortName(name(s.item)));
 }
 
 // --- protocol ---------------------------------------------------------------------------------------

@@ -62,10 +62,18 @@ struct StationDef {
     // Before the generic container input (slots, Esc / E closes); true: consumed.
     bool (*input)(UiState& s, const InputEvent& e, Menu& m, const Layout& l, float left, float top) = nullptr;
     int resultSlot = -1;  // an output slot: never placed into, taken whole
-    // quickMoveStack: moveTo(start, end, backwards) like moveItemStackTo. Return 1 moved, 0 nothing, -1 generic rule.
+    // quickMoveStack: moveTo(start, end, backwards) like moveItemStackTo. Return 1 moved, 0 nothing, -1 generic rule,
+    // 3 moved but the shift-click ends (the game returns EMPTY after moving).
     int (*quickMove)(UiState& s, const Menu& m, int index, const ItemStack& st,
                      const std::function<bool(int start, int end, bool backwards)>& moveTo) = nullptr;
     bool (*mayPlace)(UiState& s, const Menu& m, int slot, const ItemStack& st) = nullptr;  // Slot.mayPlace
+    // Slot.getMaxStackSize of the station's own slots (enchanting item 1, beacon payment 1, ...); 0: the default.
+    int (*slotMax)(UiState& s, const Menu& m, int slot, const ItemStack& st) = nullptr;
+    bool (*mayPickup)(UiState& s, const Menu& m, int slot) = nullptr;  // Slot.mayPickup (anvil result: the level cost)
+    // The result slot's onTake: what taking the result uses up (stonecutter input, loom banner and dye, ...).
+    void (*onTake)(UiState& s, Menu& m) = nullptr;
+    bool partialResult = false;  // the result slot's container gives part of its stack (furnace, loom), not all of it
+    int pickAll = 1;  // canTakeItemForPickAll: 1 every slot, 0 all but the result slot, -1 none (merchant)
 };
 struct StationRegistrar {
     StationRegistrar(std::initializer_list<const char*> menuTypes, const StationDef& def);

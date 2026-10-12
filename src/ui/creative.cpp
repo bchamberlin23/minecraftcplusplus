@@ -6,6 +6,7 @@
 #include "audio/audio.h"
 #include "ui/entity_preview.h"
 #include "ui/frontend.h"
+#include "ui/item_ui.h"
 #include "ui/ui_state.h"
 
 #include <algorithm>
@@ -453,9 +454,9 @@ void draw(UiState& s, Canvas& c) {
     }
     if (g.hoveredGrid >= 0) {
         const ItemStack st = gridItem(g.hoveredGrid);
-        if (!st.empty()) s.drawTooltip(c, tooltipFor(s, st, true), mx, my);
+        if (!st.empty()) drawItemTooltip(s, c, st, tooltipFor(s, st, true), mx, my);
     } else if (g.hoveredInv >= 0 && !s.inventory.slots[size_t(g.hoveredInv)].empty()) {
-        s.drawTooltip(c, tooltipFor(s, s.inventory.slots[size_t(g.hoveredInv)], false), mx, my);
+        drawItemTooltip(s, c, s.inventory.slots[size_t(g.hoveredInv)], tooltipFor(s, s.inventory.slots[size_t(g.hoveredInv)], false), mx, my);
     }
     for (int t = 0; t < kTabCount; ++t) {  // checkTabHovering
         if (!tabVisible(t)) continue;
