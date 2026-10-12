@@ -1,16 +1,23 @@
 #pragma once
 // A chunk column while it is being generated, plus the block/biome id lookups worldgen uses.
 #include "core/common.h"
+#include "world/nbt_dom.h"
 
 #include <algorithm>
 #include <functional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace wg {
 
 // Block state key ("minecraft:stone", "minecraft:grass_block[snowy=false]") -> registry id.
 using BlockLookup = std::function<u16(std::string_view stateKey)>;
+
+struct GenChunk;
+// SerializableChunkData's view of what generation left besides the blocks: block_entities, entities, block_ticks,
+// fluid_ticks and PostProcessing, for saving the chunk as a proto chunk past its features.
+NbtValue saveExtras(const GenChunk& c, const std::function<std::string(u16 state)>& stateName);
 
 struct GenChunk {
     static constexpr u16 kAir = 0;
@@ -27,6 +34,21 @@ struct GenChunk {
     // kept up to date by every decoration write (wg::GenRegion).
     int finalHeightmaps[4][256] = {};
     bool finalHeightmapsPrimed = false;
+    // What the game saves with a generated chunk besides its blocks: the block entity tags features and structures
+    // configured ({"id", "x", "y", "z", ...}: loot tables with their seeds, spawner entities, template NBT), by
+    // index(); entity tags they added ({"id", "Pos", ...}); positions marked for post-processing
+    // (ChunkAccess.markPosForPostProcessing: fluids to schedule, shapes to update), by index().
+    std::unordered_map<u32, NbtValue> blockEntities;
+    std::vector<NbtValue> entities;
+    std::vector<u32> postProcess;
+    // Ticks scheduled during generation (block_ticks / fluid_ticks): the state's block or fluid, the delay.
+    struct Tick {
+        u32 index;
+        u16 state;
+        int delay;
+        bool fluid;
+    };
+    std::vector<Tick> ticks;
 
     void init(int chunkX, int chunkZ, int bottomY, int totalHeight) {
         cx = chunkX, cz = chunkZ, minY = bottomY, height = totalHeight;
@@ -35,6 +57,14 @@ struct GenChunk {
         std::fill(std::begin(worldSurfaceWG), std::end(worldSurfaceWG), minY);
         std::fill(std::begin(oceanFloorWG), std::end(oceanFloorWG), minY);
         finalHeightmapsPrimed = false;
+        blockEntities.clear();
+        entities.clear();
+        postProcess.clear();
+        ticks.clear();
+    }
+    u32 index(int x, int y, int z) const { return u32((size_t(y - minY) * 16 + z) * 16 + x); }  // local x / z, world y
+    void markPostProcess(int x, int y, int z) {
+        if (inside(y)) postProcess.push_back(index(x, y, z));
     }
     bool inside(int y) const { return y >= minY && y < minY + height; }
     // Local x/z (0..15), world y.

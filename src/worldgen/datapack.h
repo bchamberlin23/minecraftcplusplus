@@ -20,6 +20,9 @@ public:
     // Every entry of a worldgen registry ("minecraft:x/y"), in the game's registration order (sorted by path, then
     // namespace, like RegistryDataLoader).
     std::vector<std::string> ids(std::string_view registry) const;
+    // Top-level data folders other than worldgen: "dimension_type", "dimension" (null if missing), and their ids.
+    const nlohmann::json* file(std::string_view folder, std::string_view id) const;
+    std::vector<std::string> fileIds(std::string_view folder) const;
     // Tags: kind "block", "worldgen/biome", ... ; id without '#'. Expands nested tags.
     std::vector<std::string> tag(std::string_view kind, std::string_view id) const;
     // A tag file's own "values" (nested tags unexpanded, in file order), or null.

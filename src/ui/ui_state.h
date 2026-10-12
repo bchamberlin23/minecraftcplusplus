@@ -71,6 +71,12 @@ Layout layoutFor(const Menu& m);
 // What the client tells the server about its options (main hand, skin parts, server listing).
 net::Client::Information clientInformation(const Settings& s);
 
+// A tooltip's image component (ClientTooltipComponent.extractImage, e.g. a bundle's contents), after the first line.
+struct TooltipImage {
+    int width = 0, height = 0;
+    std::function<void(Canvas& c, float x, float y, int tooltipWidth)> draw;
+};
+
 struct ChatLine {
     Text text;
     int addedTick = 0;
@@ -97,6 +103,8 @@ enum class Screen {
     // Registered screens (modules.h ScreenDef): signs and books, advancements, statistics, game mode switcher, bed
     Sign, BookEdit, BookView, Advancements, Stats, GameModeSwitcher, InBed,
     Friends, AddFriend,  // friends_screen.cpp
+    ServerPackPrompt, CodeOfConduct, Reconfiguring,  // server_config.cpp
+    Win, CreditsAttribution, ServerLinks,  // credits.cpp
     // Front end (frontend.h)
     Title, Worlds, CreateWorld, EditWorld, Confirm, Servers, EditServer, DirectConnect, Loading, Message, OpenToLan
 };
@@ -179,7 +187,7 @@ struct Ui::State {
     Menu inventory;                   // 46 slots, container 0
     std::unique_ptr<Menu> container;  // open server container
     ItemStack carried;
-    int hotbarSynced[9] = {-2, -2, -2, -2, -2, -2, -2, -2, -2};
+    int hotbarSynced[10] = {-2, -2, -2, -2, -2, -2, -2, -2, -2, -2};  // hotbar items, then the off hand
 
     // HUD
     bool hudHidden = false, debug = false;
@@ -298,7 +306,7 @@ struct Ui::State {
     // selected stack, the stack in use); -1 none.
     void drawItem(Canvas& c, const ItemStack& s, float x, float y, bool decorations = true, const char* countOverride = nullptr,
                   int playerSlot = -1);
-    void drawTooltip(Canvas& c, const std::vector<Text>& lines, float x, float y);
+    void drawTooltip(Canvas& c, const std::vector<Text>& lines, float x, float y, const TooltipImage* image = nullptr);
     void drawText(Canvas& c, const Text& t, float x, float y, u32 color, bool shadow) { font.draw(c, t, x, y, color, shadow); }
     void drawCentered(Canvas& c, const Text& t, float cx, float y, u32 color, bool shadow = true) {
         font.draw(c, t, cx - float(font.width(t) / 2), y, color, shadow);
@@ -317,6 +325,9 @@ struct Ui::State {
     Menu& activeMenu() { return container ? *container : inventory; }
     void containerClick(int slot, int button, int input);  // simulates locally and sends container_click
     void creativeSetSlot(int menuSlot, const ItemStack& s);
+    // The open container's player slots and the inventory menu are one Inventory (Java shares it): copy them across
+    // (toContainer: inventory menu -> container).
+    void mirrorPlayerSlots(bool toContainer = false);
     void dropSelected(bool all);
     void swapHands();
     int menuSlotForInventory(const Menu& m, int inventoryIndex) const;  // Inventory index (0-8 hotbar, 40 offhand)

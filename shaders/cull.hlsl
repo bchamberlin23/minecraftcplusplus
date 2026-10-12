@@ -66,11 +66,13 @@ void CullCS(uint tid : SV_DispatchThreadID) {
     if (!sectionVisible(id, mn, mx)) return;
     // Opaque and cutout: one draw for all six face ranges of the layer (they are contiguous); the rasterizer's
     // back-face culling replaces the per-direction test. Fewer, larger draws measured faster at every LOD
-    // level (sptest 1440p: 74k -> 33k draws, 1.45 -> 1.05 ms).
+    // level (sptest 1440p: 74k -> 33k draws, 1.45 -> 1.05 ms). A section cross-fading draws its opaque faces with
+    // the cutout pipeline, whose pixel shader discards (fadedOut); the opaque one stays discard-free.
+    bool fading = fadeProgress(gSections[id].fade) < 1.0;
     for (uint l = 0; l < 2; ++l) {
         uint first = gSections[id].ranges[l * 6].x, count = 0;
         [unroll] for (uint f = 0; f < 6; ++f) count += gSections[id].ranges[l * 6 + f].y;
-        if (count != 0) emit(l, first, count, id);
+        if (count != 0) emit(fading ? 1 : l, first, count, id);
     }
     uint2 m = gSections[id].ranges[18];
     if (m.y != 0) emit(3, m.x, m.y, id);

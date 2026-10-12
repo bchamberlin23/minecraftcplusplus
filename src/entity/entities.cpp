@@ -581,7 +581,9 @@ void EntityWorld::attach(net::Client& client) {
         Event e;
         e.type = EventType::Swing;
         e.id = r.varInt();
-        e.a = r.varInt();  // hand
+        e.a = r.varInt();      // hand
+        e.b = r.varInt();      // SwingAnimation: type (0 none, 1 whack, 2 stab), duration
+        e.count = u32(r.varInt());
         if (r.ok) q.events.push_back(e);
     });
     on("animate", [](net::Reader& r, EventQueue& q) {  // wake up / critical hit particles
@@ -602,6 +604,9 @@ void EntityWorld::attach(net::Client& client) {
         Event e;
         e.type = EventType::Damage;
         e.id = r.varInt();
+        e.a = r.varInt();      // damage_type network id (Client::registryId("minecraft:damage_type", ...))
+        r.varInt(), r.varInt();  // cause / direct entity id + 1
+        if (r.boolean()) r.f64(), r.f64(), r.f64();  // source position
         if (r.ok) q.events.push_back(e);
     });
     on("entity_event", [](net::Reader& r, EventQueue& q) {
@@ -799,7 +804,10 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
         }
         return;
     }
-    if (it == entities_.end()) return;
+    if (it == entities_.end()) {
+        if (ev.type == EventType::EntityEvent && onUntrackedEntityEvent) onUntrackedEntityEvent(ev.id, ev.a);
+        return;
+    }
     Entity& e = it->second;
     switch (ev.type) {
         case EventType::Move: {
@@ -871,7 +879,10 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
                 e.equipStack[slot] = stack >= 0 ? q.stacks[size_t(stack)] : nullptr;
             }
             break;
-        case EventType::Swing: e.swingTime = 0; break;
+        case EventType::Swing:
+            e.swingTime = 0, e.swingHand = ev.a == 1 ? 1 : 0, e.swingType = int(ev.b);
+            e.swingDuration = std::max<int>(int(ev.count), 1);
+            break;
         case EventType::Hurt:
             e.hurtTime = 10;
             if (verbose_) LOG("entities: %d hurt animation", e.id);
@@ -882,7 +893,7 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
             break;
         case EventType::EntityEvent:
             if (ev.a == 3 && e.category == Category::Living) e.dying = true;  // death
-            if (ev.a == 2) e.hurtTime = 10;                                     // legacy hurt
+            if (ev.a == 2 && (e.kineticHitTicks < 0 || e.kineticHitTicks > 10)) e.kineticHitTicks = 0;  // KINETIC_HIT
             if (onEntityEvent) onEntityEvent(e, ev.a);
             break;
         case EventType::Animate:
@@ -1148,6 +1159,7 @@ void EntityWorld::tickEntity(Entity& e) {
     if (e.vehicleDamage > 0) e.vehicleDamage = std::max(0.0f, e.vehicleDamage - 1.0f);
     if (e.dying && e.deathTime < 20) ++e.deathTime;
     if (e.swingTime >= 0 && ++e.swingTime >= e.swingDuration) e.swingTime = -1;
+    if (e.kineticHitTicks >= 0) ++e.kineticHitTicks;
     if (e.livingFlags & 1) ++e.useTicks;
 
     // Interpolation (a vehicle the local player drives moves itself).
@@ -1321,6 +1333,19 @@ void EntityWorld::tickEntity(Entity& e) {
 // ---------------------------------------------------------------------------------------------------------
 // Picking and interaction.
 
+void entitySize(const Entity& e, double& w, double& h) {
+    w = e.info ? e.info->width : 0.6, h = e.info ? e.info->height : 1.8;
+    if (!e.info) return;
+    if (e.baby && e.category == Category::Living) w *= 0.5, h *= 0.5;
+    if (e.info->dataId("ID_SIZE") >= 0) w *= e.size, h *= e.size;
+    if (e.info->name == "minecraft:armor_stand" && (e.standFlags & 1)) w *= 0.5, h *= 0.5;
+    if (e.category == Category::Player) {
+        if (e.pose == 5) h = 1.5;
+        else if (e.pose == 1 || e.pose == 3 || e.pose == 4) h = 0.6;
+        else if (e.pose == 2) w = h = 0.2;
+    }
+}
+
 PickResult EntityWorld::pick(const double o[3], const double dir[3], double maxDistance) const {
     PickResult best;
     best.distance = maxDistance;
@@ -1337,15 +1362,8 @@ PickResult EntityWorld::pick(const double o[3], const double dir[3], double maxD
             pickable = true;
         if (n == "minecraft:ender_dragon" || (n == "minecraft:armor_stand" && (e.standFlags & 16))) pickable = false;
         if (!pickable || e.deathTime > 0) continue;
-        double w = e.info->width, h = e.info->height;
-        if (e.baby && e.category == Category::Living) w *= 0.5, h *= 0.5;
-        if (e.info->dataId("ID_SIZE") >= 0) w *= e.size, h *= e.size;
-        if (n == "minecraft:armor_stand" && (e.standFlags & 1)) w *= 0.5, h *= 0.5;
-        if (e.category == Category::Player) {
-            if (e.pose == 5) h = 1.5;
-            else if (e.pose == 1 || e.pose == 3 || e.pose == 4) h = 0.6;
-            else if (e.pose == 2) w = h = 0.2;
-        }
+        double w, h;
+        entitySize(e, w, h);
         double c[3];
         for (int a = 0; a < 3; ++a) c[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt;
         const double lo[3] = {c[0] - w / 2, c[1], c[2] - w / 2}, hi[3] = {c[0] + w / 2, c[1] + h, c[2] + w / 2};
@@ -1370,13 +1388,111 @@ PickResult EntityWorld::pick(const double o[3], const double dir[3], double maxD
     return best;
 }
 
+bool EntityWorld::attackInRange(const double eye[3], const double dir[3], double minReach, double maxReach, double margin,
+                                double forward, const BlockRay& blockRay) {
+    const PickResult p = pickAttackRange(eye, dir, minReach, maxReach, margin, forward, blockRay);
+    if (verbose_) LOG("entities: attack range %.2f..%.2f margin %.2f -> %d", minReach, maxReach, margin, p.id);
+    if (p.id < 0) {  // a miss: only the swing goes out
+        if (client_ && client_->alive()) client_->sendPlay("punch", net::Writer{});
+        return true;
+    }
+    attack(p.id);
+    return true;
+}
+
+PickResult EntityWorld::pickAttackRange(const double eye[3], const double dir[3], double minReach, double maxReach,
+                                        double margin, double forward, const BlockRay& blockRay) const {
+    PickResult best;
+    double from[3], to[3];
+    double toDist = maxReach + std::max(0.0, forward);
+    const double blockT = blockRay(eye, dir, toDist);
+    if (blockT < minReach) return best;  // a block before the reach starts
+    toDist = std::min(toDist, blockT);
+    for (int a = 0; a < 3; ++a) from[a] = eye[a] + dir[a] * minReach, to[a] = eye[a] + dir[a] * toDist;
+    // Segment entry into a box (AABB.clip): the parameter along from..to, false if it misses.
+    auto clip = [](const double lo[3], const double hi[3], const double a[3], const double b[3], double& t) {
+        double t0 = 0, t1 = 1;
+        for (int k = 0; k < 3; ++k) {
+            const double d = b[k] - a[k];
+            if (std::abs(d) < 1e-12) {
+                if (a[k] < lo[k] || a[k] > hi[k]) return false;
+                continue;
+            }
+            double ta = (lo[k] - a[k]) / d, tb = (hi[k] - a[k]) / d;
+            if (ta > tb) std::swap(ta, tb);
+            t0 = std::max(t0, ta), t1 = std::min(t1, tb);
+            if (t0 > t1) return false;
+        }
+        t = t0;
+        return true;
+    };
+    const float pt = partialTick();
+    int bestId = -1;
+    double bestDist = 1e30;
+    for (const auto& [id, e] : entities_) {
+        if (!e.info || e.deathTime > 0) continue;
+        const std::string& n = e.info->name;
+        // EntitySelector.CAN_BE_PICKED: the entities the crosshair can target (EntityWorld::pick).
+        bool pickable = e.category == Category::Living || e.category == Category::Player || e.category == Category::Vehicle ||
+                        e.category == Category::Block || n == "minecraft:item_frame" || n == "minecraft:glow_item_frame" ||
+                        n == "minecraft:painting" || n == "minecraft:end_crystal" || n == "minecraft:interaction" ||
+                        n == "minecraft:shulker_bullet" || n == "minecraft:fireball" || n == "minecraft:small_fireball" ||
+                        n == "minecraft:wind_charge" || n == "minecraft:breeze_wind_charge";
+        if (n == "minecraft:ender_dragon" || (n == "minecraft:armor_stand" && (e.standFlags & 16))) pickable = false;
+        if (!pickable) continue;
+        double w, h, c[3];
+        entitySize(e, w, h);
+        for (int a = 0; a < 3; ++a) c[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt;
+        const double lo[3] = {c[0] - w / 2, c[1], c[2] - w / 2}, hi[3] = {c[0] + w / 2, c[1] + h, c[2] + w / 2};
+        double hit[3];
+        double t;
+        const bool inside = from[0] >= lo[0] && from[0] <= hi[0] && from[1] >= lo[1] && from[1] <= hi[1] && from[2] >= lo[2] &&
+                            from[2] <= hi[2];
+        if (inside) {
+            std::copy(from, from + 3, hit);
+        } else if (clip(lo, hi, from, to, t)) {
+            for (int a = 0; a < 3; ++a) hit[a] = from[a] + (to[a] - from[a]) * t;
+        } else if (margin > 0) {
+            const double ilo[3] = {lo[0] - margin, lo[1] - margin, lo[2] - margin}, ihi[3] = {hi[0] + margin, hi[1] + margin, hi[2] + margin};
+            if (!clip(ilo, ihi, from, to, t)) continue;
+            double outside[3], toward[3] = {(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2};
+            for (int a = 0; a < 3; ++a) outside[a] = from[a] + (to[a] - from[a]) * t;
+            double d[3] = {toward[0] - outside[0], toward[1] - outside[1], toward[2] - outside[2]};
+            const double len = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+            if (len > 1e-9) {  // a block between the margin and the box stops it
+                for (double& k : d) k /= len;
+                const double bt = blockRay(outside, d, len);
+                if (bt < len)
+                    for (int a = 0; a < 3; ++a) toward[a] = outside[a] + d[a] * bt;
+            }
+            if (!clip(lo, hi, outside, toward, t)) continue;
+            for (int a = 0; a < 3; ++a) hit[a] = outside[a] + (toward[a] - outside[a]) * t;  // the surface hit
+        } else {
+            continue;
+        }
+        const double dx = hit[0] - eye[0], dy = hit[1] - eye[1], dz = hit[2] - eye[2];
+        const double dist = dx * dx + dy * dy + dz * dz;
+        if (dist < bestDist) {
+            bestDist = dist, bestId = id;
+            best.id = id, best.distance = std::sqrt(dist);
+            for (int a = 0; a < 3; ++a) best.hit[a] = hit[a] - c[a];  // relative to the entity
+        }
+    }
+    (void)bestId;
+    return best;
+}
+
 bool EntityWorld::click(const double eye[3], const double dir[3], bool attack, bool use, double blockDistance,
-                        double reach, bool sneaking) {
+                        double reach, bool sneaking, double minReach) {
     const double limit = blockDistance >= 0 ? std::min(blockDistance, reach) : reach;
     const PickResult p = pick(eye, dir, limit);
     if (verbose_)
         LOG("entities: click attack=%d use=%d block=%.2f -> entity %d at %.2f", attack, use, blockDistance, p.id, p.distance);
     if (p.id < 0) return false;
+    if (attack && p.distance < minReach) {  // AttackRange.isInRange: too close for the weapon, only the swing goes out
+        if (client_ && client_->alive()) client_->sendPlay("punch", net::Writer{});
+        return true;
+    }
     if (attack) this->attack(p.id);
     else if (use) this->use(p.id, p.hit, sneaking);
     return true;

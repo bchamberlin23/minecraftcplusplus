@@ -67,6 +67,9 @@ public:
     BlockRegistry& registry() { return registry_; }
     std::string itemName(int item) const;  // "minecraft:bow", "" if unknown
     ItemRules& rules() { return rules_; }
+    // LivingEntity.onKineticHit for the local player (the server's KINETIC_HIT entity event): hit feedback for the
+    // spear animations and the kinetic_weapon's hit sound, at most every 10 ticks.
+    void kineticHit();
     // Entity.isEyeInFluid(WATER) for the local player (updateFluidOnEyes: eye y - 1/9 below the fluid surface).
     bool eyeInWater() const;
 
@@ -76,7 +79,20 @@ private:
     const ItemRules::Tool* heldTool(const ui::ItemStack* s);
     // Player.blockActionRestricted in adventure mode: the held stack's can_break (AdventureModePredicate) allows it.
     bool adventureMayBreak(int x, int y, int z);
-    void predictUse(const struct RayHit* target, bool afterEntity);
+    // Item use prediction (Game::startUseItem): ItemStack.use / useOn results per hand, buckets, riptide.
+    int predictItemUse(int hand, const struct RayHit* target);
+    int predictUseOn(int hand, const struct RayHit& hit);
+    int predictBucket(int hand, const std::string& name);
+    void releaseUse();
+    ItemRules::Use stackUse(const ui::ItemStack& s);  // the item's use with the stack's component patch
+    int equipSlot(const ui::ItemStack& s, bool& allowed, bool* swappable);  // getEquipmentSlotForItem
+    float riptideStrength(const ui::ItemStack& s) const;
+    bool rainingAt(int x, int y, int z) const;
+    bool inWaterOrRain() const;
+    int componentType(const char* name);  // data component type id by short name ("consumable")
+    void heldWeapon();                    // Game's held weapon fields from the main hand stack
+    ItemRules::Components handComponents(const ui::ItemStack* s);  // swing / kinetic components with the stack's patch
+    std::string weaponSound(const ui::ItemStack& s, const char* type);  // kinetic_weapon / piercing_weapon sound
     bool onCooldown(const ui::ItemStack* s) const;
     bool startUsing(int hand);  // LivingEntity.startUsingItem
     void tickUse();
@@ -102,6 +118,10 @@ private:
     int chargedProjectilesType_ = -1;  // data component type id of minecraft:charged_projectiles
     int toolType_ = -1, canBreakType_ = -1;  // data component type ids of minecraft:tool / minecraft:can_break
     std::vector<std::string> blockNames_;     // block registry by network id
+    std::vector<std::string> soundNames_;     // sound_event registry by network id
+    std::map<std::string, int, std::less<>> componentTypes_;
+    int playerEntityType_ = -1;
+    float rainLevel_ = 0;  // ClientLevel rain level (game events)
     std::unordered_map<std::string, ItemRules::Tool> toolCache_;  // decoded tool components by their bytes
     std::mt19937 rng_{0x5EEDu};
     std::map<std::string, int, std::less<>> effects_;        // name -> amplifier

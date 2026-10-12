@@ -2,7 +2,7 @@
 // selectable patterns per LoomMenu from the banner_pattern registry and tags, banner preview) and cartography table
 // (CartographyTableScreen with the map image from ClientboundMapItemDataPacket), registered as StationDefs.
 #include "audio/audio.h"
-#include "ui/ui_state.h"
+#include "ui/item_ui.h"
 
 #include <array>
 #include <cmath>
@@ -40,7 +40,8 @@ const std::string* component(UiState& s, const ItemStack& st, const char* name) 
 // --- packets: stonecutter recipes, map data -------------------------------------------------------------------
 
 struct StoneRecipe {
-    std::vector<int> inputs;  // item ids (empty with a tag: unsupported, never matches)
+    std::vector<int> inputs;  // Ingredient: item ids, or
+    std::string tag;          // an item tag ("minecraft:planks")
     ItemStack result;
 };
 std::vector<StoneRecipe> g_stoneRecipes;
@@ -98,24 +99,28 @@ void registerHandlers(UiState& s, net::Client& client) {
     UiState* sp = &s;
     client.onPlay("update_recipes", [sp](net::Reader& r) {
         UiState& s = *sp;
-        const i32 sets = r.varInt();  // RecipePropertySet map
+        std::unordered_map<std::string, std::vector<int>> propertySets;  // RecipePropertySet key -> item ids
+        const i32 sets = r.varInt();
         for (i32 i = 0; i < sets && r.ok; ++i) {
-            r.str();
+            std::vector<int>& ids = propertySets[std::string(r.str())];
             const i32 n = r.varInt();
-            for (i32 k = 0; k < n && r.ok; ++k) r.varInt();
+            for (i32 k = 0; k < n && r.ok; ++k) ids.push_back(r.varInt());
         }
         std::vector<StoneRecipe> recipes;
         const i32 n = r.varInt();
         for (i32 i = 0; i < n && r.ok; ++i) {
             StoneRecipe e;
-            const i32 k = r.varInt() - 1;  // Ingredient: holder set
-            if (k < 0) r.str();
+            const i32 k = r.varInt() - 1;  // Ingredient: holder set (0: a tag)
+            if (k < 0) e.tag = std::string(r.str());
             for (i32 j = 0; j < k && r.ok; ++j) e.inputs.push_back(r.varInt());
             if (!readSlotDisplay(s, r, e.result, 0)) break;
             recipes.push_back(std::move(e));
         }
         if (std::getenv("MCPP_UI_VERBOSE")) LOG("ui: update_recipes: %zu stonecutter recipes", recipes.size());
-        s.post([recipes = std::move(recipes)]() mutable { g_stoneRecipes = std::move(recipes); });
+        s.post([recipes = std::move(recipes), propertySets = std::move(propertySets)]() mutable {
+            g_stoneRecipes = std::move(recipes);
+            setPropertySets(std::move(propertySets));  // item_ui.h: station input predicates
+        });
     });
     client.onPlay("map_item_data", [sp](net::Reader& r) {
         const int id = r.varInt();
@@ -172,13 +177,17 @@ struct StonecutterState {
     int lastInput = -2;
 } stone;
 
-std::vector<int> visibleRecipes(UiState&, const Menu& m) {
+bool accepts(UiState& s, const StoneRecipe& r, int item) {  // Ingredient.test
+    if (!r.tag.empty()) return s.items.itemHasTag(item, r.tag);
+    return std::find(r.inputs.begin(), r.inputs.end(), item) != r.inputs.end();
+}
+
+std::vector<int> visibleRecipes(UiState& s, const Menu& m) {
     std::vector<int> v;
     const ItemStack& in = m.slots[0];
     if (in.empty()) return v;
     for (size_t i = 0; i < g_stoneRecipes.size(); ++i)
-        if (std::find(g_stoneRecipes[i].inputs.begin(), g_stoneRecipes[i].inputs.end(), in.item) != g_stoneRecipes[i].inputs.end())
-            v.push_back(int(i));
+        if (accepts(s, g_stoneRecipes[i], in.item)) v.push_back(int(i));
     return v;
 }
 
@@ -272,8 +281,8 @@ bool stoneInput(UiState& s, const InputEvent& e, Menu& m, const Layout&, float l
 int stoneQuickMove(UiState& s, const Menu& m, int index, const ItemStack& st, const std::function<bool(int, int, bool)>& moveTo) {
     if (index == 1) return moveTo(2, 38, true) ? 1 : 0;
     if (index == 0) return moveTo(2, 38, false) ? 1 : 0;
-    for (const StoneRecipe& r : g_stoneRecipes)
-        if (std::find(r.inputs.begin(), r.inputs.end(), st.item) != r.inputs.end()) return moveTo(0, 1, false) ? 1 : 0;
+    for (const StoneRecipe& r : g_stoneRecipes)  // stonecutterRecipes().acceptsInput
+        if (accepts(s, r, st.item)) return moveTo(0, 1, false) ? 1 : 0;
     (void)s, (void)m;
     if (index < 29) return moveTo(29, 38, false) ? 1 : 0;
     return moveTo(2, 29, false) ? 1 : 0;
@@ -282,7 +291,8 @@ int stoneQuickMove(UiState& s, const Menu& m, int index, const ItemStack& st, co
 const StationRegistrar kStonecutter({"stonecutter"}, [] {
     StationDef d;
     d.layout = stoneLayout, d.opened = stoneOpened, d.drawBg = stoneDrawBg, d.drawTop = stoneDrawTop, d.input = stoneInput;
-    d.resultSlot = 1, d.quickMove = stoneQuickMove;
+    d.resultSlot = 1, d.quickMove = stoneQuickMove, d.pickAll = 0;
+    d.onTake = [](UiState&, Menu& m) { m.slots[0] = m.slots[0].withCount(m.slots[0].count - 1); };  // inputSlot.remove(1)
     return d;
 }());
 
@@ -358,12 +368,46 @@ const std::vector<int>& patternTag(UiState& s, const std::string& tag) {
 
 // LoomMenu.getSelectablePatterns: no pattern item: #no_item_required; else the item's provides_banner_patterns tag
 // (the vanilla pattern items: <name>_banner_pattern provides #pattern_item/<name>).
+// With the server's registry and tags (registry data, update_tags), pattern ids are its network ids; without them the
+// jar's data (names sorted) stands in.
 std::vector<int> selectablePatterns(UiState& s, const Menu& m) {
     loadPatterns(s);
+    if (!s.items.registry("minecraft:banner_pattern").empty()) {
+        if (m.slots[2].empty()) {
+            const std::vector<int>* t = s.items.tag("minecraft:banner_pattern", "minecraft:no_item_required");
+            return t ? *t : std::vector<int>{};
+        }
+        const std::string* data = component(s, m.slots[2], "provides_banner_patterns");  // a holder set
+        if (!data) return {};
+        net::Reader r(reinterpret_cast<const u8*>(data->data()), data->size());
+        const i32 c = r.varInt();
+        if (c == 0) {
+            const std::vector<int>* t = s.items.tag("minecraft:banner_pattern", r.str());
+            return t ? *t : std::vector<int>{};
+        }
+        std::vector<int> ids;
+        for (i32 i = 0; i < c - 1 && r.ok; ++i) ids.push_back(r.varInt());
+        return ids;
+    }
     const std::string p = itemName(s, m.slots[2]);
     if (p.empty()) return patternTag(s, "no_item_required");
     if (p.ends_with("_banner_pattern")) return patternTag(s, "pattern_item/" + p.substr(0, p.size() - 15));
     return {};
+}
+// A pattern's texture name and translation key by id.
+std::string patternAsset(UiState& s, int id) {
+    const auto& reg = s.items.registry("minecraft:banner_pattern");
+    if (!reg.empty()) {
+        if (id < 0 || size_t(id) >= reg.size()) return {};
+        const std::string& a = reg[size_t(id)].assetId;
+        return a.substr(a.find(':') + 1);
+    }
+    return id >= 0 && size_t(id) < patterns.all.size() ? patterns.all[size_t(id)].asset : std::string();
+}
+std::string patternKey(UiState& s, int id) {
+    const auto& reg = s.items.registry("minecraft:banner_pattern");
+    if (!reg.empty()) return id >= 0 && size_t(id) < reg.size() ? reg[size_t(id)].translationKey : std::string();
+    return id >= 0 && size_t(id) < patterns.all.size() ? patterns.all[size_t(id)].translation : std::string();
 }
 
 // BannerPatternLayers of a stack (banner_patterns component): (pattern id, dye) pairs.
@@ -423,7 +467,7 @@ void drawBannerFace(UiState& s, Canvas& c, float x, float y, float w, float h, i
     };
     layer("base", baseColor);
     for (const auto& [id, dye] : layers)
-        if (id >= 0 && size_t(id) < patterns.all.size()) layer(patterns.all[size_t(id)].asset, dye);
+        if (const std::string a = patternAsset(s, id); !a.empty()) layer(a, dye);
 }
 
 void loomDrawBg(UiState& s, Canvas& c, Menu& m, const Layout& l, float left, float top) {
@@ -463,7 +507,7 @@ void loomDrawBg(UiState& s, Canvas& c, Menu& m, const Layout& l, float left, flo
                        px, py, 14, 14);
             // extractBannerOnButton: gray 5 x 10 with the pattern mask (21 x 40 of 64 at v 1) over it.
             c.fill(px + 4, py + 2, px + 9, py + 12, 0xFF000000 | kDyeColors[7]);
-            if (const Sprite* t = s.sprites.texture("entity/banner/" + patterns.all[size_t(sel[size_t(index)])].asset)) {
+            if (const Sprite* t = s.sprites.texture("entity/banner/" + patternAsset(s, sel[size_t(index)]))) {
                 const float du = t->u1 - t->u0, dv = t->v1 - t->v0;
                 c.quad(px + 4, py + 2, px + 9, py + 12, t->u0, t->v0 + dv / 64.0f, t->u0 + du * 21.0f / 64.0f,
                        t->v0 + dv / 64.0f + dv * 40.0f / 64.0f, 0xFFFFFFFF, ModeGui);
@@ -481,7 +525,7 @@ void loomDrawTop(UiState& s, Canvas& c, Menu& m, const Layout&, float left, floa
             if (index == m.data[0] || !inRect(s.mouseX, s.mouseY, left + 60 + float(col * 14), top + 13 + float(row * 14), 14, 14))
                 continue;
             const int dye = dyeIndex(itemName(s, m.slots[1]));
-            const std::string key = patterns.all[size_t(sel[size_t(index)])].translation + "." + kDyes[dye < 0 ? 0 : dye];
+            const std::string key = patternKey(s, sel[size_t(index)]) + "." + kDyes[dye < 0 ? 0 : dye];
             s.drawTooltip(c, {Text(s.res.translate(key))}, s.mouseX, s.mouseY);
         }
 }
@@ -515,21 +559,27 @@ bool loomInput(UiState& s, const InputEvent& e, Menu& m, const Layout&, float le
     return false;
 }
 
+// LoomMenu: banners (BannerItem), #loom_dyes with a dye component, #loom_patterns providing banner patterns.
+bool loomBanner(UiState& s, const ItemStack& st) { return itemName(s, st).ends_with("_banner"); }
+bool loomDye(UiState& s, const ItemStack& st) {
+    return s.items.itemHasTag(st.item, "minecraft:loom_dyes") && s.items.component(st, "dye").present();
+}
+bool loomPattern(UiState& s, const ItemStack& st) {
+    return s.items.itemHasTag(st.item, "minecraft:loom_patterns") && s.items.component(st, "provides_banner_patterns").present();
+}
 bool loomMayPlace(UiState& s, const Menu&, int slot, const ItemStack& st) {
-    const std::string n = itemName(s, st);
-    if (slot == 0) return n.ends_with("_banner");
-    if (slot == 1) return n.ends_with("_dye");
-    if (slot == 2) return n.ends_with("_banner_pattern");
+    if (slot == 0) return loomBanner(s, st);
+    if (slot == 1) return loomDye(s, st);
+    if (slot == 2) return loomPattern(s, st);
     return true;
 }
 
 int loomQuickMove(UiState& s, const Menu&, int index, const ItemStack& st, const std::function<bool(int, int, bool)>& moveTo) {
     if (index == 3) return moveTo(4, 40, true) ? 1 : 0;
     if (index < 3) return moveTo(4, 40, false) ? 1 : 0;
-    const std::string n = itemName(s, st);
-    if (n.ends_with("_banner")) return moveTo(0, 1, false) ? 1 : 0;
-    if (n.ends_with("_dye")) return moveTo(1, 2, false) ? 1 : 0;
-    if (n.ends_with("_banner_pattern")) return moveTo(2, 3, false) ? 1 : 0;
+    if (loomBanner(s, st)) return moveTo(0, 1, false) ? 1 : 0;
+    if (loomDye(s, st)) return moveTo(1, 2, false) ? 1 : 0;
+    if (loomPattern(s, st)) return moveTo(2, 3, false) ? 1 : 0;
     if (index < 31) return moveTo(31, 40, false) ? 1 : 0;
     return moveTo(4, 31, false) ? 1 : 0;
 }
@@ -538,6 +588,10 @@ const StationRegistrar kLoom({"loom"}, [] {
     StationDef d;
     d.layout = loomLayout, d.opened = loomOpened, d.drawBg = loomDrawBg, d.drawTop = loomDrawTop, d.input = loomInput;
     d.resultSlot = 3, d.mayPlace = loomMayPlace, d.quickMove = loomQuickMove;
+    d.partialResult = true;  // a SimpleContainer output
+    d.onTake = [](UiState&, Menu& m) {  // the banner and the dye are used
+        for (int i = 0; i < 2; ++i) m.slots[size_t(i)] = m.slots[size_t(i)].withCount(m.slots[size_t(i)].count - 1);
+    };
     return d;
 }());
 
@@ -683,7 +737,7 @@ void cartoDrawBg(UiState& s, Canvas& c, Menu& m, const Layout&, float left, floa
 
 bool cartoMayPlace(UiState& s, const Menu&, int slot, const ItemStack& st) {
     const std::string n = itemName(s, st);
-    if (slot == 0) return n == "filled_map";
+    if (slot == 0) return s.items.component(st, "map_id").present();
     if (slot == 1) return n == "paper" || n == "map" || n == "glass_pane";
     return true;
 }
@@ -692,7 +746,7 @@ int cartoQuickMove(UiState& s, const Menu&, int index, const ItemStack& st, cons
     if (index == 2) return moveTo(3, 39, true) ? 1 : 0;
     if (index < 2) return moveTo(3, 39, false) ? 1 : 0;
     const std::string n = itemName(s, st);
-    if (n == "filled_map") return moveTo(0, 1, false) ? 1 : 0;
+    if (s.items.component(st, "map_id").present()) return moveTo(0, 1, false) ? 1 : 0;
     if (n == "paper" || n == "map" || n == "glass_pane") return moveTo(1, 2, false) ? 1 : 0;
     if (index < 30) return moveTo(30, 39, false) ? 1 : 0;
     return moveTo(3, 30, false) ? 1 : 0;
@@ -701,10 +755,21 @@ int cartoQuickMove(UiState& s, const Menu&, int index, const ItemStack& st, cons
 const StationRegistrar kCartography({"cartography_table"}, [] {
     StationDef d;
     d.layout = cartoLayout, d.drawBg = cartoDrawBg, d.resultSlot = 2, d.mayPlace = cartoMayPlace, d.quickMove = cartoQuickMove;
+    d.pickAll = 0;
+    d.onTake = [](UiState&, Menu& m) {  // slots 0 and 1 remove(1)
+        for (int i = 0; i < 2; ++i) m.slots[size_t(i)] = m.slots[size_t(i)].withCount(m.slots[size_t(i)].count - 1);
+    };
     return d;
 }());
 
 }  // namespace
+
+bool mapInfo(int id, int& scale, bool& locked) {
+    auto it = g_maps.find(id);
+    if (it == g_maps.end()) return false;
+    scale = it->second.scale, locked = it->second.locked;
+    return true;
+}
 
 const std::vector<u8>* mapColors(int id, u32& version) {
     auto it = g_maps.find(id);

@@ -20,8 +20,11 @@ public:
     bool tracksChunk(int cx, int cz) const { return chunks_.count(World::chunkKey(cx, cz)) != 0; }  // loaded by the server
     Session(Client& client, World& world, BlockRegistry& registry, const GameReports& reports);
 
-    // Before the window opens: waits for the login and the first position from the server.
-    bool join(double timeoutSeconds, PlayerStart& start, Dimension& dimension);
+    // Before the window opens: waits for the login and the first position from the server. With `deferred`, returns
+    // early (false, *deferred set) when the configuration needs the main thread (Client::pollCommon: pack and code of
+    // conduct prompts); `patient`: the timeout only runs once the configuration is over (the player answers prompts).
+    bool join(double timeoutSeconds, PlayerStart& start, Dimension& dimension, bool* deferred = nullptr,
+              bool patient = false);
     // Starts applying the connection to the game (installs Game::onEdit).
     void attach(Game& game, Terrain& terrain);
     // Call once per frame before the game update.
@@ -35,7 +38,6 @@ public:
     void report() const;  // timings
     // The held item's use (food, bows, buckets...) and, unpredicted, a use on a block with the off hand.
     void useItem(int hand);
-    void useItemOn(int hand, const RayHit& hit);
     // Block changes the game's client makes itself (piston moves, blockentity/block_entities.h); the server's updates
     // follow. Main thread, outside the world lock.
     void applyClientBlocks(const std::vector<BlockChange>& changes) { applyBlocks(changes, false); }
@@ -82,6 +84,7 @@ private:
     double sentPos_[3] = {};
     float sentRot_[2] = {};
     bool haveServerPos_ = false, loadedSent_ = false;
+    double levelStart_ = 0;
     int sentSlot_ = -1;
     int sentInput_ = 0;  // ServerboundPlayerInputPacket flags last sent
     bool sentSprinting_ = false, sentFlying_ = false;

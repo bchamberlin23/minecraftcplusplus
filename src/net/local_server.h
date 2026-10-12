@@ -34,9 +34,18 @@ public:
             std::string gameMode = "survival";  // survival / creative / adventure / spectator
             std::string difficulty = "normal";  // peaceful / easy / normal / hard
             bool hardcore = false, cheats = false, structures = true;
+            // Create World's World / More tabs (ui/world_create.cpp):
+            std::string levelType;          // world preset ("minecraft:flat", "minecraft:large_biomes"...); empty: normal
+            std::string generatorSettings;  // Superflat: FlatLevelGeneratorSettings JSON (server.properties)
+            std::string singleBiome;        // Single Biome: its biome (a preset override pack while the world is made)
+            bool bonusChest = false;        // the server's --bonusChest
+            std::vector<std::pair<std::string, std::string>> gameRules;  // set from the console once it is made
+            std::vector<std::string> enabledPacks, disabledPacks;        // initial-enabled-packs (experiments, packs)
         };
         std::optional<Create> create;
         std::string ownerUuid;  // the Java profile id: whose singleplayer player data the save keeps (new worlds)
+        // Optimize World (EditWorldScreen): the server upgrades every chunk first (--forceUpgrade [--eraseCache]).
+        bool forceUpgrade = false, eraseCache = false;
     };
 
     ~LocalServer();
@@ -44,6 +53,9 @@ public:
     bool ready() const { return ready_; }      // accepting connections
     bool upgrading() const { return upgrading_; }  // the world is being converted to this version first
     bool creating() const { return creating_; }    // the server is creating the world (Config::create)
+    // --forceUpgrade: the upgrader's last status line and percentage (-1 until it reports one).
+    std::string upgradeStatus() const;
+    int upgradePercent() const { return upgradePercent_; }
     bool running() const;
     u16 port() const { return port_; }
     // Fabric server: the block table its helper mod wrote (Client::Config::serverRegistries), else empty.
@@ -72,6 +84,9 @@ private:
     HANDLE process_ = nullptr, job_ = nullptr, stdinWrite_ = nullptr, stdoutRead_ = nullptr;
     std::thread reader_;
     std::atomic<bool> ready_{false}, failed_{false}, opJoiners_{false};
+    std::atomic<int> upgradePercent_{-1};
+    mutable std::mutex statusMutex_;
+    std::string upgradeStatus_;
     std::mutex stdinMutex_;
     u16 port_ = 0;
     bool stopped_ = false, upgrading_ = false, creating_ = false;

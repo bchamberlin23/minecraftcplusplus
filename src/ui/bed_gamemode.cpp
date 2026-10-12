@@ -205,6 +205,11 @@ bool worldKey(UiState& s, const InputEvent& e) {
         s.settings.save();
         return true;
     }
+    if (s.isKey(Key::DebugCopyRecreateCommand, e)) {  // F3 + I (debug_packets.cpp); with Shift: the client's data
+        sw.usedAsModifier = true;
+        copyRecreateCommand(s, !s.window->keyDown(VK_SHIFT));
+        return true;
+    }
     if (s.isKey(Key::DebugClearChat, e)) {  // ChatComponent.clearMessages(false): the sent history stays
         sw.usedAsModifier = true;
         s.chatLines.clear();

@@ -15,7 +15,8 @@ enum class FrameGenKind : u8 { Off, Dlss, Fsr, Xess, Count };
 enum class LowLatencyMode : u8 { Off, On, Boost, Count };
 
 struct VideoSettings {
-    u8 shaders = 3;  // ShaderPreset (render/renderer.h): 0 off .. 4 ultra
+    u8 shaders = 3;  // ShaderPreset (render/renderer.h): 0 off .. 4 ultra, 5 path traced
+    u8 pathTracing = 2;  // PathTraceQuality (render/renderer.h) with Shaders: Path Traced: 0 low .. 3 ultra
     UpscalerKind upscaler = UpscalerKind::Taa;
     UpscaleQuality quality = UpscaleQuality::Native;
     float sharpness = 0.35f;              // 0..1, the pipeline's sharpening after the upscaler
@@ -69,6 +70,15 @@ struct VideoSettings {
         if (s == "dlss") return frameGen = FrameGenKind::Dlss, frameGenMultiplier = 2, true;
         if (s.size() == 6 && s.starts_with("dlss") && s[5] == 'x' && s[4] >= '2' && s[4] <= '6')
             return frameGen = FrameGenKind::Dlss, frameGenMultiplier = u32(s[4] - '0'), true;
+        return false;
+    }
+    static const char* pathTracingKey(u8 q) {
+        static const char* n[] = {"low", "medium", "high", "ultra"};
+        return n[q < 4 ? q : 2];
+    }
+    static bool parsePathTracing(std::string_view s, u8& out) {
+        for (u8 i = 0; i < 4; ++i)
+            if (s == pathTracingKey(i)) return out = i, true;
         return false;
     }
     static const char* lowLatencyKey(LowLatencyMode m) {

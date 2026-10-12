@@ -68,6 +68,8 @@ struct Caps {
     const char* lowLatencyName = "";     // "NVIDIA Reflex", "AMD Anti-Lag 2", "Intel XeLL" (with XeSS-FG)
     std::string version[int(UpscalerKind::Count)];
     std::string why[int(UpscalerKind::Count)];  // reason an SDK is unavailable
+    bool rayReconstruction = false;              // DLSS Ray Reconstruction (path tracing)
+    std::string rrWhy = "needs an NVIDIA RTX GPU (DLSS Ray Reconstruction)";
 };
 
 }  // namespace upscale
@@ -106,6 +108,10 @@ public:
     std::vector<UpscaleQuality> qualityModes(UpscalerKind k) const;
     float renderScale(UpscalerKind k, UpscaleQuality q) const;  // render / output per axis
     std::string status() const;  // one line for the Video Settings screen / F3
+    // DLSS Ray Reconstruction (denoiser + upscaler for path tracing): its Upscaler when the selected upscaler is DLSS
+    // and the GPU / driver support it, else nullptr (why in rrWhy()).
+    ::Upscaler* rayReconstruction() const;
+    const std::string& rrWhy() const { return caps_.rrWhy; }
 
     // ---- per frame ----
     void beginFrame();            // main loop, before input / simulation: latency sleep, frame limiter, sim markers
@@ -183,6 +189,7 @@ public:
     virtual void shutdown() {}
     // Super resolution.
     virtual ::Upscaler* upscaler() { return nullptr; }
+    virtual ::Upscaler* rayReconstruction() { return nullptr; }  // denoising upscaler for path tracing
     virtual float scale(UpscaleQuality) const { return 1.0f; }
     virtual void setQuality(UpscaleQuality) {}
     virtual float mipBiasOffset() const { return 0.0f; }  // added to log2(render / output)

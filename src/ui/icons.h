@@ -24,6 +24,7 @@ public:
     ~ItemIcons();
     void init(const Resources& res, const Items& items, Atlas& atlas);
     void setScale(int guiScale);  // re-renders lazily at the new size
+    void reload();                // server resource packs: models and textures again, icons re-rendered lazily
     // The 3D item models (special model renderers: banners, shields, heads ... drawn from the same entity model
     // geometry); until set, special models are simple boxes.
     void setItemModels(ent::ItemModels* models);

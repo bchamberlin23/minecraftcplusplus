@@ -7,6 +7,7 @@
 // are not recorded.
 #include "worldgen/feature_api.h"
 #include "worldgen/java_pos_set.h"
+#include "worldgen/structure_template.h"
 
 #include "assets/assets.h"
 
@@ -1625,7 +1626,8 @@ public:
         for (const BlockPos& p : sides) rocks += valid(p) ? 1 : 0;
         for (const BlockPos& p : sides) holes += level.isEmpty(p) ? 1 : 0;
         if (rocks != rockCount_ || holes != holeCount_) return false;
-        level.setBlock(o, state_);  // (plus a scheduled fluid tick)
+        level.setBlock(o, state_);
+        level.scheduleTick(o, state_, 0, true);
         return true;
     }
 
@@ -1928,13 +1930,6 @@ private:
 // =============================================================================================
 // Dungeon
 // =============================================================================================
-// RandomizableContainer block entities: placing one consumes a loot seed (random.nextLong()).
-bool isLootContainer(std::string_view n) {
-    return n == "minecraft:chest" || n == "minecraft:trapped_chest" || n.ends_with("copper_chest") || n == "minecraft:barrel" ||
-           n == "minecraft:dispenser" || n == "minecraft:dropper" || n == "minecraft:hopper" || n.ends_with("shulker_box") ||
-           n == "minecraft:decorated_pot" || n == "minecraft:crafter";
-}
-
 class MonsterRoomFeature final : public ConfiguredFeature {
 public:
     MonsterRoomFeature(const json&, const FeatureEnv& env) : c_(env) {
@@ -1994,11 +1989,15 @@ public:
                     if (c_.solid(level.block(rel(chestPos, d)))) ++wallCount;
                 if (wallCount != 1) continue;
                 safeSet(chestPos, reorient(level, chestPos, chest_));
-                if (c_.is(level.block(chestPos), "minecraft:chest")) r.nextLong();  // loot table seed
+                if (c_.is(level.block(chestPos), "minecraft:chest"))
+                    level.setLootTable(chestPos, "minecraft:chest", "minecraft:chests/simple_dungeon", r.nextLong());
                 break;
             }
         safeSet(o, spawner_);
-        if (c_.is(level.block(o), "minecraft:spawner")) r.nextInt(4);  // spawner mob (skeleton, zombie x2, spider)
+        if (c_.is(level.block(o), "minecraft:spawner")) {
+            static constexpr const char* kMobs[4] = {"minecraft:skeleton", "minecraft:zombie", "minecraft:zombie", "minecraft:spider"};
+            level.setSpawner(o, kMobs[r.nextInt(4)]);
+        }
         return true;
     }
 
@@ -2029,623 +2028,86 @@ private:
 };
 
 // =============================================================================================
-// Structure templates (data/minecraft/structure/*.nbt) for fossils and the "template" feature
+// Structure templates: fossils and the "template" feature place them with the structures' template code
+// (StructureTemplate.placeInWorld with every processor type), in the decoration's region.
 // =============================================================================================
-struct Nbt {
-    u8 type = 0;
-    i64 i = 0;
-    double d = 0;
-    std::string s;
-    std::vector<Nbt> list;
-    std::vector<std::pair<std::string, Nbt>> compound;
-    const Nbt* get(std::string_view k) const {
-        for (const auto& [key, v] : compound)
-            if (key == k) return &v;
-        return nullptr;
-    }
-};
-
-class NbtReader {
-public:
-    NbtReader(const u8* p, size_t n) : p_(p), end_(p + n) {}
-    bool readRoot(Nbt& out) {
-        const u8 t = u1();
-        if (t != 10) return false;
-        str();
-        read(10, out, 0);
-        return ok_;
-    }
-
-private:
-    u8 u1() {
-        if (p_ >= end_) return ok_ = false, 0;
-        return *p_++;
-    }
-    u64 be(int n) {
-        u64 v = 0;
-        for (int k = 0; k < n; ++k) v = (v << 8) | u1();
-        return v;
-    }
-    std::string str() {
-        const size_t n = size_t(be(2));
-        if (size_t(end_ - p_) < n) return ok_ = false, std::string();
-        std::string s(reinterpret_cast<const char*>(p_), n);
-        p_ += n;
-        return s;
-    }
-    void read(u8 t, Nbt& out, int depth) {
-        out.type = t;
-        if (!ok_ || depth > 64) return void(ok_ = false);
-        switch (t) {
-        case 1: out.i = i8(u1()); break;
-        case 2: out.i = i16(be(2)); break;
-        case 3: out.i = i32(be(4)); break;
-        case 4: out.i = i64(be(8)); break;
-        case 5: {
-            const u32 bits = u32(be(4));
-            float f;
-            std::memcpy(&f, &bits, 4);
-            out.d = f;
-            break;
-        }
-        case 6: {
-            const u64 bits = be(8);
-            std::memcpy(&out.d, &bits, 8);
-            break;
-        }
-        case 7: case 11: case 12: {
-            const i32 n = i32(be(4));
-            const int w = t == 7 ? 1 : t == 11 ? 4 : 8;
-            for (i32 k = 0; k < n && ok_; ++k) {
-                Nbt e;
-                e.type = t == 7 ? 1 : t == 11 ? 3 : 4;
-                e.i = w == 1 ? i64(i8(u1())) : w == 4 ? i64(i32(be(4))) : i64(be(8));
-                out.list.push_back(std::move(e));
-            }
-            break;
-        }
-        case 8: out.s = str(); break;
-        case 9: {
-            const u8 et = u1();
-            const i32 n = i32(be(4));
-            for (i32 k = 0; k < n && ok_; ++k) {
-                Nbt e;
-                read(et, e, depth + 1);
-                out.list.push_back(std::move(e));
-            }
-            break;
-        }
-        case 10:
-            for (;;) {
-                const u8 et = u1();
-                if (!ok_ || et == 0) break;
-                std::string key = str();
-                Nbt e;
-                read(et, e, depth + 1);
-                out.compound.emplace_back(std::move(key), std::move(e));
-            }
-            break;
-        default: ok_ = false;
-        }
-    }
-    const u8* p_;
-    const u8* end_;
-    bool ok_ = true;
-};
-
-// Rotation: NONE, CLOCKWISE_90, CLOCKWISE_180, COUNTERCLOCKWISE_90 (the game's ordinal order).
-Direction rotateDir(Direction d, int rot) {
-    if (d == Down || d == Up) return d;
-    switch (rot) {
-    case 1: return clockWise(d);
-    case 2: return opposite(d);
-    case 3: return counterClockWise(d);
-    default: return d;
-    }
-}
-BlockPos rotatePos(const BlockPos& p, int rot) {  // StructureTemplate.transform, pivot 0, no mirror
-    switch (rot) {
-    case 1: return {-p.z, p.y, p.x};
-    case 2: return {-p.x, p.y, -p.z};
-    case 3: return {p.z, p.y, -p.x};
-    default: return p;
-    }
-}
-int rotationFromName(std::string_view n) {
-    if (n == "clockwise_90") return 1;
-    if (n == "180") return 2;
-    if (n == "counterclockwise_90") return 3;
-    return 0;
-}
-
-// BlockState.rotate for the properties templates use (facing, axis, rotation, side connections).
-using Rotated = std::array<u16, 4>;
-Rotated rotations(const Ctx& c, u16 id) {
-    Rotated out{id, id, id, id};
-    for (int rot = 1; rot < 4; ++rot) {
-        u16 s = id;
-        if (auto f = dirFromName(c.prop(id, "facing")); f) s = c.with(s, "facing", kDirName[rotateDir(*f, rot)]);
-        if (rot != 2) {
-            const std::string_view axis = c.prop(id, "axis");
-            if (axis == "x") s = c.with(s, "axis", "z");
-            else if (axis == "z") s = c.with(s, "axis", "x");
-        }
-        if (const std::string_view rs = c.prop(id, "rotation"); !rs.empty()) s = c.with(s, "rotation", std::to_string((std::stoi(std::string(rs)) + 4 * rot) % 16));
-        bool sides = true;
-        for (Direction d : kHorizontal) sides = sides && c.hasProp(id, kDirName[d]);
-        if (sides)
-            for (Direction d : kHorizontal) s = c.with(s, kDirName[rotateDir(d, rot)], c.prop(id, kDirName[d]));
-        out[size_t(rot)] = s;
-    }
-    return out;
-}
-
-struct Template {
-    BlockPos size;
-    struct Block {
-        BlockPos pos;
-        Rotated state;
-        bool nbt;
-    };
-    std::vector<std::vector<Block>> palettes;
-};
-using TemplateP = std::shared_ptr<const Template>;
-
-bool gunzip(const std::vector<u8>& in, std::vector<u8>& out) {
-    if (in.size() < 18) return false;
-    const size_t n = size_t(in[in.size() - 4]) | size_t(in[in.size() - 3]) << 8 | size_t(in[in.size() - 2]) << 16 | size_t(in[in.size() - 1]) << 24;
-    out.resize(n);
-    libdeflate_decompressor* d = libdeflate_alloc_decompressor();
-    size_t actual = 0;
-    const libdeflate_result res = libdeflate_gzip_decompress(d, in.data(), in.size(), out.data(), out.size(), &actual);
-    libdeflate_free_decompressor(d);
-    out.resize(actual);
-    return res == LIBDEFLATE_SUCCESS;
-}
-
-TemplateP parseTemplate(const Ctx& c, const Nbt& root) {
-    auto t = std::make_shared<Template>();
-    if (const Nbt* s = root.get("size"); s && s->list.size() == 3)
-        t->size = {i32(s->list[0].i), i32(s->list[1].i), i32(s->list[2].i)};
-    std::vector<const Nbt*> palettes;
-    if (const Nbt* ps = root.get("palettes"))
-        for (const Nbt& p : ps->list) palettes.push_back(&p);
-    else if (const Nbt* p = root.get("palette"))
-        palettes.push_back(p);
-    const Nbt* blocks = root.get("blocks");
-    for (const Nbt* pal : palettes) {
-        std::vector<Rotated> states;
-        for (const Nbt& e : pal->list) {
-            const Nbt* name = e.get("id");
-            if (!name) name = e.get("Name");
-            const Nbt* props = e.get("properties");
-            if (!props) props = e.get("Properties");
-            json js{{"Name", name ? name->s : std::string("minecraft:air")}};
-            if (props)
-                for (const auto& [k, v] : props->compound) js["Properties"][k] = v.s;
-            states.push_back(rotations(c, c.blocks().idFor(blockStateKey(js))));
-        }
-        // buildInfoList: full blocks, then other blocks, then block entities, each sorted by y, x, z.
-        std::vector<Template::Block> full, other, entities;
-        if (blocks)
-            for (const Nbt& b : blocks->list) {
-                const Nbt* pos = b.get("pos");
-                const Nbt* st = b.get("state");
-                if (!pos || pos->list.size() != 3) continue;
-                const size_t si = st ? size_t(st->i) : 0;
-                Template::Block info{{i32(pos->list[0].i), i32(pos->list[1].i), i32(pos->list[2].i)},
-                                     si < states.size() ? states[si] : rotations(c, c.def("minecraft:air")), b.get("nbt") != nullptr};
-                if (info.nbt)
-                    entities.push_back(info);
-                else if (c.fullCollision(info.state[0]))
-                    full.push_back(info);
-                else
-                    other.push_back(info);
-            }
-        auto byYXZ = [](const Template::Block& a, const Template::Block& b) {
-            if (a.pos.y != b.pos.y) return a.pos.y < b.pos.y;
-            if (a.pos.x != b.pos.x) return a.pos.x < b.pos.x;
-            return a.pos.z < b.pos.z;
-        };
-        std::stable_sort(full.begin(), full.end(), byYXZ);
-        std::stable_sort(other.begin(), other.end(), byYXZ);
-        std::stable_sort(entities.begin(), entities.end(), byYXZ);
-        std::vector<Template::Block> list = std::move(full);
-        list.insert(list.end(), other.begin(), other.end());
-        list.insert(list.end(), entities.begin(), entities.end());
-        t->palettes.push_back(std::move(list));
-    }
-    return t;
-}
-
-// Loads templates by id ("minecraft:fossil/spine_1"), shared process-wide.
-std::vector<TemplateP> loadTemplates(const Ctx& c, const std::vector<std::string>& ids) {
-    static std::mutex mutex;
-    static std::unordered_map<std::string, TemplateP> cache;
-    std::lock_guard lock(mutex);
-    std::vector<TemplateP> out(ids.size());
-    for (size_t i = 0; i < ids.size(); ++i) {
-        std::string id = ids[i].find(':') == std::string::npos ? "minecraft:" + ids[i] : ids[i];
-        if (auto it = cache.find(id); it != cache.end()) {
-            out[i] = it->second;
-            continue;
-        }
-        const size_t colon = id.find(':');
-        const std::string path = "data/" + id.substr(0, colon) + "/structure/" + id.substr(colon + 1) + ".nbt";
-        std::vector<u8> raw, bytes;
-        Nbt root;
-        // From the game's data with the data packs.
-        const bool ok = c.env().data().readFile(path, raw) && gunzip(raw, bytes) &&
-                        NbtReader(bytes.data(), bytes.size()).readRoot(root);
-        if (!ok) {
-            LOG("features_misc: structure template %s not found or unreadable", id.c_str());
-            continue;
-        }
-        out[i] = cache[id] = parseTemplate(c, root);
-    }
-    return out;
-}
-
-struct BBox {
-    int x0, y0, z0, x1, y1, z1;
-    bool inside(const BlockPos& p) const { return p.x >= x0 && p.x <= x1 && p.z >= z0 && p.z <= z1 && p.y >= y0 && p.y <= y1; }
-};
-
-// StructureProcessor subset used by template features (block_rot, protected_blocks, rule, block_ignore).
-struct Processor {
-    enum class Kind { Rot, Protected, Rule, Ignore, Nop } kind = Kind::Nop;
-    float integrity = 1.0f;
-    bool hasSet = false;
-    BlockSet set;
-    struct Rule {
-        std::shared_ptr<const RuleTest> input, location;
-        Rotated output;
-        int nbt;  // -1 keep, 0 clear, 1 set
-    };
-    std::vector<Rule> rules;
-    std::vector<std::string> ignored;
-};
-
-std::vector<Processor> processorList(const Ctx& c, const json& j) {
-    const json* list = &j;
-    if (j.is_string()) {
-        list = c.env().data().worldgen("processor_list", j.get<std::string>());
-        if (!list) {
-            LOG("features_misc: unknown processor list %s", j.get<std::string>().c_str());
-            return {};
-        }
-    }
-    if (list->is_object()) list = &req(*list, "processors");
-    std::vector<Processor> out;
-    if (!list->is_array()) return out;
-    for (const json& pj : *list) {
-        Processor p;
-        const std::string type = DataPack::normalize(pj.value("processor_type", std::string()));
-        if (type == "block_rot") {
-            p.kind = Processor::Kind::Rot;
-            p.integrity = pj.value("integrity", 1.0f);
-            if (pj.contains("rottable_blocks")) p.hasSet = true, p.set = blockSet(pj["rottable_blocks"]);
-        } else if (type == "protected_blocks") {
-            p.kind = Processor::Kind::Protected;
-            p.set = blockSet(req(pj, "value"));
-        } else if (type == "rule") {
-            p.kind = Processor::Kind::Rule;
-            for (const json& rj : req(pj, "rules")) {
-                if (auto pp = rj.find("position_predicate");
-                    pp != rj.end() && DataPack::normalize(pp->value("predicate_type", std::string())) != "always_true")
-                    LOG("features_misc: rule processor position predicates are not supported (treated as always true)");
-                int nbt = -1;
-                if (auto it = rj.find("block_entity_modifier"); it != rj.end()) {
-                    const std::string m = DataPack::normalize(it->value("type", std::string()));
-                    nbt = m == "passthrough" ? -1 : m == "clear" ? 0 : 1;
-                }
-                p.rules.push_back({c.env().ruleTest(req(rj, "input_predicate")), c.env().ruleTest(req(rj, "location_predicate")),
-                                   rotations(c, c.state(req(rj, "output_state"))), nbt});
-            }
-        } else if (type == "block_ignore") {
-            p.kind = Processor::Kind::Ignore;
-            for (const json& b : req(pj, "blocks")) p.ignored.push_back(std::string(c.name(c.state(b))));
-        } else if (type != "nop") {
-            LOG("features_misc: structure processor %s is not supported (ignored)", type.c_str());
-        }
-        out.push_back(std::move(p));
-    }
-    return out;
-}
-
-// BlockState.updateShape for the blocks whose shape update can change them during world generation
-// (speleothems, potent sulfur, snowy dirt); every other block only schedules ticks there.
-class ShapeUpdater {
-public:
-    ShapeUpdater(const Ctx& c, GenRegion& level) : c_(c), level_(level) {}
-
-    u16 update(u16 s, const BlockPos& p, Direction toNeighbour, u16 neighbour) {
-        if (c_.tag(s, "minecraft:speleothems")) return speleothem(s, p, toNeighbour);
-        if (c_.is(s, "minecraft:potent_sulfur")) return potentSulfur(s, p);
-        if (toNeighbour == Up && c_.hasProp(s, "snowy")) return c_.with(s, "snowy", c_.tag(neighbour, "minecraft:snow"));
-        return s;
-    }
-    // Block.updateFromNeighbourShapes
-    u16 fromNeighbours(u16 s, const BlockPos& p) {
-        static constexpr Direction kOrder[6] = {West, East, North, South, Down, Up};
-        for (Direction d : kOrder) s = update(s, p, d, level_.block(rel(p, d)));
-        return s;
-    }
-    // StructureTemplate.updateShapeAtEdge
-    void edge(const BlockPos& p, Direction d) {
-        const BlockPos n = rel(p, d);
-        const u16 state = level_.block(p), neighbour = level_.block(n);
-        const u16 newState = update(state, p, d, neighbour);
-        if (newState != state) level_.setBlock(p, newState);
-        const u16 newNeighbour = update(neighbour, n, opposite(d), newState);
-        if (newNeighbour != neighbour) level_.setBlock(n, newNeighbour);
-    }
-
-private:
-    bool speleothemWithDirection(u16 s, Direction tip) const {
-        return c_.tag(s, "minecraft:speleothems") && dirFromName(c_.prop(s, "vertical_direction")) == tip;
-    }
-    u16 speleothem(u16 s, const BlockPos& p, Direction toNeighbour) {
-        if (toNeighbour != Up && toNeighbour != Down) return s;
-        const Direction tip = dirFromName(c_.prop(s, "vertical_direction")).value_or(Up);
-        if (tip == Down && std::find(scheduled_.begin(), scheduled_.end(), p) != scheduled_.end()) return s;
-        const Direction base = opposite(tip);
-        if (toNeighbour == base) {
-            const BlockPos behind = rel(p, base);
-            const u16 b = level_.block(behind);
-            if (!(c_.sturdy(level_, behind, tip) || (speleothemWithDirection(b, tip) && c_.name(b) == c_.name(s)))) {
-                scheduled_.push_back(p);  // breaks on its scheduled tick
-                return s;
-            }
-        }
-        const bool mergeOpposingTips = c_.prop(s, "thickness") == "tip_merge";
-        const u16 front = level_.block(rel(p, tip));
-        const char* thickness;
-        if (speleothemWithDirection(front, base) && c_.name(front) == c_.name(s))
-            thickness = !mergeOpposingTips && c_.prop(front, "thickness") != "tip_merge" ? "tip" : "tip_merge";
-        else if (!speleothemWithDirection(front, tip))
-            thickness = "tip";
-        else if (const std::string_view ft = c_.prop(front, "thickness"); ft != "tip" && ft != "tip_merge")
-            thickness = speleothemWithDirection(level_.block(rel(p, base)), tip) ? "middle" : "base";
-        else
-            thickness = "frustum";
-        return c_.with(s, "thickness", thickness);
-    }
-    u16 potentSulfur(u16 s, const BlockPos& p) {  // PotentSulfurBlock.validBlockState
-        if (!c_.sourceWater(level_.block(above(p)))) return c_.with(s, "potent_sulfur_state", "dry");
-        const u16 b = level_.block(below(p));
-        const bool sourceIfFluid = c_.fluidEmpty(b) || c_.fluidSource(b);
-        if (c_.tag(b, "minecraft:causes_continuous_geyser_eruptions") && sourceIfFluid) return c_.with(s, "potent_sulfur_state", "continuous");
-        if (c_.tag(b, "minecraft:causes_periodic_geyser_eruptions") && sourceIfFluid)
-            return c_.prop(s, "potent_sulfur_state") == "erupting" ? s : c_.with(s, "potent_sulfur_state", "dormant");
-        return c_.with(s, "potent_sulfur_state", "wet");
-    }
-
-    const Ctx& c_;
-    GenRegion& level_;
-    std::vector<BlockPos> scheduled_;
-};
-
-// StructureTemplate.placeInWorld (no mirror, pivot 0, waterlogging applied, entities ignored).
-bool placeTemplate(const Ctx& c, GenRegion& level, const Template& t, const BlockPos& position, int rot, const BBox* box,
-                   const std::vector<Processor>& processors, u16 barrier, RandomSource& r) {
-    if (t.palettes.empty()) return false;
-    const std::vector<Template::Block>& blocks = t.palettes[size_t(r.nextInt(int(t.palettes.size())))];
-    if (blocks.empty() || t.size.x < 1 || t.size.y < 1 || t.size.z < 1) return false;
-    // processBlockInfos
-    struct Info {
-        BlockPos pos;
-        Rotated state;
-        bool nbt;
-    };
-    std::vector<Info> processed;
-    for (const Template::Block& b : blocks) {
-        const BlockPos rp = rotatePos(b.pos, rot);
-        const BlockPos wp = rp.offset(position.x, position.y, position.z);
-        if (box && !box->inside(wp)) continue;
-        Info info{wp, b.state, b.nbt};
-        bool keep = true;
-        for (const Processor& p : processors) {
-            switch (p.kind) {
-            case Processor::Kind::Rot:
-                if ((!p.hasSet || p.set.test(c, info.state[0])) && !(r.nextFloat() <= p.integrity)) keep = false;
-                break;
-            case Processor::Kind::Protected:
-                if (p.set.test(c, level.block(info.pos))) keep = false;
-                break;
-            case Processor::Kind::Rule: {
-                LegacyRandom rr(positionSeed(info.pos.x, info.pos.y, info.pos.z));
-                for (const Processor::Rule& rule : p.rules)
-                    if (rule.input->test(info.state[0], info.pos, rr) && rule.location->test(level.block(info.pos), info.pos, rr)) {
-                        info.state = rule.output;
-                        if (rule.nbt >= 0) info.nbt = rule.nbt == 1;
-                        break;
-                    }
-                break;
-            }
-            case Processor::Kind::Ignore:
-                for (const std::string& n : p.ignored)
-                    if (c.is(info.state[0], n)) keep = false;
-                break;
-            case Processor::Kind::Nop: break;
-            }
-            if (!keep) break;
-        }
-        if (keep) processed.push_back(info);
-    }
-    std::vector<BlockPos> toFill, locked, placed;
-    auto waterlog = [&](const BlockPos& p, u16 s, u16 fluidFrom) {  // SimpleWaterloggedBlock.placeLiquid
-        if (c.prop(s, "waterlogged") == "false" && c.sourceWater(fluidFrom)) level.setBlock(p, c.with(s, "waterlogged", true));
-    };
-    for (const Info& info : processed) {
-        if (box && !box->inside(info.pos)) continue;
-        const u16 previous = level.block(info.pos);
-        const u16 state = info.state[size_t(rot)];
-        if (info.nbt) level.setBlock(info.pos, barrier);
-        if (!level.setBlock(info.pos, state)) continue;
-        placed.push_back(info.pos);
-        if (info.nbt && isLootContainer(c.name(state))) r.nextLong();  // LootTableSeed
-        if (c.fluidSource(state)) {
-            locked.push_back(info.pos);
-        } else if (c.hasProp(state, "waterlogged")) {
-            waterlog(info.pos, state, previous);
-            if (!c.fluidSource(previous)) toFill.push_back(info.pos);
-        }
-    }
-    static constexpr Direction kFillDirs[5] = {Up, North, East, South, West};
-    for (bool filled = true; filled && !toFill.empty();) {
-        filled = false;
-        for (size_t i = 0; i < toFill.size();) {
-            const BlockPos p = toFill[i];
-            u16 toPlace = level.block(p);
-            for (int k = 0; k < 5 && !c.fluidSource(toPlace); ++k) {
-                const BlockPos n = rel(p, kFillDirs[k]);
-                const u16 ns = level.block(n);
-                if (c.fluidSource(ns) && std::find(locked.begin(), locked.end(), n) == locked.end()) toPlace = ns;
-            }
-            const u16 s = level.block(p);
-            if (c.fluidSource(toPlace) && c.hasProp(s, "waterlogged")) {
-                waterlog(p, s, toPlace);
-                filled = true;
-                toFill.erase(toFill.begin() + std::ptrdiff_t(i));
-            } else {
-                ++i;
-            }
-        }
-    }
-    if (placed.empty()) return true;
-    // Shape updates: the placed volume's boundary faces (DiscreteVoxelShape.forAllFaces order), then every
-    // placed block against its neighbours.
-    BlockPos lo = placed[0], hi = placed[0];
-    for (const BlockPos& p : placed) {
-        lo = {std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z)};
-        hi = {std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z)};
-    }
-    const int sx = hi.x - lo.x + 1, sy = hi.y - lo.y + 1, sz = hi.z - lo.z + 1;
-    std::vector<u8> shape(size_t(sx) * sy * sz, 0);
-    for (const BlockPos& p : placed) shape[(size_t(p.y - lo.y) * sz + (p.z - lo.z)) * sx + (p.x - lo.x)] = 1;
-    auto full = [&](int x, int y, int z) { return shape[(size_t(y) * sz + z) * sx + x] != 0; };
-    ShapeUpdater updater(c, level);
-    auto emit = [&](Direction d, int x, int y, int z) { updater.edge(lo.offset(x, y, z), d); };
-    for (int x = 0; x < sx; ++x)  // z faces
-        for (int y = 0; y < sy; ++y)
-            for (int z = 0, last = 0; z <= sz; ++z) {
-                const int f = z != sz && full(x, y, z);
-                if (!last && f) emit(North, x, y, z);
-                if (last && !f) emit(South, x, y, z - 1);
-                last = f;
-            }
-    for (int z = 0; z < sz; ++z)  // y faces
-        for (int x = 0; x < sx; ++x)
-            for (int y = 0, last = 0; y <= sy; ++y) {
-                const int f = y != sy && full(x, y, z);
-                if (!last && f) emit(Down, x, y, z);
-                if (last && !f) emit(Up, x, y - 1, z);
-                last = f;
-            }
-    for (int y = 0; y < sy; ++y)  // x faces
-        for (int z = 0; z < sz; ++z)
-            for (int x = 0, last = 0; x <= sx; ++x) {
-                const int f = x != sx && full(x, y, z);
-                if (!last && f) emit(West, x, y, z);
-                if (last && !f) emit(East, x - 1, y, z);
-                last = f;
-            }
-    for (const BlockPos& p : placed) {
-        const u16 s = level.block(p);
-        const u16 n = updater.fromNeighbours(s, p);
-        if (n != s) level.setBlock(p, n);
-    }
-    return true;
-}
-
 class FossilFeature final : public ConfiguredFeature {
 public:
-    FossilFeature(const json& cfg, const FeatureEnv& env) : c_(env) {
-        std::vector<std::string> fossils, overlays;
-        for (const json& j : req(cfg, "fossil_structures")) fossils.push_back(j.get<std::string>());
-        for (const json& j : req(cfg, "overlay_structures")) overlays.push_back(j.get<std::string>());
-        fossils_ = loadTemplates(c_, fossils);
-        overlays_ = loadTemplates(c_, overlays);
-        fossilProcessors_ = processorList(c_, req(cfg, "fossil_processors"));
-        overlayProcessors_ = processorList(c_, req(cfg, "overlay_processors"));
+    FossilFeature(const json& cfg, const FeatureEnv& env) : c_(env), s_(templateEnv(env)) {
+        for (const json& j : req(cfg, "fossil_structures")) fossils_.push_back(s_.templates->get(j.get<std::string>()));
+        for (const json& j : req(cfg, "overlay_structures")) overlays_.push_back(s_.templates->get(j.get<std::string>()));
+        fossilProcessors_ = st::parseProcessors(s_, req(cfg, "fossil_processors"));
+        overlayProcessors_ = st::parseProcessors(s_, req(cfg, "overlay_processors"));
         maxEmptyCorners_ = opt<int>(cfg, "max_empty_corners_allowed", 0);
-        barrier_ = c_.def("minecraft:barrier");
     }
 
     bool place(GenRegion& level, RandomSource& r, const BlockPos& o) const override {
-        const int rot = r.nextInt(4);
+        const st::Rot rotation = st::randomRotation(r);
         const int index = r.nextInt(int(fossils_.size()));
-        const TemplateP base = fossils_[size_t(index)];
-        const TemplateP overlay = index < int(overlays_.size()) ? overlays_[size_t(index)] : nullptr;
-        if (!base || !overlay) return false;
+        if (size_t(index) >= overlays_.size()) return false;
+        const st::Template& base = *fossils_[size_t(index)];
+        const st::Template& overlay = *overlays_[size_t(index)];
         const int cx = o.x >> 4, cz = o.z >> 4;
-        const BBox box{cx * 16 - 16, level.minY(), cz * 16 - 16, cx * 16 + 15 + 16, javaMaxY(level), cz * 16 + 15 + 16};
-        const BlockPos size = rot == 1 || rot == 3 ? BlockPos{base->size.z, base->size.y, base->size.x} : base->size;
+        st::PlaceSettings settings;
+        settings.rotation = rotation;
+        settings.box = st::BBox(cx * 16 - 16, level.minY(), cz * 16 - 16, cx * 16 + 15 + 16, javaMaxY(level), cz * 16 + 15 + 16);
+        settings.random = &r;
+        const BlockPos size = base.sizeFor(rotation);
         const BlockPos lowCorner = o.offset(-size.x / 2, 0, -size.z / 2);
         int lowestSurfaceY = o.y;
         for (int x = 0; x < size.x; ++x)
             for (int z = 0; z < size.z; ++z)
                 lowestSurfaceY = std::min(lowestSurfaceY, level.height(Heightmap::OceanFloorWG, lowCorner.x + x, lowCorner.z + z));
         const int targetY = std::max(lowestSurfaceY - 15 - r.nextInt(10), level.minY() + 10);
-        const BlockPos target = zeroPosition(atY(lowCorner, targetY), rot, base->size.x, base->size.z);
-        if (emptyCorners(level, target, rot, base->size) > maxEmptyCorners_) return false;
-        placeTemplate(c_, level, *base, target, rot, &box, fossilProcessors_, barrier_, r);
-        placeTemplate(c_, level, *overlay, target, rot, &box, overlayProcessors_, barrier_, r);
+        const BlockPos target = st::zeroPositionWithTransform(atY(lowCorner, targetY), st::Mir::None, rotation, base.size.x, base.size.z);
+        // countEmptyCorners of getBoundingBox(settings, target)
+        const st::BBox box = st::templateBox(target, rotation, settings.pivot, settings.mirror, base.size);
+        int empty = 0;
+        for (int x : {box.minX, box.maxX})
+            for (int y : {box.minY, box.maxY})
+                for (int z : {box.minZ, box.maxZ}) {
+                    const u16 s = level.block(BlockPos{x, y, z});
+                    empty += c_.air(s) || c_.is(s, "minecraft:lava") || c_.is(s, "minecraft:water");
+                }
+        if (empty > maxEmptyCorners_) return false;
+        st::setThreadSB(&s_.b);
+        st::PlaceCtx pc{level, s_, s_.b, level.centre().cx, level.centre().cz};
+        settings.processors = fossilProcessors_;
+        st::placeTemplate(pc, base, target, target, settings, r);
+        settings.processors = overlayProcessors_;
+        st::placeTemplate(pc, overlay, target, target, settings, r);
         return true;
     }
 
-private:
-    static BlockPos zeroPosition(const BlockPos& zero, int rot, int sizeX, int sizeZ) {
-        --sizeX, --sizeZ;
-        switch (rot) {
-        case 3: return zero.offset(0, 0, sizeX);
-        case 1: return zero.offset(sizeZ, 0, 0);
-        case 2: return zero.offset(sizeX, 0, sizeZ);
-        default: return zero;
-        }
-    }
-    int emptyCorners(const GenRegion& level, const BlockPos& pos, int rot, const BlockPos& size) const {
-        const BlockPos a = rotatePos({0, 0, 0}, rot), b = rotatePos(size.offset(-1, -1, -1), rot);
-        const int x0 = std::min(a.x, b.x) + pos.x, y0 = std::min(a.y, b.y) + pos.y, z0 = std::min(a.z, b.z) + pos.z;
-        const int x1 = std::max(a.x, b.x) + pos.x, y1 = std::max(a.y, b.y) + pos.y, z1 = std::max(a.z, b.z) + pos.z;
-        int count = 0;
-        for (int z : {z1, z0})
-            for (int y : {y1, y0})
-                for (int x : {x1, x0}) {
-                    const u16 s = level.block(BlockPos{x, y, z});
-                    if (c_.air(s) || c_.lava(s) || c_.water(s)) ++count;
-                }
-        return count;
+    static const st::StructureEnv& templateEnv(const FeatureEnv& env) {
+        if (const st::StructureEnv* s = env.structureEnv()) return *s;
+        throw std::runtime_error("structure templates are unavailable here");
     }
 
+private:
     Ctx c_;
-    std::vector<TemplateP> fossils_, overlays_;
-    std::vector<Processor> fossilProcessors_, overlayProcessors_;
+    const st::StructureEnv& s_;
+    std::vector<const st::Template*> fossils_, overlays_;
+    st::ProcessorList fossilProcessors_, overlayProcessors_;
     int maxEmptyCorners_;
-    u16 barrier_;
 };
 
 class TemplateFeature final : public ConfiguredFeature {
 public:
-    TemplateFeature(const json& cfg, const FeatureEnv& env) : c_(env) {
-        std::vector<std::string> ids;
+    TemplateFeature(const json& cfg, const FeatureEnv& env) : s_(FossilFeature::templateEnv(env)) {
         for (const json& e : req(cfg, "templates")) {
             const json& data = req(e, "data");
             Entry entry;
             entry.weight = e.value("weight", 1);
             if (auto it = data.find("rotations"); it != data.end())
-                for (const json& rj : *it) entry.rotations.push_back(rotationFromName(DataPack::normalize(rj.get<std::string>())));
+                for (const json& rj : *it) entry.rotations.push_back(st::rotFromName(rj.get<std::string>()));
             else
-                entry.rotations = {0, 1, 2, 3};
+                entry.rotations = {st::Rot::None, st::Rot::CW90, st::Rot::CW180, st::Rot::CCW90};
+            entry.tmpl = s_.templates->get(data.value("id", std::string()));
             totalWeight_ += entry.weight;
             entries_.push_back(std::move(entry));
-            ids.push_back(data.value("id", std::string()));
         }
-        const std::vector<TemplateP> loaded = loadTemplates(c_, ids);
-        for (size_t i = 0; i < entries_.size(); ++i) entries_[i].tmpl = loaded[i];
-        if (auto it = cfg.find("processors"); it != cfg.end()) processors_ = processorList(c_, *it);
-        barrier_ = c_.def("minecraft:barrier");
+        if (auto it = cfg.find("processors"); it != cfg.end()) processors_ = st::parseProcessors(s_, *it);
     }
 
     bool place(GenRegion& level, RandomSource& r, const BlockPos& o) const override {
@@ -2657,28 +2119,32 @@ public:
                 entry = &e;
                 break;
             }
-        const int rot = entry->rotations[size_t(r.nextInt(int(entry->rotations.size())))];
-        if (!entry->tmpl) return false;
-        const Template& t = *entry->tmpl;
+        const st::Rot rot = entry->rotations[size_t(r.nextInt(int(entry->rotations.size())))];
+        const st::Template& t = *entry->tmpl;
         // getRotatedOffset: rotation.rotate(axis.getNegative()) * (size along the axis / 2)
-        const Direction dx = rotateDir(West, rot), dz = rotateDir(North, rot);
+        const Direction dx = st::rotate(rot, West), dz = st::rotate(rot, North);
         BlockPos p = o;
         p = p.offset(kDirOffset[dx][0] * (t.size.x / 2), 0, kDirOffset[dx][2] * (t.size.x / 2));
         p = p.offset(kDirOffset[dz][0] * (t.size.z / 2), 0, kDirOffset[dz][2] * (t.size.z / 2));
-        return placeTemplate(c_, level, t, p, rot, nullptr, processors_, barrier_, r);
+        st::PlaceSettings settings;
+        settings.rotation = rot;
+        settings.random = &r;
+        settings.processors = processors_;
+        st::setThreadSB(&s_.b);
+        st::PlaceCtx pc{level, s_, s_.b, level.centre().cx, level.centre().cz};
+        return st::placeTemplate(pc, t, p, p, settings, r);
     }
 
 private:
     struct Entry {
-        TemplateP tmpl;
-        std::vector<int> rotations;
+        const st::Template* tmpl = nullptr;
+        std::vector<st::Rot> rotations;
         int weight = 1;
     };
-    Ctx c_;
+    const st::StructureEnv& s_;
     std::vector<Entry> entries_;
     int totalWeight_ = 0;
-    std::vector<Processor> processors_;
-    u16 barrier_;
+    st::ProcessorList processors_;
 };
 
 // =============================================================================================
@@ -3187,7 +2653,8 @@ public:
                 const u16 s = level.block(p);
                 if (!level.isEmpty(p) && blocksCollision(s)) continue;
                 level.setBlock(p, chest_);
-                if (c_.is(level.block(p), "minecraft:chest")) r.nextLong();  // loot table seed
+                if (c_.is(level.block(p), "minecraft:chest"))
+                    level.setLootTable(p, "minecraft:chest", "minecraft:chests/spawn_bonus_chest", r.nextLong());
                 for (Direction d : kHorizontal) {
                     const BlockPos t = rel(p, d);
                     if (c_.canSurvive(level, torch_, t)) level.setBlock(t, torch_);
