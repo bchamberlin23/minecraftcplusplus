@@ -44,9 +44,12 @@ public:
     struct Attachment {
         i32 entity;
         float hand[2][12];  // right, left arm (ArmedModel.translateToHand)
-        float head[12];     // head part (HeadedModel.translateToHead)
+        float head[12];     // head part (HeadedModel.translateToHead, with CustomHeadLayer.Transforms' scale)
+        float item[12];     // the main hand item of HoldingEntityRenderState layers (fox mouth, crossed arms...; ground)
+        float headY;        // CustomHeadLayer.Transforms: yOffset (items) and skullYOffset (skulls)
+        float skullY;
         u32 light;
-        u8 valid;           // 1 right arm, 2 left arm, 4 head
+        u8 valid;           // 1 right arm, 2 left arm, 4 head, 8 item
         bool babyOffset;    // ItemInHandLayer baby offsets
         bool shadowOnly;    // posed only as a shadow caster (outside the view, or the first-person local player)
     };
@@ -93,6 +96,11 @@ private:
     bool modelEntity(const Entity& e, const TypeDef& d, float pt, const double cam[3], u32 light);
     void speciesRotations(const Entity& e, const TypeDef& d, float pt, float pitch, Mat34& root) const;
     void mobPoses(const Entity& e, const TypeDef& d, const double cam[3], AnimState& s) const;
+    int speciesLayers(const Entity& e, const TypeDef& d, float pt, Layer* layers, int n, int max) const;
+    void blockDecorations(const Entity& e, const TypeDef& d, const Model& m, float pt, const Mat34& root, u32 light,
+                          u32 overlay);
+    int tex(const char* path) const;    // entity texture by path ("creeper/creeper_armor"), cached by literal
+    int model(const char* layer) const;  // model layer ("creeper#armor"), cached by literal
     void freeEntity(const Entity& e, const TypeDef& d, float pt, const double cam[3], u32 light, const float* camRight);
     void emitBlock(u16 block, const Mat34& m, u32 light, u32 overlay);
     void emitFree(const float pos[4][3], const float uv[4][2], const float n[3], u32 tex, u32 color, u32 light,
@@ -106,7 +114,7 @@ private:
     std::vector<TypeDef> defs_;  // by entity type id
 
     ComPtr<ID3D12RootSignature> rootSig_;
-    ComPtr<ID3D12PipelineState> psoCutout_, psoTranslucent_, psoFree_, psoGlint_;
+    ComPtr<ID3D12PipelineState> psoCutout_, psoTranslucent_, psoFree_, psoGlint_, psoAdditive_, psoAdditiveMv_;
     // Shader pipeline: with a motion target (PassContext::motionRtv) and shadow casters (depth only).
     ComPtr<ID3D12PipelineState> psoCutoutMv_, psoTranslucentMv_, psoFreeMv_, psoGlintMv_, psoShadow_, psoShadowFree_;
     ComPtr<ID3D12Resource> quads_, atlas_, upload_;
@@ -121,6 +129,7 @@ private:
     std::vector<u8> hidden_;
     std::vector<u32> translucent_;      // instance ids drawn after the cutout pass
     std::vector<u32> glint_;            // (quad, instance) of enchanted armour, drawn last with the glint
+    std::vector<u32> additive_;         // (quad, instance) of additive layers (energy swirl), after the translucent ones
     std::vector<i32> itemBlocks_;      // item id -> block id (0: not a block), -1 unresolved
     struct CachedLayers {
         Layer layers[6];
@@ -135,7 +144,7 @@ private:
 
     // Last build: reference ranges. Refs: [cutout: camera | shadow only][translucent: camera | shadow only][glint].
     bool prepared_ = false, built_ = false, shadowOnly_ = false;
-    u32 cutoutRefs_ = 0, glintRefs_ = 0, camCutout_ = 0, camTranslucent_ = 0, camFree_ = 0;
+    u32 cutoutRefs_ = 0, glintRefs_ = 0, additiveRefs_ = 0, camCutout_ = 0, camTranslucent_ = 0, camFree_ = 0;
     struct Caster {  // one entity's geometry for the shadow maps (camera-relative bounding sphere)
         float c[3], r;
         u32 ref, refN, tr, trN, free, freeN;

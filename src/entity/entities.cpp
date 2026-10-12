@@ -359,7 +359,7 @@ void readEntityData(net::Reader& r, EventQueue& q, int entityEffect) {
                 keep = false;
                 break;
             }
-            case 18: v.i = r.varInt(), v.f[0] = float(r.varInt()), r.varInt(); break;  // villager data
+            case 18: v.i = r.varInt(), v.f[0] = float(r.varInt()), v.f[1] = float(r.varInt()); break;  // villager data
             case 19: case 20: v.i = r.varInt(); break;  // optional unsigned int, pose
             case 21: case 22: case 23: case 24: case 25: case 26: case 27: case 28: case 29: case 30: case 31: case 32:
                 v.i = r.varInt();  // registry holders (variants)
@@ -964,7 +964,7 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
         else if (idx == d.powered) e.powered = v.i != 0;
         else if (idx == d.mainHand) e.mainArm = int(v.i);
         else if (idx == d.skinParts) e.skinParts = int(v.i);
-        else if (idx == d.villagerData) e.villagerType = int(v.i), e.variant2 = int(v.f[0]);
+        else if (idx == d.villagerData) e.villagerType = int(v.i), e.variant2 = int(v.f[0]), e.villagerLevel = int(v.f[1]);
         else if (idx == d.tameFlags && (name == "minecraft:wolf" || name == "minecraft:cat" || name == "minecraft:nautilus" ||
                                         name == "minecraft:zombie_nautilus"))
             e.tame = (v.i & 4) != 0;  // TamableAnimal.DATA_FLAGS_ID

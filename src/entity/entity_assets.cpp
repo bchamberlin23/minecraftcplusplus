@@ -426,6 +426,15 @@ bool EntityAssets::loadTextures(const fs::path& jar) {
         if (n.starts_with("entity/shield/") && !n.starts_with("entity/shield/shield_base")) continue;
         texs.push_back({file, std::string(n.substr(0, n.size() - 4))});
     }
+    for (const Tex& t : texs) {  // villager hats (VillagerMetadataSection) from the textures' .mcmeta
+        if (!t.key.starts_with("entity/villager/") && !t.key.starts_with("entity/zombie_villager/")) continue;
+        std::vector<u8> meta;
+        if (!src.read(t.path + ".mcmeta", meta)) continue;
+        const json j = json::parse(meta.begin(), meta.end(), nullptr, false);
+        if (!j.is_object() || !j.contains("villager") || !j["villager"].is_object()) continue;
+        const std::string hat = j["villager"].value("hat", "none");
+        villagerHats_[t.key] = hat == "full" ? 2 : hat == "partial" ? 1 : 0;
+    }
     Jobs::parallelFor(texs.size(), [&](size_t i) {
         Tex& t = texs[i];
         std::vector<u8> bytes;
@@ -594,6 +603,11 @@ int EntityAssets::texture(std::string_view path) const {
 }
 
 int EntityAssets::itemTexture(std::string_view item) const { return texture("item/" + std::string(item)); }
+
+int EntityAssets::villagerHat(std::string_view path) const {
+    auto it = villagerHats_.find(std::string(path));
+    return it == villagerHats_.end() ? 0 : it->second;
+}
 
 const TypeInfo* EntityAssets::type(int protocolId) const {
     return protocolId >= 0 && size_t(protocolId) < types_.size() ? &types_[size_t(protocolId)] : nullptr;

@@ -140,7 +140,7 @@ struct Entity {
     bool baby = false;
     float health = 1;
     int variant = 0, variant2 = 0;  // registry/enum variant; secondary (markings, hidden gene, profession...)
-    int villagerType = 0;
+    int villagerType = 0, villagerLevel = 1;
     int wool = 0;                   // sheep: color | 0x10 sheared
     int collar = 14;                // wolf/cat collar dye colour (red by default)
     int dyeColor = -1;              // cushion DATA_COLOR / shulker DATA_COLOR_ID (-1: the type's default)

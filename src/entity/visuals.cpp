@@ -1432,6 +1432,12 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
             pushItem(L, models.mesh(item, e->equipDye[slot], false), k == 0 ? Display::ThirdRight : Display::ThirdLeft,
                      m, a.light, (e->equipFoil >> slot) & 1);
         }
+        if (a.valid & 8) {  // HoldingEntityRenderState: the main hand item with the ground transform
+            Xf m;
+            std::memcpy(m.m, a.item, sizeof(m.m));
+            L.begin((u64(u32(a.entity)) << 4 | 3) + 1);
+            pushItem(L, models.mesh(e->equipment[0], e->equipDye[0], false), Display::Ground, m, a.light, e->equipFoil & 1);
+        }
         const int head = e->equipment[5];
         if ((a.valid & 4) && head >= 0) {
             const ItemModels::Equippable& eq = models.equippable(head);
@@ -1446,10 +1452,11 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
                         ItemModels::skullLayer(models.itemName(head), layer, tex);
                         skullMeshes[size_t(head)] = &models.entityLayerMesh(layer, tex);
                     }
+                    m = xfMul(m, xfTranslate(0, a.skullY, 0));
                     m = xfMul(m, xfScale(1.1875f, 1.1875f, 1.1875f));
                     pushRaw(L, *skullMeshes[size_t(head)], m, a.light);
                 } else {  // translateToHead
-                    m = xfMul(m, xfTranslate(0, -0.25f, 0));
+                    m = xfMul(m, xfTranslate(0, -0.25f + a.headY, 0));
                     m = xfMul(m, xfRotY(180.0f * kDeg));
                     m = xfMul(m, xfScale(0.625f, -0.625f, -0.625f));
                     pushItem(L, models.mesh(head, e->equipDye[5], false), Display::Head, m, a.light, (e->equipFoil >> 5) & 1);

@@ -33,8 +33,9 @@ struct PartMatrix {
 struct Instance {
     uint matrixBase;
     uint color;    // 0xAABBGGRR tint
-    uint light;    // sky << 4 | block; bit 8: full bright (eyes); bit 9: no diffuse shading
-    uint overlay;  // red (hurt) amount in bits 0..7, white flash amount in bits 8..15
+    uint light;    // sky << 4 | block; bit 8: full bright (eyes); bit 9: no diffuse shading; bit 10: scrolled texture
+    uint overlay;  // red (hurt) amount in bits 0..7, white flash amount in bits 8..15; scrolled: u, v offset / 256 in
+                   // bits 16..23, 24..31 (the texture wraps: energy swirl, breeze wind)
     float4 uvRect; // atlas offset (xy) and size (zw)
 };
 struct FreeQuad {
@@ -70,8 +71,9 @@ struct VSOut {
     float fog : FOG;
     float shade : SHADE;       // directional shading alone (shader pipeline)
     nointerpolation uint lightBits : LIGHTBITS;
-    float2 rawUv : TEXCOORD1;  // texture coordinates within the entity texture (glint)
+    float2 rawUv : TEXCOORD1;  // texture coordinates within the entity texture (glint, scrolled textures)
     float4 prevClip : PREVCLIP;  // previous frame's clip position (motion vectors)
+    nointerpolation float4 rect : RECT;  // atlas rect of a scrolled texture (light bit 10)
 };
 
 static const uint kCorner[6] = {0, 1, 2, 0, 2, 3};
@@ -109,8 +111,12 @@ VSOut finish(float3 rel, float3 n, float2 uv, uint layer, uint color, uint light
     o.fog = saturate((length(rel) - gFogParams.x) / max(gFogParams.y - gFogParams.x, 1e-3));
     o.rawUv = 0;
     o.prevClip = 0;
+    o.rect = 0;
     return o;
 }
+
+// The atlas coordinates to sample: scrolled textures wrap within their rect (per pixel).
+float2 atlasUv(VSOut i) { return (i.lightBits & 1024) ? i.rect.xy + frac(i.rawUv) * i.rect.zw : i.uv; }
 
 VSOut EntityModelVS(uint vid : SV_VertexID) {
     uint2 ref = gRefs[gRefBase + vid / 6];
@@ -122,8 +128,13 @@ VSOut EntityModelVS(uint vid : SV_VertexID) {
     float3 rel = float3(dot(m.r0, p), dot(m.r1, p), dot(m.r2, p));
     float3 n = normalize(float3(dot(m.r0.xyz, q.normal), dot(m.r1.xyz, q.normal), dot(m.r2.xyz, q.normal)) + 1e-6);
     float2 uv = inst.uvRect.xy + q.uv[corner] * inst.uvRect.zw;
-    VSOut o = finish(rel, n, uv, 0xFFFFFFFF, inst.color, inst.light, inst.overlay);
+    bool scrolled = (inst.light & 1024) != 0;
+    VSOut o = finish(rel, n, uv, 0xFFFFFFFF, inst.color, inst.light, scrolled ? 0 : inst.overlay);
     o.rawUv = q.uv[corner];
+    if (scrolled) {
+        o.rawUv += float2((inst.overlay >> 16) & 255, inst.overlay >> 24) / 256.0;
+        o.rect = inst.uvRect;
+    }
     PartMatrix pm = gPrevMatrices[inst.matrixBase + q.part];
     o.prevClip = mul(gPrevViewProj, float4(dot(pm.r0, p), dot(pm.r1, p), dot(pm.r2, p), 1));
     return o;
@@ -175,7 +186,7 @@ void EntityShadowPS(ShadowOut i) {
 }
 
 float4 shade(VSOut i, float minAlpha) {
-    float4 t = i.layer == 0xFFFFFFFF ? gAtlas.SampleLevel(gPoint, i.uv, 0)
+    float4 t = i.layer == 0xFFFFFFFF ? gAtlas.SampleLevel(gPoint, atlasUv(i), 0)
                                      : gBlocks.Sample(gBlockSampler, float3(i.uv, float(i.layer & 0xFFFF)));
     float4 c = t * i.tint;
     clip(c.a - minAlpha);
@@ -190,7 +201,7 @@ float4 shade(VSOut i, float minAlpha) {
 // code = sky << 3 | block >> 1 (sky 15: block code at most 5), 126 = full bright. Translucent pixels: the
 // vanilla-lit colour with alpha * 0.49 (coverage below one half marks them). No fog (the pipeline applies it).
 float4 shadePipeline(VSOut i, float minAlpha, bool translucent) {
-    float4 t = i.layer == 0xFFFFFFFF ? gAtlas.SampleLevel(gPoint, i.uv, 0)
+    float4 t = i.layer == 0xFFFFFFFF ? gAtlas.SampleLevel(gPoint, atlasUv(i), 0)
                                      : gBlocks.Sample(gBlockSampler, float3(i.uv, float(i.layer & 0xFFFF)));
     float4 c = t * i.tint;
     clip(c.a - minAlpha);

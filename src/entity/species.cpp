@@ -531,7 +531,7 @@ void tickSpecies(Entity& e, i64 gameTime, const std::unordered_map<int, Entity>&
         }
         case Sp::CopperGolem: {  // CopperGolem.setupAnimationStates
             if (e.mobFlags & 1) break;
-            const int state = int(dataInt(e, "DATA_STATE"));
+            const int state = int(dataInt(e, "COPPER_GOLEM_STATE"));
             if (state == 0) {
                 for (int k = kGolemGet; k <= kGolemDropNo; ++k) stop(e, k);
                 if (s.t[0] == e.age) start(e, kGolemIdle);

@@ -39,7 +39,8 @@ constexpr u64 kFrameBytes = (kFreeOffset + u64(kMaxFree) * 128 + 65535) & ~u64(6
 
 enum LayerFlags : u16 {
     Emissive = 1, Translucent = 2, Additive = 4, TintWool = 8, TintCollar = 16, Armor = 32, Elytra = 64, Glint = 128,
-    Scroll = 256,  // texture coordinates wrap within the texture, scrolled by Layer::scroll (breeze wind, energy swirl)
+    Scroll = 256,     // texture coordinates wrap within the texture, scrolled by Layer::scroll (breeze wind, energy swirl)
+    NoOverlay = 512,  // OverlayTexture.NO_OVERLAY (no hurt tint)
 };
 enum Special : u8 {
     SpNone, SpCow, SpPig, SpChicken, SpSheep, SpWolf, SpCat, SpHorse, SpLlama, SpRabbit, SpParrot, SpFox, SpAxolotl,
@@ -382,9 +383,9 @@ int EntityRenderer::resolve(const Entity& e, const TypeDef& d, Layer* out) {
     if (d.special == SpSalmon) v1 = u64(dataInt(e, "DATA_TYPE", 1));            // Salmon.Variant (medium by default)
     else if (d.special == SpPufferfish) v1 = u64(dataInt(e, "PUFF_STATE", 0));  // the puff state picks the model
     const u64 key = (u64(u32(e.type)) << 48) | (v1 << 36) | ((u64(e.variant2) & 0xFFF) << 24) |
-                    ((u64(e.villagerType) & 0xFF) << 16) | (u64(e.baby) << 0) | (u64(e.tame) << 1) |
+                    ((u64(e.villagerType) & 0xFF) << 16) | (u64(e.villagerLevel & 7) << 13) | (u64(e.baby) << 0) | (u64(e.tame) << 1) |
                     (u64(e.angry) << 2) | (u64(e.slim) << 3) | (u64((e.wool & 0x10) != 0) << 4) |
-                    (u64((e.wool & 15) != 0) << 5) | (u64(e.dyeColor & 31) << 6);
+                    (u64((e.wool & 15) != 0 || (d.special == SpSheep && e.name == "jeb_")) << 5) | (u64(e.dyeColor & 31) << 6);
     auto it = layerCache_.find(key);
     if (it == layerCache_.end()) {
         CachedLayers c;
@@ -393,9 +394,21 @@ int EntityRenderer::resolve(const Entity& e, const TypeDef& d, Layer* out) {
     }
     const CachedLayers& c = it->second;
     const int wool = e.wool & 15;
-    const u32 woolRgb = wool == 0 ? 0xE6E6E6  // ColorLerper SHEEP: white is 0xE6E6E6, others diffuse * 0.75
-                                  : (u32(((kDye[wool] >> 16) & 255) * 0.75f) << 16) |
-                                        (u32(((kDye[wool] >> 8) & 255) * 0.75f) << 8) | u32((kDye[wool] & 255) * 0.75f);
+    auto sheepColor = [](int dye) -> u32 {  // ColorLerper SHEEP: white is 0xE6E6E6, others diffuse * 0.75
+        return dye == 0 ? 0xE6E6E6u
+                        : (u32(((kDye[dye] >> 16) & 255) * 0.75f) << 16) | (u32(((kDye[dye] >> 8) & 255) * 0.75f) << 8) |
+                              u32((kDye[dye] & 255) * 0.75f);
+    };
+    u32 woolRgb = sheepColor(wool);
+    if (d.special == SpSheep && e.name == "jeb_") {  // ColorLerper.getLerpedColor(SHEEP, ageInTicks): 25 ticks a colour
+        const float tick = float(e.age) + world_.partialTick();
+        const int ticks = int(std::floor(tick)), value = ticks / 25;
+        const float sub = (float(ticks % 25) + (tick - std::floor(tick))) / 25.0f;
+        const u32 c1 = sheepColor(value % 16), c2 = sheepColor((value + 1) % 16);
+        woolRgb = 0;
+        for (int k = 0; k < 24; k += 8)
+            woolRgb |= u32(int((c1 >> k) & 255) + int(std::floor(sub * float(int((c2 >> k) & 255) - int((c1 >> k) & 255))))) << k;
+    }
     for (int i = 0; i < c.count; ++i) {
         out[i] = c.layers[i];
         if (out[i].flags & TintWool) out[i].color = abgr(woolRgb);
@@ -549,7 +562,7 @@ int EntityRenderer::resolveUncached(const Entity& e, const TypeDef& d, Layer* ou
         const int color = e.wool & 15;
         const int woolModel = assets_.model(baby ? "sheep_baby#wool" : "sheep#wool");
         const int woolTex = T(baby ? "sheep/sheep_wool_baby" : "sheep/sheep_wool");
-        if (!baby && color != 0) {
+        if (!baby && (color != 0 || e.name == "jeb_")) {
             const int under = assets_.model("sheep#wool_undercoat"), underTex = T("sheep/sheep_wool_undercoat");
             if (under >= 0 && underTex >= 0) out[n++] = {under, underTex, kWhite, TintWool};
         }
@@ -560,15 +573,29 @@ int EntityRenderer::resolveUncached(const Entity& e, const TypeDef& d, Layer* ou
         const int t = withBaby(base);
         if (t >= 0) out[n++] = {out[0].model, t, kWhite, TintCollar};
     }
-    if ((d.special == SpVillager || d.special == SpZombieVillager) && n < 5) {
-        // VillagerProfessionLayer: biome type, then profession (none / nitwit-free) on the same model.
+    if ((d.special == SpVillager || d.special == SpZombieVillager) && n < 4) {
+        // VillagerProfessionLayer: biome type (on the no-hat model when the profession's hat covers it), profession,
+        // profession level badge.
         const std::string dir = d.special == SpVillager ? "villager/" : "zombie_villager/";
         const std::string& type = world_.villagerType(e.villagerType);
         const std::string& prof = world_.profession(e.variant2);
+        const int typeHat = assets_.villagerHat("entity/" + dir + "type/" + type);
+        const int profHat = prof.empty() ? 0 : assets_.villagerHat("entity/" + dir + "profession/" + prof);
+        const bool typeHatVisible = profHat == 0 || (profHat == 1 && typeHat != 2);
+        int typeModel = out[0].model;
+        if (!typeHatVisible) {
+            const std::string base = d.special == SpVillager ? "villager" : "zombie_villager";
+            if (const int m = assets_.model(base + (baby ? "_baby_no_hat#main" : "_no_hat#main")); m >= 0) typeModel = m;
+        }
         const int typeTex = T(dir + (baby ? "baby/" : "type/") + type);
-        if (!type.empty() && typeTex >= 0) out[n++] = {out[0].model, typeTex, kWhite, 0};
+        if (!type.empty() && typeTex >= 0) out[n++] = {typeModel, typeTex, kWhite, 0};
         const int profTex = baby || prof.empty() || prof == "none" ? -1 : T(dir + "profession/" + prof);
-        if (profTex >= 0) out[n++] = {out[0].model, profTex, kWhite, 0};
+        if (profTex >= 0) {
+            out[n++] = {out[0].model, profTex, kWhite, 0};
+            static const char* kLevels[5] = {"stone", "iron", "gold", "emerald", "diamond"};
+            const int levelTex = prof == "nitwit" ? -1 : T(dir + "profession_level/" + kLevels[std::clamp(e.villagerLevel, 1, 5) - 1]);
+            if (levelTex >= 0) out[n++] = {out[0].model, levelTex, kWhite, 0};
+        }
     }
     if (d.special == SpTropicalFish && n < 6) {  // TropicalFishPatternLayer
         const bool large = (e.variant & 0xFF) == 1;
@@ -640,8 +667,9 @@ bool EntityRenderer::create(Renderer& r) {
         return false;
 
     // targets: 1 colour; 2 colour + motion (written); 3 colour + motion (kept); 0 shadow map (depth only)
+    // additive: BlendFunction.ADDITIVE (energy swirl: creeper charge, wither armour)
     auto pso = [&](const void* vs, size_t vsSize, const void* ps, size_t psSize, bool blend, D3D12_CULL_MODE cull,
-                   ComPtr<ID3D12PipelineState>& out, int targets = 1) {
+                   ComPtr<ID3D12PipelineState>& out, int targets = 1, bool additive = false) {
         D3D12_GRAPHICS_PIPELINE_STATE_DESC d{};
         d.pRootSignature = rootSig_.Get();
         d.VS = {vs, vsSize};
@@ -653,6 +681,10 @@ bool EntityRenderer::create(Renderer& r) {
             rt.SrcBlend = D3D12_BLEND_SRC_COLOR, rt.DestBlend = D3D12_BLEND_ONE, rt.BlendOp = D3D12_BLEND_OP_ADD;
             rt.SrcBlendAlpha = D3D12_BLEND_ZERO, rt.DestBlendAlpha = D3D12_BLEND_ONE, rt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
             rt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_RED | D3D12_COLOR_WRITE_ENABLE_GREEN | D3D12_COLOR_WRITE_ENABLE_BLUE;
+        } else if (additive) {
+            rt.BlendEnable = TRUE;
+            rt.SrcBlend = D3D12_BLEND_ONE, rt.DestBlend = D3D12_BLEND_ONE, rt.BlendOp = D3D12_BLEND_OP_ADD;
+            rt.SrcBlendAlpha = D3D12_BLEND_ZERO, rt.DestBlendAlpha = D3D12_BLEND_ONE, rt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
         } else if (blend) {
             rt.BlendEnable = TRUE;
             rt.SrcBlend = D3D12_BLEND_SRC_ALPHA;
@@ -699,6 +731,8 @@ bool EntityRenderer::create(Renderer& r) {
         !pso(SH(EntityModelVS), SH(EntityTranslucentPS), true, back, psoTranslucentMv_, 3) ||
         !pso(SH(EntityFreeVS), SH(EntityCutoutMvPS), false, noCull, psoFreeMv_, 2) ||
         !pso(SH(EntityModelVS), SH(EntityGlintPS), true, noCull, psoGlintMv_, 3) ||
+        !pso(SH(EntityModelVS), SH(EntityTranslucentPS), true, noCull, psoAdditive_, 1, true) ||
+        !pso(SH(EntityModelVS), SH(EntityTranslucentPS), true, noCull, psoAdditiveMv_, 3, true) ||
         !pso(SH(EntityShadowVS), SH(EntityShadowPS), false, noCull, psoShadow_, 0) ||
         !pso(SH(EntityShadowFreeVS), SH(EntityShadowPS), false, noCull, psoShadowFree_, 0))
         return false;
@@ -936,6 +970,210 @@ void EntityRenderer::speciesRotations(const Entity& e, const TypeDef& d, float p
     }
 }
 
+int EntityRenderer::tex(const char* path) const {
+    thread_local std::unordered_map<const char*, int> cache;
+    auto it = cache.find(path);
+    if (it == cache.end()) it = cache.emplace(path, assets_.texture(std::string("entity/") + path)).first;
+    return it->second;
+}
+
+int EntityRenderer::model(const char* layer) const {
+    thread_local std::unordered_map<const char*, int> cache;
+    auto it = cache.find(layer);
+    if (it == cache.end()) it = cache.emplace(layer, assets_.model(layer)).first;
+    return it->second;
+}
+
+// Per-frame textures and layers of the species renderers: getTextureLocation (charging, angry, sleeping, cold,
+// invulnerable...), eyes / emissive / energy swirl layers, iron golem cracks, model tints.
+int EntityRenderer::speciesLayers(const Entity& e, const TypeDef& d, float pt, Layer* L, int n, int max) const {
+    const float age = float(e.age) + pt;
+    auto add = [&](int m, int t, u32 color, u16 flags) -> Layer* {
+        if (m < 0 || t < 0 || n >= max) return nullptr;
+        L[n] = {m, t, color, flags};
+        return &L[n++];
+    };
+    auto setTex = [&](int t) {
+        if (t >= 0) L[0].tex = t;
+    };
+    auto white = [](float a) { return (u32(std::clamp(a, 0.0f, 1.0f) * 255.0f + 0.5f) << 24) | 0xFFFFFFu; };
+    const bool baby = e.baby;
+    switch (d.anim) {
+        case Anim::Bee: {  // BeeRenderer.getTextureLocation
+            const bool nectar = (dataInt(e, "DATA_FLAGS_ID") & 8) != 0;
+            if (e.angry) setTex(nectar ? tex(baby ? "bee/bee_angry_nectar_baby" : "bee/bee_angry_nectar") : tex(baby ? "bee/bee_angry_baby" : "bee/bee_angry"));
+            else if (nectar) setTex(tex(baby ? "bee/bee_nectar_baby" : "bee/bee_nectar"));
+            break;
+        }
+        case Anim::Fox:  // FoxRenderer: the sleeping texture
+            if (dataInt(e, "DATA_FLAGS_ID") & 32)
+                setTex(e.variant == 1 ? tex(baby ? "fox/fox_snow_sleep_baby" : "fox/fox_snow_sleep")
+                                      : tex(baby ? "fox/fox_sleep_baby" : "fox/fox_sleep"));
+            break;
+        case Anim::Ghast:  // GhastRenderer
+            if (dataInt(e, "DATA_IS_CHARGING")) setTex(tex("ghast/ghast_shooting"));
+            break;
+        case Anim::Vex:  // VexRenderer
+            if (dataInt(e, "DATA_FLAGS_ID") & 1) setTex(tex("illager/vex_charging"));
+            break;
+        case Anim::Strider:  // StriderRenderer: cold while out of lava
+            if (dataInt(e, "DATA_SUFFOCATING")) setTex(tex(baby ? "strider/strider_cold_baby" : "strider/strider_cold"));
+            break;
+        case Anim::Rabbit:  // RabbitRenderer: "Toast"
+            if (e.name == "Toast") setTex(tex(baby ? "rabbit/rabbit_toast_baby" : "rabbit/rabbit_toast"));
+            break;
+        case Anim::WitherSkull:  // WitherSkullRenderer: dangerous (blue) skulls
+            if (dataInt(e, "DATA_DANGEROUS")) setTex(tex("wither/wither_invulnerable"));
+            break;
+        case Anim::Arrow:  // TippableArrowRenderer
+            if (e.info && e.info->name == "minecraft:arrow" && dataInt(e, "ID_EFFECT_COLOR", -1) != -1) setTex(tex("projectiles/arrow_tipped"));
+            break;
+        case Anim::Wither: {  // WitherBossRenderer: invulnerable texture blinking; WitherArmorLayer below half health
+            const int inv = int(std::floor(std::max(0.0f, float(dataInt(e, "DATA_ID_INV")) - pt)));
+            if (inv > 0 && (inv > 80 || inv / 5 % 2 != 1)) setTex(tex("wither/wither_invulnerable"));
+            if (e.health <= 150.0f) {
+                if (Layer* l = add(model("wither#armor"), tex("wither/wither_armor"), 0xFF808080u, Additive | Scroll | Emissive | NoOverlay))
+                    l->scroll[0] = std::cos(age * 0.02f) * 3.0f, l->scroll[1] = age * 0.01f;
+            }
+            break;
+        }
+        case Anim::Creeper:  // CreeperPowerLayer
+            if (e.powered)
+                if (Layer* l = add(model("creeper#armor"), tex("creeper/creeper_armor"), 0xFF808080u, Additive | Scroll | Emissive | NoOverlay))
+                    l->scroll[0] = age * 0.01f, l->scroll[1] = age * 0.01f;
+            break;
+        case Anim::Breeze:  // BreezeWindLayer, BreezeEyesLayer
+            if (Layer* l = add(model("breeze#wind"), tex("breeze/breeze_wind"), kWhite, Translucent | Scroll | NoOverlay))
+                l->scroll[0] = age * 0.02f;
+            add(model("breeze#eyes"), tex("breeze/breeze_eyes"), kWhite, Emissive | Translucent | NoOverlay);
+            break;
+        case Anim::Creaking: {  // the eyes (LivingEntityEmissiveLayer, eyes render type): active, or blinking while torn down
+            const bool tearing = dataInt(e, "IS_TEARING_DOWN") != 0;
+            if (tearing ? e.sp.t[4] != 0 : dataInt(e, "IS_ACTIVE") != 0)
+                add(model("creaking#eyes"), tex("creaking/creaking_eyes"), kWhite, Emissive | Translucent | NoOverlay);
+            break;
+        }
+        case Anim::CopperGolem: {  // CopperGolemRenderer: oxidation texture and its eyes
+            static const char* kTex[4] = {"copper_golem/copper_golem", "copper_golem/copper_golem_exposed",
+                                          "copper_golem/copper_golem_weathered", "copper_golem/copper_golem_oxidized"};
+            static const char* kEyes[4] = {"copper_golem/copper_golem_eyes", "copper_golem/copper_golem_eyes_exposed",
+                                           "copper_golem/copper_golem_eyes_weathered", "copper_golem/copper_golem_eyes_oxidized"};
+            const int w = std::clamp(int(dataInt(e, "DATA_WEATHER_STATE")), 0, 3);
+            setTex(tex(kTex[w]));
+            add(L[0].model, tex(kEyes[w]), kWhite, Emissive | Translucent | NoOverlay);
+            break;
+        }
+        case Anim::Warden: {  // WardenRenderer's LivingEntityEmissiveLayers (entity translucent emissive, with alpha)
+            auto lerpA = [&](int i) { return (e.sp.ao[i] + (e.sp.a[i] - e.sp.ao[i]) * pt) / 10.0f; };
+            add(model("warden#bioluminescent"), tex("warden/warden_bioluminescent_layer"), kWhite, Emissive | Translucent);
+            const float spots = std::cos(age * 0.045f) * 0.25f;
+            if (spots > 1e-5f) add(model("warden#pulsating_spots"), tex("warden/warden_pulsating_spots_1"), white(spots), Emissive | Translucent);
+            if (-spots > 1e-5f) add(model("warden#pulsating_spots"), tex("warden/warden_pulsating_spots_2"), white(-spots), Emissive | Translucent);
+            if (const float t = lerpA(kTendril); t > 1e-5f) add(model("warden#tendrils"), tex("warden/warden"), white(t), Emissive | Translucent);
+            if (const float h = lerpA(kHeart); h > 1e-5f) add(model("warden#heart"), tex("warden/warden_heart"), white(h), Emissive | Translucent);
+            break;
+        }
+        case Anim::IronGolem: {  // IronGolemCrackinessLayer (Crackiness.GOLEM by health, 100 max)
+            const float f = e.health / 100.0f;
+            const char* crack = f < 0.25f ? "iron_golem/iron_golem_crackiness_high" : f < 0.5f ? "iron_golem/iron_golem_crackiness_medium"
+                                : f < 0.75f ? "iron_golem/iron_golem_crackiness_low" : nullptr;
+            if (crack) add(L[0].model, tex(crack), kWhite, 0);
+            break;
+        }
+        case Anim::Wolf: {  // WolfRenderer.getModelTint: darker while wet
+            if (e.sp.t[1]) {
+                const float shake = e.sp.ao[kShake] + (e.sp.a[kShake] - e.sp.ao[kShake]) * pt;
+                const float shade = std::min(0.75f + shake / 2.0f * 0.25f, 1.0f);
+                const u32 g = u32(shade * 255.0f + 0.5f);
+                L[0].color = 0xFF000000u | g << 16 | g << 8 | g;
+            }
+            break;
+        }
+        case Anim::Dragon:  // EnderDragonRenderer: the eyes
+            add(L[0].model, tex("enderdragon/dragon_eyes"), kWhite, Emissive | Translucent | NoOverlay);
+            break;
+        default: break;
+    }
+    return n;
+}
+
+// Block models worn or carried by mobs: MushroomCowMushroomLayer, CarriedBlockLayer, IronGolemFlowerLayer,
+// SnowGolemHeadLayer, BlockDecorationLayer (copper golem antenna). The posed base model's matrices are in mats_.
+void EntityRenderer::blockDecorations(const Entity& e, const TypeDef& d, const Model& m, float pt, const Mat34& rootIn,
+                                      u32 light, u32 overlay) {
+    const M34& root = *reinterpret_cast<const M34*>(&rootIn);
+    const M34* pm = reinterpret_cast<const M34*>(mats_.data());
+    BlockRegistry& reg = world_.registry();
+    auto blockId = [&](const char* name) -> u16 {
+        thread_local std::unordered_map<const char*, u16> cache;
+        auto it = cache.find(name);
+        if (it == cache.end()) it = cache.emplace(name, reg.idFor(world_.reports().complete(name))).first;
+        return it->second;
+    };
+    auto emit = [&](u16 block, const M34& mm, u32 ov) {
+        if (block) emitBlock(block, *reinterpret_cast<const Mat34*>(&mm), light, ov);
+    };
+    auto part = [&](std::string_view name, M34& out) {
+        const int i = m.part(name);
+        if (i < 0) return false;
+        out = pm[i];
+        return true;
+    };
+    switch (d.anim) {
+        case Anim::Quadruped:
+            if (d.special == SpMooshroom && !e.baby) {  // three mushrooms: two on the back, one on the head
+                const u16 b = blockId(e.variant == 1 ? "minecraft:brown_mushroom" : "minecraft:red_mushroom");
+                auto finish = [&](M34 x) { return mul(mul(x, scale(-1, -1, 1)), translate(-0.5f, -0.5f, -0.5f)); };
+                emit(b, finish(mul(mul(root, translate(0.2f, -0.35f, 0.5f)), rotY(-48.0f * kDeg))), overlay);
+                emit(b, finish(mul(mul(mul(mul(root, translate(0.2f, -0.35f, 0.5f)), rotY(42.0f * kDeg)), translate(0.1f, 0, -0.6f)),
+                                   rotY(-48.0f * kDeg))), overlay);
+                M34 head;
+                if (part("head", head)) emit(b, finish(mul(mul(head, translate(0, -0.7f, -0.2f)), rotY(-78.0f * kDeg))), overlay);
+            }
+            break;
+        case Anim::Enderman: {  // CarriedBlockLayer
+            const int state = int(dataInt(e, "DATA_CARRY_STATE"));
+            if (state <= 0) break;
+            M34 x = mul(mul(mul(root, translate(0, 0.6875f, -0.75f)), rotX(20.0f * kDeg)), rotY(45.0f * kDeg));
+            x = mul(mul(mul(x, translate(0.25f, 0.1875f, 0.25f)), scale(-0.5f, -0.5f, 0.5f)), rotY(kPi / 2));
+            emit(world_.localBlock(state), x, 0);
+            break;
+        }
+        case Anim::IronGolem: {  // IronGolemFlowerLayer (while offering a flower)
+            M34 arm;
+            if (e.sp.t[1] <= 0 || !part("right_arm", arm)) break;
+            M34 x = mul(mul(arm, translate(-1.1875f, 1.0625f, -0.9375f)), translate(0.5f, 0.5f, 0.5f));
+            x = mul(mul(mul(x, scale(0.5f, 0.5f, 0.5f)), rotX(-kPi / 2)), translate(-0.5f, -0.5f, -0.5f));
+            emit(blockId("minecraft:poppy"), x, 0);
+            break;
+        }
+        case Anim::SnowGolem: {  // SnowGolemHeadLayer (SnowGolem.hasPumpkin)
+            M34 head;
+            if (!(dataInt(e, "DATA_PUMPKIN_ID", 16) & 16) || !part("head", head)) break;
+            M34 x = mul(mul(mul(head, translate(0, -0.34375f, 0)), rotY(kPi)), scale(0.625f, -0.625f, -0.625f));
+            emit(blockId("minecraft:carved_pumpkin"), mul(x, translate(-0.5f, -0.5f, -0.5f)), overlay);
+            break;
+        }
+        case Anim::CopperGolem: {  // BlockDecorationLayer: a block item on the antenna (the saddle slot)
+            const int item = e.equipment[7];
+            M34 head;
+            if (item < 0 || !part("head", head)) break;
+            if (itemBlocks_.size() < assets_.itemNames().size()) itemBlocks_.assign(assets_.itemNames().size(), -1);
+            i32& cached = itemBlocks_[size_t(item)];
+            if (cached < 0) {
+                const std::string key = "minecraft:" + assets_.itemNames()[size_t(item)];
+                cached = world_.reports().hasBlock(key) ? reg.idFor(world_.reports().complete(key)) : 0;
+            }
+            // applyBlockOnAntennaTransform, then translation(-0.5, 0, -0.5).rotateAround(Z 180, 0.5, 0.5, 0.5)
+            M34 x = mul(mul(head, translate(0, -1.75f, 0)), translate(-0.5f, 0, -0.5f));
+            x = mul(mul(mul(x, translate(0.5f, 0.5f, 0.5f)), rotZ(kPi)), translate(-0.5f, -0.5f, -0.5f));
+            emit(u16(cached), x, 0);
+            break;
+        }
+        default: break;
+    }
+}
+
 // Mob arm poses: HumanoidMobRenderer.getArmPose (spears; the skeletons' bow, the drowned's trident), PiglinArmPose,
 // IllagerArmPose; the guardian's eye target (GuardianRenderer.getEntityToLookAt).
 void EntityRenderer::mobPoses(const Entity& e, const TypeDef& d, const double cam[3], AnimState& s) const {
@@ -1014,6 +1252,7 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
     int layerCount = 0;
     if (d.kind == Kind::Mob) layerCount = resolve(e, d, layers);
     if (!layerCount) return false;
+    layerCount = speciesLayers(e, d, pt, layers, layerCount, 16);
     if (e.category == Category::Living || e.category == Category::Player)
         layerCount += equipmentLayers(e, d, layers + layerCount, 16 - layerCount);
 
@@ -1365,24 +1604,123 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
             a.light = light;
             a.babyOffset = e.baby && d.special != SpArmorStand;
             a.shadowOnly = shadowOnly_;
+            const M34* pm = reinterpret_cast<const M34*>(mats_.data());
+            auto partMat = [&](std::string_view name, M34& out) {
+                const int i = m.part(name);
+                if (i < 0 || hidden_[size_t(i)] == 1) return false;
+                out = pm[i];
+                return true;
+            };
+            // ArmedModel.translateToHand of each model (an arm moved sideways for skeletons and slim players; the
+            // allay's body, the vex's / copper golem's scaled arms).
             const i16 arms[2] = {m.role(RightArm), m.role(LeftArm)};
-            for (int k = 0; k < 2; ++k) {
+            bool handItems = true;  // illagers show items only while attacking / casting
+            if (d.anim == Anim::Illager) {
+                const std::string& n = e.info ? e.info->name : std::string();
+                const bool casting = dataInt(e, "DATA_SPELL_CASTING_ID") > 0, aggressive = (e.mobFlags & 4) != 0;
+                handItems = n == "minecraft:vindicator" ? aggressive : n == "minecraft:evoker" ? casting
+                          : n == "minecraft:illusioner" ? casting || aggressive : true;
+            }
+            for (int k = 0; k < 2 && handItems; ++k) {
                 if (arms[k] < 0 || hidden_[size_t(arms[k])]) continue;
-                M34 hm = *reinterpret_cast<const M34*>(&mats_[size_t(arms[k])]);
-                if (d.special == SpPlayer && e.slim) {  // PlayerModel.translateToHand: slim arms move 0.5 px out
+                M34 hm = pm[arms[k]];
+                const float side = k == 0 ? 1.0f : -1.0f;
+                const float shift = d.special == SpPlayer && e.slim ? 0.5f : d.anim == Anim::Skeleton ? 1.0f : 0.0f;
+                if (shift != 0) {  // part.x += offset while translating
                     const ModelPart& ap = m.parts[size_t(arms[k])];
-                    const M34 par = ap.parent >= 0 ? *reinterpret_cast<const M34*>(&mats_[size_t(ap.parent)]) : root;
-                    const float off = (k == 0 ? 0.5f : -0.5f) / 16.0f;
-                    for (int r = 0; r < 3; ++r) hm.m[r * 4 + 3] += par.m[r * 4] * off;
+                    const M34 par = ap.parent >= 0 ? pm[ap.parent] : layerRoot;
+                    for (int r = 0; r < 3; ++r) hm.m[r * 4 + 3] += par.m[r * 4] * side * shift / 16.0f;
+                }
+                if (d.anim == Anim::Allay) {
+                    M34 body;
+                    if (!partMat("body", body)) continue;
+                    hm = mul(mul(body, translate(0, 0.0625f, 0.1875f)), rotX(poses_[size_t(m.part("right_arm"))].xRot));
+                    hm = mul(mul(hm, scale(0.7f, 0.7f, 0.7f)), translate(0.0625f, 0, 0));
+                } else if (d.anim == Anim::Vex) {
+                    hm = mul(mul(hm, scale(0.55f, 0.55f, 0.55f)), translate(side * 0.046875f, -0.15625f, 0.078125f));
+                } else if (d.anim == Anim::CopperGolem) {
+                    if (dataInt(e, "COPPER_GOLEM_STATE") == 0) hm = mul(mul(hm, rotY((k == 0 ? -90.0f : 90.0f) * kDeg)), translate(0, 0, 0.125f));
+                    else hm = mul(mul(hm, scale(0.55f, 0.55f, 0.55f)), translate(-0.125f, 0.3125f, -0.1875f));
                 }
                 std::memcpy(a.hand[k], hm.m, sizeof(a.hand[k]));
                 a.valid |= u8(1 << k);
             }
-            if (const i16 h = m.role(Head); h >= 0) {
-                std::memcpy(a.head, &mats_[size_t(h)], sizeof(a.head));
+            if (const i16 h = m.role(Head); h >= 0) {  // CustomHeadLayer: Transforms' scale outside the model
+                float hs = 1.0f, vs = 1.0f;
+                if (d.anim == Anim::Piglin || d.anim == Anim::ZombifiedPiglin) hs = 1.0019531f;
+                else if (d.special == SpVillager || d.special == SpZombieVillager) a.headY = -0.1171875f, a.skullY = -0.07421875f;
+                M34 hm = pm[h];
+                if (hs != 1.0f || vs != 1.0f) {  // root * scale * (the model's own chain)
+                    M34 chain = M34::identity();
+                    for (int i = h; i >= 0; i = m.parts[size_t(i)].parent) chain = mul(partLocal(poses_[size_t(i)]), chain);
+                    hm = mul(mul(layerRoot, scale(hs, vs, hs)), chain);
+                }
+                if (d.anim == Anim::CopperGolem) hm = mul(mul(hm, translate(0, 0.125f, 0)), scale(1.0625f, 1.0625f, 1.0625f));
+                std::memcpy(a.head, hm.m, sizeof(a.head));
                 a.valid |= 4;
             }
+            // HoldingEntityRenderState layers: the main hand item (ground transform) in the mouth / by the arms.
+            if (e.equipment[0] >= 0) {
+                M34 im;
+                bool item = false;
+                const float headYaw = s.headYaw, headPitch = s.pitch;
+                switch (d.anim) {
+                    case Anim::Fox: {  // FoxHeldItemLayer
+                        const int hi = m.part("head");
+                        if (hi < 0) break;
+                        const PartPose& hp = poses_[size_t(hi)];
+                        const bool sleeping = (dataInt(e, "DATA_FLAGS_ID") & 32) != 0;
+                        im = mul(root, translate(hp.x / 16.0f, hp.y / 16.0f, hp.z / 16.0f));
+                        if (e.baby) im = mul(im, scale(0.75f, 0.75f, 0.75f));
+                        const float roll = (e.sp.ao[kFoxInterest] + (e.sp.a[kFoxInterest] - e.sp.ao[kFoxInterest]) * pt) * 0.11f * kPi;
+                        im = mul(mul(mul(im, rotZ(roll)), rotY(headYaw * kDeg)), rotX(headPitch * kDeg));
+                        im = mul(im, e.baby ? (sleeping ? translate(0.4f, 0.26f, 0.15f) : translate(0.06f, 0.26f, -0.5f))
+                                            : (sleeping ? translate(0.46f, 0.26f, 0.22f) : translate(0.06f, 0.27f, -0.5f)));
+                        im = mul(im, rotX(kPi / 2));
+                        if (sleeping) im = mul(im, rotZ(kPi / 2));
+                        item = true;
+                        break;
+                    }
+                    case Anim::Dolphin: {  // DolphinCarryingItemLayer
+                        const float ax = std::abs(headPitch) / 60.0f;
+                        im = mul(root, headPitch < 0 ? translate(0, 1.0f - ax * 0.5f, -1.0f + ax * 0.5f)
+                                                     : translate(0, 1.0f + ax * 0.8f, -1.0f + ax * 0.2f));
+                        item = true;
+                        break;
+                    }
+                    case Anim::Panda: {  // PandaHoldsItemLayer: while sitting and not scared
+                        if (!(dataInt(e, "DATA_ID_FLAGS") & 8) || (e.variant == 2 && speciesThundering())) break;
+                        float z = -0.6f, y = 1.4f;
+                        if (dataInt(e, "EAT_COUNTER") > 0) {
+                            const float a6 = (float(e.age) + pt) * 0.6f;
+                            z -= 0.2f * std::sin(a6) + 0.2f, y -= 0.09f * std::sin(a6);
+                        }
+                        im = mul(root, translate(0.1f, y, z));
+                        item = true;
+                        break;
+                    }
+                    case Anim::Witch:
+                    case Anim::Villager:
+                    case Anim::WanderingTrader: {  // WitchItemLayer (a potion by the nose) / CrossedArmsItemLayer
+                        const std::string& held = assets_.itemNames()[size_t(e.equipment[0])];
+                        if (d.anim == Anim::Witch && held == "potion") {
+                            if (!partMat("nose", im)) break;
+                            im = mul(mul(im, translate(0.0625f, 0.25f, 0)), rotZ(kPi));
+                            im = mul(mul(mul(im, rotX(140.0f * kDeg)), rotZ(10.0f * kDeg)), rotX(kPi));
+                        } else {
+                            if (!partMat("arms", im)) break;
+                            im = mul(mul(im, rotX(0.75f)), scale(1.07f, 1.07f, 1.07f));
+                            im = mul(mul(im, translate(0, 0.13f, -0.34f)), rotX(kPi));
+                        }
+                        item = true;
+                        break;
+                    }
+                    default: break;
+                }
+                if (item) std::memcpy(a.item, im.m, sizeof(a.item)), a.valid |= 8;
+            }
             if (a.valid) attachments_.push_back(a);
+            blockDecorations(e, d, m, pt, *reinterpret_cast<const Mat34*>(&root), light, overlay);
         }
         const u32 base = matCount_;
         std::memcpy(frameBase_ + kMatOffset + u64(base) * 48, mats_.data(), parts * 48);
@@ -1392,11 +1730,16 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
             entHash_ = entHash_ * 31 + u32(L.model) * 7 + u32(parts);
         }
         const TexRect& tr = assets_.rect(L.tex);
-        GpuInstance inst{base, L.color, (L.flags & Emissive) ? (light | 256u) : light, overlay,
+        GpuInstance inst{base, L.color, (L.flags & Emissive) ? (light | 256u) : light, (L.flags & NoOverlay) ? 0u : overlay,
                          {tr.u0, tr.v0, tr.du, tr.dv}};
+        if (L.flags & Scroll) {  // RenderTypes.energySwirl / breezeWind: the texture offset (bits 16..31, 1/256 steps)
+            auto frac256 = [](float v) { return u32(int(std::floor((v - std::floor(v)) * 256.0f)) & 255); };
+            inst.light |= 1024u | 512u;  // scrolled, NO_CARDINAL_LIGHTING
+            inst.overlay = frac256(L.scroll[0]) << 16 | frac256(L.scroll[1]) << 24;
+        }
         const u32 instId = instCount_++;
         std::memcpy(frameBase_ + kInstOffset + u64(instId) * 32, &inst, 32);
-        const bool translucent = (L.flags & Translucent) != 0;
+        const bool translucent = (L.flags & (Translucent | Additive)) != 0;
         if (pack_) {  // shader pack: the posed quads as vertices (entity atlas coordinates)
             const auto& quads = assets_.quads();
             // Armour glint (TextureTransform.setupGlintTexturing, scale 0.16, glint speed 0.5) as gbuffers_armor_glint
@@ -1435,11 +1778,13 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         }
         u32* refs = reinterpret_cast<u32*>(frameBase_ + kRefOffset);
         for (size_t i = 0; i < parts; ++i) {
-            if (hidden_[i]) continue;
+            if (hidden_[i]) continue;  // hidden, or skipDraw (2): the children are drawn
             const ModelPart& part = m.parts[i];
             for (u32 q = part.quadFirst; q < part.quadFirst + part.quadCount; ++q) {
                 if ((L.flags & Glint) && !shadowOnly_) glint_.push_back(q), glint_.push_back(instId);
-                if (translucent) {
+                if (L.flags & Additive) {
+                    if (!shadowOnly_) additive_.push_back(q), additive_.push_back(instId);
+                } else if (translucent) {
                     translucent_.push_back(q);
                     translucent_.push_back(instId);
                 } else {
@@ -1668,6 +2013,7 @@ void EntityRenderer::build(const PassContext& ctx) {
     matCount_ = instCount_ = refCount_ = freeCount_ = 0;
     pack_ = ctx.pack;
     translucent_.clear();
+    additive_.clear();
     glint_.clear();
     ++buildFrame_;
 
@@ -1846,6 +2192,10 @@ void EntityRenderer::build(const PassContext& ctx) {
     std::memcpy(refs + u64(refCount_) * 2, translucent_.data(), u64(extra) * 8);
     refCount_ += extra;
     camTranslucent_ = std::min(camTranslucent_, extra);
+    additiveRefs_ = refCount_;
+    const u32 additives = std::min<u32>(u32(additive_.size() / 2), kMaxRefs - refCount_);
+    std::memcpy(refs + u64(refCount_) * 2, additive_.data(), u64(additives) * 8);
+    refCount_ += additives;
     glintRefs_ = refCount_;
     const u32 glints = std::min<u32>(u32(glint_.size() / 2), kMaxRefs - refCount_);
     std::memcpy(refs + u64(refCount_) * 2, glint_.data(), u64(glints) * 8);
@@ -1937,6 +2287,7 @@ void EntityRenderer::record(const PassContext& ctx) {
     drawRange((mv ? psoCutoutMv_ : psoCutout_).Get(), 0, camCutout_);
     drawRange((mv ? psoFreeMv_ : psoFree_).Get(), 0, camFree_);
     drawRange((mv ? psoTranslucentMv_ : psoTranslucent_).Get(), cutoutRefs_, camTranslucent_);
+    drawRange((mv ? psoAdditiveMv_ : psoAdditive_).Get(), additiveRefs_, glintRefs_ - additiveRefs_);
     if (assets_.texture("misc/enchanted_glint_armor") >= 0)
         drawRange((mv ? psoGlintMv_ : psoGlint_).Get(), glintRefs_, refCount_ - glintRefs_);
     if (mv) list->OMSetRenderTargets(1, &ctx.colorRtv, FALSE, &ctx.dsv);

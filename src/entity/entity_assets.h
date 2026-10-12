@@ -116,6 +116,9 @@ public:
 
     int texture(std::string_view path) const;  // "entity/cow/cow_temperate" (no extension); -1 if missing
     int itemTexture(std::string_view item) const;  // item name without namespace; -1 if missing
+    // VillagerMetadataSection.hat of a villager type / profession texture ("entity/villager/profession/farmer"):
+    // 0 none, 1 partial, 2 full.
+    int villagerHat(std::string_view path) const;
     const TexRect& rect(int tex) const { return rects_[size_t(tex)]; }
     const std::vector<u8>& atlas() const { return atlas_; }
     u32 atlasWidth() const { return atlasW_; }
@@ -151,6 +154,7 @@ private:
     std::vector<std::string> items_;
     std::unordered_map<std::string, std::vector<Variant>> variants_;
     std::unordered_map<std::string, KeyAnimation> animations_;
+    std::unordered_map<std::string, int> villagerHats_;
 };
 
 }  // namespace ent
