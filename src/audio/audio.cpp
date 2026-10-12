@@ -560,6 +560,16 @@ void AudioSystem::tick() {
     tickAmbient(ambientEnv ? &ambientEnv->ambient : nullptr);
 }
 
+void AudioSystem::setScreenMusic(std::string_view event) {
+    const int id = event.empty() || !ready() ? -1 : bank_.eventId(event);
+    if (id < 0 && screenMusic_.event >= 0 && music_ && musicEvent_ == screenMusic_.event) {  // MusicManager.stopPlaying
+        engine_.stopHandle(music_);
+        music_ = 0, musicEvent_ = -1;
+        nextSongDelay_ = 100;
+    }
+    screenMusic_ = MusicDef{id, 0, 0, true};  // Musics.CREDITS: no delay, replaces what plays
+}
+
 // MusicManager.tick with the default music frequency.
 void AudioSystem::tickMusic(const AudioEnvironment* env, bool creative, bool underwater, float volume) {
     constexpr int kMaxFrequency = 20 * 1200;
@@ -579,12 +589,12 @@ void AudioSystem::tickMusic(const AudioEnvironment* env, bool creative, bool und
         if (musicGain_ <= 1.0E-4f) {
             engine_.stopHandle(music_);
             music_ = 0;
-            nextSongDelay_ = nextDelay(env ? env->music.select(creative, underwater) : nullptr) + 100;
+            nextSongDelay_ = nextDelay(screenMusic_.event >= 0 ? &screenMusic_ : env ? env->music.select(creative, underwater) : nullptr) + 100;
             return;
         }
         engine_.setMusicFade(musicGain_);
     }
-    const MusicDef* music = env ? env->music.select(creative, underwater) : nullptr;
+    const MusicDef* music = screenMusic_.event >= 0 ? &screenMusic_ : env ? env->music.select(creative, underwater) : nullptr;
     if (!music) {
         nextSongDelay_ = std::max(nextSongDelay_, 100);
         return;

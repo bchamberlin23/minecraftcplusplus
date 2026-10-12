@@ -1107,7 +1107,8 @@ void Ui::State::runScript(double) {
                 {"pause", Screen::Pause},         {"options", Screen::Options},     {"online", Screen::Online},
                 {"skin", Screen::SkinCustomization}, {"sounds", Screen::Sounds},    {"video", Screen::Video},
                 {"videoextra", Screen::VideoExtra}, {"controls", Screen::Controls}, {"mouse", Screen::MouseSettings},
-                {"keybinds", Screen::KeyBinds},   {"accessibility", Screen::Accessibility}, {"none", Screen::None}};
+                {"keybinds", Screen::KeyBinds},   {"accessibility", Screen::Accessibility}, {"credits", Screen::CreditsAttribution},
+                {"none", Screen::None}};
             for (auto [n, sc] : kScreens)
                 if (arg(0) == n) sc == Screen::None ? closeScreen() : openScreen(sc);
         } else if (st.verb == "fullscreen") {

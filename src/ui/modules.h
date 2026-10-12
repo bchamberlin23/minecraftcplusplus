@@ -73,6 +73,9 @@ struct StationRegistrar {
 };
 const StationDef* stationFor(const std::string& menuType);  // "anvil" (minecraft:menu key without namespace)
 
+// WinScreen: the End poem (and credits) after leaving the End, or the credits alone (credits.cpp).
+void openWinScreen(UiState& s, bool poem);
+
 // Sends ServerboundContainerButtonClickPacket for the open container.
 void sendContainerButton(UiState& s, int buttonId);
 // F3 + I: the recreate command of the block / entity under the crosshair to the clipboard (debug_packets.cpp).

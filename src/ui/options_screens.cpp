@@ -348,8 +348,7 @@ void optionsBuild(UiState& s) {
     grid.push_back(screenButton(s, "options.accessibility", Screen::Accessibility));
     grid.push_back(screenButton(s, "options.telemetry", Screen::None, false));
     grid.back().tooltip = [p] { return Text(p->res.translate("options.telemetry.disabled")); };
-    grid.push_back(screenButton(s, "options.credits_and_attribution", Screen::None, false));
-    grid.back().tooltip = notAvailable;
+    grid.push_back(screenButton(s, "options.credits_and_attribution", Screen::CreditsAttribution));
     const float gridX = float((W - 316) / 2), gridY = float(std::min(61 + 30, H - kFooterH - 120));
     for (size_t i = 0; i < grid.size(); ++i) {
         grid[i].x = gridX + 4 + float(i % 2) * 158, grid[i].y = gridY + float(i / 2) * 24, grid[i].w = 150;
