@@ -5,6 +5,8 @@
 #include "ui/frontend.h"
 #include "ui/signs_books.h"
 #include "ui/gameplay_hud.h"
+#include "ui/narrator.h"
+#include "ui/options_list.h"
 #include "ui/ui_state.h"
 #include "world/terrain.h"
 
@@ -89,6 +91,7 @@ bool Settings::load() {
         const size_t c = line.find(':');
         if (c == std::string::npos) continue;
         const std::string k = line.substr(0, c), v = line.substr(c + 1);
+        if (loadExtra(k, v)) continue;
         if (k == "fov") fov = std::clamp(float(std::atof(v.c_str())), 30.f, 110.f);
         else if (k == "renderDistance") renderDistance = std::clamp(std::atoi(v.c_str()), 2, 64);
         else if (k == "guiScale") guiScale = std::clamp(std::atoi(v.c_str()), 0, 8);
@@ -152,6 +155,7 @@ void Settings::save() const {
       << "\npauseOnLostFocus:" << b(pauseOnLostFocus) << "\nadvancedItemTooltips:" << b(advancedItemTooltips) << "\n";
     for (int i = 0; i < 7; ++i) f << "modelPart_" << kModelParts[i] << ":" << b(modelParts & (1 << i)) << "\n";
     for (size_t i = 0; i < kKeyCount; ++i) f << "key_" << keyDef(Key(i)).name << ":" << keyName(keys[i]) << "\n";
+    saveExtra(f);
 }
 
 net::Client::Information clientInformation(const Settings& s) {
@@ -159,6 +163,8 @@ net::Client::Information clientInformation(const Settings& s) {
     info.modelParts = u8(s.modelParts & 0x7F);
     info.mainHand = s.mainHand;
     info.allowListing = s.allowServerListing;
+    info.language = s.lang, info.chatVisibility = s.chatVisibility, info.chatColors = s.chatColors;  // Options.buildPlayerInformation
+    info.particles = s.particles;
     return info;
 }
 
@@ -227,11 +233,13 @@ int Ui::State::guiScale() const {
     int scale = 1;
     const int max = settings.guiScale;
     while (scale != max && u32(scale) < w && u32(scale) < h && w / u32(scale + 1) >= 320 && h / u32(scale + 1) >= 240) ++scale;
+    if (settings.forceUnicodeFont && scale % 2 != 0) ++scale;  // Window.calculateScale(enforceUnicode)
     return scale;
 }
 
 void Ui::State::openScreen(Screen s) {
     const bool wasNone = screen == Screen::None;
+    if (screen == Screen::Chat && s != Screen::Chat) leaveChat();
     if (screen != s)
         if (const ScreenDef* d = screenDef(screen); d && d->closed) d->closed(*this);
     screen = s;
@@ -253,8 +261,30 @@ void Ui::State::openScreen(Screen s) {
     window->setClickCaptures(false);
 }
 
+void Ui::State::leaveChat() {  // ChatScreen.removed
+    const bool blank = chatInput.value.find_first_not_of(' ') == std::string::npos;
+    const bool discard = chatExit != 0 && (chatExit != 1 || !settings.saveChatDrafts);  // shouldDiscardDraft
+    if (discard || blank) chatDraft.clear();
+    else if (!chatIsDraft) chatDraft = chatInput.value;
+    chatExit = 0;
+    chatIsDraft = false;
+    chatScroll = 0, newMessageSinceScroll = false;  // resetChatScroll
+}
+
+void Ui::State::openChat(bool command) {
+    openScreen(Screen::Chat);
+    if (!chatDraft.empty() && (!command || chatDraft[0] == '/')) {  // ChatMethod.isDraftRestorable
+        chatInput.value = chatDraft;
+        chatIsDraft = true;
+    } else {
+        chatInput.value = command ? "/" : "";
+    }
+    chatInput.cursor = chatInput.selection = int(chatInput.value.size());
+}
+
 void Ui::State::closeScreen(bool sendClose) {
     const Screen old = screen;
+    if (old == Screen::Chat) leaveChat();
     if (const ScreenDef* d = screenDef(old); d && d->closed) d->closed(*this);
     if ((old == Screen::Inventory || old == Screen::Container) && online()) {
         // Carried items go back (the server does the same on close); tell it the menu closed.
@@ -292,18 +322,6 @@ void Ui::State::closeScreen(bool sendClose) {
     window->setMouseCaptured(true);
 }
 
-void Ui::State::addChat(const Text& message) {
-    nativeMods.chatReceived(message.plain());
-    chatMessages.insert(chatMessages.begin(), {message, guiTicks});
-    if (chatMessages.size() > 100) chatMessages.pop_back();
-    const std::vector<Text> lines = font.split(message, 320);  // ChatComponent.getWidth() at default options
-    for (size_t i = 0; i < lines.size(); ++i) {
-        if (screen == Screen::Chat && chatScroll > 0) ++chatScroll;
-        chatLines.insert(chatLines.begin(), ChatLine{lines[i], guiTicks, i == lines.size() - 1});
-    }
-    if (chatLines.size() > 100) chatLines.resize(100);
-}
-
 void Ui::State::sendChat(const std::string& raw) {
     std::string text = raw;
     while (!text.empty() && text.back() == ' ') text.pop_back();
@@ -312,6 +330,10 @@ void Ui::State::sendChat(const std::string& raw) {
     if (sentHistory.empty() || sentHistory.back() != text) sentHistory.push_back(text);
     if (sentHistory.size() > 100) sentHistory.erase(sentHistory.begin());
     if (text[0] == '/' && nativeMods.command(text)) return;  // a native mod's command (mods/mcpp_mod.h)
+    if (settings.chatVisibility == 2 || (settings.chatVisibility == 1 && text[0] != '/')) {  // ChatAbilities
+        addChat(Text(res.translate("chat.disabled.options"), colorStyle(0xFF5555)));
+        return;
+    }
     if (!online()) {
         if (text[0] == '/') addChat(Text("Commands need a server", colorStyle(0xFF5555)));
         else addChat(translatable("chat.type.text", {Text("Player"), Text(text)}, lang()));
@@ -447,9 +469,13 @@ bool Ui::loadImpl(const fs::path& jar, const fs::path& minecraftDir, const GameR
     Timer t;
     s.settings.load();
     if (!s.res.open(jar, minecraftDir)) return false;
+    if (s.settings.lang != "en_us") s.res.setLanguage(s.settings.lang);
     s.guiAtlas.init(2048, 4096);
     s.iconAtlas.init(2048, 2048);
-    if (!s.font.load(s.res, s.guiAtlas) || !s.sprites.load(s.res, s.guiAtlas)) return false;
+    if (!s.font.load(s.res, s.guiAtlas, s.settings.forceUnicodeFont, s.settings.japaneseGlyphVariants) ||
+        !s.sprites.load(s.res, s.guiAtlas))
+        return false;
+    installFontHooks(s);
     if (!s.items.init(reports, s.res)) LOG("warning: item registry unavailable; inventories will be empty");
     for (const char* tex : {"gui/container/inventory", "gui/container/generic_54", "gui/container/crafting_table",
                             "gui/container/furnace", "gui/container/creative_inventory/tab_item_search",
@@ -833,9 +859,17 @@ void Ui::registerHandlers(net::Client& client) {
             if (slot >= 0 && slot < 9) s->game->setSelectedSlot(slot);
         });
     });
-    auto chatMessage = [s](Text t) {
+    // ChatListener: system messages show at once; player chat waits for the Chat Delay option.
+    auto chatMessage = [s](Text t, int source = 1) {
         LOG("[chat] %s", t.plain().c_str());
-        s->post([s, t = std::move(t)] { s->addChat(t); });
+        if (source == 1) s->post([s, t = std::move(t)] { s->addChat(t, 1); });
+        else s->post([s, t = std::move(t)] {
+            s->handleChatMessage([s, t] {
+                if (!s->chatVisible(2)) return false;
+                s->addChat(t, 2);
+                return true;
+            });
+        });
     };
     client.onPlay("system_chat", [s, lang, chatMessage](net::Reader& r) {
         Text t = parseComponent(r.nbt(), lang);
@@ -860,7 +894,8 @@ void Ui::registerHandlers(net::Client& client) {
     };
     client.onPlay("player_chat", [s, lang, chatMessage, decorate](net::Reader& r) {
         r.varInt();    // global index
-        r.skip(16);    // sender
+        const std::string_view senderId = r.bytes(16);
+        const bool fromSelf = s->client && std::string(senderId) == s->client->profileId();
         r.varInt();    // index
         std::string signature;
         if (r.boolean()) signature = std::string(r.bytes(256));
@@ -869,7 +904,14 @@ void Ui::registerHandlers(net::Client& client) {
         const i32 seen = r.varInt();
         for (i32 i = 0; i < seen && r.ok; ++i)
             if (r.varInt() == 0) r.skip(256);
-        if (r.boolean()) content = parseComponent(r.nbt(), lang);
+        // Only Show Secure Chat: the signed body without the server's unsigned decoration, and nothing unsigned
+        // (ChatTrustLevel: our own messages are secure).
+        const bool secureOnly = s->settings.onlyShowSecureChat;
+        if (r.boolean()) {
+            Text unsignedContent = parseComponent(r.nbt(), lang);
+            if (!secureOnly) content = std::move(unsignedContent);
+        }
+        if (secureOnly && signature.empty() && !fromSelf) return;
         const int filter = r.varInt();
         if (filter == 2) {
             const i32 longs = r.varInt();
@@ -895,7 +937,7 @@ void Ui::registerHandlers(net::Client& client) {
                 }
             });
         if (filter == 1) return;
-        chatMessage(decorate(type, sender, hasTarget ? &target : nullptr, content));
+        chatMessage(decorate(type, sender, hasTarget ? &target : nullptr, content), 2);
     });
     client.onPlay("disguised_chat", [lang, chatMessage, decorate](net::Reader& r) {
         const Text content = parseComponent(r.nbt(), lang);
@@ -904,7 +946,7 @@ void Ui::registerHandlers(net::Client& client) {
         Text target;
         const bool hasTarget = type >= 0 && r.boolean();
         if (hasTarget) target = parseComponent(r.nbt(), lang);
-        chatMessage(decorate(type, sender, hasTarget ? &target : nullptr, content));
+        chatMessage(decorate(type, sender, hasTarget ? &target : nullptr, content), 2);
     });
     client.onPlay("set_title_text", [s, lang](net::Reader& r) {
         Text t = parseComponent(r.nbt(), lang);
@@ -1107,9 +1149,20 @@ void Ui::State::runScript(double) {
                 {"pause", Screen::Pause},         {"options", Screen::Options},     {"online", Screen::Online},
                 {"skin", Screen::SkinCustomization}, {"sounds", Screen::Sounds},    {"video", Screen::Video},
                 {"videoextra", Screen::VideoExtra}, {"controls", Screen::Controls}, {"mouse", Screen::MouseSettings},
-                {"keybinds", Screen::KeyBinds},   {"accessibility", Screen::Accessibility}, {"none", Screen::None}};
+                {"keybinds", Screen::KeyBinds},   {"accessibility", Screen::Accessibility}, {"none", Screen::None},
+                {"chatoptions", Screen::ChatOptions}, {"language", Screen::Language}, {"font", Screen::FontOptions},
+                {"onboarding", Screen::AccessibilityOnboarding}, {"chat", Screen::Chat}};
             for (auto [n, sc] : kScreens)
                 if (arg(0) == n) sc == Screen::None ? closeScreen() : openScreen(sc);
+        } else if (st.verb == "option") {  // option <options.txt key> <value>: sets it as the options screens would
+            if (settings.loadExtra(arg(0), arg(1))) {
+                settings.save();
+                if (arg(0) == "forceUnicodeFont" || arg(0) == "japaneseGlyphVariants") reloadFonts(*this);
+                if (arg(0).starts_with("chat") || arg(0) == "textBackgroundOpacity") chatRescale(*this);
+                if (arg(0) == "lang") setLanguage(*this, arg(1));
+                if (screen != Screen::None) buildButtons();
+            }
+            LOG("script: option %s = %s", arg(0).c_str(), arg(1).c_str());
         } else if (st.verb == "fullscreen") {
             toggleFullscreen();
         } else if (st.verb == "quit") {
@@ -1179,6 +1232,8 @@ void Ui::beginFrame(double dt) {
             s.toggleFullscreen();
             continue;
         }
+        // Ctrl+B: the narrator hotkey (not while typing in a text field or binding a key).
+        if (!s.keyCaptureActive && s.screen != Screen::Chat && s.screen != Screen::Language && narrator::hotkey(s, e)) continue;
         if (s.screen != Screen::None) {
             s.screenInput(e);
             continue;
@@ -1211,12 +1266,7 @@ void Ui::beginFrame(double dt) {
         } else if (s.isKey(Key::Inventory, e)) {
             s.openScreen(s.creative() ? Screen::Creative : Screen::Inventory);
         } else if (s.isKey(Key::Chat, e) || s.isKey(Key::Command, e)) {
-            const bool command = !s.isKey(Key::Chat, e);
-            s.openScreen(Screen::Chat);
-            if (command) {
-                s.chatInput.value = "/";
-                s.chatInput.cursor = s.chatInput.selection = 1;
-            }
+            s.openChat(!s.isKey(Key::Chat, e));
             skipChar = e.type == Window::InputEvent::Key;
         } else if (s.isKey(Key::Drop, e)) {
             if (std::getenv("MCPP_UI_VERBOSE")) LOG("ui: drop slot %d", s.game->selectedSlot());
@@ -1267,6 +1317,7 @@ void Ui::endFrame() {
     if (hud) s.drawModHud(c);  // native mods
     if (s.debug) s.drawDebug(c);
     if (s.screen != Screen::None) s.drawScreen(c);
+    narrator::frame(s);  // the widget under the mouse, when the narrator narrates the system
     for (const UiModule& m : uiModules())  // modules.h: toasts
         if (m.drawTop) m.drawTop(s, c);
 }

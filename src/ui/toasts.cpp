@@ -16,6 +16,7 @@ constexpr int kSlots = 5;
 
 struct Toast {
     Text title, message;
+    std::string id;
     double shownAt = -1;  // clock when it started sliding in (-1: queued)
     int slot = 0, slots = 1;
     bool hiding = false, soundOut = false;
@@ -24,6 +25,8 @@ struct Toast {
 
 std::deque<Toast> g_queue;
 std::vector<Toast> g_visible;
+double g_now = 0;
+double g_displayScale = 1;  // the Notification Time option
 
 void play(const char* event) {
     if (audio::AudioSystem* a = audio::instance()) a->playUi(event, 1.0f, 1.0f);
@@ -31,6 +34,7 @@ void play(const char* event) {
 
 void drawToasts(UiState& s, Canvas& c) {
     const double now = s.clock;
+    g_now = now, g_displayScale = s.settings.notificationDisplayTime;
     // Free slots fill from the queue (ToastManager.update).
     while (!g_queue.empty()) {
         bool used[kSlots] = {};
@@ -52,7 +56,7 @@ void drawToasts(UiState& s, Canvas& c) {
     }
     const int W = c.guiWidth();
     for (Toast& t : g_visible) {
-        if (!t.hiding && now - t.shownAt >= kSlide + kDisplay) {
+        if (!t.hiding && now - t.shownAt >= kSlide + kDisplay * g_displayScale) {
             t.hiding = true, t.hideAt = now;
             play("ui.toast.out");
         }
@@ -77,13 +81,26 @@ const UiModuleRegistrar g_module({.name = "toasts", .drawTop = drawToasts});
 
 }  // namespace
 
-void showToast(const Text& title, const Text& message) {
+void showToast(const Text& title, const Text& message, const std::string& id) {
+    if (!id.empty()) {
+        for (Toast& t : g_visible)
+            if (t.id == id && !t.hiding) {
+                t.title = title, t.message = message;
+                t.shownAt = g_now - kSlide;  // fully in, its display time starts over
+                return;
+            }
+        for (Toast& t : g_queue)
+            if (t.id == id) {
+                t.title = title, t.message = message;
+                return;
+            }
+    }
     // The same toast twice in a row (a friend flickering online) is shown once.
     for (const Toast& t : g_queue)
         if (t.title.plain() == title.plain() && t.message.plain() == message.plain()) return;
     if (g_queue.size() >= 16) return;
     Toast t;
-    t.title = title, t.message = message;
+    t.title = title, t.message = message, t.id = id;
     g_queue.push_back(std::move(t));
 }
 

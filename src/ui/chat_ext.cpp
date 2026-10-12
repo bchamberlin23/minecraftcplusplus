@@ -6,9 +6,8 @@
 #include "ui/command_tree.h"
 #include "ui/frontend.h"
 #include "ui/mp_hud.h"
+#include "ui/options_list.h"
 #include "ui/ui_state.h"
-
-#include <shellapi.h>
 
 #include <algorithm>
 #include <cmath>
@@ -281,29 +280,8 @@ UiModuleRegistrar reg([] {
 
 // --- chat component events ----------------------------------------------------------------------------------------
 
-// The style under GUI point (mx, my) in the open chat (ChatComponent geometry of hud.cpp drawChat); null: none.
-const Style* chatStyleAt(UiState& s, float mx, float my, Style& out) {
-    const int chatBottom = s.guiH() - 40;
-    if (my >= float(chatBottom) || mx < 4) return nullptr;
-    const int i = int(std::floor((float(chatBottom) - my) / 9.0f));
-    const int total = int(s.chatLines.size());
-    if (i < 0 || i >= std::min(total - s.chatScroll, 20)) return nullptr;
-    const Text& line = s.chatLines[size_t(i + s.chatScroll)].text;
-    const float x = mx - 4;
-    float pen = 0;
-    bool found = false;
-    s.font.iterate(line, [&](int, const Style& st, u32 cp) {
-        const float adv = s.font.glyph(cp).advanceFor(st.isBold());
-        if (x >= pen && x < pen + adv) {
-            out = st;
-            found = true;
-            return false;
-        }
-        pen += adv;
-        return true;
-    });
-    return found ? &out : nullptr;
-}
+// The style under GUI point (mx, my) in the open chat (hud.cpp); null: none.
+const Style* chatStyleAt(UiState& s, float mx, float my, Style& out) { return chatLineStyleAt(s, mx, my, out) ? &out : nullptr; }
 
 std::vector<Text> hoverLines(UiState& s, const TextEvents& ev) {
     std::vector<Text> lines;
@@ -322,11 +300,6 @@ std::vector<Text> hoverLines(UiState& s, const TextEvents& ev) {
         lines.push_back(translatable("gui.entity_tooltip.type", {Text(s.res.translate(key))}, s.lang()));
     }
     return lines;
-}
-
-void openUrl(const std::string& url) {
-    std::wstring w(url.begin(), url.end());
-    ShellExecuteW(nullptr, L"open", w.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 }
 
 // ChatScreen.handleComponentClicked + Screen.defaultHandleGameClickEvent.
@@ -356,14 +329,12 @@ bool clickStyle(UiState& s, const Style& st, bool shift) {
         f.cursor = f.selection = int(f.value.size());
     } else if (ev.click == "copy_to_clipboard") {
         s.window->setClipboard(ev.clickValue);
-    } else if (ev.click == "open_url") {  // ConfirmLinkScreen (chatLinksPrompt)
+    } else if (ev.click == "open_url") {  // Screen.clickUrlAction: Web Links, then Prompt on Links (ConfirmLinkScreen)
         const std::string url = ev.clickValue;
+        if (!s.settings.chatLinks) return false;
         if (!url.starts_with("http://") && !url.starts_with("https://")) return true;
-        UiState* sp = &s;
-        showConfirm(s, Text(s.res.translate("chat.link.confirm")), Text(url), s.res.translate("chat.link.open"), [sp, url] {
-            openUrl(url);
-            sp->openScreen(Screen::Chat);
-        }, Screen::Chat);
+        if (s.settings.chatLinksPrompt) openConfirmLink(s, url, Screen::Chat, false);
+        else openUrlInBrowser(url);
     }
     return true;
 }
@@ -411,6 +382,7 @@ bool chatExtInput(UiState& s, const InputEvent& e) {
             }
             return true;
         }
+        if (chatSpecialClick(s, s.mouseX, s.mouseY)) return true;
         Style st;
         if (chatStyleAt(s, s.mouseX, s.mouseY, st)) return clickStyle(s, st, s.window->keyDown(VK_SHIFT));
     }

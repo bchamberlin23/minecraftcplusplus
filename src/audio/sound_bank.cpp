@@ -38,6 +38,7 @@ bool SoundBank::load(const fs::path& mc, const std::string& indexId) {
                 if (!ev.is_object() || item.value().value("replace", false)) ev = {{"sounds", nlohmann::json::array()}};
                 if (item.value().contains("sounds") && item.value()["sounds"].is_array())
                     for (const auto& snd : item.value()["sounds"]) ev["sounds"].push_back(snd);
+                if (item.value().contains("subtitle") && item.value()["subtitle"].is_string()) ev["subtitle"] = item.value()["subtitle"];
             }
         });
     StringMap<int> fileIds;  // "dig/stone1" / "mod:x" -> file index
@@ -64,6 +65,7 @@ bool SoundBank::load(const fs::path& mc, const std::string& indexId) {
     }
     for (const auto& item : sounds.items()) {
         Event& ev = events_[eventIds_.find(item.key())->second];
+        if (item.value().contains("subtitle")) ev.subtitle = item.value()["subtitle"].get<std::string>();
         if (!item.value().contains("sounds")) continue;
         for (const auto& s : item.value()["sounds"]) {
             Entry e;

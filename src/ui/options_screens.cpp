@@ -1,11 +1,13 @@
 // Options screens laid out like the game's: OptionsScreen (FOV, Online..., the 2 x 5 grid of sub-screens, Done),
-// Online Options, Skin Customization, Music & Sound Options, Controls, Mouse Settings, Key Binds and Accessibility
-// Settings, all on the OptionsSubScreen list layout (options_list.h). Only options this client implements are listed;
-// Video Settings are video_screen.cpp. Every change is saved to options.txt (Settings) at once, like Options.save.
+// Online Options, Skin Customization, Music & Sound Options, Controls, Mouse Settings, Key Binds, Accessibility
+// Settings, Chat Settings and Font Settings, all on the OptionsSubScreen list layout (options_list.h). Video Settings
+// are video_screen.cpp, Language language_screen.cpp. Every change is saved to options.txt (Settings) at once, like
+// Options.save.
 #include "ui/options_list.h"
 
 #include "audio/audio.h"
 #include "ui/frontend.h"
+#include "ui/narrator.h"
 
 #include <cmath>
 
@@ -290,13 +292,58 @@ Button screenButton(UiState& s, const char* labelKey, Screen target, bool active
     return b;
 }
 
-namespace {
+std::function<Text()> tooltipKey(UiState& s, const char* key) {
+    return [p = &s, key] { return Text(p->res.translate(key)); };
+}
 
-// Options.percentValueOrOffLabel
-Text percentOrOff(UiState& s, const char* captionKey, double v) {
-    if (v == 0.0) return optionLabel(s, captionKey, Text(s.res.translate("options.off")));
+Text percentLabel(UiState& s, const char* captionKey, double v) {
     return translatable("options.percent_value", {Text(s.res.translate(captionKey)), Text(std::to_string(int(v * 100.0)))}, s.lang());
 }
+
+Text percentOrOffLabel(UiState& s, const char* captionKey, double v) {
+    if (v == 0.0) return optionLabel(s, captionKey, Text(s.res.translate("options.off")));
+    return percentLabel(s, captionKey, v);
+}
+
+Button enumButton(UiState& s, const char* captionKey, int* value, std::vector<const char*> valueKeys, std::function<void()> changed,
+                  std::function<Text()> tooltip) {
+    UiState* p = &s;
+    const int n = int(valueKeys.size());
+    return cycleButton(
+        [p, captionKey, value, valueKeys] {
+            return optionLabel(*p, captionKey, Text(p->res.translate(valueKeys[size_t(std::clamp(*value, 0, int(valueKeys.size()) - 1))])));
+        },
+        [p, value, n, changed] {
+            *value = (std::clamp(*value, 0, n - 1) + (p->window->keyDown(VK_SHIFT) ? n - 1 : 1)) % n;  // Shift: backwards
+            p->settings.save();
+            if (changed) changed();
+        },
+        std::move(tooltip));
+}
+
+Button rangeSlider(UiState& s, int lo, int hi, std::function<int()> get, std::function<void(int)> set, std::function<Text()> label) {
+    // IntRangeBase.toSliderValue / fromSliderValue: each value owns an equal stretch of the slider.
+    const int v = get();
+    const float pos = v <= lo ? 0.0f : v >= hi ? 1.0f : float((double(v) + 0.5 - lo) / (double(hi) + 1.0 - lo));
+    return sliderButton(pos, std::move(label), [lo, hi, get, set](float t) {
+        const double slider = t >= 1.0f ? 0.99999 : double(t);
+        const int nv = std::clamp(int(std::floor(lo + slider * (double(hi) + 1.0 - lo))), lo, hi);
+        if (nv != get()) set(nv);
+    });
+}
+
+Button unitSlider(UiState& s, double* value, std::function<Text()> label, std::function<void()> changed, bool squared) {
+    return sliderButton(float(squared ? std::sqrt(*value) : *value), std::move(label), [value, changed, squared](float t) {
+        const double nv = squared ? double(t) * double(t) : double(t);
+        if (nv == *value) return;
+        *value = nv;
+        if (changed) changed();
+    });
+}
+
+namespace {
+
+Text percentOrOff(UiState& s, const char* captionKey, double v) { return percentOrOffLabel(s, captionKey, v); }
 
 // Client information changed (main hand, skin parts, server listing): the server hears it now
 // (Options.broadcastOptions).
@@ -333,10 +380,8 @@ void optionsBuild(UiState& s) {
     grid.push_back(screenButton(s, "options.sounds", Screen::Sounds));
     grid.push_back(screenButton(s, "options.video", Screen::Video));
     grid.push_back(screenButton(s, "options.controls", Screen::Controls));
-    grid.push_back(screenButton(s, "options.language", Screen::None, false));
-    grid.back().tooltip = notAvailable;
-    grid.push_back(screenButton(s, "options.chat", Screen::None, false));
-    grid.back().tooltip = notAvailable;
+    grid.push_back(screenButton(s, "options.language", Screen::Language));
+    grid.push_back(screenButton(s, "options.chat", Screen::ChatOptions));
     {  // Resource packs (and shader / data packs, mods) are managed on the Mods & Packs screen.
         Button b = screenButton(s, "options.resourcepack", Screen::Mods);
         b.onPress = [p] {
@@ -393,6 +438,8 @@ void onlineBuild(UiState& s) {
     l.header(Text(s.res.translate("options.online.servers.header")));
     l.big(onOffButton(s, "options.allowServerListing", &s.settings.allowServerListing, [p] { broadcastOptions(*p); },
                       "options.allowServerListing.tooltip"));
+    l.header(Text(s.res.translate("options.online.realms.header")));  // kept in options.txt; Realms itself is not here
+    l.big(onOffButton(s, "options.realmsNotifications.button", &s.settings.realmsNotifications, {}, "options.realmsNotifications.tooltip"));
     l.footer();
 }
 
@@ -447,12 +494,63 @@ Button volumeSlider(UiState& s, audio::Category c) {
     return b;
 }
 
+Button subtitlesButton(UiState& s) {
+    return onOffButton(s, "options.showSubtitles", &s.settings.showSubtitles, {}, "options.showSubtitles.tooltip");
+}
+
 void soundsBuild(UiState& s) {
     OptionsList l(s, Text(s.res.translate("options.sounds.title")), Screen::Options);
+    UiState* p = &s;
     l.big(volumeSlider(s, audio::Category::Master));
     std::vector<Button> others;
     for (int c = 1; c < audio::kCategoryCount; ++c) others.push_back(volumeSlider(s, audio::Category(c)));
     l.halves(std::move(others));
+    {  // Device: "" (System Default), then the output devices XAudio2 can open (LazyEnum over the device list)
+        Button device = cycleButton(
+            [p] {
+                const std::string& d = p->settings.soundDevice;
+                return optionLabel(*p, "options.audioDevice",
+                                   d.empty() ? Text(p->res.translate("options.audioDevice.default")) : Text(d));
+            },
+            [p] {
+                const std::vector<std::string> ids = audio::outputDevices();
+                size_t i = 0;  // 0: the default, i: ids[i - 1]
+                for (size_t k = 0; k < ids.size(); ++k)
+                    if (ids[k] == p->settings.soundDevice) i = k + 1;
+                i = (i + 1) % (ids.size() + 1);
+                p->settings.soundDevice = i ? ids[i - 1] : std::string();
+                p->settings.save();
+                if (audio::AudioSystem* a = audio::instance()) a->setOutputDevice(p->settings.soundDevice, p->settings.directionalAudio);
+                audio::playUiClick();  // SoundManager.reload, then the click on the new device
+            });
+        l.big(std::move(device));
+    }
+    {
+        Button directional = cycleButton(
+            [p] { return optionLabel(*p, "options.directionalAudio", Text(p->res.translate(p->settings.directionalAudio ? "options.on" : "options.off"))); },
+            [p] {
+                p->settings.directionalAudio = !p->settings.directionalAudio;
+                p->settings.save();
+                if (audio::AudioSystem* a = audio::instance()) a->setOutputDevice(p->settings.soundDevice, p->settings.directionalAudio);
+                audio::playUiClick();
+            },
+            [p] { return Text(p->res.translate(p->settings.directionalAudio ? "options.directionalAudio.on.tooltip" : "options.directionalAudio.off.tooltip")); });
+        l.half(subtitlesButton(s), std::move(directional));
+    }
+    {
+        Button frequency = enumButton(s, "options.music_frequency", &s.settings.musicFrequency,
+                                      {"options.music_frequency.default", "options.music_frequency.frequent", "options.music_frequency.constant"},
+                                      {}, tooltipKey(s, "options.music_frequency.tooltip"));
+        static const char* const kToast[3] = {"options.musicToast.never", "options.musicToast.pauseMenu", "options.musicToast.pauseMenuAndToast"};
+        Button toast = cycleButton(  // MusicToastDisplayState: the value alone, its own tooltip
+            [p] { return optionLabel(*p, "options.musicToast", Text(p->res.translate(kToast[std::clamp(p->settings.musicToast, 0, 2)]))); },
+            [p] {
+                p->settings.musicToast = (p->settings.musicToast + 1) % 3;
+                p->settings.save();
+            },
+            [p] { return Text(p->res.translate(std::string(kToast[std::clamp(p->settings.musicToast, 0, 2)]) + ".tooltip")); });
+        l.half(std::move(frequency), std::move(toast));
+    }
     l.footer();
 }
 
@@ -650,14 +748,198 @@ void keyBindsClosed(UiState& s) {
 
 // --- Accessibility Settings ----------------------------------------------------------------------------------------
 
+// Options.narrator: the system speech engine's status; "Not Available" without one.
+Button narratorButton(UiState& s) {
+    UiState* p = &s;
+    static const char* const kStatus[4] = {"options.narrator.off", "options.narrator.all", "options.narrator.chat", "options.narrator.system"};
+    Button b = cycleButton(
+        [p] {
+            return optionLabel(*p, "options.narrator",
+                               Text(p->res.translate(narrator::available() ? kStatus[std::clamp(p->settings.narrator, 0, 3)]
+                                                                           : "options.narrator.notavailable")));
+        },
+        [p] {
+            p->settings.narrator = (p->settings.narrator + 1) % 4;
+            p->settings.save();
+            narrator::statusChanged(*p);
+        });
+    b.active = narrator::available();
+    return b;
+}
+
+// The options shared by Accessibility and Chat Settings (same OptionInstance in the game).
+Button textBackgroundOpacitySlider(UiState& s) {
+    UiState* p = &s;
+    return unitSlider(s, &s.settings.textBackgroundOpacity,
+                      [p] { return percentLabel(*p, "options.accessibility.text_background_opacity", p->settings.textBackgroundOpacity); },
+                      [p] { chatRescale(*p); });
+}
+Button chatOpacitySlider(UiState& s) {
+    UiState* p = &s;
+    return unitSlider(s, &s.settings.chatOpacity,
+                      [p] { return percentLabel(*p, "options.chat.opacity", p->settings.chatOpacity * 0.9 + 0.1); },
+                      [p] { chatRescale(*p); });
+}
+Button chatLineSpacingSlider(UiState& s) {
+    UiState* p = &s;
+    return unitSlider(s, &s.settings.chatLineSpacing, [p] { return percentLabel(*p, "options.chat.line_spacing", p->settings.chatLineSpacing); });
+}
+Button chatDelaySlider(UiState& s) {  // IntRange(0, 60) / 10 seconds
+    UiState* p = &s;
+    return rangeSlider(s, 0, 60, [p] { return int(p->settings.chatDelay * 10.0); },
+                       [p](int v) { p->settings.chatDelay = v / 10.0; },
+                       [p] {
+                           if (p->settings.chatDelay <= 0.0) return Text(p->res.translate("options.chat.delay_none"));
+                           char buf[16];
+                           std::snprintf(buf, sizeof(buf), "%.1f", p->settings.chatDelay);
+                           return Text(formatJava(p->res.translate("options.chat.delay"), {buf}));
+                       });
+}
+
 void accessibilityBuild(UiState& s) {
     OptionsList l(s, Text(s.res.translate("options.accessibility.title")), Screen::Options);
-    // The narrator is not available here (the game shows the same when the system has none).
-    Button narrator;
-    narrator.label = optionLabel(s, "options.narrator", Text(s.res.translate("options.narrator.notavailable")));
-    narrator.active = false;
-    l.half(std::move(narrator), screenButton(s, "options.controls", Screen::Controls));
-    l.half(onOffButton(s, "options.viewBobbing", &s.settings.bobView));
+    UiState* p = &s;
+    Settings& o = s.settings;
+    l.half(narratorButton(s), screenButton(s, "options.controls", Screen::Controls));
+    std::vector<Button> v;
+    v.push_back(subtitlesButton(s));
+    {  // High Contrast: the game's high_contrast resource pack on / off (greyed when the pack is missing)
+        Button hc = onOffButton(s, "options.accessibility.high_contrast", &o.highContrast, [p] { applyHighContrast(*p); },
+                                "options.accessibility.high_contrast.tooltip");
+        if (!highContrastAvailable(s)) {
+            hc.active = false;
+            hc.tooltip = tooltipKey(s, "options.accessibility.high_contrast.error.tooltip");
+        }
+        v.push_back(std::move(hc));
+    }
+    {
+        Button blur = rangeSlider(s, 0, 10, [p] { return p->settings.menuBackgroundBlurriness; },
+                                  [p](int b) {
+                                      p->settings.menuBackgroundBlurriness = b;
+                                      p->settings.graphicsPreset = 3;  // setGraphicsPresetToCustom
+                                  },
+                                  [p] {
+                                      const int b = p->settings.menuBackgroundBlurriness;
+                                      return optionLabel(*p, "options.accessibility.menu_background_blurriness",
+                                                         Text(b == 0 ? p->res.translate("options.off") : std::to_string(b)));
+                                  });
+        blur.tooltip = tooltipKey(s, "options.accessibility.menu_background_blurriness.tooltip");
+        v.push_back(std::move(blur));
+    }
+    v.push_back(textBackgroundOpacitySlider(s));
+    v.push_back(cycleButton(  // Text Background: Chat / Everywhere
+        [p] {
+            return optionLabel(*p, "options.accessibility.text_background",
+                               Text(p->res.translate(p->settings.backgroundForChatOnly ? "options.accessibility.text_background.chat"
+                                                                                       : "options.accessibility.text_background.everywhere")));
+        },
+        [p] {
+            p->settings.backgroundForChatOnly = !p->settings.backgroundForChatOnly;
+            p->settings.save();
+        }));
+    v.push_back(chatOpacitySlider(s));
+    v.push_back(chatLineSpacingSlider(s));
+    v.push_back(chatDelaySlider(s));
+    {
+        Button t = rangeSlider(s, 5, 100, [p] { return int(p->settings.notificationDisplayTime * 10.0); },
+                               [p](int x) { p->settings.notificationDisplayTime = x / 10.0; },
+                               [p] {
+                                   char buf[16];
+                                   std::snprintf(buf, sizeof(buf), "%g", p->settings.notificationDisplayTime);
+                                   return optionLabel(*p, "options.notifications.display_time",
+                                                      Text(formatJava(p->res.translate("options.multiplier"), {buf})));
+                               });
+        t.tooltip = tooltipKey(s, "options.notifications.display_time.tooltip");
+        v.push_back(std::move(t));
+    }
+    v.push_back(onOffButton(s, "options.viewBobbing", &o.bobView));
+    auto effect = [&](const char* key, const char* tip, double* value, bool squared) {
+        Button b = unitSlider(s, value, [p, key, value] { return percentOrOffLabel(*p, key, *value); }, {}, squared);
+        b.tooltip = tooltipKey(s, tip);
+        v.push_back(std::move(b));
+    };
+    effect("options.screenEffectScale", "options.screenEffectScale.tooltip", &o.screenEffectScale, false);
+    effect("options.fovEffectScale", "options.fovEffectScale.tooltip", &o.fovEffectScale, true);
+    effect("options.darknessEffectScale", "options.darknessEffectScale.tooltip", &o.darknessEffectScale, true);
+    effect("options.damageTiltStrength", "options.damageTiltStrength.tooltip", &o.damageTiltStrength, false);
+    effect("options.glintSpeed", "options.glintSpeed.tooltip", &o.glintSpeed, false);
+    effect("options.glintStrength", "options.glintStrength.tooltip", &o.glintStrength, false);
+    v.push_back(onOffButton(s, "options.hideLightningFlashes", &o.hideLightningFlash, {}, "options.hideLightningFlashes.tooltip"));
+    v.push_back(onOffButton(s, "options.darkMojangStudiosBackgroundColor", &o.darkMojangStudiosBackground, {},
+                            "options.darkMojangStudiosBackgroundColor.tooltip"));
+    v.push_back(unitSlider(s, &o.panoramaSpeed, [p] { return percentLabel(*p, "options.accessibility.panorama_speed", p->settings.panoramaSpeed); }));
+    v.push_back(onOffButton(s, "options.hideSplashTexts", &o.hideSplashTexts, {}, "options.hideSplashTexts.tooltip"));
+    v.push_back(onOffButton(s, "options.accessibility.narrator_hotkey", &o.narratorHotkey, {}, "options.accessibility.narrator_hotkey.tooltip"));
+    {  // only in worlds with the Minecart Improvements experiment
+        Button minecart = onOffButton(s, "options.rotateWithMinecart", &o.rotateWithMinecart, {}, "options.rotateWithMinecart.tooltip");
+        minecart.active = s.client && s.client->hasFeature("minecraft:minecart_improvements");
+        v.push_back(std::move(minecart));
+    }
+    v.push_back(onOffButton(s, "options.accessibility.high_contrast_block_outline", &o.highContrastBlockOutline, {},
+                            "options.accessibility.high_contrast_block_outline.tooltip"));
+    l.halves(std::move(v));
+    Button guide;
+    guide.label = Text(s.res.translate("options.accessibility.link"));
+    guide.onPress = [p] { openConfirmLink(*p, "https://aka.ms/MinecraftJavaAccessibility", Screen::Accessibility); };
+    Button done;
+    done.label = Text(s.res.translate("gui.done"));
+    done.onPress = [p] { optionsListBack(*p); };
+    l.footer({std::move(guide), std::move(done)});
+}
+
+// --- Chat Settings -------------------------------------------------------------------------------------------------
+
+void chatOptionsBuild(UiState& s) {
+    OptionsList l(s, Text(s.res.translate("options.chat.title")), Screen::Options);
+    UiState* p = &s;
+    Settings& o = s.settings;
+    std::vector<Button> v;
+    v.push_back(enumButton(s, "options.chat.visibility", &o.chatVisibility,
+                           {"options.chat.visibility.full", "options.chat.visibility.system", "options.chat.visibility.hidden"},
+                           [p] { broadcastOptions(*p); }));
+    v.push_back(onOffButton(s, "options.chat.color", &o.chatColors, [p] { broadcastOptions(*p); }));
+    v.push_back(onOffButton(s, "options.chat.links", &o.chatLinks));
+    v.push_back(onOffButton(s, "options.chat.links.prompt", &o.chatLinksPrompt));
+    v.push_back(chatOpacitySlider(s));
+    v.push_back(textBackgroundOpacitySlider(s));
+    v.push_back(unitSlider(s, &o.chatScale,
+                           [p] {
+                               if (p->settings.chatScale == 0.0)
+                                   return optionLabel(*p, "options.chat.scale", Text(p->res.translate("options.off")));
+                               return percentLabel(*p, "options.chat.scale", p->settings.chatScale);
+                           },
+                           [p] { chatRescale(*p); }));
+    v.push_back(chatLineSpacingSlider(s));
+    v.push_back(chatDelaySlider(s));
+    auto pixels = [p](const char* key, int px) {
+        return translatable("options.pixel_value", {Text(p->res.translate(key)), Text(std::to_string(px))}, p->lang());
+    };
+    v.push_back(unitSlider(s, &o.chatWidth, [p, pixels] { return pixels("options.chat.width", chatWidthPixels(p->settings.chatWidth)); },
+                           [p] { chatRescale(*p); }));
+    v.push_back(unitSlider(s, &o.chatHeightFocused,
+                           [p, pixels] { return pixels("options.chat.height.focused", chatHeightPixels(p->settings.chatHeightFocused)); },
+                           [p] { chatRescale(*p); }));
+    v.push_back(unitSlider(s, &o.chatHeightUnfocused,
+                           [p, pixels] { return pixels("options.chat.height.unfocused", chatHeightPixels(p->settings.chatHeightUnfocused)); },
+                           [p] { chatRescale(*p); }));
+    v.push_back(narratorButton(s));
+    v.push_back(onOffButton(s, "options.autoSuggestCommands", &o.autoSuggestions));
+    v.push_back(onOffButton(s, "options.hideMatchedNames", &o.hideMatchedNames, {}, "options.hideMatchedNames.tooltip"));
+    v.push_back(onOffButton(s, "options.reducedDebugInfo", &o.reducedDebugInfo));
+    v.push_back(onOffButton(s, "options.onlyShowSecureChat", &o.onlyShowSecureChat, {}, "options.onlyShowSecureChat.tooltip"));
+    v.push_back(onOffButton(s, "options.chat.drafts", &o.saveChatDrafts, {}, "options.chat.drafts.tooltip"));
+    l.halves(std::move(v));
+    l.footer();
+}
+
+// --- Font Settings -------------------------------------------------------------------------------------------------
+
+void fontOptionsBuild(UiState& s) {
+    OptionsList l(s, Text(s.res.translate("options.font.title")), Screen::Language);
+    UiState* p = &s;
+    l.half(onOffButton(s, "options.forceUnicodeFont", &s.settings.forceUnicodeFont, [p] { reloadFonts(*p); }),
+           onOffButton(s, "options.japaneseGlyphVariants", &s.settings.japaneseGlyphVariants, [p] { reloadFonts(*p); },
+                       "options.japaneseGlyphVariants.tooltip"));
     l.footer();
 }
 
@@ -671,6 +953,8 @@ const ScreenRegistrar kControls({Screen::Controls, controlsBuild, listDraw, opti
 const ScreenRegistrar kMouse({Screen::MouseSettings, mouseBuild, listDraw, optionsListInput, nullptr});
 const ScreenRegistrar kKeyBinds({Screen::KeyBinds, keyBindsBuild, keyBindsDraw, keyBindsInput, keyBindsClosed});
 const ScreenRegistrar kAccessibility({Screen::Accessibility, accessibilityBuild, listDraw, optionsListInput, nullptr});
+const ScreenRegistrar kChatOptions({Screen::ChatOptions, chatOptionsBuild, listDraw, optionsListInput, nullptr});
+const ScreenRegistrar kFontOptions({Screen::FontOptions, fontOptionsBuild, listDraw, optionsListInput, nullptr});
 
 }  // namespace
 

@@ -1,6 +1,6 @@
 #pragma once
 // Biome tints (grass, foliage, water) from the game's own biome definitions and colormaps, read from
-// the player's jar, blended over 5x5 blocks like the game's default biome blend.
+// the player's jar, blended over the Biome Blend option's square of blocks (5x5 by default) like the game.
 #include "core/common.h"
 
 #include <array>
@@ -39,3 +39,4 @@ struct ColumnColors {
 // Blended colours of the padded columns around section column (cx, cz). Caller holds a shared lock on
 // world.mutex(). Columns of unknown biome get the game's default tints.
 void gatherColumnColors(const World& world, const BiomeColors& colors, int cx, int cz, ColumnColors& out);
+void setBiomeBlendRadius(int radius);  // the Biome Blend option (0..7, default 2: 5x5); re-mesh after a change

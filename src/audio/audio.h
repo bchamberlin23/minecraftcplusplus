@@ -69,6 +69,13 @@ public:
     u32 playNetwork(int registryId, std::string_view name, Category category, const double pos[3], float volume, float pitch);
     void stop(u32 handle);
 
+    // SoundEventListener (the subtitles): every sound that starts with its subtitle key (sounds.json), position,
+    // audible range (infinite for sounds at the listener) and whether it loops. Main thread.
+    std::function<void(const std::string& subtitle, const double pos[3], float range, bool looping)> onSound;
+    // The Device and Directional Audio options: an output device by name ("" the system default), HRTF on / off.
+    void setOutputDevice(const std::string& name, bool hrtf);
+    bool directionalActive() const { return engine_.hrtfActive(); }
+
     // Category volumes 0..1 (the game's sound options), saved to the settings file.
     float volume(Category c) const { return volumes_[int(c)]; }
     void setVolume(Category c, float v);
@@ -177,6 +184,7 @@ private:
 };
 
 AudioSystem* instance();  // the running system (nullptr before init)
+std::vector<std::string> outputDevices();  // active render endpoints by friendly name (MMDevice API)
 void playUiClick();       // ui.button.click, as the game's buttons play it (pitch 1, volume 0.25)
 
 }  // namespace audio

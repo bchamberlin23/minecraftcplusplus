@@ -9,6 +9,7 @@
 
 #include <array>
 #include <functional>
+#include <iosfwd>
 #include <memory>
 #include <string_view>
 
@@ -83,6 +84,53 @@ struct Settings {
     int modelParts = 0x7F;
     bool allowServerListing = true;
     bool pauseOnLostFocus = true, advancedItemTooltips = false;
+    // The rest of Options (options_data.cpp keeps them in options.txt under the game's keys, with its defaults).
+    // Video Settings: quality and preferences
+    int graphicsPreset = 1;                // GraphicsPreset: 0 fast, 1 fancy, 2 fabulous, 3 custom
+    int simulationDistance = 12;           // chunks (the local server's simulation distance)
+    double entityDistanceScaling = 1.0;    // 0.5..5 (entity render distance)
+    bool entityShadows = true, ao = true, cutoutLeaves = true, vignette = true, improvedTransparency = false;
+    int biomeBlendRadius = 2;              // 0..7 (blend width 2r + 1)
+    int cloudStatus = 2;                   // CloudStatus: 0 off, 1 fast, 2 fancy (options.txt renderClouds)
+    int cloudRange = 128;                  // chunks, 2..128
+    int weatherRadius = 10;                // blocks, 3..10
+    double chunkFade = 0.75;               // seconds, 0..2 (chunkSectionFadeInTime)
+    int prioritizeChunkUpdates = 0;        // PrioritizeChunkUpdates: 0 none, 1 player affected, 2 nearby
+    double gamma = 0.5;                    // Brightness
+    int mipmapLevels = 4;                  // 0..4
+    int textureFiltering = 0;              // TextureFilteringMethod: 0 none, 1 RGSS, 2 anisotropic
+    int maxAnisotropyBit = 2;              // 1..3 (2x, 4x, 8x)
+    int particles = 0;                     // ParticleStatus: 0 all, 1 decreased, 2 minimal
+    int inactivityFpsLimit = 1;            // InactivityFpsLimit: 0 minimized, 1 afk
+    bool showAutosaveIndicator = true;
+    // Accessibility
+    int narrator = 0;                      // NarratorStatus: 0 off, 1 all, 2 chat, 3 system
+    bool narratorHotkey = true, showSubtitles = false, highContrast = false, highContrastBlockOutline = false;
+    bool hideLightningFlash = false, hideSplashTexts = false, darkMojangStudiosBackground = false, rotateWithMinecart = false;
+    int menuBackgroundBlurriness = 5;      // 0..10
+    double textBackgroundOpacity = 0.5, panoramaSpeed = 1.0, notificationDisplayTime = 1.0;
+    double screenEffectScale = 1.0, fovEffectScale = 1.0, darknessEffectScale = 1.0;
+    double glintSpeed = 0.5, glintStrength = 0.75, damageTiltStrength = 1.0;
+    bool backgroundForChatOnly = true;
+    // Chat Settings
+    int chatVisibility = 0;                // ChatVisiblity: 0 full, 1 system (commands only), 2 hidden
+    bool chatColors = true, chatLinks = true, chatLinksPrompt = true, autoSuggestions = true, hideMatchedNames = true;
+    bool reducedDebugInfo = false, onlyShowSecureChat = false, saveChatDrafts = false;
+    double chatOpacity = 1.0, chatLineSpacing = 0.0, chatScale = 1.0, chatWidth = 1.0;
+    double chatHeightFocused = 1.0, chatHeightUnfocused = 70.0 / 160.0, chatDelay = 0.0;
+    // Language and fonts
+    std::string lang = "en_us";
+    bool forceUnicodeFont = false, japaneseGlyphVariants = false;
+    // Music & Sounds
+    std::string soundDevice;               // "" = the system default
+    bool directionalAudio = false;
+    int musicFrequency = 0;                // MusicManager.MusicFrequency: 0 default, 1 frequent, 2 constant
+    int musicToast = 0;                    // MusicToastDisplayState: 0 never, 1 pause, 2 pause and toast
+    // Flags and preferences
+    std::string lastServer;                // lastServer (Direct Connect's address)
+    int tutorialStep = 0;                  // TutorialSteps: 0 movement, 1 find_tree, 2 punch_tree, 3 open_inventory, 4 craft_planks, 5 none
+    bool joinedFirstServer = false, skipMultiplayerWarning = false, hideServerAddress = false;
+    bool realmsNotifications = true, telemetryOptInExtra = false, onboardAccessibility = true, startedCleanly = true;
     bool loaded = false;
 
     int key(Key k) const { return keys[size_t(k)]; }
@@ -91,6 +139,8 @@ struct Settings {
     static fs::path path();
     bool load();
     void save() const;
+    bool loadExtra(const std::string& key, const std::string& value);  // options_data.cpp: the keys above
+    void saveExtra(std::ostream& out) const;
     // Mouse look in radians per pixel (the game's sensitivity curve).
     float radiansPerPixel() const;
 };

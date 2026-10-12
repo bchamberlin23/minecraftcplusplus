@@ -94,6 +94,7 @@ enum class Screen {
     None, Chat, Inventory, Container, Creative, Pause, Options, Death, Mods, Video, PackOptions,
     // Options sub-screens (options_screens.cpp; VideoExtra: video_screen.cpp)
     Online, SkinCustomization, Sounds, Controls, MouseSettings, KeyBinds, Accessibility, VideoExtra,
+    ChatOptions, Language, FontOptions, AccessibilityOnboarding, ConfirmLink,  // options_screens.cpp, language_screen.cpp
     // Registered screens (modules.h ScreenDef): signs and books, advancements, statistics, game mode switcher, bed
     Sign, BookEdit, BookView, Advancements, Stats, GameModeSwitcher, InBed,
     Friends, AddFriend,  // friends_screen.cpp
@@ -201,11 +202,28 @@ struct Ui::State {
 
     // Chat
     std::vector<ChatLine> chatLines;  // newest first, wrapped
-    std::vector<std::pair<Text, int>> chatMessages;  // newest first: message, added tick
+    struct ChatMessage {  // GuiMessage
+        Text text;
+        int addedTick = 0;
+        u8 source = 0;  // GuiMessageSource: 0 client system, 1 server system, 2 player
+    };
+    std::vector<ChatMessage> chatMessages;  // newest first
+    // ChatListener: messages waiting for the Chat Delay option (each shows itself; false: dropped), and when the last
+    // one was shown (seconds, clock).
+    std::deque<std::function<bool()>> chatQueue;
+    double previousMessageTime = 0;
     std::vector<std::string> sentHistory;
     int historyPos = -1;
     std::string historyDraft;
     int chatScroll = 0;
+    bool newMessageSinceScroll = false;
+    // ChatComponent.Draft (Save Unsent Chats): the text left in the chat input, shown again (grey, italic) the next
+    // time the chat opens; how the chat screen was left (ChatScreen.ExitReason: 0 interrupted, 1 Esc, 2 sent).
+    std::string chatDraft;
+    bool chatIsDraft = false;
+    int chatExit = 0;
+    void leaveChat();
+    void openChat(bool command);  // Gui.openChatScreen(MESSAGE / COMMAND): the draft or the prefix
     // Message acknowledgements (LastSeenMessagesTracker): signatures of signed messages.
     struct Seen {
         std::string signature;
@@ -284,7 +302,20 @@ struct Ui::State {
     void updatePause();
     void closeScreen(bool sendClose = true);
     void syncHotbarToGame();
-    void addChat(const Text& message);
+    void addChat(const Text& message, int source = 0);  // ChatComponent.addMessage (dropped when chat hides it)
+    void handleChatMessage(std::function<bool()> show);  // ChatListener.handleMessage: now, or after the delay
+    void tickChat();                                     // ChatListener.tick + ChatComponent.tick
+    bool chatVisible(int source) const;                  // ChatAbilities.visibleMessagesFilter (Chat option)
+    int chatLinesPerPage() const;
+    void scrollChat(int lines);                          // ChatComponent.scrollChat
+    // Options.getBackgroundColor: text backgrounds outside the chat use the Text Background Opacity option when the
+    // Text Background option says Everywhere, else their own colour.
+    u32 textBackground(u32 defaultColor) const {
+        return settings.backgroundForChatOnly ? defaultColor : withAlpha(0, float(settings.textBackgroundOpacity));
+    }
+    u32 textBackground(float defaultOpacity) const {
+        return withAlpha(0, settings.backgroundForChatOnly ? defaultOpacity : float(settings.textBackgroundOpacity));
+    }
     void sendChat(const std::string& text);
     const Lang* lang() const { return &res.lang(); }
     void runScript(double dt);
@@ -350,5 +381,8 @@ struct Ui::State {
     // Last member: native mods unload first (their on_unload may still use the UI).
     mods::NativeMods nativeMods;
 };
+
+// language.cpp: what object text components draw (atlas sprites, player heads) and the right-to-left default.
+void installFontHooks(Ui::State& s);
 
 }  // namespace ui

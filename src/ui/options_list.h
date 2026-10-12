@@ -42,5 +42,27 @@ Button onOffButton(UiState& s, const char* captionKey, bool* value, std::functio
 Button sliderButton(float value, std::function<Text()> label, std::function<void(float)> slide);
 Button screenButton(UiState& s, const char* labelKey, Screen target, bool active = true);
 std::vector<Text> tooltipLines(UiState& s, const Text& text);  // split at new lines and 170 pixels
+// OptionInstance widgets on a Settings field (each change saves options.txt, then runs `changed`):
+std::function<Text()> tooltipKey(UiState& s, const char* key);  // a constant translated tooltip
+Text percentLabel(UiState& s, const char* captionKey, double v);       // Options.percentValueLabel
+Text percentOrOffLabel(UiState& s, const char* captionKey, double v);  // Options.percentValueOrOffLabel
+// OptionInstance.Enum: "Caption: value", cycling through the values (their translation keys) in order.
+Button enumButton(UiState& s, const char* captionKey, int* value, std::vector<const char*> valueKeys,
+                  std::function<void()> changed = {}, std::function<Text()> tooltip = {});
+// OptionInstance.IntRange slider (lo..hi inclusive, the game's slider mapping) over get / set.
+Button rangeSlider(UiState& s, int lo, int hi, std::function<int()> get, std::function<void(int)> set, std::function<Text()> label);
+// OptionInstance.UnitDouble slider (0..1), optionally through the square map (fovEffectScale, darknessEffectScale).
+Button unitSlider(UiState& s, double* value, std::function<Text()> label, std::function<void()> changed = {}, bool squared = false);
+void openConfirmLink(UiState& s, const std::string& url, Screen back, bool trusted = true);  // ConfirmLinkScreen (confirm_link.cpp)
+void openUrlInBrowser(const std::string& url);  // Util.getPlatform().openUri
+
+// Option effects that live elsewhere:
+void chatRescale(UiState& s);          // ChatComponent.rescaleChat: re-wraps the chat at the new width / scale (hud.cpp)
+int chatWidthPixels(double pct);       // ChatComponent.getWidth / getHeight
+int chatHeightPixels(double pct);
+bool highContrastAvailable(UiState& s);  // the game's high_contrast pack exists (mods_screen.cpp)
+void applyHighContrast(UiState& s);      // enables / disables it after Options.highContrast
+void reloadFonts(UiState& s);            // Force Unicode / Japanese glyph variants / language changed (ui.cpp)
+void setLanguage(UiState& s, const std::string& code);  // LanguageManager.setSelected + reload (language_screen.cpp)
 
 }  // namespace ui

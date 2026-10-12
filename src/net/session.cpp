@@ -299,7 +299,7 @@ void Session::applyBlocks(const std::vector<BlockChange>& changes, bool server) 
                     registry_.name(world_.block(c.x, c.y, c.z)).c_str());
         }
     }
-    if (!dirty.empty()) terrain_->remesh(std::vector<u64>(dirty.begin(), dirty.end()));
+    if (!dirty.empty()) terrain_->remesh(std::vector<u64>(dirty.begin(), dirty.end()), false);
 }
 
 void Session::acknowledge(int sequence) {
@@ -359,7 +359,7 @@ void Session::applyBiomes(const BiomesEvent& e) {
                         dirty.insert(Lighting::sectionKey(c.cx + dx, sy, c.cz + dz));
         }
     }
-    if (!dirty.empty()) terrain_->remesh(std::vector<u64>(dirty.begin(), dirty.end()));
+    if (!dirty.empty()) terrain_->remesh(std::vector<u64>(dirty.begin(), dirty.end()), false);
 }
 
 void Session::teleport(const TeleportEvent& e) {

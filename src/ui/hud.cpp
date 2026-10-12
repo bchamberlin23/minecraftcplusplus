@@ -2,6 +2,8 @@
 #include "assets/assets.h"
 #include "ui/gameplay_hud.h"
 #include "render/renderer.h"
+#include "ui/narrator.h"
+#include "ui/options_list.h"
 #include "ui/ui_state.h"
 #include "world/terrain.h"
 #include "world/world.h"
@@ -44,6 +46,13 @@ u32 hsvToRgb(float h, float s, float v) {  // Mth.hsvToRgb
     return argb(255, int(r * 255), int(g * 255), int(b * 255));
 }
 
+// GuiGraphics.textWithBackdrop: the Text Background Opacity behind HUD text when Text Background is Everywhere.
+void backdrop(UiState& s, Canvas& c, float x, float y, int width, u32 textColor) {
+    const u32 bg = s.textBackground(0.0f);
+    if (!alphaOf(bg)) return;
+    c.fill(x - 2, y - 2, x + float(width) + 2, y + 9 + 2, withAlpha(0, float(alphaOf(bg)) * float(alphaOf(textColor)) / (255.0f * 255.0f)));
+}
+
 const char* kDirNames[4] = {"south", "west", "north", "east"};
 const char* kTowards[4] = {"Towards positive Z", "Towards negative X", "Towards negative Z", "Towards positive X"};
 }  // namespace
@@ -52,6 +61,7 @@ const char* kTowards[4] = {"Towards positive Z", "Towards negative X", "Towards 
 
 void Ui::State::tickHud() {
     ++guiTicks;
+    tickChat();
     for (auto& [id, e] : effects)
         if (e.duration > 0) --e.duration;
     if (actionbarTime > 0) --actionbarTime;
@@ -305,7 +315,10 @@ void Ui::State::drawHud(Canvas& c) {
         int y = gh - 59;
         if (!hurtable) y += 14;
         const int alpha = std::min(255, int(float(toolHighlightTimer) * 256.0f / 10.0f));
-        if (alpha > 0) font.draw(c, name, float((gw - w) / 2), float(y), u32(alpha) << 24 | 0xFFFFFF, true);
+        if (alpha > 0) {
+            backdrop(*this, c, float((gw - w) / 2), float(y), w, u32(alpha) << 24 | 0xFFFFFF);
+            font.draw(c, name, float((gw - w) / 2), float(y), u32(alpha) << 24 | 0xFFFFFF, true);
+        }
     }
     // Action bar.
     if (actionbarTime > 0) {
@@ -313,6 +326,7 @@ void Ui::State::drawHud(Canvas& c) {
         const int alpha = std::min(255, int(t * 255.0f / 20.0f));
         if (alpha > 0) {
             const int w = font.width(actionbar);
+            backdrop(*this, c, float(gw / 2 - w / 2), float(gh - 68 - 4), w, u32(alpha) << 24 | 0xFFFFFF);
             font.draw(c, actionbar, float(gw / 2 - w / 2), float(gh - 68 - 4), u32(alpha) << 24 | 0xFFFFFF, true);
         }
     }
@@ -330,12 +344,14 @@ void Ui::State::drawHud(Canvas& c) {
             c.push();
             c.scaleBy(4);
             const int tw = font.width(title);
+            backdrop(*this, c, float(-tw / 2), -10, tw, color);
             font.draw(c, title, float(-tw / 2), -10, color, true);
             c.pop();
             if (hasSubtitle) {
                 c.push();
                 c.scaleBy(2);
                 const int sw = font.width(subtitle);
+                backdrop(*this, c, float(-sw / 2), 5, sw, color);
                 font.draw(c, subtitle, float(-sw / 2), 5, color, true);
                 c.pop();
             }
@@ -352,42 +368,239 @@ void Ui::State::drawHud(Canvas& c) {
 
 // --- chat ---------------------------------------------------------------------------------------------------
 
+int chatWidthPixels(double pct) { return int(std::floor(pct * 280.0 + 40.0)); }   // ChatComponent.getWidth
+int chatHeightPixels(double pct) { return int(std::floor(pct * 160.0 + 20.0)); }  // ChatComponent.getHeight
+
+namespace {
+// ComponentRenderUtils.wrapComponents: legacy codes stripped without Colors, wrapped lines indented by a space.
+std::vector<Text> wrapChat(UiState& s, const Text& message, int maxWidth) {
+    Text src;
+    for (const Span& sp : message.spans) {
+        if (s.settings.chatColors || sp.text.find("\xC2\xA7") == std::string::npos) {
+            src.spans.push_back(sp);
+            continue;
+        }
+        std::string t;  // ChatFormatting.stripFormatting
+        for (size_t i = 0; i < sp.text.size(); ++i) {
+            if (u8(sp.text[i]) == 0xC2 && i + 1 < sp.text.size() && u8(sp.text[i + 1]) == 0xA7) {
+                i += 2;  // the code character after the section sign
+                continue;
+            }
+            t += sp.text[i];
+        }
+        src.spans.push_back({t, sp.style});
+    }
+    std::vector<Text> lines;
+    for (const Text& paragraph : s.font.split(src, 1 << 20)) {  // explicit line breaks are not indented
+        const std::vector<Text> wrapped = s.font.split(paragraph, maxWidth);
+        for (size_t i = 0; i < wrapped.size(); ++i) {
+            if (i == 0) {
+                lines.push_back(wrapped[i]);
+                continue;
+            }
+            Text indented(" ");
+            indented.append(wrapped[i]);
+            lines.push_back(std::move(indented));
+        }
+    }
+    return lines;
+}
+
+double chatScale(const UiState& s) { return s.settings.chatScale; }
+}  // namespace
+
+bool Ui::State::chatVisible(int source) const {
+    if (source == 0) return true;                       // client system messages always show
+    if (source == 2) return settings.chatVisibility == 0;  // player chat: Shown only
+    return settings.chatVisibility != 2;                // server system messages: not when Hidden
+}
+
+int Ui::State::chatLinesPerPage() const {  // getHeight / getLineHeight
+    const int height = chatHeightPixels(screen == Screen::Chat ? settings.chatHeightFocused : settings.chatHeightUnfocused);
+    return height / std::max(1, int(9.0 * (settings.chatLineSpacing + 1.0)));
+}
+
+void Ui::State::scrollChat(int lines) {
+    chatScroll += lines;
+    const int max = int(chatLines.size());
+    if (chatScroll > max - chatLinesPerPage()) chatScroll = max - chatLinesPerPage();
+    if (chatScroll <= 0) chatScroll = 0, newMessageSinceScroll = false;
+}
+
+void Ui::State::addChat(const Text& message, int source) {
+    if (!chatVisible(source)) return;
+    nativeMods.chatReceived(message.plain());
+    chatMessages.insert(chatMessages.begin(), {message, guiTicks, u8(source)});
+    if (chatMessages.size() > 100) chatMessages.pop_back();
+    const int maxWidth = int(std::floor(double(chatWidthPixels(settings.chatWidth)) / std::max(0.01, chatScale(*this))));
+    const std::vector<Text> lines = wrapChat(*this, message, maxWidth);
+    for (size_t i = 0; i < lines.size(); ++i) {
+        if (screen == Screen::Chat && chatScroll > 0) newMessageSinceScroll = true, scrollChat(1);
+        chatLines.insert(chatLines.begin(), ChatLine{lines[i], guiTicks, i == lines.size() - 1});
+    }
+    if (chatLines.size() > 100) chatLines.resize(100);
+    narrator::chat(*this, message, source);
+}
+
+void chatRescale(UiState& s) {  // rescaleChat: resetChatScroll + refreshTrimmedMessages
+    s.chatScroll = 0, s.newMessageSinceScroll = false;
+    const std::vector<UiState::ChatMessage> all = std::move(s.chatMessages);
+    s.chatMessages.clear();
+    s.chatLines.clear();
+    for (size_t i = all.size(); i-- > 0;) {
+        if (!s.chatVisible(all[i].source)) continue;
+        const int maxWidth = int(std::floor(double(chatWidthPixels(s.settings.chatWidth)) / std::max(0.01, s.settings.chatScale)));
+        const std::vector<Text> lines = wrapChat(s, all[i].text, maxWidth);
+        s.chatMessages.insert(s.chatMessages.begin(), all[i]);
+        for (size_t k = 0; k < lines.size(); ++k)
+            s.chatLines.insert(s.chatLines.begin(), ChatLine{lines[k], all[i].addedTick, k == lines.size() - 1});
+    }
+    if (s.chatLines.size() > 100) s.chatLines.resize(100);
+}
+
+void Ui::State::handleChatMessage(std::function<bool()> show) {
+    if (settings.chatDelay > 0.0) chatQueue.push_back(std::move(show));
+    else if (show()) previousMessageTime = clock;
+}
+
+void Ui::State::tickChat() {  // ChatListener.tick
+    if (paused) {
+        if (settings.chatDelay > 0.0) previousMessageTime += 0.05;
+        return;
+    }
+    if (settings.chatDelay <= 0.0) {
+        while (!chatQueue.empty()) {  // flushQueue
+            auto fn = std::move(chatQueue.front());
+            chatQueue.pop_front();
+            fn();
+        }
+        previousMessageTime = 0;
+    } else if (clock >= previousMessageTime + settings.chatDelay) {
+        while (!chatQueue.empty()) {
+            auto fn = std::move(chatQueue.front());
+            chatQueue.pop_front();
+            if (fn()) {
+                previousMessageTime = clock;
+                break;
+            }
+        }
+    }
+}
+
+// ChatComponent.extractRenderState: the chat scale, width, line spacing, text opacity and background opacity
+// options, the message delay queue line and (focused) the restricted prompt and the scroll bar.
 void Ui::State::drawChat(Canvas& c, bool focused) {
-    if (chatLines.empty()) return;
-    const int maxWidth = 320, entryHeight = 9;
-    const int chatBottom = c.guiHeight() - 40;
-    const int linesPerPage = (focused ? 180 : 90) / 9;
-    const float textOpacity = 1.0f * 0.9f + 0.1f, bgOpacity = 0.5f;
+    const bool restricted = focused && settings.chatVisibility != 0;
+    if (chatLines.empty() && !restricted && chatQueue.empty()) return;
+    const float scale = float(settings.chatScale);
+    const int maxWidth = int(std::ceil(float(chatWidthPixels(settings.chatWidth)) / std::max(0.01f, scale)));
+    const int chatBottom = int(std::floor(float(c.guiHeight() - 40) / std::max(0.01f, scale)));
+    const float textOpacity = float(settings.chatOpacity) * 0.9f + 0.1f;
+    const float bgOpacity = float(settings.textBackgroundOpacity);
+    const double spacing = settings.chatLineSpacing;
+    const int entryHeight = int(9.0 * (spacing + 1.0));
+    const int entryBottomToMessageY = int(std::lround(8.0 * (spacing + 1.0) - 4.0 * spacing));
+    const int linesPerPage = chatLinesPerPage();
     c.push();
+    c.scaleBy(scale);
     c.translate(4, 0);
     const int total = int(chatLines.size());
+    auto alphaOf = [&](const ChatLine& line) {  // AlphaCalculator.timeBased (focused: fully visible)
+        if (focused) return 1.0f;
+        double t = double(guiTicks - line.addedTick) / 200.0;
+        t = std::clamp((1.0 - t) * 10.0, 0.0, 1.0);
+        return float(t * t);
+    };
     int count = 0;
     for (int i = std::min(total - chatScroll, linesPerPage) - 1; i >= 0; --i) {
-        const ChatLine& line = chatLines[size_t(i + chatScroll)];
-        float alpha = 1;
-        if (!focused) {
-            double t = double(guiTicks - line.addedTick) / 200.0;
-            t = std::clamp((1.0 - t) * 10.0, 0.0, 1.0);
-            alpha = float(t * t);
-        }
+        const float alpha = alphaOf(chatLines[size_t(i + chatScroll)]);
         if (alpha <= 1e-5f) continue;
         ++count;
         const int entryBottom = chatBottom - i * entryHeight, entryTop = entryBottom - entryHeight;
         c.fill(-4, float(entryTop), float(maxWidth + 4 + 4), float(entryBottom), withAlpha(0, alpha * bgOpacity));
-        const int textTop = entryBottom - 8;
+    }
+    const int lineAboveMessagesY = chatBottom - (count + 1) * entryHeight;
+    if (!chatQueue.empty()) c.fill(-2, float(chatBottom), float(maxWidth + 4), float(chatBottom + 9), withAlpha(0, bgOpacity));
+    if (restricted) c.fill(-2, float(lineAboveMessagesY), float(maxWidth + 4 + 4), float(lineAboveMessagesY + entryHeight), withAlpha(0, bgOpacity));
+    for (int i = std::min(total - chatScroll, linesPerPage) - 1; i >= 0; --i) {
+        const ChatLine& line = chatLines[size_t(i + chatScroll)];
+        const float alpha = alphaOf(line);
+        if (alpha <= 1e-5f) continue;
+        const int textTop = chatBottom - i * entryHeight - entryBottomToMessageY;
         font.draw(c, line.text, 0, float(textTop), withAlpha(0xFFFFFF, alpha * textOpacity), true);
+    }
+    if (!chatQueue.empty())  // "[+n pending lines]": clicking it shows the next one (QUEUE_EXPAND_ID)
+        font.draw(c, translatable("chat.queue", {Text(std::to_string(chatQueue.size()))}, lang()), 0, float(chatBottom + 9 - 8),
+                  withAlpha(0xFFFFFF, 0.5f * textOpacity), true);
+    if (restricted) {  // ChatScreen with restrictions: the red, underlined prompt (opens Chat Settings)
+        Style st = colorStyle(0xFF5555);
+        st.underlined = 1;
+        font.draw(c, Text(res.translate("chat_screen.restricted"), st), 0, float(lineAboveMessagesY + entryHeight - entryBottomToMessageY - 1),
+                  withAlpha(0xFFFFFF, textOpacity), true);
     }
     if (focused && total > 0) {  // scroll bar
         const int chatHeight = count * entryHeight, virtualHeight = total * entryHeight;
-        if (virtualHeight != chatHeight && total > 0) {
+        if (virtualHeight != chatHeight) {
             const int y = chatScroll * chatHeight / total - chatBottom;
             const int h = chatHeight * chatHeight / virtualHeight;
             const int a = y > 0 ? 170 : 96;
-            c.fill(float(maxWidth + 4), float(-y), float(maxWidth + 6), float(-y - h), u32(a) << 24 | 0x3333AA);
+            const u32 color = newMessageSinceScroll ? 0xCC3333 : 0x3333AA;
+            c.fill(float(maxWidth + 4), float(-y), float(maxWidth + 6), float(-y - h), u32(a) << 24 | color);
             c.fill(float(maxWidth + 6), float(-y), float(maxWidth + 5), float(-y - h), u32(a) << 24 | 0xCCCCCC);
         }
     }
     c.pop();
+}
+
+// Chat clicks below / above the lines: the queue line shows the next waiting message, the restricted prompt opens
+// Chat Settings. true when handled.
+bool chatSpecialClick(UiState& s, float mx, float my) {
+    const float scale = float(std::max(0.01, s.settings.chatScale));
+    const int chatBottom = int(std::floor(float(s.guiH() - 40) / scale));
+    const float x = mx / scale - 4, y = my / scale;
+    const int maxWidth = int(std::ceil(float(chatWidthPixels(s.settings.chatWidth)) / scale));
+    if (x < -4 || x > float(maxWidth + 8)) return false;
+    if (!s.chatQueue.empty() && y >= float(chatBottom) && y < float(chatBottom + 9)) {
+        auto fn = std::move(s.chatQueue.front());  // acceptNextDelayedMessage
+        s.chatQueue.pop_front();
+        fn();
+        return true;
+    }
+    if (s.settings.chatVisibility != 0) {
+        const int entryHeight = int(9.0 * (s.settings.chatLineSpacing + 1.0));
+        int count = std::min(int(s.chatLines.size()) - s.chatScroll, s.chatLinesPerPage());
+        const int top = chatBottom - (std::max(count, 0) + 1) * entryHeight;
+        if (y >= float(top) && y < float(top + entryHeight)) {
+            s.openScreen(Screen::ChatOptions);
+            return true;
+        }
+    }
+    return false;
+}
+
+// The style under a GUI point in the open chat (the drawChat geometry); false: none.
+bool chatLineStyleAt(UiState& s, float mx, float my, Style& out) {
+    const float scale = float(std::max(0.01, s.settings.chatScale));
+    const int chatBottom = int(std::floor(float(s.guiH() - 40) / scale));
+    const float x = mx / scale - 4, y = my / scale;
+    const int entryHeight = int(9.0 * (s.settings.chatLineSpacing + 1.0));
+    if (y >= float(chatBottom) || x < 0) return false;
+    const int i = int(std::floor((float(chatBottom) - y) / float(entryHeight)));
+    if (i < 0 || i >= std::min(int(s.chatLines.size()) - s.chatScroll, s.chatLinesPerPage())) return false;
+    const Text& line = s.chatLines[size_t(i + s.chatScroll)].text;
+    float pen = 0;
+    bool found = false;
+    s.font.iterate(line, [&](int, const Style& st, u32 cp) {
+        const float adv = s.font.glyph(cp, st).advanceFor(st.isBold());
+        if (x >= pen && x < pen + adv) {
+            out = st;
+            found = true;
+            return false;
+        }
+        pen += adv;
+        return true;
+    });
+    return found;
 }
 
 // --- text fields (EditBox) ----------------------------------------------------------------------------------
@@ -508,9 +721,12 @@ void Ui::State::drawTextField(Canvas& c, TextField& f, float x, float y, float w
     const bool cursorVisible = curRel >= 0 && curRel <= int(visible.size());
     const bool blink = focused && int((clock - f.blinkStart) / 0.3) % 2 == 0;
     Text formatted;
-    float endX = &f == &chatInput && chatFormatter && chatFormatter(visible, f.scroll, formatted)
-                     ? font.draw(c, formatted, x, y, color, shadow)
-                     : font.draw(c, visible, x, y, color, shadow);
+    Style draft = colorStyle(0xAAAAAA);
+    draft.italic = 1;
+    if (&f == &chatInput && chatIsDraft) formatted = Text(visible, draft);  // ChatScreen.formatChat
+    float endX = &f == &chatInput && (chatIsDraft || (chatFormatter && chatFormatter(visible, f.scroll, formatted)))
+                     ? font.draw(c, formatted, x, y, color, shadow, true)
+                     : font.draw(c, visible, x, y, color, shadow, true);
     const bool atEnd = f.cursor >= int(f.value.size());
     const float cursorX = cursorVisible ? x + float(font.width(visible.substr(0, size_t(curRel)))) : endX;
     if (blink && cursorVisible) {

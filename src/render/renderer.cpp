@@ -398,7 +398,7 @@ bool Renderer::createPipelines() {
     params[13].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;  // t5: texture animation remap
     params[13].Descriptor.ShaderRegister = 5;
 
-    D3D12_STATIC_SAMPLER_DESC samplers[4]{};
+    D3D12_STATIC_SAMPLER_DESC samplers[7]{};
     D3D12_STATIC_SAMPLER_DESC& samp = samplers[0];
     samp.Filter = D3D12_FILTER_MIN_MAG_POINT_MIP_LINEAR;
     samp.AddressU = samp.AddressV = samp.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
@@ -418,11 +418,18 @@ bool Renderer::createPipelines() {
         s.ShaderRegister = i;
         s.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     }
+    for (u32 i = 4; i < 7; ++i) {  // s4..s6: the Anisotropic Filtering option's 2x, 4x, 8x (wrap, like s0)
+        D3D12_STATIC_SAMPLER_DESC& s = samplers[i];
+        s = samp;
+        s.Filter = D3D12_FILTER_ANISOTROPIC;
+        s.MaxAnisotropy = 1u << (i - 3);
+        s.ShaderRegister = i;
+    }
 
     D3D12_ROOT_SIGNATURE_DESC rd{};
     rd.NumParameters = 14;
     rd.pParameters = params;
-    rd.NumStaticSamplers = 4;
+    rd.NumStaticSamplers = 7;
     rd.pStaticSamplers = samplers;
     ComPtr<ID3DBlob> blob, err;
     if (FAILED(D3D12SerializeRootSignature(&rd, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &err))) {
@@ -852,6 +859,7 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     fc.misc[0] = activeCount;
     sortTranslucent(cam, activeCount);
     fc.misc[3] = u32(translucent_.size());
+    fc.misc[2] = textureFiltering_;
     {  // texture LOD bias for the upscaler's render scale (common.hlsli sampleBlock)
         const float bias = shaded ? upscalers_->mipBias() : 0.0f;
         std::memcpy(&fc.misc[1], &bias, 4);

@@ -543,7 +543,7 @@ void Ui::State::drawScreen(Canvas& c) {
     switch (screen) {
         case Screen::Chat: {
             drawChat(c, true);
-            c.fill(2, float(H - 14), float(W - 2), float(H - 2), withAlpha(0, 0.5f));
+            c.fill(2, float(H - 14), float(W - 2), float(H - 2), textBackground(0x80000000u));
             drawTextField(c, chatInput, 4, float(H - 12 + 2), float(W - 8), 0xFFE0E0E0, true, true);
             chatExtDraw(*this, c);  // mp_hud.h: command suggestions, hovered chat components
             return;
@@ -689,9 +689,18 @@ void Ui::State::screenInput(const Window::InputEvent& e) {
     if (screen == Screen::Chat) {
         if (chatExtInput(*this, e)) return;  // mp_hud.h: suggestions list, chat clicks
         if (e.type == E::Key && e.down) {
-            if (e.code == VK_ESCAPE) return closeScreen();
+            if (e.code == VK_ESCAPE) {
+                chatExit = 1;
+                return closeScreen();
+            }
+            if (e.code == VK_BACK && chatIsDraft) {  // a restored draft goes away as a whole
+                chatInput = TextField{};
+                chatIsDraft = false;
+                return;
+            }
             if (e.code == VK_RETURN) {
                 const std::string text = chatInput.value;
+                chatExit = 2;
                 closeScreen();
                 sendChat(text);
                 return;
@@ -705,15 +714,17 @@ void Ui::State::screenInput(const Window::InputEvent& e) {
                 return;
             }
             if (e.code == VK_PRIOR || e.code == VK_NEXT) {
-                chatScroll = std::clamp(chatScroll + (e.code == VK_PRIOR ? 19 : -19), 0, std::max(0, int(chatLines.size()) - 20));
+                scrollChat((e.code == VK_PRIOR ? 1 : -1) * (chatLinesPerPage() - 1));
                 return;
             }
         }
         if (e.type == E::Wheel) {
-            chatScroll = std::clamp(chatScroll + (e.code > 0 ? 1 : -1) * (shift ? 1 : 7), 0, std::max(0, int(chatLines.size()) - 20));
+            scrollChat((e.code > 0 ? 1 : -1) * (shift ? 1 : 7));
             return;
         }
+        const std::string before = chatInput.value;
         textFieldKey(chatInput, e);
+        if (chatInput.value != before) chatIsDraft = false;  // ChatScreen.onEdited
         return;
     }
     if (screen == Screen::Death) {

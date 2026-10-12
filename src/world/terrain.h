@@ -61,8 +61,13 @@ public:
 
     bool buildCoarse();
     void update(double x, double y, double z, bool waitForDetail);
-    // Re-meshes full-detail sections right away after an edit (keys from Lighting::sectionKey).
-    void remesh(const std::vector<u64>& sections);
+    // Re-meshes full-detail sections after an edit (keys from Lighting::sectionKey): right away or on the worker by
+    // the Chunk Builder option (PrioritizeChunkUpdates: 0 threaded, 1 the player's own edits at once, 2 everything
+    // near the camera at once). byPlayer: the local player's edit.
+    void remesh(const std::vector<u64>& sections, bool byPlayer = true);
+    void setChunkUpdates(int mode) { chunkUpdates_ = mode; }
+    // Every mesh again (options the meshes depend on changed: smooth lighting, biome blend, leaves).
+    void rebuildAll();
     // A chunk was added to the world at runtime (generated): stream its sections, refresh the
     // neighbouring sections listed in dirtySections and rebuild the region's coarse levels.
     void addChunk(int cx, int cz, const std::vector<u64>& dirtySections);
@@ -187,6 +192,7 @@ private:
     std::vector<Result> pendingUpload_;         // finished meshes waiting for upload budget
     double scanX_ = 0, scanY_ = 0, scanZ_ = 0;
     bool scanned_ = false;
+    int chunkUpdates_ = 0;
     bool cutDirty_ = true;  // every region (markCut: one region)
     struct CutCache {
         double x = 0, z = 0, slack = -1;  // camera at the last walk; valid while it stays within slack

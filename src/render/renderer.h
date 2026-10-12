@@ -220,6 +220,12 @@ public:
         daylight_ = daylight;
     }
     void setLightmap(const Lightmap& l) { lightmap_ = l; }
+    void setFadeSeconds(float s) { fadeSeconds_ = s; }  // the Chunk Fade option (chunkSectionFadeInTime)
+    // Block texture options: Texture Filtering (0 none, 1 RGSS, 2 anisotropic), Mipmap Levels (0..4), Anisotropic
+    // Filtering (1..3: 2x / 4x / 8x).
+    void setTextureFiltering(int mode, int mipLevels, int anisotropyBit) {
+        textureFiltering_ = u32(std::clamp(mode, 0, 2)) | (u32(std::clamp(mipLevels, 0, 4)) << 2) | (u32(std::clamp(anisotropyBit, 1, 3)) << 5);
+    }
     const Lightmap& lightmap() const { return lightmap_; }
     // Caps on the fog distances (blocks) this frame, e.g. a boss bar's world fog (AtmosphericFogEnvironment:
     // start 10, end 96); infinity: the view distance's own fog.
@@ -370,6 +376,8 @@ private:
     float fogColor_[4] = {0.62f, 0.76f, 1.0f, 1.0f};
     float daylight_ = 1.0f;
     Lightmap lightmap_;
+    float fadeSeconds_ = 0.75f;
+    u32 textureFiltering_ = 4u << 2 | 2u << 5;  // see setTextureFiltering
     float fogLimit_[2] = {1e30f, 1e30f};
     u32 descriptorSize_ = 0, descriptorsUsed_ = 1, descriptorCapacity_ = 0;  // 0: block textures
     void runPasses(PassStage stage, const PassContext& ctx);

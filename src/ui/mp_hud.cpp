@@ -445,8 +445,8 @@ void drawSidebar(UiState& s, Canvas& c) {
     const int bottom = c.guiHeight() / 2 + height / 3;
     const int left = c.guiWidth() - biggest - 3, right = c.guiWidth() - 3 + 2;
     const int headerY = bottom - count * 9;
-    c.fill(float(left - 2), float(headerY - 9 - 1), float(right), float(headerY - 1), 0x66000000);
-    c.fill(float(left - 2), float(headerY - 1), float(right), float(bottom), 0x4C000000);
+    c.fill(float(left - 2), float(headerY - 9 - 1), float(right), float(headerY - 1), s.textBackground(0.4f));
+    c.fill(float(left - 2), float(headerY - 1), float(right), float(bottom), s.textBackground(0.3f));
     s.font.draw(c, title, float(left + biggest / 2 - titleWidth / 2), float(headerY - 9), 0xFFFFFFFF, false);
     for (int i = 0; i < count; ++i) {
         const int y = bottom - (count - i) * 9;
@@ -596,7 +596,7 @@ void drawPlayerList(UiState& s, Canvas& c) {
         const int col = i / rows, row = i % rows;
         int xo = xxo + col * slotWidth + col * 5;
         const int yo = yyo + row * 9;
-        c.fill(float(xo), float(yo), float(xo + slotWidth), float(yo + 8), 0x20FFFFFF);
+        c.fill(float(xo), float(yo), float(xo + slotWidth), float(yo + 8), s.textBackground(0x20FFFFFFu));
         const PlayerEntry& p = *list[size_t(i)];
         const Entry& e = entries[size_t(i)];
         if (showHead) {  // PlayerFaceExtractor: face (8, 8) and hat (40, 8) of the 64x64 skin

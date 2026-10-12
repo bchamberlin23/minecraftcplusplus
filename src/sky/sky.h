@@ -68,6 +68,15 @@ public:
     void setTickRate(double ticksPerSecond) { tickRate_ = ticksPerSecond; }
     // The camera's mob effects (blindness, darkness, night vision, water vision), before update().
     void setViewEffects(const ViewEffects& fx) { fx_ = fx; }
+    // Video / accessibility options: Clouds (0 off, 1 fast: flat, 2 fancy), Cloud Distance (chunks), Weather Effect
+    // Radius (blocks), Brightness (the lightmap's gamma) and Hide Sky Flashes.
+    struct Options {
+        int clouds = 2, cloudRange = 128, weatherRadius = 10;
+        float brightness = 0.5f;
+        bool hideFlashes = false;
+        bool operator==(const Options&) const = default;
+    };
+    void setOptions(const Options& o);
 
     // Shared with the render passes.
     struct Frame;
@@ -114,7 +123,8 @@ private:
     float borderPartial_ = 0, borderRange_ = 512;
     double tickRate_ = 20.0;
     ViewEffects fx_;
-    float cloudFogLimit_ = 1e30f;  // the fog environment's cloud end (FogData.cloudEnd) when it is not the atmosphere
+    float cloudFogLimit_ = 1e30f;
+    Options options_;  // the fog environment's cloud end (FogData.cloudEnd) when it is not the atmosphere
     float darken_ = 0, darkenO_ = 0;  // GameRenderer.bossOverlayWorldDarkening (per tick)
     double tickAccumulator_ = 0;
 

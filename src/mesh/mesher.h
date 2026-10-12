@@ -53,6 +53,16 @@ struct SectionMesh {
 // the game's stored light for the same cells.
 void gatherSection(const World& world, int cx, int sy, int cz, u16* padded, u8* light);
 
+// The video options meshes depend on: Smooth Lighting (corner light averaging and ambient occlusion; off: each face
+// lit by the cell in front of it) and See-Through Leaves (off: leaves are opaque and hide the faces between them,
+// ModelBlockRenderer.forceOpaque / LeavesBlock.skipRendering). Terrain::rebuildAll re-meshes after a change.
+struct MeshOptions {
+    bool smoothLighting = true, cutoutLeaves = true;
+    bool operator==(const MeshOptions&) const = default;
+};
+void setMeshOptions(const MeshOptions& o);
+MeshOptions meshOptions();
+
 // Greedy-meshes a padded grid of block ids.
 //  light: per-cell (sky << 4 | block), or null for open sky everywhere (LOD levels).
 //  models: also emit non-cube block models (full detail only).

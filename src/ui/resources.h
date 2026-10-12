@@ -7,6 +7,7 @@
 
 #include <json/json.hpp>
 
+#include <map>
 #include <unordered_map>
 
 namespace ui {
@@ -31,15 +32,29 @@ public:
     std::vector<std::string> list(std::string_view prefix) const;
     const fs::path& objectPath(std::string_view path, fs::path& out) const;  // the file on disk, or empty
 
-    const std::unordered_map<std::string, std::string>& lang() const { return lang_; }  // en_us
+    // The selected language over en_us (ClientLanguage.loadFrom): the same map object for the whole run.
+    const std::unordered_map<std::string, std::string>& lang() const { return lang_; }
     std::string translate(const std::string& key) const {
         auto it = lang_.find(key);
         return it == lang_.end() ? key : it->second;
     }
+    // Languages from the packs' pack.mcmeta "language" sections (LanguageManager.extractLanguages), by code.
+    struct LanguageInfo {
+        std::string name, region;
+        bool bidirectional = false;
+    };
+    std::map<std::string, LanguageInfo> languages() const;
+    // LanguageManager.onResourceManagerReload: en_us, then `code` over it (an unknown code keeps en_us). Callers
+    // make sure nothing reads lang() meanwhile (the network thread: net::Client::pauseDispatch).
+    void setLanguage(const std::string& code);
+    const std::string& languageCode() const { return langCode_; }
+    bool rightToLeft() const { return rtl_; }  // ClientLanguage.isDefaultRightToLeft
 
 private:
     const AssetSource* src_ = nullptr;  // the game's assets with resource packs (assets/asset_source.h)
     std::unordered_map<std::string, std::string> lang_;
+    std::string langCode_ = "en_us";
+    bool rtl_ = false;
 };
 
 // Decodes a PNG (or anything stb_image reads) to RGBA8.

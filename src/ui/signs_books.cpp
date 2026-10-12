@@ -703,7 +703,7 @@ const Style* bookStyleAt(UiState& s, const Canvas& c, Style& out) {
     float pen = 0;
     bool found = false;
     s.font.iterate(lines[size_t(i)], [&](int, const Style& st, u32 cp) {
-        const float adv = s.font.glyph(cp).advanceFor(st.isBold());
+        const float adv = s.font.glyph(cp, st).advanceFor(st.isBold());
         if (x >= pen && x < pen + adv) {
             out = st;
             found = true;

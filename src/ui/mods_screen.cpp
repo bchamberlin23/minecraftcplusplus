@@ -4,6 +4,8 @@
 #include "assets/assets.h"
 #include "mods/mod_manager.h"
 #include "ui/frontend.h"
+#include "ui/options_list.h"
+#include "ui/toasts.h"
 #include "ui/ui_state.h"
 #include "world/world.h"
 
@@ -219,6 +221,29 @@ void Ui::State::modsInput(const Window::InputEvent& e) {
         return;
     }
     buttonsInput(e);
+}
+
+// --- High Contrast (Options.highContrast: the game's high_contrast pack, applied at the next start like every pack
+// change here) --------------------------------------------------------------------------------------------------
+
+namespace {
+int highContrastEntry() {
+    const auto& entries = mods::Manager::get().entries();
+    for (size_t i = 0; i < entries.size(); ++i)
+        if (entries[i].id == "builtin/high_contrast") return int(i);
+    return -1;
+}
+}  // namespace
+
+bool highContrastAvailable(UiState&) { return highContrastEntry() >= 0; }
+
+void applyHighContrast(UiState& s) {
+    const int i = highContrastEntry();
+    if (i < 0) return;
+    mods::Manager& m = mods::Manager::get();
+    if (m.entries()[size_t(i)].enabled != s.settings.highContrast) m.setEnabled(size_t(i), s.settings.highContrast);
+    if (m.restartNeeded())
+        showToast(Text(s.res.translate("options.accessibility.high_contrast")), Text("Applies when the game starts again"), "high_contrast");
 }
 
 }  // namespace ui

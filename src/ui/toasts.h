@@ -5,6 +5,7 @@
 
 namespace ui {
 
-void showToast(const Text& title, const Text& message = Text());
+// id: SystemToast.addOrUpdate (a toast with the same id shows the new text and starts its time again).
+void showToast(const Text& title, const Text& message = Text(), const std::string& id = {});
 
 }  // namespace ui

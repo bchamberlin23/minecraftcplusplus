@@ -158,6 +158,22 @@ const Sprite* Sprites::texture(const std::string& name) {
     return &s;
 }
 
+const Sprite* Sprites::textureAt(const std::string& path) {
+    if (auto it = textures_.find(path); it != textures_.end()) return it->second.w ? &it->second : nullptr;
+    Sprite& s = textures_[path];
+    Image img;
+    const nlohmann::json meta = res_->exists(path + ".mcmeta") ? res_->json(path + ".mcmeta") : nlohmann::json();
+    if (!res_->image(path, img) || !place(img, meta, s)) return nullptr;
+    return &s;
+}
+
+const Sprite* Sprites::addImage(const std::string& key, const Image& img) {
+    if (auto it = textures_.find(key); it != textures_.end()) return it->second.w ? &it->second : nullptr;
+    Sprite& s = textures_[key];
+    if (!place(img, nlohmann::json(), s)) return nullptr;
+    return &s;
+}
+
 namespace {
 // Region (fu0..fu1, fv0..fv1 as fractions of the sprite) into a rectangle.
 void part(Canvas& c, const Sprite* s, float x0, float y0, float x1, float y1, float fu0, float fv0, float fu1, float fv1,

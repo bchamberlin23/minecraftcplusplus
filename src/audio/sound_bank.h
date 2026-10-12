@@ -68,6 +68,7 @@ public:
 
     int eventId(std::string_view name) const;  // "minecraft:block.stone.break" or "block.stone.break"; -1 unknown
     const std::string& eventName(int id) const { return events_[id].name; }
+    const std::string& subtitle(int id) const { return events_[id].subtitle; }  // translation key, "" none
     size_t eventCount() const { return events_.size(); }
     // WeighedSoundEvents.getSound: false when the event has nothing playable.
     bool resolve(int event, JavaRandom& rng, ResolvedSound& out) const;
@@ -88,6 +89,7 @@ private:
     struct Event {
         std::string name;  // "minecraft:..."
         std::vector<Entry> entries;
+        std::string subtitle;  // sounds.json "subtitle"
     };
     struct File {
         std::string name;

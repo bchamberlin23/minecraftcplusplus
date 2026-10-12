@@ -24,6 +24,10 @@ public:
     const Sprite* sprite(std::string_view name) const;
     // Any texture by resource path below textures/: "gui/container/inventory", loaded on first use.
     const Sprite* texture(const std::string& name);
+    // Any image by full resource path ("assets/ns/textures/block/stone.png"), loaded on first use.
+    const Sprite* textureAt(const std::string& path);
+    // A decoded image (a downloaded skin) under `key`, replacing nothing already there.
+    const Sprite* addImage(const std::string& key, const Image& img);
     // Animated sprites and textures (.mcmeta "animation", SpriteContents.AnimatedTexture) show their frame for this
     // client tick (blended with the next one when interpolated); call once per frame.
     void tick(u64 tick);

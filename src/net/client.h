@@ -155,6 +155,11 @@ public:
     int simulationDistance() const { return simulationDistance_; }
     int viewCenterX() const { return viewCenter_[0]; }
     int viewCenterZ() const { return viewCenter_[1]; }
+    // Runs fn while no packet is being handled (the network thread waits): for state handlers read, like the
+    // language tables a language switch replaces. Also switches this client's own translations to `language`.
+    void pauseDispatch(const std::function<void()>& fn, const std::string& language = {});
+    const std::string& profileId() const { return profileId_; }  // our UUID from login_finished (16 bytes)
+    bool hasFeature(const std::string& id) const;  // update_enabled_features ("minecraft:minecart_improvements")
 
 private:
     enum Phase { Login, Configuration, Play, PhaseCount };
@@ -189,6 +194,9 @@ private:
     std::atomic<int> viewDistance_{0}, simulationDistance_{0}, viewCenter_[2] = {0, 0};
     mutable std::mutex mutex_;  // events_, stats_
     std::mutex sendMutex_;  // phase check + send are atomic w.r.t. phase changes
+    std::mutex dispatchMutex_;  // held while a packet is handled (pauseDispatch)
+    std::string profileId_;
+    std::vector<std::string> features_;  // guarded by mutex_
     std::vector<Event> events_;
     std::unordered_map<std::string, std::vector<PacketHandler>> playHandlers_;
     std::unordered_map<std::string, std::vector<PacketHandler>> playPeeks_;

@@ -1156,6 +1156,7 @@ u16 BlockRegistry::create(std::string_view key) {
         for (const Box& b : shapes_->shape(e->collision)) addBox(b, true);
     }
 
+    bi.leaves = shortName.ends_with("_leaves");
     blocks_.push_back(bi);
     names_.push_back(std::string(key));
     blockCount_ = blocks_.size();

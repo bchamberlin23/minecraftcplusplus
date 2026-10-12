@@ -14,10 +14,26 @@ struct TextEvents;  // click / hover events of a component (below)
 
 using Lang = std::unordered_map<std::string, std::string>;
 
+// Style.font (FontDescription): a font resource ("minecraft:alt"), or what an "object" component shows in the text
+// (an atlas sprite, a player's head). Interned: Style keeps the index (fontIndex / fontDesc, any thread).
+struct FontDesc {
+    enum Kind : u8 { Resource, Atlas, Player } kind = Resource;
+    std::string id;             // Resource: the font ("minecraft:default"); Atlas: the atlas ("minecraft:blocks")
+    std::string sprite;         // Atlas: the sprite ("block/stone")
+    std::string name, uuid;     // Player: the profile (name and / or "xxxxxxxx-xxxx-..." id)
+    std::string texture;        // Player: the profile's skin texture override ("entity/player/wide/alex"), or the
+                                // "textures" property value (base64 JSON with the skin URL)
+    bool hat = true;            // Player: the hat layer too
+    bool operator==(const FontDesc&) const = default;
+};
+int fontIndex(const FontDesc& d);  // >= 0
+FontDesc fontDesc(int index);
+
 struct Style {
     i32 color = -1;   // 0xRRGGBB, -1: not set
     i64 shadow = -1;  // 0xAARRGGBB shadow colour override, -1: not set
     i8 bold = -1, italic = -1, underlined = -1, strikethrough = -1, obfuscated = -1;  // -1: not set
+    i32 font = -1;    // fontIndex(FontDesc), -1: not set (the default font)
     std::shared_ptr<const TextEvents> events;  // click_event / hover_event / insertion (inherited); null: none
 
     bool isBold() const { return bold == 1; }

@@ -42,7 +42,8 @@ struct BlockInfo {
     bool replaceable = false;  // placing a block here overwrites it (air, fluids, grass, snow layer...)
     u8 emission = 0;           // block light emitted, 0..15
     u8 opacity = 0;            // light absorbed when passing through (15 = opaque)
-    u16 cullGroup = 0;         // same group + non-opaque => shared faces are hidden (glass, water, leaves)
+    u16 cullGroup = 0;         // same group + non-opaque => shared faces are hidden (glass, water)
+    bool leaves = false;       // a LeavesBlock (the See-Through Leaves option)
     CubeFace faces[6];
     u32 quadFirst = 0, quadCount = 0;
     u32 collisionFirst = 0, selectionFirst = 0;  // into BlockRegistry::boxes()

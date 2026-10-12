@@ -155,8 +155,19 @@ void gatherSection(const World& world, int cx, int sy, int cz, u16* padded, u8* 
                 if (dx || dz) fillBorder(world, cx, sy, cz, dx, dy, dz, padded, light);
 }
 
+namespace {
+std::atomic<bool> gSmoothLighting{true}, gCutoutLeaves{true};
+}  // namespace
+
+void setMeshOptions(const MeshOptions& o) {
+    gSmoothLighting.store(o.smoothLighting), gCutoutLeaves.store(o.cutoutLeaves);
+}
+
+MeshOptions meshOptions() { return {gSmoothLighting.load(), gCutoutLeaves.load()}; }
+
 void meshGrid(const u16* ids, const u8* light, const BlockRegistry& registry, bool models, bool skirts,
               SectionMesh& out, const ColumnColors* colors) {
+    const bool smooth = gSmoothLighting.load(std::memory_order_relaxed), cutoutLeaves = gCutoutLeaves.load(std::memory_order_relaxed);
     Scratch& sc = scratch();
     const BlockInfo* infos = registry.infos();
     const u16 water = registry.waterId();
@@ -232,6 +243,10 @@ void meshGrid(const u16* ids, const u8* light, const BlockRegistry& registry, bo
                         const BlockInfo& bc = infos[c];
                         const BlockInfo& bn = infos[n];
                         bool hidden = bn.occludes || (n != 0 && bc.layer != LayerOpaque && bn.cullGroup == bc.cullGroup);
+                        // Leaves: the faces between them show with See-Through Leaves (full detail; LOD keeps culling them).
+                        if (bc.leaves && light) hidden = bn.occludes || (!cutoutLeaves && bn.leaves);
+                        else if (bc.leaves && !cutoutLeaves) hidden = hidden || bn.leaves;
+                        const u8 layer = bc.leaves && !cutoutLeaves ? u8(LayerOpaque) : bc.layer;
                         if (hidden && skirts && d >= 2 && bc.layer != LayerTranslucent && onBorder(d, x, y, z) &&
                             (!infos[sc.cube[p + kStrideY]].occludes || !infos[sc.cube[p + off + kStrideY]].occludes))
                             hidden = false;
@@ -240,7 +255,7 @@ void meshGrid(const u16* ids, const u8* light, const BlockRegistry& registry, bo
                             const int q = p + off;  // the cell the face looks into
                             const u32 lq = light ? light[q] : kFullSky;
                             u32 ao = 0, sky = 0, block = 0;
-                            if (light && bc.layer != LayerTranslucent) {
+                            if (light && bc.layer != LayerTranslucent && smooth) {
                                 // Smooth lighting: each corner averages the four cells in front of it (dark solid
                                 // cells take the centre's light) and darkens by the solid cells beside it; a corner
                                 // behind two solid sides counts as solid itself.
@@ -264,7 +279,7 @@ void meshGrid(const u16* ids, const u8* light, const BlockRegistry& registry, bo
                                 sky = ((lq >> 4) * 16) * 0x01010101u;
                                 block = ((lq & 15) * 16) * 0x01010101u;
                             }
-                            key.a = 1 + (u32(f.tex) | (u32(f.rot) << 16) | (u32(bc.layer) << 21) | (ao << 23));
+                            key.a = 1 + (u32(f.tex) | (u32(f.rot) << 16) | (u32(layer) << 21) | (ao << 23));
                             key.sky = sky, key.block = block;
                             const int kind = biomeKind(f.tint);
                             key.color = colors && kind >= 0 ? colors->index[kind][(z + 1) * 18 + (x + 1)] : f.tint;

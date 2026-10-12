@@ -1,11 +1,13 @@
-// Video Settings (VideoSettingsScreen layout: Display, Quality & Performance, Preferences) with the options this
-// client has, and its own page for the rendering features the game does not have, reached from Quality &
-// Performance: Shaders & Upscaling (shader preset and packs, temporal upscaler TAA / NVIDIA DLSS / AMD FSR / Intel
-// XeSS with the vendor's quality modes, sharpness, frame generation, low-latency mode). Only what this GPU and
-// driver support is offered (render/upscalers/upscalers.h). Every change applies immediately; options.txt keeps it.
+// Video Settings (VideoSettingsScreen: Display, Quality & Performance with the graphics presets, Preferences) and
+// this client's own page for the rendering features the game does not have, reached from Quality & Performance:
+// Shaders & Upscaling (shader preset and packs, temporal upscaler TAA / NVIDIA DLSS / AMD FSR / Intel XeSS with the
+// vendor's quality modes, sharpness, frame generation, low-latency mode). Only what this GPU and driver support is
+// offered (render/upscalers/upscalers.h). Every change applies immediately (the renderer, terrain, sky and HUD read
+// the options each frame: ui/graphics_options.cpp); options.txt keeps it.
 #include "render/packs/pack_api.h"
 #include "render/renderer.h"
 #include "render/upscalers/upscalers.h"
+#include "ui/frontend.h"
 #include "ui/options_list.h"
 #include "world/terrain.h"
 
@@ -47,33 +49,83 @@ Text value(UiState& s, const std::string& caption, const std::string& v) {
 
 // --- Video Settings ----------------------------------------------------------------------------------------------
 
+// Options.setGraphicsPresetToCustom: any quality option changed by hand.
+void custom(UiState& s) { s.settings.graphicsPreset = 3; }
+
+// GraphicsPreset.apply: the Quality & Performance options of Fast / Fancy / Fabulous (Custom changes nothing).
+void applyPreset(UiState& s, int preset) {
+    Settings& o = s.settings;
+    const int maxRd = std::max(2, s.init.detailChunks);
+    auto rd = [&](int d) {
+        o.renderDistance = std::min(d, maxRd);
+        s.terrain->setDetailRadius(float(o.renderDistance) * 16.0f);
+    };
+    switch (preset) {
+        case 0:
+            o.biomeBlendRadius = 1, rd(8), o.prioritizeChunkUpdates = 0, o.simulationDistance = 6, o.ao = false;
+            o.cloudStatus = 1, o.particles = 1, o.mipmapLevels = 2, o.entityShadows = false, o.entityDistanceScaling = 0.75;
+            o.menuBackgroundBlurriness = 2, o.cloudRange = 32, o.cutoutLeaves = false, o.improvedTransparency = false;
+            o.weatherRadius = 5, o.maxAnisotropyBit = 1, o.textureFiltering = 0;
+            break;
+        case 1:
+            o.biomeBlendRadius = 2, rd(16), o.prioritizeChunkUpdates = 1, o.simulationDistance = 12, o.ao = true;
+            o.cloudStatus = 2, o.particles = 0, o.mipmapLevels = 4, o.entityShadows = true, o.entityDistanceScaling = 1.0;
+            o.menuBackgroundBlurriness = 5, o.cloudRange = 64, o.cutoutLeaves = true, o.improvedTransparency = false;
+            o.weatherRadius = 10, o.maxAnisotropyBit = 1, o.textureFiltering = 1;
+            break;
+        case 2:
+            o.biomeBlendRadius = 2, rd(32), o.prioritizeChunkUpdates = 1, o.simulationDistance = 12, o.ao = true;
+            o.cloudStatus = 2, o.particles = 0, o.mipmapLevels = 4, o.entityShadows = true, o.entityDistanceScaling = 1.25;
+            o.menuBackgroundBlurriness = 5, o.cloudRange = 128, o.cutoutLeaves = true, o.improvedTransparency = true;
+            o.weatherRadius = 10, o.maxAnisotropyBit = 2, o.textureFiltering = 2;
+            break;
+        default: break;
+    }
+    o.graphicsPreset = preset;
+}
+
+// A boolean quality option (CycleButton.onOffBuilder): a change makes the preset Custom.
+Button qualityOnOff(UiState& s, const char* key, bool* v, const char* tooltip = nullptr) {
+    UiState* p = &s;
+    return onOffButton(s, key, v, [p] { custom(*p); }, tooltip);
+}
+
 void videoBuild(UiState& s) {
     OptionsList l(s, Text(s.res.translate("options.videoTitle")), Screen::Options);
     UiState* p = &s;
-    Upscalers& up = s.init.renderer->upscalers();
+    Settings& o = s.settings;
+    const auto unavailable = [] { return Text("Not available in minecraftCplusplus yet"); };
     l.header(Text(s.res.translate("options.video.display.header")));
+    {  // Exclusive Fullscreen Mode: the window is borderless fullscreen only
+        Button mode;
+        mode.label = optionLabel(s, "options.fullscreen.exclusive.mode", Text(s.res.translate("options.fullscreen.current")));
+        mode.active = false;
+        mode.tooltip = unavailable;
+        l.big(std::move(mode));
+    }
+    std::vector<Button> display;
     {  // Max Framerate (our steps include common refresh rates) and VSync
-        const u32 cur = up.settings().fpsLimit;
+        const u32 cur = s.init.renderer->upscalers().settings().fpsLimit;
         int idx = int(std::size(kFpsSteps)) - 1;
         for (int i = 0; i < int(std::size(kFpsSteps)); ++i)
             if (kFpsSteps[i] == cur) idx = i;
-        Button fps = sliderButton(float(idx) / float(std::size(kFpsSteps) - 1),
-                                  [p] {
-                                      const u32 f = p->init.renderer->upscalers().settings().fpsLimit;
-                                      const Text v = f ? Text(formatJava(p->res.translate("options.framerate"), {std::to_string(f)}))
-                                                       : Text(p->res.translate("options.framerateLimit.max"));
-                                      return optionLabel(*p, "options.framerateLimit", v);
-                                  },
-                                  [p](float v) {
-                                      const u32 f = kFpsSteps[size_t(std::lround(v * float(std::size(kFpsSteps) - 1)))];
-                                      VideoSettings vs = p->init.renderer->upscalers().settings();
-                                      if (vs.fpsLimit != f) {
-                                          vs.fpsLimit = f;
-                                          p->settings.video = p->init.renderer->upscalers().apply(vs);
-                                          p->settings.videoSaved = true;
-                                      }
-                                  });
-        Button vsync = cycleButton(
+        display.push_back(sliderButton(float(idx) / float(std::size(kFpsSteps) - 1),
+                                       [p] {
+                                           const u32 f = p->init.renderer->upscalers().settings().fpsLimit;
+                                           const Text v = f ? Text(formatJava(p->res.translate("options.framerate"), {std::to_string(f)}))
+                                                            : Text(p->res.translate("options.framerateLimit.max"));
+                                           return optionLabel(*p, "options.framerateLimit", v);
+                                       },
+                                       [p](float v) {
+                                           const u32 f = kFpsSteps[size_t(std::lround(v * float(std::size(kFpsSteps) - 1)))];
+                                           VideoSettings vs = p->init.renderer->upscalers().settings();
+                                           if (vs.fpsLimit != f) {
+                                               vs.fpsLimit = f;
+                                               p->settings.video = p->init.renderer->upscalers().apply(vs);
+                                               p->settings.videoSaved = true;
+                                           }
+                                       }));
+        display.push_back(cycleButton(
             [p] {
                 return optionLabel(*p, "options.vsync",
                                    Text(p->res.translate(p->init.renderer->upscalers().settings().vsync ? "options.on" : "options.off")));
@@ -83,55 +135,196 @@ void videoBuild(UiState& s) {
                 v.vsync = !v.vsync;
                 p->applyVideo(v);
                 p->settings.save();
-            });
-        l.half(std::move(fps), std::move(vsync));
+            }));
     }
-    {  // GUI Scale (Auto, then 1 .. the largest this window allows) and Fullscreen (borderless, this monitor)
-        Button gui = cycleButton(
-            [p] {
-                return optionLabel(*p, "options.guiScale",
-                                   Text(p->settings.guiScale == 0 ? p->res.translate("options.guiScale.auto") : std::to_string(p->settings.guiScale)));
-            },
-            [p] {
-                int maxScale = 1;
-                const u32 w = p->window->width(), h = p->window->height();
-                while (w / u32(maxScale + 1) >= 320 && h / u32(maxScale + 1) >= 240) ++maxScale;
-                p->settings.guiScale = p->settings.guiScale >= maxScale ? 0 : p->settings.guiScale + 1;
-                p->settings.save();
-            });
-        Button full = cycleButton(
-            [p] { return optionLabel(*p, "options.fullscreen", Text(p->res.translate(p->window->fullscreen() ? "options.on" : "options.off"))); },
-            [p] { p->toggleFullscreen(); });
-        l.half(std::move(gui), std::move(full));
+    display.push_back(enumButton(s, "options.inactivityFpsLimit", &o.inactivityFpsLimit,
+                                 {"options.inactivityFpsLimit.minimized", "options.inactivityFpsLimit.afk"}, {}, [p] {
+                                     return Text(p->res.translate(p->settings.inactivityFpsLimit == 0 ? "options.inactivityFpsLimit.minimized.tooltip"
+                                                                                                      : "options.inactivityFpsLimit.afk.tooltip"));
+                                 }));
+    // GUI Scale (Auto, then 1 .. the largest this window allows) and Fullscreen (borderless, this monitor)
+    display.push_back(cycleButton(
+        [p] {
+            return optionLabel(*p, "options.guiScale",
+                               Text(p->settings.guiScale == 0 ? p->res.translate("options.guiScale.auto") : std::to_string(p->settings.guiScale)));
+        },
+        [p] {
+            int maxScale = 1;
+            const u32 w = p->window->width(), h = p->window->height();
+            while (w / u32(maxScale + 1) >= 320 && h / u32(maxScale + 1) >= 240) ++maxScale;
+            p->settings.guiScale = p->settings.guiScale >= maxScale ? 0 : p->settings.guiScale + 1;
+            p->settings.save();
+        }));
+    display.push_back(cycleButton(
+        [p] { return optionLabel(*p, "options.fullscreen", Text(p->res.translate(p->window->fullscreen() ? "options.on" : "options.off"))); },
+        [p] { p->toggleFullscreen(); }));
+    {
+        Button exclusive;
+        exclusive.label = optionLabel(s, "options.exclusiveFullscreen", Text(s.res.translate("options.off")));
+        exclusive.active = false;
+        exclusive.tooltip = unavailable;
+        display.push_back(std::move(exclusive));
     }
+    display.push_back(unitSlider(s, &o.gamma, [p] {  // Brightness: Moody .. Default .. Bright
+        const int v = int(p->settings.gamma * 100.0);
+        if (v == 0) return optionLabel(*p, "options.gamma", Text(p->res.translate("options.gamma.min")));
+        if (v == 50) return optionLabel(*p, "options.gamma", Text(p->res.translate("options.gamma.default")));
+        if (v == 100) return optionLabel(*p, "options.gamma", Text(p->res.translate("options.gamma.max")));
+        return optionLabel(*p, "options.gamma", Text(std::to_string(v)));
+    }));
+    {  // Graphics API: this client renders with Direct3D 12 only
+        Button api;
+        api.label = optionLabel(s, "options.graphicsApi", Text("Direct3D 12"));
+        api.active = false;
+        api.tooltip = tooltipKey(s, "options.graphicsApi.tooltip");
+        display.push_back(std::move(api));
+    }
+    l.halves(std::move(display));
+
     l.header(Text(s.res.translate("options.video.quality.header")));
-    {  // where the game has its graphics preset: this client's rendering features
+    {  // Preset: a slider over Fast, Fancy, Fabulous!, Custom
+        static const char* const kPresets[4] = {"options.graphics.fast", "options.graphics.fancy", "options.graphics.fabulous",
+                                                "options.graphics.custom"};
+        Button preset = sliderButton(float(std::clamp(o.graphicsPreset, 0, 3)) / 3.0f,
+                                     [p] { return optionLabel(*p, "options.graphics.preset", Text(p->res.translate(kPresets[std::clamp(p->settings.graphicsPreset, 0, 3)]))); },
+                                     [p](float v) {
+                                         const int i = std::clamp(int(std::floor((v >= 1.0f ? 0.99999f : v) * 4.0f)), 0, 3);
+                                         if (i == p->settings.graphicsPreset) return;
+                                         applyPreset(*p, i);
+                                         p->settings.save();
+                                         const int dragging = p->draggingSlider;
+                                         p->buildButtons();  // the other widgets show the preset's values
+                                         p->draggingSlider = dragging;
+                                     });
+        preset.tooltip = tooltipKey(s, "options.graphics.preset.tooltip");
+        l.big(std::move(preset));
+    }
+    std::vector<Button> q;
+    q.push_back(rangeSlider(s, 0, 7, [p] { return p->settings.biomeBlendRadius; },
+                            [p](int v) { p->settings.biomeBlendRadius = v, custom(*p); },
+                            [p] {
+                                return optionLabel(*p, "options.biomeBlendRadius",
+                                                   Text(p->res.translate("options.biomeBlendRadius." + std::to_string(p->settings.biomeBlendRadius * 2 + 1))));
+                            }));
+    {  // Render Distance: up to the launch detail radius (it sized the geometry arena)
+        const int maxRd = std::max(2, s.init.detailChunks);
+        q.push_back(rangeSlider(s, 2, maxRd, [p] { return p->settings.renderDistance; },
+                                [p](int v) {
+                                    p->settings.renderDistance = v, custom(*p);
+                                    p->terrain->setDetailRadius(float(v) * 16.0f);
+                                },
+                                [p, maxRd] {
+                                    return optionLabel(*p, "options.renderDistance",
+                                                       Text(formatJava(p->res.translate("options.chunks"),
+                                                                       {std::to_string(std::min(p->settings.renderDistance, maxRd))})));
+                                }));
+    }
+    {
+        static const char* const kTips[3] = {"options.prioritizeChunkUpdates.none.tooltip", "options.prioritizeChunkUpdates.byPlayer.tooltip",
+                                             "options.prioritizeChunkUpdates.nearby.tooltip"};
+        q.push_back(enumButton(s, "options.prioritizeChunkUpdates", &o.prioritizeChunkUpdates,
+                               {"options.prioritizeChunkUpdates.none", "options.prioritizeChunkUpdates.byPlayer", "options.prioritizeChunkUpdates.nearby"},
+                               [p] { custom(*p); }, [p] { return Text(p->res.translate(kTips[std::clamp(p->settings.prioritizeChunkUpdates, 0, 2)])); }));
+    }
+    {  // Simulation Distance: the local server's (it takes the value when the world starts)
+        Button sim = rangeSlider(s, 5, 32, [p] { return p->settings.simulationDistance; },
+                                 [p](int v) { p->settings.simulationDistance = v, custom(*p); },
+                                 [p] {
+                                     return optionLabel(*p, "options.simulationDistance",
+                                                        Text(formatJava(p->res.translate("options.chunks"), {std::to_string(p->settings.simulationDistance)})));
+                                 });
+        sim.active = !s.online() || s.fe->cfg.singleplayer;
+        if (s.online()) sim.tooltip = [] { return Text("Applies the next time this world is opened"); };
+        q.push_back(std::move(sim));
+    }
+    q.push_back(qualityOnOff(s, "options.ao", &o.ao));
+    q.push_back(enumButton(s, "options.renderClouds", &o.cloudStatus, {"options.off", "options.clouds.fast", "options.clouds.fancy"},
+                           [p] { custom(*p); }));
+    q.push_back(enumButton(s, "options.particles", &o.particles, {"options.particles.all", "options.particles.decreased", "options.particles.minimal"},
+                           [p] { custom(*p); }));
+    q.push_back(rangeSlider(s, 0, 4, [p] { return p->settings.mipmapLevels; }, [p](int v) { p->settings.mipmapLevels = v, custom(*p); },
+                            [p] {
+                                const int v = p->settings.mipmapLevels;
+                                return optionLabel(*p, "options.mipmapLevels", Text(v == 0 ? p->res.translate("options.off") : std::to_string(v)));
+                            }));
+    q.push_back(qualityOnOff(s, "options.entityShadows", &o.entityShadows));
+    q.push_back(rangeSlider(s, 2, 20, [p] { return int(p->settings.entityDistanceScaling * 4.0); },
+                            [p](int v) { p->settings.entityDistanceScaling = v / 4.0, custom(*p); },
+                            [p] { return percentLabel(*p, "options.entityDistanceScaling", p->settings.entityDistanceScaling); }));
+    {
+        Button blur = rangeSlider(s, 0, 10, [p] { return p->settings.menuBackgroundBlurriness; },
+                                  [p](int v) { p->settings.menuBackgroundBlurriness = v, custom(*p); },
+                                  [p] {
+                                      const int b = p->settings.menuBackgroundBlurriness;
+                                      return optionLabel(*p, "options.accessibility.menu_background_blurriness",
+                                                         Text(b == 0 ? p->res.translate("options.off") : std::to_string(b)));
+                                  });
+        blur.tooltip = tooltipKey(s, "options.accessibility.menu_background_blurriness.tooltip");
+        q.push_back(std::move(blur));
+    }
+    q.push_back(rangeSlider(s, 2, 128, [p] { return p->settings.cloudRange; }, [p](int v) { p->settings.cloudRange = v, custom(*p); },
+                            [p] {
+                                return optionLabel(*p, "options.renderCloudsDistance",
+                                                   Text(formatJava(p->res.translate("options.chunks"), {std::to_string(p->settings.cloudRange)})));
+                            }));
+    q.push_back(qualityOnOff(s, "options.cutoutLeaves", &o.cutoutLeaves, "options.cutoutLeaves.tooltip"));
+    q.push_back(qualityOnOff(s, "options.improvedTransparency", &o.improvedTransparency, "options.improvedTransparency.oit.tooltip"));
+    {
+        static const char* const kTips[3] = {"options.textureFiltering.none.tooltip", "options.textureFiltering.rgss.tooltip",
+                                             "options.textureFiltering.anisotropic.tooltip"};
+        q.push_back(enumButton(s, "options.textureFiltering", &o.textureFiltering,
+                               {"options.textureFiltering.none", "options.textureFiltering.rgss", "options.textureFiltering.anisotropic"},
+                               [p] {
+                                   custom(*p);
+                                   p->buildButtons();  // Anisotropic Filtering is only active with Anisotropic
+                               },
+                               [p] { return Text(p->res.translate(kTips[std::clamp(p->settings.textureFiltering, 0, 2)])); }));
+    }
+    {
+        Button aniso = rangeSlider(s, 1, 3, [p] { return p->settings.maxAnisotropyBit; }, [p](int v) { p->settings.maxAnisotropyBit = v, custom(*p); },
+                                   [p] {
+                                       return optionLabel(*p, "options.maxAnisotropy",
+                                                          Text(formatJava(p->res.translate("options.multiplier"),
+                                                                          {std::to_string(1 << p->settings.maxAnisotropyBit)})));
+                                   });
+        aniso.tooltip = tooltipKey(s, "options.maxAnisotropy.tooltip");
+        aniso.active = o.textureFiltering == 2;
+        q.push_back(std::move(aniso));
+    }
+    {
+        Button weather = rangeSlider(s, 3, 10, [p] { return p->settings.weatherRadius; }, [p](int v) { p->settings.weatherRadius = v, custom(*p); },
+                                     [p] {
+                                         return optionLabel(*p, "options.weatherRadius",
+                                                            Text(formatJava(p->res.translate("options.blocks"), {std::to_string(p->settings.weatherRadius)})));
+                                     });
+        weather.tooltip = tooltipKey(s, "options.weatherRadius.tooltip");
+        q.push_back(std::move(weather));
+    }
+    l.halves(std::move(q));
+    {  // this client's own rendering features, after the game's quality options
         Button extra = screenButton(s, "", Screen::VideoExtra);
         extra.label = Text("Shaders & Upscaling...");
         extra.tooltip = [] { return Text("Shader preset and shader packs, DLSS / FSR / XeSS upscaling, frame generation and low latency"); };
         l.big(std::move(extra));
     }
-    {  // Render Distance: up to the launch detail radius (it sized the geometry arena)
-        const int maxRd = std::max(2, s.init.detailChunks);
-        l.half(sliderButton(float(std::min(s.settings.renderDistance, maxRd) - 2) / float(std::max(1, maxRd - 2)),
-                             [p, maxRd] {
-                                 return optionLabel(*p, "options.renderDistance",
-                                                    Text(formatJava(p->res.translate("options.chunks"),
-                                                                    {std::to_string(std::min(p->settings.renderDistance, maxRd))})));
-                             },
-                             [p, maxRd](float v) {
-                                 p->settings.renderDistance = 2 + int(std::lround(v * float(maxRd - 2)));
-                                 p->terrain->setDetailRadius(float(p->settings.renderDistance) * 16.0f);
-                             }));
-    }
+
     l.header(Text(s.res.translate("options.video.preferences.header")));
-    static const char* kIndicator[3] = {"options.off", "options.attack.crosshair", "options.attack.hotbar"};
-    l.half(cycleButton(
-        [p] { return optionLabel(*p, "options.attackIndicator", Text(p->res.translate(kIndicator[std::clamp(p->settings.attackIndicator, 0, 2)]))); },
-        [p] {
-            p->settings.attackIndicator = (p->settings.attackIndicator + 1) % 3;
-            p->settings.save();
-        }));
+    std::vector<Button> prefs;
+    prefs.push_back(onOffButton(s, "options.autosaveIndicator", &o.showAutosaveIndicator));
+    prefs.push_back(onOffButton(s, "options.vignette", &o.vignette, {}, "options.vignette.tooltip"));
+    prefs.push_back(enumButton(s, "options.attackIndicator", &o.attackIndicator, {"options.off", "options.attack.crosshair", "options.attack.hotbar"}));
+    {
+        Button fade = rangeSlider(s, 0, 40, [p] { return int(p->settings.chunkFade * 20.0); }, [p](int v) { p->settings.chunkFade = v / 20.0; },
+                                  [p] {
+                                      if (p->settings.chunkFade <= 0.0) return Text(p->res.translate("options.chunkFade.none"));
+                                      char buf[16];
+                                      std::snprintf(buf, sizeof(buf), "%.2f", p->settings.chunkFade);
+                                      return Text(formatJava(p->res.translate("options.chunkFade.seconds"), {buf}));
+                                  });
+        fade.tooltip = tooltipKey(s, "options.chunkFade.tooltip");
+        prefs.push_back(std::move(fade));
+    }
+    l.halves(std::move(prefs));
     l.footer();
 }
 

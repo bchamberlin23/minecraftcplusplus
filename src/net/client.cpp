@@ -82,6 +82,7 @@ bool Client::start(const Config& config) {
     if (zip.open(config_.jar)) {
         protocol_ = protocolVersion(zip);
         AssetSource::client(config_.jar).readLang("en_us", lang_);  // with resource packs and mods' lang
+        if (info_.language != "en_us") AssetSource::client(config_.jar).readLang(info_.language, lang_);
     }
     if (!protocol_) {
         LOG("error: cannot read the protocol version from %s", config_.jar.string().c_str());
@@ -95,6 +96,22 @@ bool Client::start(const Config& config) {
     alive_ = true;
     thread_ = std::thread([this] { run(); });
     return true;
+}
+
+void Client::pauseDispatch(const std::function<void()>& fn, const std::string& language) {
+    std::lock_guard dispatch(dispatchMutex_);
+    if (!language.empty()) {
+        std::unordered_map<std::string, std::string> next;
+        AssetSource::client(config_.jar).readLang("en_us", next);
+        if (language != "en_us") AssetSource::client(config_.jar).readLang(language, next);
+        lang_.swap(next);
+    }
+    if (fn) fn();
+}
+
+bool Client::hasFeature(const std::string& id) const {
+    std::lock_guard lock(mutex_);
+    return std::find(features_.begin(), features_.end(), id) != features_.end();
 }
 
 void Client::stop() {
@@ -179,6 +196,7 @@ void Client::run() {
         const std::vector<std::string>& names = clientbound_[phase];
         if (!r.ok || id < 0 || size_t(id) >= names.size()) continue;  // unknown: skip by length
         const std::string& name = names[size_t(id)];
+        std::lock_guard dispatch(dispatchMutex_);
         bool keepGoing, handled = false;
         if (phase == Login) {
             keepGoing = handleLogin(name, r);
@@ -239,7 +257,7 @@ bool Client::handleLogin(const std::string& name, Reader& r) {
         push(DisconnectEvent{jsonComponentText(r.str(), &lang_)});
         return false;
     } else if (name == "login_finished") {
-        r.skip(16);
+        profileId_ = std::string(r.bytes(16));
         const std::string_view player = r.str();
         LOG("net: logged in as %.*s (protocol %d)", int(player.size()), player.data(), protocol_);
         switchPhase(Login, "login_acknowledged", Configuration);
@@ -311,6 +329,12 @@ bool Client::handleConfiguration(const std::string& name, Reader& r) {
         Writer w;
         w.varInt(0);
         send(Configuration, "select_known_packs", w);
+    } else if (name == "update_enabled_features") {  // the world's feature flags (experiments)
+        std::vector<std::string> features;
+        const i32 n = r.varInt();
+        for (i32 i = 0; i < n && r.ok; ++i) features.emplace_back(r.str());
+        std::lock_guard lock(mutex_);
+        features_ = std::move(features);
     } else if (name == "registry_data") {
         const std::string registry(r.str());
         const i32 n = r.varInt();

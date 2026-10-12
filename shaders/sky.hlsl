@@ -162,6 +162,7 @@ CloudOut SkyCloudVS(uint vid : SV_VertexID) {
     uint flags = face >> 24;
     uint dir = flags & 7;
     bool inside = (flags & 16) != 0;
+    bool topColor = (flags & 32) != 0;  // flat clouds: the down face in the top face's colour
     uint index = dir * 4 + (inside ? 3 - corner : corner);
     float3 v = float3((0xF03CC3u >> index) & 1, (0x6666F0u >> index) & 1, (0xC3F066u >> index) & 1);
     float3 cell = float3(12, 4, 12);
@@ -169,7 +170,7 @@ CloudOut SkyCloudVS(uint vid : SV_VertexID) {
     CloudOut o;
     o.pos = mul(gViewProj, float4(p, 1));
     o.dist = length(p);
-    o.color = float4(kCloudShade[dir].xxx, 1) * gCloudColor;
+    o.color = float4((topColor ? 1.0 : kCloudShade[dir]).xxx, 1) * gCloudColor;
     return o;
 }
 

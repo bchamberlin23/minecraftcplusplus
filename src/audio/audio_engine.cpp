@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <xapo.h>
 #include <xaudio2.h>
+#include <hrtfapoapi.h>
 
 #include <algorithm>
 #include <cmath>
@@ -18,6 +19,7 @@
 #include <stb_vorbis/stb_vorbis.c>
 
 #pragma comment(lib, "xaudio2.lib")
+#pragma comment(lib, "hrtfapo.lib")
 #pragma comment(lib, "ole32.lib")
 
 namespace audio {
@@ -169,8 +171,22 @@ struct Engine::Impl {
             if (vf) stb_vorbis_close(vf);
         }
     };
+    struct Pooled {
+        IXAudio2SourceVoice* sv = nullptr;
+        IXAudio2SubmixVoice* sub = nullptr;      // directional audio: the mono 48 kHz submix with the HRTF effect
+        IXAPOHrtfParameters* hrtf = nullptr;
+        void destroy() {
+            if (sv) sv->DestroyVoice();
+            if (sub) sub->DestroyVoice();
+            if (hrtf) hrtf->Release();
+            sv = nullptr, sub = nullptr, hrtf = nullptr;
+        }
+    };
     struct Voice {
         IXAudio2SourceVoice* sv = nullptr;
+        IXAudio2SubmixVoice* sub = nullptr;
+        IXAPOHrtfParameters* hrtf = nullptr;
+        float hrtfPos[3] = {1e9f, 0, 0};
         u32 key = 0;  // channels << 24 | rate
         int channels = 1;
         PlayRequest req;
@@ -194,7 +210,8 @@ struct Engine::Impl {
     IXAudio2MasteringVoice* master = nullptr;
     std::vector<Pcm> pcm;  // by file index
     std::vector<Voice> voices;  // active (reserved; never reallocates)
-    std::unordered_map<u32, std::vector<IXAudio2SourceVoice*>> pool;
+    std::unordered_map<u32, std::vector<Pooled>> pool;
+    bool hrtf = false;
     double listener[3] = {};
     float forward[3] = {0, 0, 1}, up[3] = {0, 1, 0}, right[3] = {-1, 0, 0};
     std::unique_ptr<CaptureSink> capture;
@@ -224,8 +241,17 @@ bool Engine::start(const SoundBank& bank, const fs::path& capture) {
     thread_ = std::thread([&] {
         Impl& m = *impl_;
         CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        std::wstring device;
+        {
+            std::lock_guard lock(mutex_);
+            device = deviceId_, m.hrtf = hrtf_, deviceDirty_ = false;
+        }
         bool ok = SUCCEEDED(XAudio2Create(&m.xa, 0, XAUDIO2_DEFAULT_PROCESSOR)) &&
-                  SUCCEEDED(m.xa->CreateMasteringVoice(&m.master, 2, kMixRate, 0, nullptr, nullptr, AudioCategory_GameEffects));
+                  (SUCCEEDED(m.xa->CreateMasteringVoice(&m.master, 2, kMixRate, 0, device.empty() ? nullptr : device.c_str(), nullptr,
+                                                        AudioCategory_GameEffects)) ||
+                   (!device.empty() && SUCCEEDED(m.xa->CreateMasteringVoice(&m.master, 2, kMixRate, 0, nullptr, nullptr,
+                                                                            AudioCategory_GameEffects))));
+        hrtfActive_ = ok && m.hrtf;
         if (ok && m.capture) {
             CaptureXapo* xapo = new CaptureXapo(m.capture.get());
             XAUDIO2_EFFECT_DESCRIPTOR desc{static_cast<IXAPO*>(xapo), TRUE, 2};
@@ -243,10 +269,10 @@ bool Engine::start(const SoundBank& bank, const fs::path& capture) {
             running_ = true;
             run();
         }
-        for (auto& v : m.voices) v.sv->DestroyVoice();
+        for (auto& v : m.voices) Impl::Pooled{v.sv, v.sub, v.hrtf}.destroy();
         m.voices.clear();
         for (auto& [k, list] : m.pool)
-            for (auto* sv : list) sv->DestroyVoice();
+            for (auto& p : list) p.destroy();
         if (m.master) m.master->DestroyVoice();
         if (m.xa) m.xa->Release();
         m.master = nullptr, m.xa = nullptr;
@@ -360,6 +386,15 @@ void Engine::setListener(const double pos[3], const float forward[3], const floa
     commands_.push_back(c);
 }
 
+void Engine::setDevice(const std::wstring& endpointId, bool hrtf) {
+    {
+        std::lock_guard lock(mutex_);
+        if (deviceId_ == endpointId && hrtf_ == hrtf) return;
+        deviceId_ = endpointId, hrtf_ = hrtf, deviceDirty_ = true;
+    }
+    cv_.notify_one();
+}
+
 void Engine::takeFinished(std::vector<u32>& out) {
     std::lock_guard lock(mutex_);
     out.insert(out.end(), finished_.begin(), finished_.end());
@@ -440,6 +475,27 @@ void Engine::run() {
     auto applyMatrix = [&](Impl::Voice& v) {
         float mtx[4];
         v.gain = computeMatrix(v.req, v.channels, mtx);
+        if (v.hrtf) {  // directional audio: the HRTF effect places the sound, the source keeps the game's gain
+            double rel[3];
+            for (int a = 0; a < 3; ++a) rel[a] = v.req.pos[a] - m.listener[a];
+            // Listener space for the effect: +x right, +y up, -z forward; one metre away (the direction only).
+            float p[3] = {float(rel[0] * m.right[0] + rel[1] * m.right[1] + rel[2] * m.right[2]),
+                          float(rel[0] * m.up[0] + rel[1] * m.up[1] + rel[2] * m.up[2]),
+                          -float(rel[0] * m.forward[0] + rel[1] * m.forward[1] + rel[2] * m.forward[2])};
+            const float len = std::sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
+            if (len < 1e-3f) p[0] = 0, p[1] = 0, p[2] = -1;
+            else p[0] /= len, p[1] /= len, p[2] /= len;
+            if (std::abs(p[0] - v.hrtfPos[0]) + std::abs(p[1] - v.hrtfPos[1]) + std::abs(p[2] - v.hrtfPos[2]) > 1e-3f) {
+                const HrtfPosition hp{p[0], p[1], p[2]};
+                v.hrtf->SetSourcePosition(&hp);
+                std::copy(p, p + 3, v.hrtfPos);
+            }
+            if (std::abs(v.gain - v.matrix[0]) > 1e-5f) {
+                v.matrix[0] = v.matrix[1] = v.gain;
+                v.sv->SetVolume(v.gain);
+            }
+            return;
+        }
         const int n = v.channels * 2;
         bool changed = false;
         for (int i = 0; i < n; ++i) changed |= std::abs(mtx[i] - v.matrix[i]) > 1e-5f;
@@ -454,13 +510,28 @@ void Engine::run() {
         v.sv->SetOutputMatrix(nullptr, v.channels, 2, x);
     };
 
-    auto acquire = [&](int channels, int rate) -> IXAudio2SourceVoice* {
-        const u32 key = (u32(channels) << 24) | u32(rate);
+    auto acquire = [&](int channels, int rate, bool hrtf) -> Impl::Pooled {
+        const u32 key = (u32(channels) << 24) | (hrtf ? 1u << 23 : 0u) | u32(rate);
         auto& list = m.pool[key];
         if (!list.empty()) {
-            IXAudio2SourceVoice* sv = list.back();
+            Impl::Pooled p = list.back();
             list.pop_back();
-            return sv;
+            return p;
+        }
+        Impl::Pooled p;
+        if (hrtf) {  // a mono submix at 48 kHz carrying the HRTF effect (stereo out), fed by the source voice
+            IXAPO* apo = nullptr;
+            HrtfApoInit init{};
+            if (FAILED(CreateHrtfApo(&init, &apo))) return p;
+            apo->QueryInterface(__uuidof(IXAPOHrtfParameters), reinterpret_cast<void**>(&p.hrtf));
+            XAUDIO2_EFFECT_DESCRIPTOR fx{apo, TRUE, 2};
+            XAUDIO2_EFFECT_CHAIN chain{1, &fx};
+            const bool ok = SUCCEEDED(m.xa->CreateSubmixVoice(&p.sub, 1, kMixRate, 0, 0, nullptr, &chain));
+            apo->Release();
+            if (!ok || !p.hrtf) {
+                p.destroy();
+                return p;
+            }
         }
         WAVEFORMATEX fmt{};
         fmt.wFormatTag = WAVE_FORMAT_PCM;
@@ -469,18 +540,22 @@ void Engine::run() {
         fmt.wBitsPerSample = 16;
         fmt.nBlockAlign = WORD(channels * 2);
         fmt.nAvgBytesPerSec = fmt.nSamplesPerSec * fmt.nBlockAlign;
-        IXAudio2SourceVoice* sv = nullptr;
-        if (FAILED(m.xa->CreateSourceVoice(&sv, &fmt, 0, 2.0f))) return nullptr;
-        return sv;
+        XAUDIO2_SEND_DESCRIPTOR send{0, p.sub};
+        XAUDIO2_VOICE_SENDS sends{1, &send};
+        if (FAILED(m.xa->CreateSourceVoice(&p.sv, &fmt, 0, 2.0f, nullptr, p.sub ? &sends : nullptr))) p.destroy();
+        return p;
     };
 
     auto release = [&](Impl::Voice& v) {  // the voice has no queued buffers
         auto& list = m.pool[v.key];
-        if (list.size() < 32)
-            list.push_back(v.sv);
-        else
-            v.sv->DestroyVoice();
-        v.sv = nullptr;
+        Impl::Pooled p{v.sv, v.sub, v.hrtf};
+        if (list.size() < 32) {
+            if (p.sv) p.sv->SetVolume(1.0f);
+            list.push_back(p);
+        } else {
+            p.destroy();
+        }
+        v.sv = nullptr, v.sub = nullptr, v.hrtf = nullptr;
         v.stream.reset();
     };
 
@@ -583,12 +658,14 @@ void Engine::run() {
             victim->draining = true;
             finished_.push_back(victim->req.handle);
         }
-        IXAudio2SourceVoice* sv = acquire(channels, rate);
+        const bool hrtf = m.hrtf && channels == 1 && !r.relative;
+        const Impl::Pooled pooled = acquire(channels, rate, hrtf);
+        IXAudio2SourceVoice* sv = pooled.sv;
         if (!sv) return false;
         m.voices.emplace_back();
         Impl::Voice& v = m.voices.back();
-        v.sv = sv;
-        v.key = (u32(channels) << 24) | u32(rate);
+        v.sv = sv, v.sub = pooled.sub, v.hrtf = pooled.hrtf;
+        v.key = (u32(channels) << 24) | (hrtf ? 1u << 23 : 0u) | u32(rate);
         v.channels = channels;
         v.req = r;
         v.stream = std::move(stream);
@@ -625,6 +702,25 @@ void Engine::run() {
             std::unique_lock lock(mutex_);
             cv_.wait_for(lock, std::chrono::milliseconds(5), [&] { return quit_ || !commands_.empty(); });
             if (quit_) break;
+            if (deviceDirty_) {  // SoundManager.reload: everything stops, the output moves
+                deviceDirty_ = false;
+                for (auto& v : m.voices) {
+                    Impl::Pooled{v.sv, v.sub, v.hrtf}.destroy();
+                    if (!v.draining) finished_.push_back(v.req.handle);
+                }
+                m.voices.clear();
+                for (auto& [k, list] : m.pool)
+                    for (auto& p : list) p.destroy();
+                m.pool.clear();
+                if (m.master) m.master->DestroyVoice();
+                m.master = nullptr;
+                const bool ok = SUCCEEDED(m.xa->CreateMasteringVoice(&m.master, 2, kMixRate, 0, deviceId_.empty() ? nullptr : deviceId_.c_str(),
+                                                                    nullptr, AudioCategory_GameEffects)) ||
+                                SUCCEEDED(m.xa->CreateMasteringVoice(&m.master, 2, kMixRate, 0, nullptr, nullptr, AudioCategory_GameEffects));
+                m.hrtf = hrtf_ && ok;
+                hrtfActive_ = m.hrtf;
+                LOG("audio: output %s%s", ok ? "reopened" : "unavailable", m.hrtf ? " with directional audio (HRTF)" : "");
+            }
             cmds.swap(commands_);
             for (int f : preloadFiles_) m.preloadQueue.push_back(f);
             preloadFiles_.clear();

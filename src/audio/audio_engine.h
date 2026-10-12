@@ -45,6 +45,11 @@ public:
     void setCategoryGain(Category c, float gain) { gains_[int(c)].store(gain, std::memory_order_relaxed); }
     void setMusicFade(float gain) { musicFade_.store(gain, std::memory_order_relaxed); }
     void takeFinished(std::vector<u32>& out);  // handles that stopped playing since the last call
+    // The output device (an endpoint id, "" the system default) and directional audio (each positioned mono sound
+    // through XAudio2's HRTF effect). Before start(): what it opens; later every sound stops and output moves
+    // (SoundManager.reload).
+    void setDevice(const std::wstring& endpointId, bool hrtf);
+    bool hrtfActive() const { return hrtfActive_.load(); }
     void preload(const std::vector<int>& files);
 
     // Debug capture.
@@ -79,6 +84,9 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<float> gains_[kCategoryCount];
     std::atomic<float> musicFade_{1.0f};
+    std::wstring deviceId_;  // guarded by mutex_
+    bool hrtf_ = false, deviceDirty_ = false;
+    std::atomic<bool> hrtfActive_{false};
     std::atomic<double> captureStart_{0};
     Impl* impl_ = nullptr;
 };

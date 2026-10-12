@@ -2,7 +2,27 @@
 
 #include "world/nbt.h"
 
+#include <mutex>
+
 namespace ui {
+
+namespace {
+std::mutex gFontMutex;
+std::vector<FontDesc> gFonts;  // interned FontDescriptions (index = Style::font)
+}  // namespace
+
+int fontIndex(const FontDesc& d) {
+    std::lock_guard lock(gFontMutex);
+    for (size_t i = 0; i < gFonts.size(); ++i)
+        if (gFonts[i] == d) return int(i);
+    gFonts.push_back(d);
+    return int(gFonts.size() - 1);
+}
+
+FontDesc fontDesc(int index) {
+    std::lock_guard lock(gFontMutex);
+    return index >= 0 && size_t(index) < gFonts.size() ? gFonts[size_t(index)] : FontDesc{FontDesc::Resource, "minecraft:default"};
+}
 
 const u32 kLegacyColors[16] = {0x000000, 0x0000AA, 0x00AA00, 0x00AAAA, 0xAA0000, 0xAA00AA, 0xFFAA00, 0xAAAAAA,
                                0x555555, 0x5555FF, 0x55FF55, 0x55FFFF, 0xFF5555, 0xFF55FF, 0xFFFF55, 0xFFFFFF};
@@ -12,7 +32,8 @@ const char* kColorNames[16] = {"black", "dark_blue", "dark_green", "dark_aqua", 
                                "red",   "light_purple", "yellow", "white"};
 
 struct Node {
-    enum Kind { Literal, Translate, Keybind } kind = Literal;
+    enum Kind { Literal, Translate, Keybind, Object } kind = Literal;
+    FontDesc object;  // Object: what it shows (ObjectContents: "atlas" sprite / "player" head)
     std::string text, key, fallback;
     std::vector<Node> with, extra;
     Style style;
@@ -37,6 +58,53 @@ i8 flag(NbtReader& r, u8 tag) {
 }
 
 Node parseNbt(NbtReader& r, u8 tag, int depth);
+
+std::string uuidText(const i32 v[4]) {
+    char b[40];
+    std::snprintf(b, sizeof(b), "%08x-%04x-%04x-%04x-%04x%08x", u32(v[0]), u32(v[1]) >> 16, u32(v[1]) & 0xFFFF, u32(v[2]) >> 16,
+                  u32(v[2]) & 0xFFFF, u32(v[3]));
+    return b;
+}
+
+// ResolvableProfile (NBT): name, id (int array), properties [{name, value}], texture (skin patch).
+void readProfile(NbtReader& r, FontDesc& d) {
+    u8 t;
+    std::string_view name;
+    while (r.field(t, name)) {
+        if (name == "name" && t == TagString) d.name = r.str();
+        else if (name == "id" && t == TagIntArray) {
+            const i32 cnt = r.i32v();
+            i32 v[4] = {};
+            for (i32 i = 0; i < cnt && r.ok; ++i) {
+                const i32 x = r.i32v();
+                if (i < 4) v[i] = x;
+            }
+            if (cnt == 4) d.uuid = uuidText(v);
+        } else if (name == "texture" && t == TagString) {
+            d.texture = r.str();
+        } else if (name == "properties" && t == TagList) {
+            const u8 et = r.u8v();
+            const i32 cnt = r.i32v();
+            for (i32 i = 0; i < cnt && r.ok; ++i) {
+                if (et != TagCompound) {
+                    r.skip(et);
+                    continue;
+                }
+                std::string pn, pv;
+                u8 pt;
+                std::string_view pk;
+                while (r.field(pt, pk)) {
+                    if (pk == "name" && pt == TagString) pn = r.str();
+                    else if (pk == "value" && pt == TagString) pv = r.str();
+                    else r.skip(pt);
+                }
+                if (pn == "textures" && d.texture.empty()) d.texture = pv;
+            }
+        } else {
+            r.skip(t);
+        }
+    }
+}
 
 void parseList(NbtReader& r, std::vector<Node>& out, int depth) {
     const u8 et = r.u8v();
@@ -95,6 +163,19 @@ Node parseNbt(NbtReader& r, u8 tag, int depth) {
                 if (sn == "name" && st == TagString) n.text = r.str();
                 else r.skip(st);
             }
+        } else if (name == "font" && t == TagString) {
+            n.style.font = fontIndex({FontDesc::Resource, std::string(r.str())});
+        } else if (name == "sprite" && t == TagString) {  // object: atlas sprite
+            n.kind = Node::Object, n.object.kind = FontDesc::Atlas, n.object.sprite = r.str();
+            if (n.object.id.empty()) n.object.id = "minecraft:blocks";
+        } else if (name == "atlas" && t == TagString) {
+            n.object.id = r.str();
+        } else if (name == "player" && (t == TagCompound || t == TagString)) {  // object: a player's head
+            n.kind = Node::Object, n.object.kind = FontDesc::Player;
+            if (t == TagString) n.object.name = r.str();
+            else readProfile(r, n.object);
+        } else if (name == "hat" && t == TagByte) {
+            n.object.hat = r.u8v() != 0;
         } else if (name == "color" && t == TagString) {
             n.style.color = colorByName(r.str());
         } else if (name == "shadow_color" && t == TagInt) {
@@ -199,6 +280,30 @@ Node parseJson(const nlohmann::json& j, int depth) {
     if (j.contains("extra") && j["extra"].is_array())
         for (const auto& e : j["extra"]) n.extra.push_back(parseJson(e, depth + 1));
     if (j.contains("color") && j["color"].is_string()) n.style.color = colorByName(j["color"].get<std::string>());
+    if (j.contains("font") && j["font"].is_string()) n.style.font = fontIndex({FontDesc::Resource, j["font"].get<std::string>()});
+    if (j.contains("sprite") && j["sprite"].is_string()) {  // object: atlas sprite
+        n.kind = Node::Object, n.object.kind = FontDesc::Atlas, n.object.sprite = j["sprite"].get<std::string>();
+        n.object.id = j.value("atlas", std::string("minecraft:blocks"));
+    } else if (j.contains("player")) {  // object: a player's head
+        n.kind = Node::Object, n.object.kind = FontDesc::Player;
+        const auto& pl = j["player"];
+        if (pl.is_string()) n.object.name = pl.get<std::string>();
+        else if (pl.is_object()) {
+            n.object.name = pl.value("name", "");
+            n.object.texture = pl.value("texture", "");
+            if (pl.contains("id") && pl["id"].is_array() && pl["id"].size() == 4) {
+                i32 v[4];
+                for (int i = 0; i < 4; ++i) v[i] = pl["id"][size_t(i)].is_number_integer() ? i32(pl["id"][size_t(i)].get<i64>()) : 0;
+                n.object.uuid = uuidText(v);
+            } else if (pl.contains("id") && pl["id"].is_string()) {
+                n.object.uuid = pl["id"].get<std::string>();
+            }
+            if (n.object.texture.empty() && pl.contains("properties") && pl["properties"].is_array())
+                for (const auto& pr : pl["properties"])
+                    if (pr.is_object() && pr.value("name", "") == "textures") n.object.texture = pr.value("value", "");
+        }
+        n.object.hat = j.value("hat", true);
+    }
     if (j.contains("shadow_color") && j["shadow_color"].is_number_integer())
         n.style.shadow = i64(u32(j["shadow_color"].get<i64>()));
     n.style.bold = jflag(j, "bold");
@@ -291,6 +396,10 @@ void flatten(const Node& n, const Style& parent, const Lang* lang, Text& out, in
     const Style style = own.over(parent);
     if (n.kind == Node::Translate) {
         translate(n, style, lang, out, depth);
+    } else if (n.kind == Node::Object) {  // ObjectContents.visit: U+FFFC in the object's font
+        Style st = style;
+        st.font = fontIndex(n.object);
+        out.spans.push_back({std::string("\xEF\xBF\xBC"), st});
     } else if (n.kind == Node::Keybind) {
         std::string s = n.key;
         if (lang)
@@ -312,6 +421,7 @@ Style Style::over(const Style& p) const {
     if (s.underlined < 0) s.underlined = p.underlined;
     if (s.strikethrough < 0) s.strikethrough = p.strikethrough;
     if (s.obfuscated < 0) s.obfuscated = p.obfuscated;
+    if (s.font < 0) s.font = p.font;
     if (!s.events) s.events = p.events;
     return s;
 }

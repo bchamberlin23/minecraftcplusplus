@@ -8,8 +8,11 @@
 
 #include <json/json.hpp>
 
+#include <mmdeviceapi.h>
+
 #include <algorithm>
 #include <climits>
+#include <limits>
 #include <cmath>
 #include <fstream>
 
@@ -21,6 +24,64 @@ constexpr double kTick = 0.05;
 }  // namespace
 
 AudioSystem* instance() { return g_instance; }
+
+namespace {
+constexpr PROPERTYKEY kFriendlyName = {{0xa45c254e, 0xdf1c, 0x4efd, {0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0}}, 14};  // PKEY_Device_FriendlyName
+
+// Active render endpoints: (id, friendly name). On a thread of its own (COM apartment of its own).
+std::vector<std::pair<std::wstring, std::string>> endpoints() {
+    std::vector<std::pair<std::wstring, std::string>> out;
+    std::thread([&] {
+        CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        IMMDeviceEnumerator* en = nullptr;
+        IMMDeviceCollection* list = nullptr;
+        if (SUCCEEDED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator),
+                                       reinterpret_cast<void**>(&en))) &&
+            SUCCEEDED(en->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &list))) {
+            UINT n = 0;
+            list->GetCount(&n);
+            for (UINT i = 0; i < n; ++i) {
+                IMMDevice* dev = nullptr;
+                IPropertyStore* props = nullptr;
+                LPWSTR id = nullptr;
+                if (SUCCEEDED(list->Item(i, &dev)) && SUCCEEDED(dev->GetId(&id)) && SUCCEEDED(dev->OpenPropertyStore(STGM_READ, &props))) {
+                    PROPVARIANT v;
+                    PropVariantInit(&v);
+                    if (SUCCEEDED(props->GetValue(kFriendlyName, &v)) && v.vt == VT_LPWSTR) {
+                        const int len = WideCharToMultiByte(CP_UTF8, 0, v.pwszVal, -1, nullptr, 0, nullptr, nullptr);
+                        std::string name(size_t(std::max(len, 1)) - 1, '\0');
+                        WideCharToMultiByte(CP_UTF8, 0, v.pwszVal, -1, name.data(), len, nullptr, nullptr);
+                        out.push_back({id, name});
+                    }
+                    PropVariantClear(&v);
+                }
+                if (id) CoTaskMemFree(id);
+                if (props) props->Release();
+                if (dev) dev->Release();
+            }
+        }
+        if (list) list->Release();
+        if (en) en->Release();
+        CoUninitialize();
+    }).join();
+    return out;
+}
+}  // namespace
+
+std::vector<std::string> outputDevices() {
+    std::vector<std::string> names;
+    for (auto& [id, name] : endpoints()) names.push_back(name);
+    return names;
+}
+
+void AudioSystem::setOutputDevice(const std::string& name, bool hrtf) {
+    std::wstring id;  // by name like the game's option; a device that is gone falls back to the default
+    if (!name.empty())
+        for (auto& [eid, ename] : endpoints())
+            if (ename == name) id = eid;
+    if (!name.empty() && id.empty()) LOG("audio: output device \"%s\" not found; using the default", name.c_str());
+    engine_.setDevice(id, hrtf);
+}
 
 void playUiClick() {
     if (g_instance) g_instance->playUi("minecraft:ui.button.click");
@@ -145,6 +206,12 @@ u32 AudioSystem::play(int event, Category category, const double pos[3], float v
     if (!bank_.resolve(event, random, s)) return 0;
     const float instVolume = volume * s.volume;
     if (soundVolume) *soundVolume = s.volume;
+    if (onSound) {  // SoundEngine.notifyListeners: before the silent check
+        const std::string& subtitle = bank_.subtitle(event);
+        if (!subtitle.empty())
+            onSound(subtitle, pos, relative || !linear ? std::numeric_limits<float>::infinity() : std::max(instVolume, 1.0f) * float(s.attenuation),
+                    looping);
+    }
     const float clamped = std::clamp(instVolume, 0.0f, 1.0f);
     const float gain = clamped * volumes_[int(category)] * (category == Category::Master ? 1.0f : volumes_[0]);
     if (gain <= 0.0f && category != Category::Music) return 0;  // SoundEngine.play: skipped when silent

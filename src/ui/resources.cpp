@@ -28,6 +28,34 @@ bool Resources::open(const fs::path& jar, const fs::path& minecraftDir) {
     return true;
 }
 
+std::map<std::string, Resources::LanguageInfo> Resources::languages() const {
+    std::map<std::string, LanguageInfo> out{{"en_us", {"English", "US", false}}};
+    if (!src_) return out;
+    // The asset index serves the game's pack.mcmeta as assets/pack.mcmeta; resource packs have theirs at the root.
+    for (const char* path : {"assets/pack.mcmeta", "pack.mcmeta"})
+        src_->readAll(path, [&](size_t, const std::vector<u8>& bytes) {
+            const nlohmann::json j = nlohmann::json::parse(bytes.begin(), bytes.end(), nullptr, false);
+            if (!j.is_object() || !j.contains("language") || !j["language"].is_object()) return;
+            for (const auto& [code, info] : j["language"].items()) {
+                if (!info.is_object() || out.count(code)) continue;  // putIfAbsent
+                out[code] = {info.value("name", code), info.value("region", ""), info.value("bidirectional", false)};
+            }
+        });
+    return out;
+}
+
+void Resources::setLanguage(const std::string& code) {
+    std::unordered_map<std::string, std::string> next;
+    src_->readLang("en_us", next);
+    const auto langs = languages();
+    const auto it = langs.find(code);
+    langCode_ = it == langs.end() ? "en_us" : code;
+    rtl_ = it != langs.end() && it->second.bidirectional;
+    if (langCode_ != "en_us") src_->readLang(langCode_, next);
+    lang_.swap(next);
+    LOG("ui: language %s (%zu strings%s)", langCode_.c_str(), lang_.size(), rtl_ ? ", right to left" : "");
+}
+
 const fs::path& Resources::objectPath(std::string_view path, fs::path& out) const {
     out.clear();
     const int pack = src_ ? src_->find(path) : -1;

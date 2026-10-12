@@ -595,7 +595,7 @@ void Terrain::collect(const RegionLod& r, int level, int x, int z, double px, do
     }
 }
 
-void Terrain::remesh(const std::vector<u64>& sections) {
+void Terrain::remesh(const std::vector<u64>& sections, bool byPlayer) {
     thread_local u16 padded[kPadCells];
     thread_local u8 light[kPadCells];
     for (u64 k : sections) {
@@ -606,6 +606,16 @@ void Terrain::remesh(const std::vector<u64>& sections) {
         if (it == regionIndex_.end() || ny < 0 || ny >= regions_[it->second].ny[0]) continue;
         RegionLod& r = regions_[it->second];
         u32& state = r.at(0, cx & 31, ny, cz & 31);
+        // Chunk Builder: resident sections that need not block go to the worker (refresh) like the game's threaded
+        // compiles; Fully Blocking keeps the camera's neighbourhood (SectionRenderDispatcher: 768 squared) at once.
+        const double dx = cx * 16 + 8 - scanX_, dy = sy * 16 + 8 - scanY_, dz = cz * 16 + 8 - scanZ_;
+        const bool nearby = dx * dx + dy * dy + dz * dz < 768.0;
+        const bool now = chunkUpdates_ == 2 ? nearby || byPlayer : chunkUpdates_ == 1 ? byPlayer : false;
+        if (!now && (isSlot(state) || state == Renderer::kNoSlot)) {
+            ++stamps_[k];
+            refresh_.push_back({it->second, cx, sy, cz, 0.0f, 0, true});
+            continue;
+        }
         ++stamps_[k];
         if (!world_.section(cx, sy, cz, nullptr)) continue;  // light-only change in empty space
         const bool resident = isSlot(state) || state == Renderer::kNoSlot;
@@ -671,6 +681,11 @@ void Terrain::removeChunk(int cx, int cz) {
     std::erase_if(resident_, [&](const Request& q) { return q.cx == cx && q.cz == cz; });
     markDirty(it->second);
     markCut(it->second);
+}
+
+void Terrain::rebuildAll() {
+    for (const Request& q : resident_) refresh_.push_back({q.region, q.cx, q.sy, q.cz, 0.0f, 0, true});
+    for (size_t i = 0; i < regions_.size(); ++i) markDirty(int(i));  // coarse levels (leaves)
 }
 
 void Terrain::refresh(const std::vector<u64>& sections) {

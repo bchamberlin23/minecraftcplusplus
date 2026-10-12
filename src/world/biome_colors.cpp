@@ -120,12 +120,20 @@ u32 BiomeColors::color(u8 biome, Kind kind) const {
     return v & 0xFFFFFF;
 }
 
+namespace {
+std::atomic<int> gBlendRadius{2};
+}  // namespace
+
+void setBiomeBlendRadius(int radius) { gBlendRadius.store(std::clamp(radius, 0, 7)); }
+
 void gatherColumnColors(const World& world, const BiomeColors& colors, int cx, int cz, ColumnColors& out) {
-    // Biome colours of the 22x22 block columns the 5x5 blend reaches, then a separable box filter.
-    constexpr int kR = 2, kN = 18 + 2 * kR;
+    // Biome colours of the block columns the (2r+1)^2 blend reaches (the Biome Blend option, BiomeColors with the
+    // game's ColorResolver box), then a separable box filter.
+    constexpr int kMaxR = 7, kMaxN = 18 + 2 * kMaxR;
+    const int kR = gBlendRadius.load(std::memory_order_relaxed), kN = 18 + 2 * kR;
     const int x0 = cx * 16 - 1 - kR, z0 = cz * 16 - 1 - kR;
     static constexpr u32 kDefaults[BiomeColors::KindCount] = {0x91BD59, 0x77AB2F, 0x3F76E4};
-    u8 biomes[kN * kN];
+    u8 biomes[kMaxN * kMaxN];
     bool any = false;
     for (int z = 0; z < kN; ++z)
         for (int x = 0; x < kN; ++x) {
@@ -140,13 +148,13 @@ void gatherColumnColors(const World& world, const BiomeColors& colors, int cx, i
             std::fill(std::begin(out.index[k]), std::end(out.index[k]), u16(k == 0 ? 1 : k == 1 ? 2 : 5));
             continue;
         }
-        u32 rgb[kN * kN][3];
+        u32 rgb[kMaxN * kMaxN][3];
         for (int i = 0; i < kN * kN; ++i) {
             const u32 c = biomes[i] == World::kUnknownBiome ? kDefaults[k]
                                                              : colors.color(biomes[i], BiomeColors::Kind(k));
             rgb[i][0] = c >> 16, rgb[i][1] = (c >> 8) & 255, rgb[i][2] = c & 255;
         }
-        u32 rows[kN * 18][3];  // horizontal pass: kN rows x 18 columns
+        u32 rows[kMaxN * 18][3];  // horizontal pass: kN rows x 18 columns
         for (int z = 0; z < kN; ++z)
             for (int x = 0; x < 18; ++x)
                 for (int ch = 0; ch < 3; ++ch) {

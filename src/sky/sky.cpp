@@ -24,8 +24,6 @@ namespace {
 
 constexpr float kPi = 3.14159265358979f;
 constexpr int kRenderDistance = 32;  // chunks: the view distance the vanilla fog formulas are given
-constexpr int kCloudRange = 128;     // chunks (options.renderCloudsDistance default)
-constexpr int kWeatherRadius = 10;   // blocks (options.weatherRadius default)
 
 u32 packColor(float r, float g, float b, float a) {
     auto c = [](float v) { return u32(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
@@ -587,7 +585,7 @@ void Sky::update(const CameraState& cam, double dt) {
     in.biomeWeights = &biomeWeights_;
     in.clocks = &clocks_;
     in.rain = rain, in.thunder = thunder;
-    in.flash = flashTime_ > 0;
+    in.flash = flashTime_ > 0 && !options_.hideFlashes;  // Hide Sky Flashes
     env_.evaluate(in, a);
 
     // FogRenderer: the fluid at the camera picks the fog type (Camera.getFluidInCamera).
@@ -711,7 +709,7 @@ void Sky::update(const CameraState& cam, double dt) {
         // The darkness effect: color - DarknessScale before the clamp (the sum's constant part, so the ambient term),
         // and the brightness option lowered by its blend factor.
         for (float& c : lm.ambient) c -= fx_.darknessScale;
-        lm.brightness = std::max(0.0f, lm.brightness - fx_.darknessBlend);
+        lm.brightness = std::max(0.0f, options_.brightness - fx_.darknessBlend);  // the Brightness option
         renderer_->setLightmap(lm);
     }
     {  // the renderer's shader pipeline lights the world from the same sun / moon and weather
@@ -891,11 +889,16 @@ void Sky::buildCelestial(const Value* a, float rain, bool) {
     std::copy(stars.m, stars.m + 9, f.starRot);
 }
 
-// CloudRenderer.prepare + buildMesh (fancy clouds).
+void Sky::setOptions(const Options& o) {
+    if (o.clouds != options_.clouds || o.cloudRange != options_.cloudRange) cloudCellX_ = INT_MIN;  // rebuild the mesh
+    options_ = o;
+}
+
+// CloudRenderer.prepare + buildMesh (fancy clouds: extruded cells; fast: flat cells, seen from both sides).
 void Sky::buildClouds(const CameraState& cam, const Value* a) {
     Frame& f = *frame_;
     const Value& color = a[int(Attr::CloudColor)];
-    f.clouds = color[3] > 0.0f && dimension_->skybox == Skybox::Overworld && cloudW_ > 0;
+    f.clouds = options_.clouds != 0 && color[3] > 0.0f && dimension_->skybox == Skybox::Overworld && cloudW_ > 0;
     if (!f.clouds) return;
     const float bottom = a[int(Attr::CloudHeight)][0];
     const float relBottom = float(bottom - cam.y), relTop = relBottom + 4.0f;
@@ -910,7 +913,8 @@ void Sky::buildClouds(const CameraState& cam, const Value* a) {
     if (cellX != cloudCellX_ || cellZ != cloudCellZ_ || band != cloudBand_) {
         cloudCellX_ = cellX, cloudCellZ_ = cellZ, cloudBand_ = band;
         cloudFaces_.clear();
-        const int radius = (kCloudRange * 16 + 11) / 12;
+        const int radius = (options_.cloudRange * 16 + 11) / 12;
+        const bool flat = options_.clouds == 1;
         auto encode = [&](int x, int z, u32 flags) {
             cloudFaces_.push_back((u32(x) & 0xFFF) | ((u32(z) & 0xFFF) << 12) | (flags << 24));
         };
@@ -918,6 +922,11 @@ void Sky::buildClouds(const CameraState& cam, const Value* a) {
             const int ix = (((cellX + rx) % cloudW_) + cloudW_) % cloudW_, iz = (((cellZ + rz) % cloudH_) + cloudH_) % cloudH_;
             const u32 c = cloudCells_[size_t(iz) * cloudW_ + ix];
             if (!c) return;
+            if (flat) {  // buildFlatCell: the down face with the top colour, both windings (no culling)
+                encode(rx, rz, 0 | 32);
+                encode(rx, rz, 0 | 16 | 32);
+                return;
+            }
             if (band != 2) encode(rx, rz, 1);  // up (not when below the clouds)
             if (band != 0) encode(rx, rz, 0);  // down (not when above)
             if ((c & 2) && rz > 0) encode(rx, rz, 2);   // north
@@ -938,7 +947,7 @@ void Sky::buildClouds(const CameraState& cam, const Value* a) {
     }
     std::copy(color.begin(), color.end(), f.cloudColor);
     f.cloudOffset[0] = -xIn, f.cloudOffset[1] = relBottom, f.cloudOffset[2] = -zIn;
-    f.cloudFogEnd = std::min(float(kCloudRange * 16), a[int(Attr::CloudFogEnd)][0]);
+    f.cloudFogEnd = std::min(float(options_.cloudRange * 16), a[int(Attr::CloudFogEnd)][0]);
     f.cloudFogEnd = std::min(f.cloudFogEnd, cloudFogLimit_);  // a fog environment's cloud end (boss fog: = fog end)
     f.cloudFaces = &cloudFaces_;
     f.cloudVersion = cloudVersion_;
@@ -950,7 +959,7 @@ void Sky::buildWeather(const CameraState& cam, const Value* a, float rain) {
     f.weather.clear();
     f.rainVertices = 0;
     if (rain <= 0.0f) return;
-    const int r = kWeatherRadius;
+    const int r = options_.weatherRadius;
     const int camX = int(std::floor(cam.x)), camY = int(std::floor(cam.y)), camZ = int(std::floor(cam.z));
     const i64 ticks = i64(gameTime_);
     const float partial = float(gameTime_ - std::floor(gameTime_));

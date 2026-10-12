@@ -284,8 +284,6 @@ const char* kWords[] = {"the",      "elder",   "scrolls",  "klaatu",   "berata",
                         "stale",    "phnglui", "mglwnafh", "cthulhu",  "rlyeh",     "wgahnagl", "fhtagn",  "baguette"};
 
 struct EnchantState {
-    Font alt;
-    bool altTried = false, altOk = false;
     JavaRandom names;
     // Book (EnchantmentScreen.tickBook).
     JavaRandom random;
@@ -345,14 +343,12 @@ void enchantLayout(const Menu&, Layout& l) {
 }
 
 void enchantOpened(UiState& s, Menu& m) {
-    const bool altOk = ench.altOk;
-    const bool altTried = ench.altTried;
     const bool regLoaded = ench.registryLoaded;
     auto reg = std::move(ench.registry);
     ench.flip = ench.oFlip = ench.flipT = ench.flipA = ench.open = ench.oOpen = 0;
     ench.lastItem = -2, ench.lastCount = 0, ench.lastTick = s.guiTicks;
     ench.random.setSeed(i64(std::llround(s.clock * 1000.0)) ^ 0x1234567);
-    ench.altOk = altOk, ench.altTried = altTried, ench.registryLoaded = regLoaded, ench.registry = std::move(reg);
+    ench.registryLoaded = regLoaded, ench.registry = std::move(reg);
     for (int i = 4; i < 10; ++i) m.data[size_t(i)] = -1;  // enchantClue / levelClue default -1 until the server sends them
 }
 
@@ -476,6 +472,14 @@ void drawBook(UiState& s, Canvas& c, float left, float top) {
     c.popScissor();
 }
 
+// EnchantmentNames: the standard galactic alphabet (minecraft:alt font).
+Style altStyle() {
+    static const int font = fontIndex({FontDesc::Resource, "minecraft:alt"});
+    Style st;
+    st.font = font;
+    return st;
+}
+
 std::string randomName(UiState& s, int maxWidth) {  // EnchantmentNames.getRandomName
     std::string r;
     const int words = ench.names.nextInt(2) + 3;
@@ -483,17 +487,20 @@ std::string randomName(UiState& s, int maxWidth) {  // EnchantmentNames.getRando
         if (i) r += " ";
         r += kWords[ench.names.nextInt(int(std::size(kWords)))];
     }
-    Font& f = ench.altOk ? ench.alt : s.font;
-    return f.headByWidth(r, maxWidth);
+    float w = 0;  // the widest prefix in the alt font (font.substrByWidth)
+    size_t end = 0;
+    for (size_t i = 0; i < r.size();) {
+        size_t j = i;
+        w += s.font.glyph(nextCodepoint(r, j), altStyle()).advance;
+        if (w > float(maxWidth)) break;
+        end = i = j;
+    }
+    return r.substr(0, end);
 }
 
 int lapisCount(const Menu& m) { return m.slots.size() > 1 && !m.slots[1].empty() ? m.slots[1].count : 0; }
 
 void enchantDrawBg(UiState& s, Canvas& c, Menu& m, const Layout&, float left, float top) {
-    if (!ench.altTried) {
-        ench.altTried = true;
-        ench.altOk = ench.alt.load(s.res, s.guiAtlas, "minecraft:alt");
-    }
     for (int guard = 0; ench.lastTick < s.guiTicks && guard < 40; ++guard) ++ench.lastTick, tickBook(m);
     ench.lastTick = s.guiTicks;
     drawBook(s, c, left, top);
@@ -509,12 +516,12 @@ void enchantDrawBg(UiState& s, Canvas& c, Menu& m, const Layout&, float left, fl
         const std::string costText = std::to_string(cost);
         const int textWidth = 86 - s.font.width(costText);
         const std::string name = randomName(s, textWidth);
-        Font& f = ench.altOk ? ench.alt : s.font;
+        Font& f = s.font;
         u32 col = 0xFF685E4A;
         if ((gold < i + 1 || s.xpLevel < cost) && !s.creative()) {
             blitSprite(c, sp(s, "container/enchanting_table/enchantment_slot_disabled"), lx, ly, 108, 19);
             blitSprite(c, sp(s, "container/enchanting_table/level_" + std::to_string(i + 1) + "_disabled"), lx + 1, ly + 1, 16, 16);
-            f.draw(c, name, tx, top + 16 + float(19 * i), 0xFF000000 | ((col & 0xFEFEFE) >> 1), false);
+            f.draw(c, Text(name, altStyle()), tx, top + 16 + float(19 * i), 0xFF000000 | ((col & 0xFEFEFE) >> 1), false);
             col = 0xFF407F10;
         } else {
             if (inRect(s.mouseX, s.mouseY, lx, ly, 108, 19)) {
@@ -524,7 +531,7 @@ void enchantDrawBg(UiState& s, Canvas& c, Menu& m, const Layout&, float left, fl
                 blitSprite(c, sp(s, "container/enchanting_table/enchantment_slot"), lx, ly, 108, 19);
             }
             blitSprite(c, sp(s, "container/enchanting_table/level_" + std::to_string(i + 1)), lx + 1, ly + 1, 16, 16);
-            f.draw(c, name, tx, top + 16 + float(19 * i), col, false);
+            f.draw(c, Text(name, altStyle()), tx, top + 16 + float(19 * i), col, false);
             col = 0xFF80FF20;
         }
         s.drawText(c, Text(costText), tx + 86 - float(s.font.width(costText)), top + 16 + float(19 * i) + 7, col, true);
