@@ -805,11 +805,10 @@ void BlockEntityRenderer::attach(net::Client& client) {
 void BlockEntityRenderer::applyNetwork() {
     std::vector<NetChunk> chunks;
     std::vector<NetBlockEntity> data;
-    std::vector<NetEvent> events;
     {
         std::lock_guard lock(netMutex_);
-        if (netChunks_.empty() && netData_.empty() && netEvents_.empty()) return;
-        chunks.swap(netChunks_), data.swap(netData_), events.swap(netEvents_);
+        if (netChunks_.empty() && netData_.empty()) return;
+        chunks.swap(netChunks_), data.swap(netData_);  // block events: applyBlockEvents (pistons need them too)
     }
     for (NetChunk& c : chunks) {
         std::vector<World::BlockEntityNbt> list;
@@ -818,7 +817,6 @@ void BlockEntityRenderer::applyNetwork() {
         world_.setChunkBlockEntities(c.cx, c.cz, std::move(list));
     }
     for (NetBlockEntity& e : data) world_.setBlockEntity({e.x, e.y, e.z, std::move(e.nbt)});
-    for (const NetEvent& e : events) handleEvent(e.x, e.y, e.z, e.type, e.param);
 }
 
 void BlockEntityRenderer::handleEvent(int x, int y, int z, int type, int param) {
