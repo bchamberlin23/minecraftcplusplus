@@ -1195,6 +1195,9 @@ int wmain(int argc, wchar_t** argv) {
         if (opt.seconds > 0) shot = timeUp && !opt.screenshot.empty();
         sky.setBossOverlay(ui::bossDarkenScreen(), ui::bossWorldFog());  // boss bar flags (mp_hud.h)
         sky.setRenderDistance(ui.settings().renderDistance);
+        if (haveEntities)
+            entityRenderer.setViewScale(std::clamp(float(ui.settings().renderDistance) / 8.0f, 1.0f, 2.5f) *
+                                        float(ui.settings().entityDistanceScaling));
         {  // Video Settings the meshes depend on (Smooth Lighting, See-Through Leaves, Biome Blend): re-mesh on change
             const ui::Settings& vs = ui.settings();
             const MeshOptions mo{vs.ao, vs.cutoutLeaves};

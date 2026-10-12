@@ -15,6 +15,9 @@ class EntityRenderer : public RenderPass {
 public:
     explicit EntityRenderer(EntityWorld& world);
     ~EntityRenderer() override;
+    // Entity.setViewScale (LevelRenderer: clamp(render distance / 8, 1, 2.5) x the Entity Distance option): how far
+    // entities are drawn (shouldRenderAtSqrDistance).
+    void setViewScale(float scale) { viewScale_ = scale; }
     bool create(Renderer& renderer) override;
     void draw(const PassContext& ctx) override;
     // Shader pipeline: entities are posed once in prepare (camera-visible ones and shadow casters inside the updated
@@ -91,6 +94,7 @@ public:
     int displayLayers(int type, Layer* out, int max, Anim& anim, float& scale) const;
 
 private:
+    float viewScale_ = 2.5f;
     struct Mat34 {
         float m[12];  // row-major 3x4
     };

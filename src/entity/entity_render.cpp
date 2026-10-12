@@ -2084,7 +2084,7 @@ void EntityRenderer::build(const PassContext& ctx) {
     }
     const double cam[3] = {ctx.camX, ctx.camY, ctx.camZ};
     const float pt = std::clamp(world_.partialTick(), 0.0f, 1.0f);
-    const float maxDist = std::min(ctx.fogEnd, 192.0f);
+    const float maxDist = ctx.fogEnd;
     const u32 shadowMask = pack_ || !ctx.shadowMats ? 0u : ctx.shadowMask;
     World& world = world_.world();
     std::shared_lock lock(world.mutex());
@@ -2107,7 +2107,14 @@ void EntityRenderer::build(const PassContext& ctx) {
         sphere[1] += h * 0.5f;
         const float dist = std::sqrt(sphere[0] * sphere[0] + sphere[1] * sphere[1] + sphere[2] * sphere[2]);
         if (dist - sphere[3] > maxDist) return 0;
-        if (d.special == SpDisplay && dist > e.display.viewRange * 64.0f) return 0;  // shouldRenderAtSqrDistance
+        if (d.special == SpDisplay) {
+            if (dist > e.display.viewRange * 64.0f) return 0;  // Display.shouldRenderAtSqrDistance
+        } else if (e.id != world_.viewEntity) {
+            // Entity.shouldRenderAtSqrDistance: the bounding box's mean size x 64 x the view scale.
+            const float size = (2.0f * w + h) / 3.0f * 64.0f * viewScale_;
+            const float dx = float(e.pos[0] - cam[0]), dy = float(e.pos[1] - cam[1]), dz = float(e.pos[2] - cam[2]);
+            if (dx * dx + dy * dy + dz * dz >= size * size) return 0;
+        }
         if (&e != localShadow_ && e.id != world_.viewEntity) {
             bool inside = true;
             for (const auto& pl : planes) {
