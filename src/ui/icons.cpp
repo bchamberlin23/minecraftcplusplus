@@ -1,8 +1,11 @@
 #include "ui/icons.h"
 
+#include "entity/item_models.h"
+#include "ui/item_props.h"
 #include "ui/sprites.h"
 
 #include <cmath>
+#include <deque>
 #include <functional>
 
 namespace ui {
@@ -48,7 +51,19 @@ std::string strip(std::string s) {
     const size_t c = s.find(':');
     return c == std::string::npos ? s : s.substr(c + 1);
 }
+// Resource id -> "namespace:path" (default namespace minecraft) and its file in a resource pack.
+std::string normId(const std::string& id) { return id.find(':') == std::string::npos ? "minecraft:" + id : id; }
+std::string resPath(const std::string& id, const char* kind, const char* ext) {
+    const std::string n = normId(id);
+    const size_t c = n.find(':');
+    return "assets/" + n.substr(0, c) + "/" + kind + "/" + n.substr(c + 1) + ext;
+}
 
+// Texels the rasterizer samples (texel coordinates).
+struct TexView {
+    const u8* rgba = nullptr;  // nullptr: white (untextured)
+    int w = 1, h = 1;
+};
 struct Tex {
     int w = 0, h = 0;
     std::vector<u8> rgba;  // the frame shown
@@ -98,10 +113,11 @@ struct ItemIcons::Impl {
     std::unordered_map<std::string, json> jsonCache;
     std::unordered_map<std::string, Tex> texCache;
     std::unordered_map<std::string, std::shared_ptr<Model>> models;
-    std::unordered_map<u64, std::array<float, 4>> icons;  // key -> uv (u0 < 0: nothing)
+    std::unordered_map<std::string, std::array<float, 4>> icons;  // evaluated parts -> uv (u0 < 0: nothing)
     // Icons drawn with animated textures: rasterized again into their atlas slot when a frame changes.
     struct AnimatedIcon {
         ItemStack stack;
+        ItemContext context;
         int x, y;
     };
     std::vector<AnimatedIcon> animatedIcons;
@@ -116,7 +132,7 @@ struct ItemIcons::Impl {
     }
 
     const Tex& texture(const std::string& name) {
-        const std::string key = strip(name);
+        const std::string key = name.empty() ? name : normId(name);
         auto it = texCache.find(key);
         if (it != texCache.end()) {
             touchedAnimated |= it->second.animated;
@@ -124,8 +140,8 @@ struct ItemIcons::Impl {
         }
         Tex& t = texCache[key];
         Image img;
-        const std::string path = "assets/minecraft/textures/" + key + ".png";
-        if (res->image(path, img) && img.w > 0) {
+        const std::string path = resPath(key, "textures", ".png");
+        if (atlasTextureImage(*res, key, img) && img.w > 0) {
             if (res->exists(path + ".mcmeta") && Sprites::parseAnimation(img, res->json(path + ".mcmeta"), t.anim)) {
                 t.animated = touchedAnimated = true;
                 t.w = t.anim.fw, t.h = t.anim.fh;
@@ -143,7 +159,7 @@ struct ItemIcons::Impl {
     }
 
     std::shared_ptr<Model> model(const std::string& rawName) {
-        const std::string name = strip(rawName);
+        const std::string name = rawName.empty() ? rawName : normId(rawName);
         if (auto it = models.find(name); it != models.end()) return it->second;
         auto m = std::make_shared<Model>();
         models[name] = m;
@@ -152,11 +168,11 @@ struct ItemIcons::Impl {
         bool haveDisplay = false, haveLight = false;
         std::string cur = name;
         for (int guard = 0; guard < 32 && !cur.empty(); ++guard) {
-            if (cur == "builtin/generated") {
+            if (cur == "minecraft:builtin/generated") {
                 m->generated = true;
                 break;
             }
-            const json& j = jsonAt("assets/minecraft/models/" + cur + ".json");
+            const json& j = jsonAt(resPath(cur, "models", ".json"));
             if (!j.is_object()) break;
             if (j.contains("textures") && j["textures"].is_object())
                 for (const auto& t : j["textures"].items()) {
@@ -180,7 +196,7 @@ struct ItemIcons::Impl {
                 m->sideLit = j.value("gui_light", "side") == "side";
                 haveLight = true;
             }
-            cur = j.contains("parent") && j["parent"].is_string() ? strip(j["parent"].get<std::string>()) : "";
+            cur = j.contains("parent") && j["parent"].is_string() ? normId(j["parent"].get<std::string>()) : "";
         }
         auto resolve = [&](std::string ref) {
             for (int g = 0; g < 16 && !ref.empty() && ref[0] == '#'; ++g) {
@@ -241,8 +257,13 @@ struct ItemIcons::Impl {
     struct Part {
         std::string model;
         std::vector<u32> tints;  // ARGB per tint index
-        std::string special;     // "chest:<texture>", "shulker_box:<texture>"
+        std::string special;     // without the item models: "chest:<texture>", "shulker_box:<texture>" ... boxes
+        const json* specialNode = nullptr;  // with them: a special model node they build the quads of
+        const ItemStack* stack = nullptr;   // the stack the special node shows
+        ent::Xf local;                      // the definition's transformations
     };
+    ent::ItemModels* itemModels = nullptr;
+    std::deque<ItemStack> scratch;  // stacks inside stacks (bundle selections) while one icon is evaluated
 
     u32 colormap(const Image& img, float temp, float down) {
         if (img.w < 256 || img.h < 256) return 0xFF7FB238;
@@ -253,83 +274,80 @@ struct ItemIcons::Impl {
         return argb(255, p[0], p[1], p[2]);
     }
 
-    u32 tint(const json& t, const ItemStack& s) {
-        const std::string type = strip(t.value("type", ""));
-        auto def = [&](const char* k, u32 d) { return t.contains(k) && t[k].is_number() ? u32(t[k].get<i64>()) : d; };
-        if (type == "constant") return def("value", 0xFFFFFFFF);
-        if (type == "dye") return s.dyedColor >= 0 ? 0xFF000000 | u32(s.dyedColor) : def("default", 0xFFFFFFFF);
-        if (type == "potion") return s.potionColor >= 0 ? 0xFF000000 | u32(s.potionColor) : def("default", 0xFFFFFFFF);
-        if (type == "grass") return colormap(grass, num(t.value("temperature", json()), 0.5f), num(t.value("downfall", json()), 1.f));
-        if (type == "foliage") return colormap(foliage, num(t.value("temperature", json()), 0.5f), num(t.value("downfall", json()), 1.f));
-        return def("default", 0xFFFFFFFF);
+    // ItemModelResolver.appendItemLayers: the stack's item definition (item_model component); `key` collects what the
+    // icon depends on (the chosen leaves, tints, transforms, special data).
+    void evaluateStack(const ItemStack& s, const ItemContext& c, const ent::Xf& local, std::vector<Part>& out,
+                       std::string& key, int depth) {
+        if (s.empty() || depth > 4) return;
+        const std::string id = itemModelId(*items, s);
+        if (id.empty()) return;
+        const json& def = jsonAt(resPath(id, "items", ".json"));
+        if (def.is_object() && def.contains("model")) evaluate(def["model"], s, c, local, out, key, depth);
     }
 
-    bool hasComponent(const ItemStack& s, const std::string& name) {
-        const int type = items->componentType(strip(name));
-        for (const auto& c : s.added)
-            if (c.type == type) return true;
-        return false;
-    }
-
-    void evaluate(const json& n, const ItemStack& s, std::vector<Part>& out, int depth) {
-        if (!n.is_object() || depth > 16) return;
+    void evaluate(const json& n, const ItemStack& s, const ItemContext& c, const ent::Xf& local, std::vector<Part>& out,
+                  std::string& key, int depth) {
+        if (!n.is_object() || depth > 24) return;
+        const ent::Xf here = n.contains("transformation") ? ent::xfMul(local, ent::itemTransformation(n["transformation"])) : local;
         const std::string type = strip(n.value("type", ""));
+        auto keyPart = [&](const void* node) {
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "|%p:", node);
+            key += buf;
+            key.append(reinterpret_cast<const char*>(here.m), sizeof(here.m));
+        };
         if (type == "model") {
-            Part p{n.value("model", ""), {}, {}};
-            if (n.contains("tints"))
-                for (const json& t : n["tints"]) p.tints.push_back(tint(t, s));
+            Part p;
+            p.model = n.value("model", "");
+            p.local = here;
+            if (n.contains("tints") && n["tints"].is_array())
+                for (const json& t : n["tints"])
+                    p.tints.push_back(itemTint(*items, t, s, c, [&](bool isFoliage, float temp, float down) {
+                        return colormap(isFoliage ? foliage : grass, temp, down);
+                    }));
+            keyPart(&n);
+            for (u32 t : p.tints) key.append(reinterpret_cast<const char*>(&t), sizeof(t));
             out.push_back(std::move(p));
         } else if (type == "composite") {
-            if (n.contains("models"))
-                for (const json& m : n["models"]) evaluate(m, s, out, depth + 1);
-        } else if (type == "condition") {
-            bool value = false;
-            const std::string prop = strip(n.value("property", ""));
-            if (prop == "has_component") value = hasComponent(s, n.value("component", ""));
-            else if (prop == "damaged") value = s.damage > 0;
-            evaluate(n.value(value ? "on_true" : "on_false", json()), s, out, depth + 1);
-        } else if (type == "select") {
-            if (n.contains("fallback")) evaluate(n["fallback"], s, out, depth + 1);
-            else if (n.contains("cases") && !n["cases"].empty()) evaluate(n["cases"][0].value("model", json()), s, out, depth + 1);
-        } else if (type == "range_dispatch") {
-            float value = 0;
-            if (strip(n.value("property", "")) == "damage") {
-                const int md = items->maxDamage(s);
-                value = md > 0 ? float(s.damage) / float(md) : 0.f;
-            }
-            value *= num(n.value("scale", json()), 1.f);
-            const json* best = nullptr;
-            float bestT = -1e30f;
-            if (n.contains("entries"))
-                for (const json& e : n["entries"]) {
-                    const float t = num(e.value("threshold", json()), 0);
-                    if (t <= value && t >= bestT) bestT = t, best = &e;
-                }
-            if (best) evaluate((*best).value("model", json()), s, out, depth + 1);
-            else if (n.contains("fallback")) evaluate(n["fallback"], s, out, depth + 1);
-            else if (n.contains("entries") && !n["entries"].empty()) evaluate(n["entries"][0].value("model", json()), s, out, depth + 1);
+            if (n.contains("models") && n["models"].is_array())
+                for (const json& m : n["models"]) evaluate(m, s, c, here, out, key, depth + 1);
+        } else if (type == "condition" || type == "select" || type == "range_dispatch") {
+            if (const json* next = chooseItemModel(*items, n, s, c)) evaluate(*next, s, c, here, out, key, depth + 1);
         } else if (type == "special") {
-            Part p{n.value("base", ""), {}, {}};
-            const json& sm = n.value("model", json());
-            const std::string st = strip(sm.value("type", ""));
-            if (st == "chest") p.special = "chest:" + strip(sm.value("texture", "normal"));
-            if (st == "shulker_box") p.special = "shulker_box:" + strip(sm.value("texture", "shulker"));
-            if (st == "head") p.special = "head:" + sm.value("kind", "skeleton");
-            if (st == "player_head") p.special = "head:player";
-            if (st == "shield") p.special = "shield:";
-            if (st == "banner") {
-                p.special = "banner:" + sm.value("color", "white");
-                static const std::pair<const char*, u32> kDye[] = {
-                    {"white", 0xF9FFFE}, {"orange", 0xF9801D}, {"magenta", 0xC74EBD}, {"light_blue", 0x3AB3DA},
-                    {"yellow", 0xFED83D}, {"lime", 0x80C71F}, {"pink", 0xF38BAA}, {"gray", 0x474F52},
-                    {"light_gray", 0x9D9D97}, {"cyan", 0x169C9C}, {"purple", 0x8932B8}, {"blue", 0x3C44AA},
-                    {"brown", 0x835432}, {"green", 0x5E7C16}, {"red", 0xB02E26}, {"black", 0x1D1D21}};
-                u32 color = 0xFFFFFF;
-                for (auto [n, c] : kDye)
-                    if (sm.value("color", "white") == n) color = c;
-                p.tints.push_back(0xFF000000 | color);
+            if (!n.contains("model") || !n["model"].is_object()) return;
+            const json& sm = n["model"];
+            Part p;
+            p.model = n.value("base", "");
+            p.local = here;
+            keyPart(&n);
+            if (itemModels) {
+                p.specialNode = &sm;
+                p.stack = &s;
+                key += itemModels->specialKey(sm, s);
+            } else {  // before the item models exist (title screens): simple boxes
+                const std::string st = strip(sm.value("type", ""));
+                if (st == "chest") p.special = "chest:" + strip(sm.value("texture", "normal"));
+                if (st == "shulker_box") p.special = "shulker_box:" + strip(sm.value("texture", "shulker"));
+                if (st == "head") p.special = "head:" + sm.value("kind", "skeleton");
+                if (st == "player_head") p.special = "head:player";
+                if (st == "shield") p.special = "shield:";
+                if (st == "banner") {
+                    p.special = "banner:" + sm.value("color", "white");
+                    u32 color = 0xFFFFFF;
+                    for (int d = 0; d < 16; ++d)
+                        if (sm.value("color", "white") == dyeName(d)) color = dyeDiffuse(d);
+                    p.tints.push_back(0xFF000000 | color);
+                }
+                key += p.special;
             }
             out.push_back(std::move(p));
+        } else if (type == "bundle/selected_item") {  // BundleSelectedItemSpecialRenderer
+            ItemStack selected;
+            if (bundleSelectedItem(*items, s, selected)) {
+                scratch.push_back(std::move(selected));
+                key += "|bundle";
+                evaluateStack(scratch.back(), c, here, out, key, depth + 1);
+            }
         }
     }
 
@@ -355,13 +373,17 @@ struct ItemIcons::Impl {
         float x, y, z, u, v;  // pixel coordinates; texel coordinates
     };
 
-    static void triangle(Raster& r, const Vtx& a, const Vtx& b, const Vtx& c, const Tex& t, const float mul[4]) {
+    // depth: test against (later quads win at equal depth) and write the depth buffer; generated item layers are
+    // painted in order instead (their layers lie in one plane).
+    static void triangle(Raster& r, const Vtx& a, const Vtx& b, const Vtx& c, const TexView& t, const float mul[4],
+                         bool depth = true) {
         const float area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
         if (std::abs(area) < 1e-6f || t.w <= 0) return;
         const int x0 = std::max(0, int(std::floor(std::min({a.x, b.x, c.x}))));
         const int x1 = std::min(r.n - 1, int(std::ceil(std::max({a.x, b.x, c.x}))));
         const int y0 = std::max(0, int(std::floor(std::min({a.y, b.y, c.y}))));
         const int y1 = std::min(r.n - 1, int(std::ceil(std::max({a.y, b.y, c.y}))));
+        static const u8 kWhite[4] = {255, 255, 255, 255};
         for (int py = y0; py <= y1; ++py)
             for (int px = x0; px <= x1; ++px) {
                 const float x = float(px) + 0.5f, y = float(py) + 0.5f;
@@ -372,15 +394,15 @@ struct ItemIcons::Impl {
                 if (w0 < eps || w1 < eps || w2 < eps) continue;
                 const float z = a.z * w0 + b.z * w1 + c.z * w2;
                 const size_t i = size_t(py) * r.n + px;
-                if (z <= r.depth[i]) continue;
+                if (depth && z < r.depth[i] - 1e-5f) continue;
                 const float u = a.u * w0 + b.u * w1 + c.u * w2, v = a.v * w0 + b.v * w1 + c.v * w2;
                 const int tx = std::clamp(int(std::floor(u)), 0, t.w - 1), ty = std::clamp(int(std::floor(v)), 0, t.h - 1);
-                const u8* p = &t.rgba[(size_t(ty) * t.w + tx) * 4];
+                const u8* p = t.rgba ? &t.rgba[(size_t(ty) * t.w + tx) * 4] : kWhite;
                 if (p[3] < 26) continue;  // alpha < 0.1: discarded like the item cutout shader
                 const float col[4] = {p[0] / 255.f * mul[0], p[1] / 255.f * mul[1], p[2] / 255.f * mul[2], p[3] / 255.f * mul[3]};
                 if (col[3] >= 0.99f) {
                     std::memcpy(&r.color[i * 4], col, sizeof(col));
-                    r.depth[i] = z;
+                    if (depth) r.depth[i] = z;
                 } else {
                     r.blend(i, col);
                 }
@@ -464,33 +486,68 @@ struct ItemIcons::Impl {
         return m;
     }
 
-    void drawModel(Raster& r, const Model& m, const std::vector<u32>& tints) {
+    struct Quad {
+        Vtx v[4];
+        TexView tex;
+        float mul[4];
+        float z;
+    };
+    // Model space (blocks) -> icon pixels through the GUI display transform (translate, rotate, scale about the
+    // centre); z towards the viewer.
+    V3 project(const Model& m, V3 v, float N) const {
+        V3 c = v - V3{0.5f, 0.5f, 0.5f};
+        c = {c.x * m.scale[0], c.y * m.scale[1], c.z * m.scale[2]};
+        c = rotXYZ(c, m.rot) + V3{m.trans[0] / 16, m.trans[1] / 16, m.trans[2] / 16};
+        return {(0.5f + c.x) * N, (0.5f - c.y) * N, c.z};
+    }
+    static V3 xf(const ent::Xf& l, V3 v) {
+        const float in[3] = {v.x, v.y, v.z};
+        float o[3];
+        ent::xfPoint(l, in, o);
+        return {o[0], o[1], o[2]};
+    }
+    static V3 xfDir(const ent::Xf& l, V3 n) {
+        return {l.m[0] * n.x + l.m[1] * n.y + l.m[2] * n.z, l.m[4] * n.x + l.m[5] * n.y + l.m[6] * n.z,
+                l.m[8] * n.x + l.m[9] * n.y + l.m[10] * n.z};
+    }
+    // Lighting.ITEMS_3D for side lit models (gui_light "side"), else full brightness.
+    float lightOf(const Model& m, V3 normal, bool shade) const {
+        V3 n = rotXYZ({normal.x * m.scale[0], normal.y * m.scale[1], normal.z * m.scale[2]}, m.rot);
+        const float len = std::sqrt(n.x * n.x + n.y * n.y + n.z * n.z);
+        if (len > 0) n = n * (1 / len);
+        if (!m.sideLit || !shade) return 1;
+        const float l0 = std::max(0.f, n.x * kLight0.x + n.y * kLight0.y + n.z * kLight0.z);
+        const float l1 = std::max(0.f, n.x * kLight1.x + n.y * kLight1.y + n.z * kLight1.z);
+        return std::min(1.0f, (l0 + l1) * 0.6f + 0.4f);
+    }
+    bool backFacing(const Model& m, V3 normal) const {
+        const V3 n = rotXYZ({normal.x * m.scale[0], normal.y * m.scale[1], normal.z * m.scale[2]}, m.rot);
+        return n.z < -1e-4f;
+    }
+
+    void drawModel(Raster& r, const Model& m, const std::vector<u32>& tints, const ent::Xf& local) {
         auto tintOf = [&](int idx) -> u32 { return idx >= 0 && idx < int(tints.size()) ? tints[size_t(idx)] : 0xFFFFFFFF; };
-        if (m.generated) {
+        const float N = float(r.n);
+        if (m.generated) {  // the layers' front faces (z 8.5 / 16), painted in order
             for (size_t li = 0; li < m.layers.size(); ++li) {
                 const Tex& t = texture(m.layers[li]);
                 if (t.w <= 0) continue;
                 const u32 tc = tintOf(int(li));
                 const float mul[4] = {((tc >> 16) & 255) / 255.f, ((tc >> 8) & 255) / 255.f, (tc & 255) / 255.f, 1.f};
-                for (int y = 0; y < r.n; ++y)
-                    for (int x = 0; x < r.n; ++x) {
-                        const int tx = (x * t.w) / r.n, ty = (y * t.h) / r.n;
-                        const u8* p = &t.rgba[(size_t(ty) * t.w + tx) * 4];
-                        if (p[3] < 26) continue;
-                        const float col[4] = {p[0] / 255.f * mul[0], p[1] / 255.f * mul[1], p[2] / 255.f * mul[2], p[3] / 255.f};
-                        r.blend(size_t(y) * r.n + x, col);
-                    }
+                const V3 p[4] = {{0, 1, 8.5f / 16}, {0, 0, 8.5f / 16}, {1, 0, 8.5f / 16}, {1, 1, 8.5f / 16}};
+                const float uv[4][2] = {{0, 0}, {0, float(t.h)}, {float(t.w), float(t.h)}, {float(t.w), 0}};
+                Vtx v[4];
+                for (int k = 0; k < 4; ++k) {
+                    const V3 q = project(m, xf(local, p[k]), N);
+                    v[k] = {q.x, q.y, q.z, uv[k][0], uv[k][1]};
+                }
+                const TexView tv{t.rgba.data(), t.w, t.h};
+                triangle(r, v[0], v[1], v[2], tv, mul, false);
+                triangle(r, v[0], v[2], v[3], tv, mul, false);
             }
             return;
         }
-        struct Quad {
-            Vtx v[4];
-            const Tex* tex;
-            float mul[4];
-            float z;
-        };
         std::vector<Quad> quads;
-        const float N = float(r.n);
         for (const Element& e : m.elements) {
             const V3 lo = e.from, hi = e.to;
             for (int d = 0; d < 6; ++d) {
@@ -519,7 +576,8 @@ struct ItemIcons::Impl {
                 V3 normal = kNormals[d];
                 const Tex& t = texture(f.tex);
                 Quad q;
-                q.tex = &t;
+                q.tex = {t.rgba.empty() ? nullptr : t.rgba.data(), std::max(t.w, 1), std::max(t.h, 1)};
+                if (t.w <= 0) continue;
                 for (int k = 0; k < 4; ++k) {
                     V3 v = p[k];
                     if (e.rotated) {
@@ -537,28 +595,17 @@ struct ItemIcons::Impl {
                         }
                         v = o + e.origin;
                     }
-                    // Display transform: translate, rotate, scale around the model centre.
-                    V3 c = (v * (1.0f / 16.0f)) - V3{0.5f, 0.5f, 0.5f};
-                    c = {c.x * m.scale[0], c.y * m.scale[1], c.z * m.scale[2]};
-                    c = rotXYZ(c, m.rot) + V3{m.trans[0] / 16, m.trans[1] / 16, m.trans[2] / 16};
+                    const V3 c = project(m, xf(local, v * (1.0f / 16.0f)), N);
                     const int ci = (k + f.rot) % 4;
-                    q.v[k] = {(0.5f + c.x) * N, (0.5f - c.y) * N, c.z, corner[ci][0] / 16.0f * float(t.w),
-                              corner[ci][1] / 16.0f * float(t.h)};
+                    q.v[k] = {c.x, c.y, c.z, corner[ci][0] / 16.0f * float(t.w), corner[ci][1] / 16.0f * float(t.h)};
                 }
                 if (e.rotated) normal = e.axis >= 0 ? (e.axis == 0 ? rotX(normal, e.angle * kPi / 180)
                                                        : e.axis == 1 ? rotY(normal, e.angle * kPi / 180)
                                                                      : rotZ(normal, e.angle * kPi / 180))
                                                     : rotXYZ(normal, e.euler);
-                V3 n = rotXYZ({normal.x * m.scale[0], normal.y * m.scale[1], normal.z * m.scale[2]}, m.rot);
-                const float len = std::sqrt(n.x * n.x + n.y * n.y + n.z * n.z);
-                if (len > 0) n = n * (1 / len);
-                if (n.z < -1e-4f) continue;  // back face
-                float light = 1;
-                if (m.sideLit && e.shade) {
-                    const float l0 = std::max(0.f, n.x * kLight0.x + n.y * kLight0.y + n.z * kLight0.z);
-                    const float l1 = std::max(0.f, n.x * kLight1.x + n.y * kLight1.y + n.z * kLight1.z);
-                    light = std::min(1.0f, (l0 + l1) * 0.6f + 0.4f);
-                }
+                normal = xfDir(local, normal);
+                if (backFacing(m, normal)) continue;
+                const float light = lightOf(m, normal, e.shade);
                 const u32 tc = tintOf(f.tint);
                 q.mul[0] = ((tc >> 16) & 255) / 255.f * light, q.mul[1] = ((tc >> 8) & 255) / 255.f * light;
                 q.mul[2] = (tc & 255) / 255.f * light, q.mul[3] = 1;
@@ -566,22 +613,53 @@ struct ItemIcons::Impl {
                 quads.push_back(q);
             }
         }
+        drawQuads(r, quads);
+    }
+
+    // Special model quads from the item models (entity model layers in the item / entity atlas).
+    void drawMeshQuads(Raster& r, const Model& m, const std::vector<ent::MeshQuad>& in) {
+        const float N = float(r.n);
+        std::vector<Quad> quads;
+        for (const ent::MeshQuad& mq : in) {
+            Quad q;
+            const ent::ItemModels::AtlasView av = itemModels->atlasView(mq.tex);
+            q.tex = {av.rgba, std::max(av.w, 1), std::max(av.h, 1)};
+            for (int k = 0; k < 4; ++k) {
+                const V3 c = project(m, {mq.pos[k][0], mq.pos[k][1], mq.pos[k][2]}, N);
+                q.v[k] = {c.x, c.y, c.z, mq.uv[k][0] * float(q.tex.w), mq.uv[k][1] * float(q.tex.h)};
+            }
+            auto unpack = [](u32 v) { return float(i8(u8(v))) / 127.0f; };
+            const V3 normal{unpack(mq.normal), unpack(mq.normal >> 8), unpack(mq.normal >> 16)};
+            if (backFacing(m, normal)) continue;
+            const float light = lightOf(m, normal, !(mq.flags & ent::kQuadNoShade));
+            const u32 c = mq.color;  // 0xAABBGGRR
+            q.mul[0] = (c & 255) / 255.f * light, q.mul[1] = ((c >> 8) & 255) / 255.f * light;
+            q.mul[2] = ((c >> 16) & 255) / 255.f * light, q.mul[3] = ((c >> 24) & 255) / 255.f;
+            q.z = (q.v[0].z + q.v[1].z + q.v[2].z + q.v[3].z) / 4;
+            quads.push_back(q);
+        }
+        drawQuads(r, quads);
+    }
+
+    void drawQuads(Raster& r, std::vector<Quad>& quads) {
         std::stable_sort(quads.begin(), quads.end(), [](const Quad& a, const Quad& b) { return a.z < b.z; });
         for (const Quad& q : quads) {
-            triangle(r, q.v[0], q.v[1], q.v[2], *q.tex, q.mul);
-            triangle(r, q.v[0], q.v[2], q.v[3], *q.tex, q.mul);
+            triangle(r, q.v[0], q.v[1], q.v[2], q.tex, q.mul);
+            triangle(r, q.v[0], q.v[2], q.v[3], q.tex, q.mul);
         }
     }
 
-    bool rasterize(const ItemStack& s, Raster& r) {
-        const std::string name = strip(items->name(s.item));
-        const json& def = jsonAt("assets/minecraft/items/" + name + ".json");
-        std::vector<Part> parts;
-        if (def.is_object()) evaluate(def.value("model", json()), s, parts, 0);
+    void rasterize(std::vector<Part>& parts, Raster& r) {
         r.init(size);
-        bool any = false;
         for (const Part& p : parts) {
             std::shared_ptr<Model> m = model(p.model);
+            if (p.specialNode) {
+                std::vector<ent::MeshQuad> quads;
+                if (itemModels->specialQuads(*p.specialNode, *p.stack, p.local, quads)) {
+                    drawMeshQuads(r, *m, quads);
+                    continue;
+                }
+            }
             if (!p.special.empty()) m = specialModel(p.special, m);
             if (!m->generated && m->elements.empty() && !m->particle.empty()) {  // other special renderers: flat particle
                 auto flat = std::make_shared<Model>();
@@ -589,16 +667,15 @@ struct ItemIcons::Impl {
                 flat->layers.push_back(m->particle);
                 m = flat;
             }
-            drawModel(r, *m, p.tints);
-            any = true;
+            drawModel(r, *m, p.tints, p.special.empty() ? p.local : ent::Xf{});
         }
-        return any;
     }
 
-    bool render(const ItemStack& s, float uv[4]) {
+    bool render(std::vector<Part>& parts, const ItemStack& s, const ItemContext& c, float uv[4]) {
         Raster r;
         touchedAnimated = false;
-        if (!rasterize(s, r)) return false;
+        if (parts.empty()) return false;
+        rasterize(parts, r);
         int x, y;
         if (!atlas->alloc(size, size, x, y)) {
             if (!atlas->full()) return false;
@@ -606,7 +683,7 @@ struct ItemIcons::Impl {
             icons.clear(), animatedIcons.clear();
             if (!atlas->alloc(size, size, x, y)) return false;
         }
-        if (touchedAnimated) animatedIcons.push_back({s, x, y});
+        if (touchedAnimated) animatedIcons.push_back({s, c, x, y});
         write(r, x, y);
         const float W = float(atlas->width()), H = float(atlas->height());
         uv[0] = float(x) / W, uv[1] = float(y) / H, uv[2] = float(x + size) / W, uv[3] = float(y + size) / H;
@@ -635,10 +712,26 @@ void ItemIcons::init(const Resources& res, const Items& items, Atlas& atlas) {
     res.image("assets/minecraft/textures/colormap/foliage.png", impl_->foliage);
 }
 
+void ItemIcons::reload() {
+    Impl& m = *impl_;
+    m.jsonCache.clear(), m.texCache.clear(), m.models.clear();
+    m.icons.clear(), m.animatedIcons.clear();
+    m.atlas->reset();
+    m.res->image("assets/minecraft/textures/colormap/grass.png", m.grass);
+    m.res->image("assets/minecraft/textures/colormap/foliage.png", m.foliage);
+}
+
 void ItemIcons::setScale(int guiScale) {
     const int size = std::clamp(16 * guiScale, 16, 160);
     if (size == size_) return;
     size_ = impl_->size = size;
+    impl_->icons.clear(), impl_->animatedIcons.clear();
+    impl_->atlas->reset();
+}
+
+void ItemIcons::setItemModels(ent::ItemModels* models) {
+    if (impl_->itemModels == models) return;
+    impl_->itemModels = models;
     impl_->icons.clear(), impl_->animatedIcons.clear();
     impl_->atlas->reset();
 }
@@ -657,24 +750,37 @@ void ItemIcons::tick(u64 tick) {
     if (!changed) return;
     m.size = size_;
     for (const Impl::AnimatedIcon& a : m.animatedIcons) {
+        std::vector<Impl::Part> parts;
+        std::string key;
+        m.scratch.clear();
+        m.evaluateStack(a.stack, a.context, ent::Xf{}, parts, key, 0);
         Impl::Raster r;
-        if (m.rasterize(a.stack, r)) m.write(r, a.x, a.y);
+        m.rasterize(parts, r);
+        m.write(r, a.x, a.y);
     }
 }
 
-bool ItemIcons::icon(const ItemStack& s, float uv[4]) {
+bool ItemIcons::icon(const ItemStack& s, float uv[4], const ItemContext* context) {
     if (s.empty()) return false;
     impl_->size = size_;
-    u64 key = u64(u32(s.item)) | (u64(u32(s.dyedColor + 1) & 0xFFFFFF) << 24);
-    key ^= u64(u32(s.potionColor + 1)) << 40;
-    for (const auto& c : s.added)  // model-selecting components
-        if (impl_->items->componentType("lodestone_tracker") == c.type) key ^= u64(1) << 63;
-    if (s.damage > 0) key ^= u64(std::min(s.damage, 4095)) << 48;
+    ItemContext fallback;
+    if (!context) {
+        fallback.owner = itemWorld().player;
+        context = &fallback;
+    }
+    std::vector<Impl::Part> parts;
+    std::string key;
+    impl_->scratch.clear();
+    try {
+        impl_->evaluateStack(s, *context, ent::Xf{}, parts, key, 0);
+    } catch (const std::exception&) {
+        return false;
+    }
     auto it = impl_->icons.find(key);
     if (it == impl_->icons.end()) {
         std::array<float, 4> r{-1, -1, -1, -1};
-        if (!impl_->render(s, r.data())) r[0] = -1;
-        it = impl_->icons.emplace(key, r).first;
+        if (!impl_->render(parts, s, *context, r.data())) r[0] = -1;
+        it = impl_->icons.emplace(std::move(key), r).first;
     }
     if (it->second[0] < 0) return false;
     std::copy(it->second.begin(), it->second.end(), uv);

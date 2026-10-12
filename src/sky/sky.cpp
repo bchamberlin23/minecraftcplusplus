@@ -1,5 +1,7 @@
 #include "sky/sky.h"
 
+#include "ui/item_props.h"
+
 #include "assets/assets.h"
 #include "assets/game_reports.h"
 #include "assets/asset_source.h"
@@ -8,6 +10,7 @@
 #include "render/packs/pack_api.h"
 #include "render/renderer.h"
 #include "sky/sky_gpu.h"
+#include "ui/item_props.h"
 #include "world/nbt_dom.h"
 #include "world/world.h"
 #include "worldgen/rng.h"
@@ -731,6 +734,10 @@ void Sky::update(const CameraState& cam, double dt) {
         auto clock = clocks_.find(dimension_->clock.empty() ? std::string("minecraft:overworld") : dimension_->clock);
         if (clock != clocks_.end()) g.worldTime = i64(std::floor(clock->second));
         g.moonPhase = std::clamp(int(a[int(Attr::MoonPhase)][0]), 0, 7);
+        // Item model properties (clock needles: minecraft:time daytime / moon_phase; wobble per level tick).
+        ui::ItemWorld& iw = ui::itemWorld();
+        iw.sunAngle = a[int(Attr::SunAngle)][0], iw.moonPhase = g.moonPhase;
+        iw.gameTime = i64(std::floor(gameTime_)), iw.ticking = tickRate_ > 0;
         const int ex = int(std::floor(cam.x)), ey = int(std::floor(cam.y)), ez = int(std::floor(cam.z));
         const World::LightView lv = world_->light(ex >> 4, ey >> 4, ez >> 4);
         g.eyeBrightness[0] = lv.block4(ex & 15, ey & 15, ez & 15) * 16;

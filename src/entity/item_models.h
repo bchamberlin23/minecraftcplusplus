@@ -13,6 +13,7 @@
 // of an equipment asset (assets/minecraft/equipment/<asset>.json).
 #include "core/common.h"
 #include "ui/canvas.h"
+#include "ui/item_props.h"
 
 #include <memory>
 #include <unordered_map>
@@ -48,11 +49,13 @@ Xf xfScale(float x, float y, float z);
 Xf xfRotX(float radians);
 Xf xfRotY(float radians);
 Xf xfRotZ(float radians);
+// An item model "transformation" (translation, left_rotation, scale, right_rotation, or a 4x4 matrix).
+Xf itemTransformation(const nlohmann::json& t);
 void xfPoint(const Xf& m, const float in[3], float out[3]);
 u32 packNormal(float x, float y, float z);
 
 // None: ItemDisplayContext.NONE (no model transform, only the centring).
-enum class Display : u8 { FirstRight, FirstLeft, ThirdRight, ThirdLeft, Head, Gui, Ground, Fixed, None, Count };
+enum class Display : u8 { FirstRight, FirstLeft, ThirdRight, ThirdLeft, Head, Gui, Ground, Fixed, OnShelf, None, Count };
 
 struct ItemMesh {
     struct Part {
@@ -63,6 +66,7 @@ struct ItemMesh {
     Part parts[4];
     int partCount = 0;
     float groundMinY = 0, groundDepth = 0;  // model bounding box in the GROUND display (ItemEntityRenderer)
+    float shelfMinY = 0, shelfMaxY = 0;     // and in the ON_SHELF display (ShelfRenderer)
     bool empty() const { return partCount == 0; }
 };
 
@@ -81,19 +85,27 @@ public:
     bool init(const ui::Resources& res, const EntityAssets& assets, const std::vector<std::string>& itemNames,
               const fs::path& componentReports);
 
-    // Mesh of an item stack (network item id); flat: gui / ground / fixed contexts (some items select other models).
-    // Never null; empty() when the item has nothing to draw.
-    const ItemMesh& mesh(int item, i32 dye, bool flat);
-    // Item model properties that follow the holder's item use (ItemModel select / condition / range_dispatch):
-    // minecraft:using_item, use_duration, crossbow/pull, use_cycle and the crossbow's charge_type.
-    struct UseState {
-        bool usingItem = false;
-        float useTicks = 0;       // ticks the item has been used (use_duration)
-        float pull = 0;           // crossbow/pull: use ticks / charge duration
-        float remaining = 0;      // use_cycle: remaining use ticks
-        int charge = 0;           // charge_type: 0 none, 1 arrow, 2 rocket
+    // The game's item registry (data components of stacks); before the first mesh.
+    void setItems(const ui::Items* items) { items_ = items; }
+    // Mesh of an item stack in a display context (ItemModelResolver.updateForTopItem): the item definition named by
+    // the stack (item_model component) with its condition / select / range_dispatch properties, tints and special
+    // renderers evaluated for the stack's components and the context. Never null; empty() when nothing is drawn.
+    const ItemMesh& mesh(const ui::ItemStack& s, const ui::ItemContext& c);
+    // A plain stack of an item (no components) with an optional dyed colour.
+    static ui::ItemStack plainStack(int item, i32 dye = -1);
+    // GUI icons (ui/icons.cpp) draw special models from the same geometry: the quads of a "special" item model node
+    // for a stack (model space, `local` applied; textures in the item (kTexItems) or entity (kTexEntity) atlas), and a
+    // key of the stack data they depend on.
+    bool specialQuads(const nlohmann::json& node, const ui::ItemStack& s, const Xf& local, std::vector<MeshQuad>& out);
+    std::string specialKey(const nlohmann::json& node, const ui::ItemStack& s);
+    // A player head's skull model with the skin of the stack's profile (SkullBlockRenderer: player heads placed as
+    // blocks), model space, no display transform.
+    const ItemMesh& headMesh(const ui::ItemStack& s);
+    struct AtlasView {
+        const u8* rgba = nullptr;  // w * h * 4
+        int w = 0, h = 0;
     };
-    const ItemMesh& mesh(int item, i32 dye, bool flat, const UseState& use);
+    AtlasView atlasView(u32 tex) const;  // kTexItems / kTexEntity
     // Texture of the item's particles (BreakingItemParticle): the model's particle texture, else its first layer.
     std::string itemParticleTexture(int item);
     const ItemMesh& blockModelMesh(const std::string& model);  // "block/item_frame" (display transforms unused)
@@ -158,6 +170,7 @@ public:
 
 private:
     std::unique_ptr<Impl> impl_;
+    const ui::Items* items_ = nullptr;
     ui::Atlas atlas_;
     std::vector<Rect> rects_;
     std::vector<MeshQuad> store_;

@@ -8,6 +8,7 @@
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 
+#include <algorithm>
 #include <memory>
 
 struct SectionMesh;
@@ -92,6 +93,16 @@ struct ShadowContext {
     D3D12_GPU_DESCRIPTOR_HANDLE blockTextures;
     D3D12_GPU_VIRTUAL_ADDRESS textureRemap;
 };
+// Posed entity geometry of this frame for the path tracer (Shaders: Path Traced), in entity.hlsl's layouts: model
+// quads (static, 96 bytes: pos[4] in model pixels, uv[4], normal, part) referenced by (quad, instance) pairs whose
+// instance (32 bytes, matrixBase first) selects the part matrices (3 float4 rows: part space -> camera-relative
+// blocks), and free quads (128 bytes, camera-relative pos[4] first). Offsets are bytes into `frameData`.
+struct RtEntities {
+    ID3D12Resource* modelQuads = nullptr;
+    ID3D12Resource* frameData = nullptr;
+    u64 matrices = 0, instances = 0, refs = 0, freeQuads = 0;
+    u32 refCount = 0, freeCount = 0;
+};
 class RenderPass {
 public:
     static constexpr DXGI_FORMAT kMotionFormat = DXGI_FORMAT_R16G16_FLOAT;
@@ -103,6 +114,8 @@ public:
     virtual void prepare(const PassContext&) {}
     // Pipeline shadow maps, once per updated cascade, after prepare (World-stage passes only).
     virtual void drawShadow(const ShadowContext&) {}
+    // Path tracing: this frame's posed geometry after prepare (World-stage passes); false = none.
+    virtual bool rtEntities(u32 /*frame*/, RtEntities&) { return false; }
 };
 enum class PassStage {
     Sky,    // first: after the clear, before any terrain (depth test/write off is up to the pass)
@@ -115,7 +128,10 @@ enum class PassStage {
 
 // Built-in shader pipeline ("shaders"): HDR + AgX tonemap, cascaded sun / moon shadows, lit water with
 // reflections, volumetric light, bloom, eye adaptation, TAA. Off = the vanilla look, unchanged.
-enum class ShaderPreset : u8 { Off, Low, Medium, High, Ultra };
+// PathTraced: the High pipeline with the world near the camera path traced (render/pathtrace.h).
+enum class ShaderPreset : u8 { Off, Low, Medium, High, Ultra, PathTraced };
+// Path tracing quality presets (Shaders: Path Traced): bounces, samples per pixel, radius.
+enum class PathTraceQuality : u8 { Low, Medium, High, Ultra, Count };
 struct ShaderSettings {
     u32 cascades = 3;              // shadow cascades (0..4)
     u32 shadowRes = 2048;          // per cascade
@@ -132,7 +148,13 @@ struct ShaderSettings {
     float exposure = 1.0f;         // exposure compensation
     float renderScale = 1.0f;      // internal resolution / output resolution (0.33..1), upscaled temporally
     float sunPathTilt = 0.6f;      // radians the sun / moon path is tilted towards the south (packs: ~30-40 deg)
+    // Path tracing (preset PathTraced): sections within ptRadius blocks are ray traced (render/pathtrace.h).
+    bool pathTrace = false;
+    u32 ptBounces = 1;             // diffuse bounces after the primary surface (1..2)
+    u32 ptSamples = 1;             // paths per pixel
+    float ptRadius = 256;          // blocks (clamped to the full-detail render distance)
     static ShaderSettings preset(ShaderPreset p);
+    void setPathTraceQuality(PathTraceQuality q);
 };
 // Sky state the pipeline lights with; set each frame by the sky system.
 // Inputs of the game's lightmap (shaders/lightmap.hlsli), from the dimension's environment attributes.
@@ -204,7 +226,11 @@ public:
     bool growBuffer(ComPtr<ID3D12Resource>& buffer, u64 oldBytes, u64 newBytes, const char* what);
     u32 addMesh(const SectionMesh& mesh, int level, i32 x, i32 y, i32 z);  // kNoSlot if out of space (after growing)
     void removeMesh(u32 slot);
-    void setActive(const std::vector<u32>& slots) { active_ = slots, ++activeVersion_; }
+    // The LOD cut's slots. Sections entering or leaving it cross-fade (dithered) over fadeSeconds; a section replaced
+    // by one at the same place and level (an edit, new light) swaps at once.
+    void setActive(const std::vector<u32>& slots);
+    void setFadeSeconds(float seconds) { fadeSeconds_ = std::max(seconds, 0.0f); }
+    void beginWorldReveal(double x, double z);  // stagger entrance fades outward on join/large teleport
     void flushUploads();  // submit staged copies now (used while loading)
 
     // HUD and world overlays for the next frame.
@@ -236,7 +262,7 @@ public:
     ShaderPreset shaderPreset() const { return shaderPreset_; }
     void setShaderSettings(const ShaderSettings& settings);  // fine tuning on top of a preset (not Off)
     const ShaderSettings& shaderSettings() const { return shaderSettings_; }
-    static bool parseShaderPreset(std::string_view name, ShaderPreset& out);  // off|low|medium|high|ultra
+    static bool parseShaderPreset(std::string_view name, ShaderPreset& out);  // off|low|medium|high|ultra|pathtraced
     static const char* shaderPresetName(ShaderPreset preset);
     void setSkyLighting(const SkyLighting& sky) { skyLighting_ = sky; }
     // Tilt the sky should apply to the sun / moon / stars so they match the shadows (0 when shaders are off).
@@ -252,6 +278,11 @@ public:
     // OptiFine / Iris shader packs (API: render/packs/pack_api.h); while one is active it replaces the pipeline above.
     struct Packs;
     Packs& packs();  // created on first use
+    // Path tracing (render/pathtrace.h): available on this GPU (DXR 1.1 inline ray tracing), else why not; and what it
+    // is doing right now (denoiser, sections in the acceleration structure) for the options screen.
+    struct PathTracer;
+    bool pathTracingSupported(std::string* why = nullptr) const;
+    std::string pathTracingStatus() const;
     // Main loop, once per frame before input and simulation: latency sleep (Reflex / XeLL), frame limiter, markers.
     void beginFrame();
     // History of the temporal passes is invalid (camera cut, dimension change); the next frame resets it.
@@ -294,7 +325,14 @@ private:
         u64 cubeOffset = 0, cubeCount = 0, modelOffset = 0, modelCount = 0;
         i32 origin[4] = {};  // xyz in blocks, w = LOD level
         u32 translucent = 0;  // translucent quads
+        u32 opaque = 0, cutout = 0;  // opaque / cutout cube quads (the path tracer's geometries)
+        float fade = 0;       // GpuSection::fade
+        bool inCut = false, retiring = false, freeLater = false;
     };
+    void freeSlot(u32 slot);
+    void setFade(u32 slot, float fade);
+    float fadeNow() const;
+    float fadeProgress(float fade, float now) const;
     // Active slots with translucent quads, far to near: blending needs back-to-front order between sections.
     void sortTranslucent(const CameraState& cam, u32 activeCount);
 
@@ -367,6 +405,19 @@ private:
     std::vector<u32> freeSlots_;
     u32 slotCapacity_ = 0, slotHigh_ = 0;
     std::vector<u32> active_;
+    std::vector<u32> drawList_;  // active_ + sections still fading out
+    struct Retiring {
+        u32 slot;
+        float end;
+    };
+    std::vector<Retiring> retiring_;
+    std::vector<u32> cutMark_;
+    u32 cutStamp_ = 0;
+    float fadeSeconds_ = 0.75f;  // the game's chunkSectionFadeInTime default
+    u32 fadeFrame_ = 0;
+    float revealStart_ = 0;
+    double revealX_ = 0, revealZ_ = 0;
+    float entranceTime(const Slot& slot, float now) const;
     std::vector<u32> translucent_;
     u64 activeVersion_ = 0, sortedVersion_ = ~u64(0);
     double sortedCam_[3] = {};
@@ -386,6 +437,7 @@ private:
     void submitAndWait();  // close + execute list_ (recorded from allocators_[0]) and wait
 
     std::unique_ptr<Shading> shading_;
+    std::unique_ptr<PathTracer> pt_;  // Shaders: Path Traced only
     ShaderPreset shaderPreset_ = ShaderPreset::High;
     ShaderSettings shaderSettings_;
     SkyLighting skyLighting_;

@@ -30,6 +30,7 @@ struct PlayerEntry {
     Text display;
     int listOrder = 0;
     bool showHat = true;
+    bool chatSession = false;  // a profile key (RemoteChatSession) was sent for this player
 };
 
 struct HealthState {  // PlayerTabOverlay.HealthState (hearts render type)
@@ -56,8 +57,10 @@ struct Score {
     NumFmt format;
 };
 struct Team {
+    Text displayName;
     Text prefix, suffix;
-    int color = -1;  // TeamColor id (0..15), -1 none
+    int color = -1;      // TeamColor id (0..15), -1 none
+    int collision = 0;   // Team.CollisionRule: 0 always, 1 never, 2 push other teams, 3 push own team
 };
 
 // --- boss bars --------------------------------------------------------------------------------------------------
@@ -92,6 +95,17 @@ struct MpState {
 MpState g;
 
 void reset() { g = MpState{}; }
+
+}  // namespace
+
+int teamCollisionRule(const std::string& member) {
+    auto it = g.playerTeam.find(member);
+    if (it == g.playerTeam.end()) return 0;
+    auto t = g.teams.find(it->second);
+    return t == g.teams.end() ? 0 : t->second.collision;
+}
+
+namespace {
 
 const Team* teamOf(const std::string& member) {
     auto it = g.playerTeam.find(member);
@@ -198,8 +212,10 @@ void registerHandlers(UiState& s, net::Client& client) {
                 const int skin = ent::defaultSkinIndex(e.uuid);
                 e.skin = std::string("entity/player/") + (skin < 9 ? "slim/" : "wide/") + kSkins[skin % 9];
             }
-            if (actions & 2)
-                if (r.boolean()) r.skip(16), r.i64v(), r.byteArray(), r.byteArray();
+            if (actions & 2) {
+                e.chatSession = r.boolean();
+                if (e.chatSession) r.skip(16), r.i64v(), r.byteArray(), r.byteArray();
+            }
             if (actions & 4) e.gameMode = r.varInt();
             if (actions & 8) e.listed = r.boolean();
             if (actions & 16) e.latency = r.varInt();
@@ -222,6 +238,7 @@ void registerHandlers(UiState& s, net::Client& client) {
                 auto it = g.players.find(key);
                 if (it == g.players.end()) continue;
                 PlayerEntry& p = it->second;
+                if (actions & 2) p.chatSession = e.chatSession;
                 if (actions & 4) p.gameMode = e.gameMode;
                 if (actions & 8) p.listed = e.listed;
                 if (actions & 16) p.latency = e.latency;
@@ -337,10 +354,11 @@ void registerHandlers(UiState& s, net::Client& client) {
         Team t;
         bool params = method == 0 || method == 2;
         if (params) {
-            parseComponent(r.nbt(), lang);  // display name
+            t.displayName = parseComponent(r.nbt(), lang);
             t.prefix = parseComponent(r.nbt(), lang);
             t.suffix = parseComponent(r.nbt(), lang);
-            r.varInt(), r.varInt();  // name tag visibility, collision rule
+            r.varInt();  // name tag visibility
+            t.collision = r.varInt();
             if (r.boolean()) t.color = r.varInt();
             r.u8v();  // options
         }
@@ -642,6 +660,31 @@ UiModuleRegistrar reg([] {
 }());
 
 }  // namespace
+
+bool findPlayerInfo(const std::string& uuid, PlayerInfoView& out) {
+    auto it = g.players.find(uuid);
+    if (it == g.players.end()) return false;
+    const PlayerEntry& p = it->second;
+    out = PlayerInfoView{uuidKey(p.uuid), p.name, p.skin, p.gameMode, p.listed, p.chatSession, p.showHat};
+    return true;
+}
+
+std::vector<PlayerInfoView> playerInfos() {
+    std::vector<PlayerInfoView> v;
+    for (const auto& [key, p] : g.players) v.push_back({key, p.name, p.skin, p.gameMode, p.listed, p.chatSession, p.showHat});
+    return v;
+}
+
+std::vector<TeamView> teamViews() {
+    std::vector<TeamView> v;
+    for (const auto& [name, t] : g.teams) {
+        TeamView tv{name, t.displayName, t.color, {}};
+        for (const auto& [member, team] : g.playerTeam)
+            if (team == name) tv.players.push_back(member);
+        v.push_back(std::move(tv));
+    }
+    return v;
+}
 
 bool bossDarkenScreen() {
     for (const Boss& b : g.bosses)

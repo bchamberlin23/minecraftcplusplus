@@ -85,10 +85,12 @@ void buildLoading(State& s) {
     if (f.loadingCancel) {
         addButton(s, float(s.guiW() / 2 - 100), float(s.guiH() / 2 + 40), 200, tr(s, "gui.cancel"), [p] {
             FrontEndState& fe = *p->fe;
-            if (fe.child) fe.child->cancel();
+            if (auto fn = fe.loadingCancelFn) fn();
+            else if (fe.child) fe.child->cancel();
         });
         f.onBack = [p] {
-            if (p->fe->child) p->fe->child->cancel();
+            if (auto fn = p->fe->loadingCancelFn) fn();
+            else if (p->fe->child) p->fe->child->cancel();
         };
     }
 }
@@ -455,6 +457,7 @@ void frontEndInit(State& s) {
     if (f.cfg.openScreen == "worlds") openWorlds(s);
     else if (f.cfg.openScreen == "servers") openServers(s);
     else if (f.cfg.openScreen == "friends") openFriendsScreen(s);
+    else if (f.cfg.openScreen == "create") openWorlds(s), openCreateWorld(s);  // world_create.cpp (tests)
     else friendsMenuCommand(s, f.cfg.openScreen);  // friend-join:<code> (friends_screen.cpp)
 }
 
@@ -552,6 +555,8 @@ void Ui::State::frontEndInput(const Window::InputEvent& e) {
     }
     if (screen == Screen::Worlds) return worldsInput(*this, e);
     if (screen == Screen::Servers) return serversInput(*this, e);
+    if (screen == Screen::CreateWorld) return createWorldInput(*this, e);
+    if (screen == Screen::EditWorld) return editWorldInput(*this, e);
     if (fieldsInput(*this, e)) return;
     buttonsInput(e);
 }
@@ -575,16 +580,19 @@ void Ui::State::frontEndFrame() {
                 std::string error = f.child->error();
                 f.child.reset();
                 const Screen back = f.failBack;
+                std::function<void()> action = std::move(f.failAction);
                 if (error.empty()) error = "It closed while starting; see the log for details.";
                 showMessage(*this, f.failTitle.empty() ? Text("Could not open the world") : f.failTitle, Text(error),
                             res.translate(back == Screen::Servers ? "gui.toMenu" : "gui.back"),
-                            [this, back] { back == Screen::Servers ? openServers(*this) : back == Screen::Worlds ? openWorlds(*this) : openScreen(back); });
+                            action ? action : [this, back] { back == Screen::Servers ? openServers(*this) : back == Screen::Worlds ? openWorlds(*this) : openScreen(back); });
             }
         }
     }
     serversFrame(*this);
+    worldsFrame(*this);
     // In a world: the server closed the connection (kicked, stopped, crashed).
-    if (!f.cfg.menu && session && !session->connected() && !f.leaving && !f.titleRequested && screen != Screen::Message) {
+    if (!f.cfg.menu && session && !session->connected() && !f.leaving && !f.titleRequested && screen != Screen::Message &&
+        !f.child) {  // (a transfer: the next instance is connecting)
         const bool multiplayer = !f.cfg.singleplayer;
         std::string reason = session->disconnectReason();
         if (reason.empty()) reason = res.translate("disconnect.endOfStream");

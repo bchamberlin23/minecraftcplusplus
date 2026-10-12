@@ -134,3 +134,15 @@ void nbtWrite(const NbtValue& root, std::vector<u8>& out, std::string_view rootN
     w.str(rootName);
     w.payload(root);
 }
+
+bool nbtReadNetwork(const u8* data, size_t size, NbtValue& root) {
+    NbtReader r(data, size);
+    const u8 t = r.u8v();
+    return r.ok && t != TagEnd && readPayload(r, t, root, 0);
+}
+
+void nbtWriteNetwork(const NbtValue& root, std::vector<u8>& out) {
+    Writer w{out};
+    w.u8v(root.type);
+    w.payload(root);
+}

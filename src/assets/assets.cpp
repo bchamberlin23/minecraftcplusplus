@@ -628,19 +628,15 @@ int gameDataVersion(const fs::path& jar) {
     return 0;
 }
 
-bool BlockRegistry::init(const fs::path& jarPath, const GameReports* reports) {
-    reports_ = reports;
-    // Game assets with the enabled resource packs (and mods' assets) layered over them.
-    const AssetSource& src = AssetSource::client(jarPath);
-    if (src.empty()) {
-        LOG("error: cannot read %s", jarPath.string().c_str());
-        return false;
-    }
-    const std::vector<std::string> namespaces = src.namespaces("assets");
+namespace {
+struct TexFile {
+    std::string key, path;
+};
+// Block textures: the block atlas's sprite sources, merged over every pack (atlases/blocks.json); sorted by key.
+std::vector<TexFile> blockTextureFiles(const AssetSource& src, const std::vector<std::string>& namespaces) {
     auto key = [](const std::string& ns, std::string_view path) {  // "block/stone", "mod:block/x"
         return ns == "minecraft" ? std::string(path) : ns + ":" + std::string(path);
     };
-    // Block textures: the block atlas's sprite sources, merged over every pack (atlases/blocks.json).
     std::vector<json> sources;
     src.readAll("assets/minecraft/atlases/blocks.json", [&](size_t, const std::vector<u8>& bytes) {
         const json j = json::parse(bytes.begin(), bytes.end(), nullptr, false);
@@ -669,13 +665,100 @@ bool BlockRegistry::init(const fs::path& jarPath, const GameReports* reports) {
             if (src.exists(file)) texPaths[stripNs(sprite)] = file;
         }
     }
-    struct TexFile {
-        std::string key, path;
-    };
     std::vector<TexFile> texFiles;
     texFiles.reserve(texPaths.size());
     for (auto& [k, f] : texPaths) texFiles.push_back({k, f});
     std::sort(texFiles.begin(), texFiles.end(), [](const TexFile& a, const TexFile& b) { return a.key < b.key; });
+    return texFiles;
+}
+
+struct DecodedTexture {
+    std::vector<u8> rgba;                       // 16x16 RGBA: the sequence's first frame
+    std::vector<std::vector<u8>> frames;        // 16x16 RGBA per strip frame (animated textures)
+    std::vector<std::pair<u16, u16>> sequence;  // (frame, ticks); empty: not animated
+};
+// One block texture resampled into the 16x16 layers. Animated textures are strips of frames (.mcmeta).
+void decodeBlockTexture(const AssetSource& src, const std::string& path, DecodedTexture& out) {
+    std::vector<u8> bytes;
+    if (!src.read(path, bytes)) return;
+    int w, h, n;
+    u8* img = stbi_load_from_memory(bytes.data(), int(bytes.size()), &w, &h, &n, 4);
+    if (!img) return;
+    // Animated textures are strips of frames (.mcmeta): the sequence's first frame is the texture's layer.
+    int fw = w, fh = std::min(w, h);
+    json animJson;
+    if (src.read(path + ".mcmeta", bytes)) {
+        const json meta = json::parse(bytes.begin(), bytes.end(), nullptr, false);
+        const json& anim = meta.is_object() ? member(meta, "animation") : meta;
+        if (anim.is_object()) {
+            const int sw = int(num(member(anim, "width"), -1)), sh = int(num(member(anim, "height"), -1));
+            if (sw > 0 || sh > 0) fw = sw > 0 ? sw : sh, fh = sh > 0 ? sh : fw;
+            animJson = anim;
+        }
+    }
+    const int cols = std::max(1, w / std::max(1, fw)), rows = std::max(1, h / std::max(1, fh));
+    const int count = cols * rows;
+    std::vector<std::pair<u16, u16>> sequence;
+    if (animJson.is_object()) {
+        const int frametime = std::max(1, int(num(member(animJson, "frametime"), 1)));
+        if (const json& frames = member(animJson, "frames"); frames.is_array() && !frames.empty()) {
+            for (const json& f : frames) {
+                const int index = f.is_object() ? int(num(member(f, "index"), 0)) : int(num(f, 0));
+                const int time = f.is_object() ? std::max(1, int(num(member(f, "time"), float(frametime)))) : frametime;
+                sequence.push_back({u16(std::clamp(index, 0, count - 1)), u16(time)});
+            }
+        } else {
+            for (int k = 0; k < count; ++k) sequence.push_back({u16(k), u16(frametime)});
+        }
+    }
+    const int first = sequence.empty() ? 0 : sequence[0].first;
+    auto resample = [&](int frame, std::vector<u8>& out) {
+        const int fx = (frame % cols) * fw, fy = (frame / cols) * fh;
+        if (fw <= 0 || fh <= 0 || fx + fw > w || fy + fh > h) return;
+        // Into the 16x16 layers: box filter (alpha weighted) for high-resolution packs, nearest below 16.
+        out.resize(kTexSize * kTexSize * 4);
+        for (int y = 0; y < kTexSize; ++y)
+            for (int x = 0; x < kTexSize; ++x) {
+                const int x0 = fx + x * fw / kTexSize, x1 = std::max(x0 + 1, fx + (x + 1) * fw / kTexSize);
+                const int y0 = fy + y * fh / kTexSize, y1 = std::max(y0 + 1, fy + (y + 1) * fh / kTexSize);
+                float c[3] = {}, plain[3] = {}, a = 0;
+                int count = 0;
+                for (int yy = y0; yy < y1; ++yy)
+                    for (int xx = x0; xx < x1; ++xx, ++count) {
+                        const u8* p = img + (size_t(yy) * w + xx) * 4;
+                        for (int k = 0; k < 3; ++k) c[k] += p[k] * (p[3] / 255.0f), plain[k] += p[k];
+                        a += p[3];
+                    }
+                u8* o = &out[(y * kTexSize + x) * 4];
+                const float wa = a / 255.0f;
+                for (int k = 0; k < 3; ++k)
+                    o[k] = u8(std::clamp(wa > 0 ? c[k] / wa : plain[k] / float(count), 0.0f, 255.0f) + 0.5f);
+                o[3] = u8(a / float(count) + 0.5f);
+            }
+    };
+    resample(first, out.rgba);
+    if (sequence.size() > 1 && count > 1) {
+        out.frames.resize(size_t(count));
+        for (int k = 0; k < count; ++k) resample(k, out.frames[size_t(k)]);
+        out.sequence = std::move(sequence);
+    }
+    stbi_image_free(img);
+}
+}  // namespace
+
+bool BlockRegistry::init(const fs::path& jarPath, const GameReports* reports) {
+    reports_ = reports;
+    // Game assets with the enabled resource packs (and mods' assets) layered over them.
+    const AssetSource& src = AssetSource::client(jarPath);
+    if (src.empty()) {
+        LOG("error: cannot read %s", jarPath.string().c_str());
+        return false;
+    }
+    const std::vector<std::string> namespaces = src.namespaces("assets");
+    auto key = [](const std::string& ns, std::string_view path) {  // "block/stone", "mod:block/x"
+        return ns == "minecraft" ? std::string(path) : ns + ":" + std::string(path);
+    };
+    const std::vector<TexFile> texFiles = blockTextureFiles(src, namespaces);
     // Block models and blockstates of every namespace (mods' blocks too).
     struct JsonFile {
         std::string path, key;
@@ -695,96 +778,26 @@ bool BlockRegistry::init(const fs::path& jarPath, const GameReports* reports) {
     }
 
     // Decode textures and parse JSON in parallel. Animated textures keep every frame of their strip.
-    struct Decoded {
-        std::vector<std::vector<u8>> frames;              // 16x16 RGBA per strip frame
-        std::vector<std::pair<u16, u16>> sequence;        // (frame, ticks); empty: not animated
-    };
-    std::vector<Decoded> decoded(texFiles.size());
-    std::vector<std::vector<u8>> rgba(texFiles.size());
+    std::vector<DecodedTexture> decoded(texFiles.size());
     std::vector<json> parsed(jsonFiles.size());
     Jobs::parallelFor(texFiles.size() + jsonFiles.size(), [&](size_t i) {
+        if (i < texFiles.size()) return decodeBlockTexture(src, texFiles[i].path, decoded[i]);
         std::vector<u8> bytes;
-        if (i < texFiles.size()) {
-            if (!src.read(texFiles[i].path, bytes)) return;
-            int w, h, n;
-            u8* img = stbi_load_from_memory(bytes.data(), int(bytes.size()), &w, &h, &n, 4);
-            if (!img) return;
-            // Animated textures are strips of frames (.mcmeta): the sequence's first frame is the texture's layer.
-            int fw = w, fh = std::min(w, h);
-            json animJson;
-            if (src.read(texFiles[i].path + ".mcmeta", bytes)) {
-                const json meta = json::parse(bytes.begin(), bytes.end(), nullptr, false);
-                const json& anim = meta.is_object() ? member(meta, "animation") : meta;
-                if (anim.is_object()) {
-                    const int sw = int(num(member(anim, "width"), -1)), sh = int(num(member(anim, "height"), -1));
-                    if (sw > 0 || sh > 0) fw = sw > 0 ? sw : sh, fh = sh > 0 ? sh : fw;
-                    animJson = anim;
-                }
-            }
-            const int cols = std::max(1, w / std::max(1, fw)), rows = std::max(1, h / std::max(1, fh));
-            const int count = cols * rows;
-            std::vector<std::pair<u16, u16>> sequence;
-            if (animJson.is_object()) {
-                const int frametime = std::max(1, int(num(member(animJson, "frametime"), 1)));
-                if (const json& frames = member(animJson, "frames"); frames.is_array() && !frames.empty()) {
-                    for (const json& f : frames) {
-                        const int index = f.is_object() ? int(num(member(f, "index"), 0)) : int(num(f, 0));
-                        const int time = f.is_object() ? std::max(1, int(num(member(f, "time"), float(frametime)))) : frametime;
-                        sequence.push_back({u16(std::clamp(index, 0, count - 1)), u16(time)});
-                    }
-                } else {
-                    for (int k = 0; k < count; ++k) sequence.push_back({u16(k), u16(frametime)});
-                }
-            }
-            const int first = sequence.empty() ? 0 : sequence[0].first;
-            auto resample = [&](int frame, std::vector<u8>& out) {
-                const int fx = (frame % cols) * fw, fy = (frame / cols) * fh;
-                if (fw <= 0 || fh <= 0 || fx + fw > w || fy + fh > h) return;
-                // Into the 16x16 layers: box filter (alpha weighted) for high-resolution packs, nearest below 16.
-                out.resize(kTexSize * kTexSize * 4);
-                for (int y = 0; y < kTexSize; ++y)
-                    for (int x = 0; x < kTexSize; ++x) {
-                        const int x0 = fx + x * fw / kTexSize, x1 = std::max(x0 + 1, fx + (x + 1) * fw / kTexSize);
-                        const int y0 = fy + y * fh / kTexSize, y1 = std::max(y0 + 1, fy + (y + 1) * fh / kTexSize);
-                        float c[3] = {}, plain[3] = {}, a = 0;
-                        int count = 0;
-                        for (int yy = y0; yy < y1; ++yy)
-                            for (int xx = x0; xx < x1; ++xx, ++count) {
-                                const u8* p = img + (size_t(yy) * w + xx) * 4;
-                                for (int k = 0; k < 3; ++k) c[k] += p[k] * (p[3] / 255.0f), plain[k] += p[k];
-                                a += p[3];
-                            }
-                        u8* o = &out[(y * kTexSize + x) * 4];
-                        const float wa = a / 255.0f;
-                        for (int k = 0; k < 3; ++k)
-                            o[k] = u8(std::clamp(wa > 0 ? c[k] / wa : plain[k] / float(count), 0.0f, 255.0f) + 0.5f);
-                        o[3] = u8(a / float(count) + 0.5f);
-                    }
-            };
-            resample(first, rgba[i]);
-            if (sequence.size() > 1 && count > 1) {
-                decoded[i].frames.resize(size_t(count));
-                for (int k = 0; k < count; ++k) resample(k, decoded[i].frames[size_t(k)]);
-                decoded[i].sequence = std::move(sequence);
-            }
-            stbi_image_free(img);
-        } else {
-            size_t j = i - texFiles.size();
-            if (src.read(jsonFiles[j].path, bytes)) parsed[j] = json::parse(bytes.begin(), bytes.end(), nullptr, false);
-        }
+        const size_t j = i - texFiles.size();
+        if (src.read(jsonFiles[j].path, bytes)) parsed[j] = json::parse(bytes.begin(), bytes.end(), nullptr, false);
     });
 
     Impl& im = *impl_;
     // Layer 0 is the "missing texture" checkerboard. The frames of animated textures follow the textures, as far
     // as the texture array's limit allows.
     u32 layers = 1;
-    for (const auto& t : rgba) layers += !t.empty();
+    for (const auto& t : decoded) layers += !t.rgba.empty();
     constexpr u32 kMaxLayers = 2048;  // D3D12 texture array limit
     u32 extra = 0;
     for (size_t i = 0; i < decoded.size(); ++i) {
-        if (rgba[i].empty() || decoded[i].frames.empty()) continue;
+        if (decoded[i].rgba.empty() || decoded[i].frames.empty()) continue;
         if (layers + extra + decoded[i].frames.size() > kMaxLayers) {
-            decoded[i] = {};
+            decoded[i].frames.clear(), decoded[i].sequence.clear();
             continue;
         }
         extra += u32(decoded[i].frames.size());
@@ -803,11 +816,11 @@ bool BlockRegistry::init(const fs::path& jarPath, const GameReports* reports) {
     buildMips(im.pixels.data());
     u32 layer = 1, extraLayer = mainLayers;
     im.animations.clear();
-    for (size_t i = 0; i < rgba.size(); ++i) {
-        if (rgba[i].empty()) continue;
+    for (size_t i = 0; i < decoded.size(); ++i) {
+        if (decoded[i].rgba.empty()) continue;
         im.texIndex.emplace(texFiles[i].key, u16(layer));
         u8* base = &im.pixels[size_t(layer) * kTexLayerBytes];
-        std::memcpy(base, rgba[i].data(), rgba[i].size());
+        std::memcpy(base, decoded[i].rgba.data(), decoded[i].rgba.size());
         bool cut = false, partial = false;
         for (int p = 0; p < kTexSize * kTexSize; ++p) {
             u8 a = base[p * 4 + 3];
@@ -848,6 +861,44 @@ bool BlockRegistry::init(const fs::path& jarPath, const GameReports* reports) {
     blockCount_ = 1;
     im.ids.emplace("minecraft:air", u16(0));
     waterId_ = idFor("minecraft:water");
+    return true;
+}
+
+bool BlockRegistry::reloadTextures() {
+    // The same layers (models, meshes and render layers keep pointing at them) with the pixels the asset stack
+    // has now: a texture a pack changes is redrawn, one it adds is not used until a restart.
+    const AssetSource& src = AssetSource::client();
+    if (src.empty()) return false;
+    const std::vector<TexFile> texFiles = blockTextureFiles(src, src.namespaces("assets"));
+    Impl& im = *impl_;
+    std::lock_guard lock(im.mutex);
+    std::vector<std::pair<const TexFile*, u16>> todo;
+    for (const TexFile& f : texFiles)
+        if (auto it = im.texIndex.find(f.key); it != im.texIndex.end()) todo.push_back({&f, it->second});
+    std::vector<DecodedTexture> decoded(todo.size());
+    Jobs::parallelFor(todo.size(), [&](size_t i) { decodeBlockTexture(src, todo[i].first->path, decoded[i]); });
+    size_t changed = 0;
+    for (size_t i = 0; i < todo.size(); ++i) {
+        const DecodedTexture& d = decoded[i];
+        if (d.rgba.empty()) continue;
+        const u32 layer = todo[i].second;
+        u8* base = &im.pixels[size_t(layer) * kTexLayerBytes];
+        if (std::memcmp(base, d.rgba.data(), d.rgba.size()) != 0) ++changed;
+        std::memcpy(base, d.rgba.data(), d.rgba.size());
+        buildMips(base, im.texClass[layer] == LayerCutout);
+        for (const Impl::Animation& a : im.animations) {  // the strip's frames, as far as the old strip had them
+            if (a.layer != layer) continue;
+            u32 frames = 0;
+            for (const auto& [f, t] : a.sequence) frames = std::max<u32>(frames, f + 1u);
+            for (u32 k = 0; k < frames && k < d.frames.size(); ++k) {
+                if (d.frames[k].empty()) continue;
+                u8* fb = &im.pixels[size_t(a.firstFrameLayer + k) * kTexLayerBytes];
+                std::memcpy(fb, d.frames[k].data(), d.frames[k].size());
+                buildMips(fb, im.texClass[layer] == LayerCutout);
+            }
+        }
+    }
+    LOG("assets: block textures reloaded (%zu of %zu changed)", changed, todo.size());
     return true;
 }
 

@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <dbghelp.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -13,6 +14,7 @@
 namespace {
 
 std::atomic<bool> g_crashing{false};
+char g_details[8192];  // setCrashDetails (read without a lock by the handler: a torn text at worst)
 
 // Logs one frame per line: module!symbol+offset (file:line) — the PDB sits next to the exe.
 void logStack(HANDLE process, HANDLE thread, CONTEXT context) {
@@ -63,6 +65,7 @@ LONG WINAPI onCrash(EXCEPTION_POINTERS* info) {
     if (rec.ExceptionCode == EXCEPTION_ACCESS_VIOLATION && rec.NumberParameters >= 2)
         LOG("crash: address 0x%llx", (unsigned long long)rec.ExceptionInformation[1]);
     logStack(GetCurrentProcess(), GetCurrentThread(), *info->ContextRecord);
+    if (g_details[0]) LOG("crash: -- Custom Server Details --\n%s", g_details);
 
     // Minidump for a debugger: %LOCALAPPDATA%\minecraftCplusplus\crashes\crash-<date>.dmp
     wchar_t local[MAX_PATH];
@@ -92,3 +95,9 @@ LONG WINAPI onCrash(EXCEPTION_POINTERS* info) {
 }  // namespace
 
 void installCrashHandler() { SetUnhandledExceptionFilter(onCrash); }
+
+void setCrashDetails(const std::string& text) {
+    const size_t n = std::min(text.size(), sizeof(g_details) - 1);
+    std::memcpy(g_details, text.data(), n);
+    g_details[n] = 0;
+}

@@ -31,6 +31,8 @@ public:
     // Animated sprites and textures (.mcmeta "animation", SpriteContents.AnimatedTexture) show their frame for this
     // client tick (blended with the next one when interpolated); call once per frame.
     void tick(u64 tick);
+    // Server resource packs: re-reads everything loaded so far from the asset stack (in place where sizes match).
+    void reload();
 
     // A .mcmeta animation: frames of fw x fh in the strip, the (frame, ticks) sequence.
     struct Animation {
@@ -48,6 +50,7 @@ public:
 
 private:
     bool add(const std::string& key, const Image& img, const nlohmann::json& meta);
+    static void scaling(const nlohmann::json& meta, Sprite& s);  // the .mcmeta "gui" scaling
     // Atlas space for img (its first frame when animated, registering the animation). False when the atlas is full.
     bool place(const Image& img, const nlohmann::json& meta, Sprite& s);
     const Resources* res_ = nullptr;

@@ -5,7 +5,7 @@
 #include "audio/audio.h"
 #include "entity/entities.h"
 #include "ui/entity_preview.h"
-#include "ui/ui_state.h"
+#include "ui/item_ui.h"
 
 #include <algorithm>
 #include <cmath>
@@ -223,8 +223,31 @@ int merchantQuickMove(State&, const Menu&, int index, const ItemStack&, const st
     return 0;
 }
 
-const StationRegistrar kMerchant({"merchant"}, StationDef{merchantLayout, merchantOpened, merchantDrawBg, merchantDrawFg, merchantDrawTop,
-                                                          merchantInput, 2, merchantQuickMove, nullptr});
+// MerchantResultSlot.onTake: the active offer (the one the payment satisfies) takes its costs.
+void merchantOnTake(State& s, Menu& m) {
+    auto satisfies = [&](const ItemStack& have, const ItemStack& cost) {
+        if (cost.empty()) return true;
+        return !have.empty() && have.item == cost.item && have.count >= cost.count;
+    };
+    for (const Offer& o : g_merchant.offers) {
+        if (o.result.item != m.slots[2].item) continue;
+        for (int swap = 0; swap < 2; ++swap) {
+            ItemStack& a = m.slots[size_t(swap)];
+            ItemStack& b = m.slots[size_t(1 - swap)];
+            if (!satisfies(a, o.costA) || !satisfies(b, o.costB)) continue;
+            a = a.withCount(a.count - o.costA.count);
+            if (!o.costB.empty()) b = b.withCount(b.count - o.costB.count);
+            (void)s;
+            return;
+        }
+    }
+}
+const StationRegistrar kMerchant({"merchant"}, [] {
+    StationDef d{merchantLayout, merchantOpened, merchantDrawBg, merchantDrawFg, merchantDrawTop, merchantInput, 2, merchantQuickMove, nullptr};
+    d.onTake = merchantOnTake;
+    d.pickAll = -1;  // MerchantMenu.canTakeItemForPickAll: never
+    return d;
+}());
 
 // --- beacon (BeaconScreen / BeaconMenu) -------------------------------------------------------------------------
 
@@ -380,10 +403,8 @@ bool beaconInput(State& s, const InputEvent& e, Menu& m, const Layout&, float le
     }
     return false;
 }
-bool beaconMayPlace(State& s, const Menu&, int slot, const ItemStack& st) {
-    if (slot != 0) return true;
-    const std::string n = itemName(s, st);
-    return n == "netherite_ingot" || n == "emerald" || n == "diamond" || n == "gold_ingot" || n == "iron_ingot";
+bool beaconMayPlace(State& s, const Menu&, int slot, const ItemStack& st) {  // PaymentSlot: #beacon_payment_items
+    return slot != 0 || s.items.itemHasTag(st.item, "minecraft:beacon_payment_items");
 }
 int beaconQuickMove(State& s, const Menu& m, int index, const ItemStack& st, const std::function<bool(int, int, bool)>& moveTo) {
     if (index == 0) return moveTo(1, 37, true) ? 1 : 0;
@@ -393,8 +414,11 @@ int beaconQuickMove(State& s, const Menu& m, int index, const ItemStack& st, con
     return moveTo(1, 37, false) ? 1 : 0;
 }
 
-const StationRegistrar kBeacon({"beacon"}, StationDef{beaconLayout, beaconOpened, beaconDrawBg, beaconDrawFg, beaconDrawTop, beaconInput,
-                                                      -1, beaconQuickMove, beaconMayPlace});
+const StationRegistrar kBeacon({"beacon"}, [] {
+    StationDef d{beaconLayout, beaconOpened, beaconDrawBg, beaconDrawFg, beaconDrawTop, beaconInput, -1, beaconQuickMove, beaconMayPlace};
+    d.slotMax = [](State&, const Menu&, int slot, const ItemStack&) { return slot == 0 ? 1 : 0; };
+    return d;
+}());
 
 // --- brewing stand (BrewingStandScreen / BrewingStandMenu) ----------------------------------------------------
 
@@ -422,31 +446,37 @@ void brewingDrawBg(State& s, Canvas& c, Menu& m, const Layout& l, float left, fl
     for (int i = 0; i < 3; ++i) emptyIcon(s, c, m, l, i, left, top, "container/slot/potion");
     emptyIcon(s, c, m, l, 4, left, top, "container/slot/brewing_fuel");
 }
-bool isPotionInput(const std::string& n) {
-    return n == "potion" || n == "splash_potion" || n == "lingering_potion" || n == "glass_bottle";
+// BrewingStandMenu: PotionIngredient.isPotionInput (the brewing_input set or #brewing_potion_inputs), the
+// brewing_reagent set, the brewing_fuel component.
+bool isPotionInput(State& s, const ItemStack& st) {
+    return inPropertySet("minecraft:brewing_input", st.item) || s.items.itemHasTag(st.item, "minecraft:brewing_potion_inputs");
 }
+bool isBrewingFuel(State& s, const ItemStack& st) { return s.items.component(st, "brewing_fuel").present(); }
 bool brewingMayPlace(State& s, const Menu&, int slot, const ItemStack& st) {
-    const std::string n = itemName(s, st);
-    if (slot <= 2) return isPotionInput(n);
-    if (slot == 4) return n == "blaze_powder";
-    return !isPotionInput(n);  // ingredient: brewing reagents (approximation)
+    if (slot <= 2) return isPotionInput(s, st);
+    if (slot == 3) return inPropertySet("minecraft:brewing_reagent", st.item);
+    if (slot == 4) return isBrewingFuel(s, st);
+    return true;
 }
 int brewingQuickMove(State& s, const Menu& m, int index, const ItemStack& st, const std::function<bool(int, int, bool)>& moveTo) {
-    const std::string n = itemName(s, st);
     if (index >= 0 && index <= 4) return moveTo(5, 41, true) ? 1 : 0;
-    if (n == "blaze_powder") {
-        if (moveTo(4, 5, false) || !moveTo(3, 4, false)) return 0;
+    if (isBrewingFuel(s, st)) {  // into the fuel slot ends the move (the game returns EMPTY there)
+        if (moveTo(4, 5, false)) return 3;
+        if (brewingMayPlace(s, m, 3, st) && !moveTo(3, 4, false)) return 0;
         return 1;
     }
-    if (isPotionInput(n)) return moveTo(0, 3, false) ? 1 : 0;
-    if (brewingMayPlace(s, m, 3, st) && moveTo(3, 4, false)) return 1;
+    if (brewingMayPlace(s, m, 3, st)) return moveTo(3, 4, false) ? 1 : 0;
+    if (isPotionInput(s, st)) return moveTo(0, 3, false) ? 1 : 0;
     if (index >= 5 && index < 32) return moveTo(32, 41, false) ? 1 : 0;
     if (index >= 32 && index < 41) return moveTo(5, 32, false) ? 1 : 0;
     return moveTo(5, 41, false) ? 1 : 0;
 }
 
-const StationRegistrar kBrewing({"brewing_stand"}, StationDef{brewingLayout, nullptr, brewingDrawBg, nullptr, nullptr, nullptr, -1,
-                                                              brewingQuickMove, brewingMayPlace});
+const StationRegistrar kBrewing({"brewing_stand"}, [] {
+    StationDef d{brewingLayout, nullptr, brewingDrawBg, nullptr, nullptr, nullptr, -1, brewingQuickMove, brewingMayPlace};
+    d.slotMax = [](State&, const Menu&, int slot, const ItemStack&) { return slot <= 2 ? 1 : 0; };  // PotionSlot
+    return d;
+}());
 
 // --- crafter (CrafterScreen / CrafterMenu) -------------------------------------------------------------------
 
@@ -510,8 +540,11 @@ int crafterQuickMove(State&, const Menu&, int index, const ItemStack&, const std
     return moveTo(0, 9, false) ? 1 : 0;
 }
 
-const StationRegistrar kCrafter({"crafter_3x3"}, StationDef{crafterLayout, nullptr, crafterDrawBg, nullptr, crafterDrawTop, crafterInput, 45,
-                                                            crafterQuickMove, crafterMayPlace});
+const StationRegistrar kCrafter({"crafter_3x3"}, [] {
+    StationDef d{crafterLayout, nullptr, crafterDrawBg, nullptr, crafterDrawTop, crafterInput, 45, crafterQuickMove, crafterMayPlace};
+    d.mayPickup = [](State&, const Menu&, int slot) { return slot != 45; };  // NonInteractiveResultSlot
+    return d;
+}());
 
 // --- mounts (mount_screen_open: HorseInventoryScreen / NautilusInventoryScreen) -------------------------------
 
@@ -558,17 +591,13 @@ void mountDrawBg(State& s, Canvas& c, Menu& m, const Layout& l, float left, floa
     if (previewEntity(s, g_mount.entity, pe))
         drawEntityFollowsMouse(s, c, pe, int(left) + 26, int(top) + 18, int(left) + 78, int(top) + 70, 17, 0.25f, s.mouseX, s.mouseY);
 }
+// ArmorSlot (SADDLE / BODY) of the mount: LivingEntity.isEquippableInSlot (the equippable slot and allowed entities).
 bool mountMayPlace(State& s, const Menu&, int slot, const ItemStack& st) {
-    const std::string n = itemName(s, st);
-    if (slot == 0) return mountSaddle() && n == "saddle";
-    if (slot == 1) {
-        if (!mountArmor()) return false;
-        if (mountLlama()) return n.ends_with("_carpet");
-        if (mountNautilus()) return n.ends_with("_nautilus_armor");
-        return n.ends_with("_horse_armor");
-    }
+    if (slot == 0) return mountSaddle() && s.items.equipmentSlot(st) == 7 && s.items.canBeEquippedBy(st, g_mount.type);
+    if (slot == 1) return mountArmor() && s.items.equipmentSlot(st) == 6 && s.items.canBeEquippedBy(st, g_mount.type);
     return true;
 }
+// AbstractMountInventoryMenu.quickMoveStack (moves between the inventory and the hotbar end the shift-click: 3).
 int mountQuickMove(State& s, const Menu& m, int index, const ItemStack& st, const std::function<bool(int, int, bool)>& moveTo) {
     const int start = 2 + (mountNautilus() ? 0 : g_mount.columns * 3), n = int(m.slots.size());
     if (index < start) return moveTo(start, n, true) ? 1 : 0;
@@ -576,13 +605,19 @@ int mountQuickMove(State& s, const Menu& m, int index, const ItemStack& st, cons
     if (mountMayPlace(s, m, 0, st) && m.slots[0].empty()) return moveTo(0, 1, false) ? 1 : 0;
     if (start > 2 && moveTo(2, start, false)) return 1;
     const int end = start + 27, hotbarEnd = end + 9;
-    if (index >= end && index < hotbarEnd) return moveTo(start, end, false) ? 1 : 0;
-    if (index >= start && index < end) return moveTo(end, hotbarEnd, false) ? 1 : 0;
+    if (index >= end && index < hotbarEnd) return moveTo(start, end, false) ? 3 : 0;
+    if (index >= start && index < end) return moveTo(end, hotbarEnd, false) ? 3 : 0;
     return 0;
 }
 
-const StationRegistrar kMount({"mount"}, StationDef{mountLayout, nullptr, mountDrawBg, nullptr, nullptr, nullptr, -1, mountQuickMove,
-                                                    mountMayPlace});
+const StationRegistrar kMount({"mount"}, [] {
+    StationDef d{mountLayout, nullptr, mountDrawBg, nullptr, nullptr, nullptr, -1, mountQuickMove, mountMayPlace};
+    d.slotMax = [](State&, const Menu&, int slot, const ItemStack&) { return slot <= 1 ? 1 : 0; };  // ArmorSlot
+    d.mayPickup = [](State& s, const Menu& m, int slot) {  // ArmorSlot: curse of binding
+        return slot > 1 || s.creative() || !s.items.hasEnchantmentEffect(m.slots[size_t(slot)], "minecraft:prevent_armor_change");
+    };
+    return d;
+}());
 
 // Minecraft.handleKeybinds: the inventory key while riding a horse-like mount (PlayerRideableJumping) asks the
 // server for the mount's inventory (ServerboundPlayerCommandPacket OPEN_INVENTORY) instead of the player's own.

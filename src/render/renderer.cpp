@@ -1,5 +1,6 @@
 #include "render/renderer.h"
 #include "render/shading.h"
+#include "render/pathtrace.h"
 #include "render/packs/pack_pipeline.h"
 #include "render/upscalers/upscalers.h"
 
@@ -10,7 +11,11 @@
 #include <stb/stb_image_write.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstddef>
+#include <cstdlib>
+#include <unordered_map>
 
 #include "CullCS.h"
 #include "DetailPS.h"
@@ -43,14 +48,17 @@ struct FrameConstants {
     u32 segCap[4];
     u32 misc[4];
     float lightmap[3][4];
+    float fade[4];  // x = fade clock (seconds), y = 1 / fade duration
 };
-static_assert(sizeof(FrameConstants) == 432);
+static_assert(sizeof(FrameConstants) == 448);
 
 struct GpuSection {
     i32 origin[4];  // xyz in blocks, w = LOD level
     u32 ranges[kRangeCount][2];
+    float fade;  // fade clock time a cross-fade started: > 0 fading in, < 0 fading out, 0 none
+    float pad;
 };
-static_assert(sizeof(GpuSection) == 168);
+static_assert(sizeof(GpuSection) == 176);
 
 void setRgb(float* dst, u32 rgb) {
     dst[0] = float((rgb >> 16) & 255) / 255.0f;
@@ -362,7 +370,13 @@ bool Renderer::createPipelines() {
         uavRanges[i].OffsetInDescriptorsFromTableStart = offset;
     }
 
-    D3D12_ROOT_PARAMETER params[14]{};
+    // Path tracer tables: t0..15 space4 (SRVs), u0..15 space4 (UAVs). See pathtrace.hlsl.
+    D3D12_DESCRIPTOR_RANGE ptRanges[2]{};
+    ptRanges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    ptRanges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    for (auto& pr : ptRanges) pr.NumDescriptors = PathTracer::kTableSize, pr.RegisterSpace = 4;
+
+    D3D12_ROOT_PARAMETER params[19]{};
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;  // b1: quadOffset, sectionIndex
     params[0].Constants.ShaderRegister = 1;
     params[0].Constants.Num32BitValues = 2;
@@ -375,7 +389,7 @@ bool Renderer::createPipelines() {
     params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;  // t2: texture array
     params[4].DescriptorTable.NumDescriptorRanges = 1;
     params[4].DescriptorTable.pDescriptorRanges = &range;
-    params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;  // the path tracer's compute passes sample it too
     params[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;  // u0: counts
     params[5].Descriptor.ShaderRegister = 0;
     params[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;  // u1: indirect args
@@ -397,6 +411,18 @@ bool Renderer::createPipelines() {
     params[12].Constants.Num32BitValues = 8;
     params[13].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;  // t5: texture animation remap
     params[13].Descriptor.ShaderRegister = 5;
+    params[14].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;  // t6: path tracer acceleration structure (TLAS)
+    params[14].Descriptor.ShaderRegister = 6;
+    params[15].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;  // t7: model quads next to the cube quads in t0
+    params[15].Descriptor.ShaderRegister = 7;
+    params[16].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;  // path tracer SRVs
+    params[16].DescriptorTable.NumDescriptorRanges = 1;
+    params[16].DescriptorTable.pDescriptorRanges = &ptRanges[0];
+    params[17].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;  // path tracer UAVs
+    params[17].DescriptorTable.NumDescriptorRanges = 1;
+    params[17].DescriptorTable.pDescriptorRanges = &ptRanges[1];
+    params[18].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;  // b4: path tracer constants
+    params[18].Descriptor.ShaderRegister = 4;
 
     D3D12_STATIC_SAMPLER_DESC samplers[7]{};
     D3D12_STATIC_SAMPLER_DESC& samp = samplers[0];
@@ -405,7 +431,7 @@ bool Renderer::createPipelines() {
     samp.MaxLOD = D3D12_FLOAT32_MAX;
     samp.MaxAnisotropy = 1;
     samp.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
-    samp.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    samp.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     for (u32 i = 1; i < 4; ++i) {  // s1 shadow comparison, s2 linear clamp, s3 point clamp
         D3D12_STATIC_SAMPLER_DESC& s = samplers[i];
         s.Filter = i == 1   ? D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT
@@ -427,7 +453,7 @@ bool Renderer::createPipelines() {
     }
 
     D3D12_ROOT_SIGNATURE_DESC rd{};
-    rd.NumParameters = 14;
+    rd.NumParameters = 19;
     rd.pParameters = params;
     rd.NumStaticSamplers = 7;
     rd.pStaticSamplers = samplers;
@@ -655,6 +681,9 @@ bool Renderer::createWorldStorage(u64 cubeQuads, u64 modelQuads, u32 slots) {
     slotCapacity_ = slots;
     slotHigh_ = 0;
     active_.clear();
+    drawList_.clear();
+    retiring_.clear();
+    cutMark_.clear();
     return true;
 }
 
@@ -716,6 +745,8 @@ u32 Renderer::addMesh(const SectionMesh& m, int level, i32 x, i32 y, i32 z) {
         return kNoSlot;
     }
     slots_[slot] = {co, nc, mo, nm, {x, y, z, level}, 0};
+    for (int r = 0; r < 6; ++r) slots_[slot].opaque += m.counts[r];
+    for (int r = 6; r < 2 * 6; ++r) slots_[slot].cutout += m.counts[r];
     for (int r = 2 * 6; r < 3 * 6; ++r) slots_[slot].translucent += m.counts[r];
 
     GpuSection g{};
@@ -731,16 +762,113 @@ u32 Renderer::addMesh(const SectionMesh& m, int level, i32 x, i32 y, i32 z) {
     if (nc) stage(cubeQuads_.Get(), co * kCubeQuadBytes, m.cubeQuads.data(), nc * kCubeQuadBytes);
     if (nm) stage(modelQuads_.Get(), mo * kModelQuadWords * 4, m.modelQuads.data(), nm * kModelQuadWords * 4);
     stage(sections_.Get(), u64(slot) * sizeof(GpuSection), &g, sizeof(g));
+    if (pt_) pt_->meshAdded(slot);
     return slot;
 }
 
 void Renderer::removeMesh(u32 slot) {
     if (slot >= slotCapacity_) return;
     Slot& s = slots_[slot];
+    if (pt_) pt_->meshRemoved(slot);  // no longer traced, even while it fades out
+    if (s.inCut || s.retiring) {  // still drawn: freed once the cut has let it fade out
+        s.freeLater = true;
+        return;
+    }
+    freeSlot(slot);
+}
+
+void Renderer::freeSlot(u32 slot) {
+    Slot& s = slots_[slot];
     if (s.cubeCount) cubeAlloc_.free(s.cubeOffset, s.cubeCount);
     if (s.modelCount) modelAlloc_.free(s.modelOffset, s.modelCount);
     s = {};
     freeSlots_.push_back(slot);
+}
+
+float Renderer::fadeNow() const {
+    static const auto start = std::chrono::steady_clock::now();
+    return 1.0f + std::chrono::duration<float>(std::chrono::steady_clock::now() - start).count();
+}
+
+float Renderer::fadeProgress(float fade, float now) const {
+    if (fade == 0 || fadeSeconds_ <= 0) return 1.0f;
+    return std::clamp((now - std::abs(fade)) / fadeSeconds_, 0.0f, 1.0f);
+}
+
+void Renderer::setFade(u32 slot, float fade) {
+    Slot& s = slots_[slot];
+    if (s.fade == fade) return;
+    s.fade = fade;
+    stage(sections_.Get(), u64(slot) * sizeof(GpuSection) + offsetof(GpuSection, fade), &fade, sizeof(fade));
+}
+
+float Renderer::entranceTime(const Slot& slot, float now) const {
+    if (fadeSeconds_ <= 0) return 0;
+    if (revealStart_ <= 0 || now >= revealStart_ + 1.5f) return now;
+    const double width = double(16 << slot.origin[3]);
+    const double dx = std::max({double(slot.origin[0]) - revealX_, 0.0, revealX_ - (slot.origin[0] + width)});
+    const double dz = std::max({double(slot.origin[2]) - revealZ_, 0.0, revealZ_ - (slot.origin[2] + width)});
+    // Immediate surroundings appear first; the reveal reaches farther terrain over 1.5 s.
+    const float delay = std::clamp(float((std::sqrt(dx * dx + dz * dz) - 48.0) / 512.0), 0.0f, 1.5f);
+    return std::max(now, revealStart_ + delay);
+}
+
+void Renderer::beginWorldReveal(double x, double z) {
+    revealX_ = x, revealZ_ = z;
+    revealStart_ = fadeNow();
+    for (u32 slot : active_)
+        if (slot < slotCapacity_ && slots_[slot].inCut) setFade(slot, entranceTime(slots_[slot], revealStart_));
+    if (std::getenv("MCPP_STREAM_PROFILE")) LOG("world reveal: centre %.1f %.1f, outward fade over 1.5 s", x, z);
+}
+
+void Renderer::setActive(const std::vector<u32>& slots) {
+    const float now = fadeNow();
+    if (cutMark_.size() < slotCapacity_) cutMark_.resize(slotCapacity_, 0);
+    ++cutStamp_;
+    for (u32 s : slots)
+        if (s < slotCapacity_) cutMark_[s] = cutStamp_;
+    auto key = [&](u32 s) {
+        const i32* o = slots_[s].origin;
+        return (u64(u32(o[0]) & 0xFFFFFF) << 40) ^ (u64(u32(o[2]) & 0xFFFFFF) << 16) ^ (u64(u32(o[1]) & 0xFFF) << 4) ^
+               u64(o[3]);
+    };
+    // Sections leaving the cut, by place and level: a section entering at the same place replaces it at once.
+    std::unordered_map<u64, u32> leaving;
+    for (u32 s : active_)
+        if (s < slotCapacity_ && slots_[s].inCut && cutMark_[s] != cutStamp_) leaving[key(s)] = s;
+    for (u32 s : slots) {
+        if (s >= slotCapacity_ || slots_[s].inCut) continue;
+        Slot& e = slots_[s];
+        e.inCut = true;
+        if (auto it = leaving.find(key(s)); it != leaving.end()) {
+            Slot& old = slots_[it->second];
+            setFade(s, old.fade > 0 ? old.fade : 0.0f);  // continue the old one's fade-in, if any
+            old.inCut = false;
+            if (old.freeLater) freeSlot(it->second);
+            leaving.erase(it);
+        } else if (e.retiring) {  // back while fading out: fade in from the share it still shows
+            e.retiring = false;
+            std::erase_if(retiring_, [&](const Retiring& r) { return r.slot == s; });
+            setFade(s, now - (1.0f - fadeProgress(e.fade, now)) * fadeSeconds_);
+        } else {
+            setFade(s, entranceTime(e, now));
+        }
+    }
+    for (auto& [k, s] : leaving) {
+        Slot& l = slots_[s];
+        l.inCut = false;
+        if (fadeSeconds_ <= 0) {
+            if (l.freeLater) freeSlot(s);
+            continue;
+        }
+        // Fade out from the share it shows now (a section still fading in shows less).
+        const float start = now - (1.0f - fadeProgress(l.fade > 0 ? l.fade : 0.0f, now)) * fadeSeconds_;
+        setFade(s, -start);
+        l.retiring = true;
+        retiring_.push_back({s, start + fadeSeconds_});
+    }
+    active_ = slots;
+    ++activeVersion_;
 }
 
 u64 Renderer::arenaBytesUsed() const {
@@ -759,7 +887,7 @@ void Renderer::sortTranslucent(const CameraState& cam, u32 activeCount) {
     thread_local std::vector<std::pair<double, u32>> keyed;
     keyed.clear();
     for (u32 i = 0; i < activeCount; ++i) {
-        const u32 id = active_[i];
+        const u32 id = drawList_[i];
         if (id >= slotCapacity_ || !slots_[id].translucent) continue;
         const i32* o = slots_[id].origin;
         const double half = double(8 << o[3]);
@@ -855,7 +983,25 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     for (int t = 0; t < 8; ++t) setRgb(fc.tints[t], tints[t]);
     std::memcpy(fc.segBase, segBase_, sizeof(segBase_));
     std::memcpy(fc.segCap, segCap_, sizeof(segCap_));
-    const u32 activeCount = u32(std::min<size_t>(active_.size(), kMaxActive));
+    {  // sections done fading out leave the draw list (and are freed if their mesh was removed meanwhile)
+        const float now = fadeNow();
+        const size_t before = retiring_.size();
+        std::erase_if(retiring_, [&](const Retiring& r) {
+            if (r.end > now) return false;
+            Slot& s = slots_[r.slot];
+            s.retiring = false;
+            if (s.freeLater) freeSlot(r.slot);
+            return true;
+        });
+        if (retiring_.size() != before) ++activeVersion_;
+        drawList_.assign(active_.begin(), active_.end());
+        for (const Retiring& r : retiring_) drawList_.push_back(r.slot);
+        fc.fade[0] = now;
+        fc.fade[1] = fadeSeconds_ > 0 ? 1.0f / fadeSeconds_ : 0.0f;
+        fc.fade[2] = float(fadeFrame_++ & 1023);
+        fc.fade[3] = shaded ? 1.0f : 0.0f;  // temporal accumulation (TAA / upscalers) blends a moving dither
+    }
+    const u32 activeCount = u32(std::min<size_t>(drawList_.size(), kMaxActive));
     fc.misc[0] = activeCount;
     sortTranslucent(cam, activeCount);
     fc.misc[3] = u32(translucent_.size());
@@ -907,7 +1053,7 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     Timer shadeTimer;
     if (shaded) shading_->prepare(shadeIn);
     double shadeCpu = shadeTimer.ms();
-    if (activeCount) std::memcpy(activeMapped_ + size_t(fi) * kMaxActive * 2, active_.data(), size_t(activeCount) * 4);
+    if (activeCount) std::memcpy(activeMapped_ + size_t(fi) * kMaxActive * 2, drawList_.data(), size_t(activeCount) * 4);
     if (!translucent_.empty())  // right after the active list (CullCS)
         std::memcpy(activeMapped_ + size_t(fi) * kMaxActive * 2 + activeCount, translucent_.data(), translucent_.size() * 4);
     const D3D12_GPU_VIRTUAL_ADDRESS activeVa = activeLists_->GetGPUVirtualAddress() + u64(fi) * kMaxActive * 2 * 4;
@@ -981,7 +1127,8 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
         list_->RSSetScissorRects(1, &scissor);
     } else if (packActive) {
         // The pack renders the frame (final -> back buffer); overlays and the Hud stage then draw onto it.
-        packs_->record(list_.Get(), {&cam, viewDistance, activeVa, activeCount, haveWorld, fi}, pc, bb, rtv);
+        packs_->record(list_.Get(), {&cam, viewDistance, activeVa, activeCount, haveWorld, fi, {fc.fade[0], fc.fade[1], fc.fade[2], 1.0f}},
+                       pc, bb, rtv);
         list_->SetDescriptorHeaps(1, heaps);
         list_->SetGraphicsRootSignature(rootSig_.Get());
         list_->SetGraphicsRootConstantBufferView(1, cb);

@@ -429,7 +429,7 @@ public:
     }
 
     std::optional<Stub> findGenerationPoint(GenCtx& c) const override {
-        const int height = startHeight_ ? startHeight_->sample(c.random, c.minY(), c.env.height()) : 0;
+        const int height = startHeight_ ? startHeight_->sample(c.random, c.env.genMinY(), c.env.genDepth()) : 0;
         const BlockPos startPos{c.minBlockX(), height, c.minBlockZ()};
         // PoolAliasLookup.create
         auto aliases = std::make_shared<AliasMap>();

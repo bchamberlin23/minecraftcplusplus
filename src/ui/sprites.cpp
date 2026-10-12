@@ -1,5 +1,8 @@
 #include "ui/sprites.h"
 
+#include <algorithm>
+#include <cmath>
+
 namespace ui {
 
 bool Sprites::load(const Resources& res, Atlas& atlas) {
@@ -119,6 +122,12 @@ bool Sprites::add(const std::string& key, const Image& img, const nlohmann::json
         LOG("ui: GUI atlas full at %s", key.c_str());
         return false;
     }
+    scaling(meta, s);
+    sprites_[key] = s;
+    return true;
+}
+
+void Sprites::scaling(const nlohmann::json& meta, Sprite& s) {
     if (meta.is_object() && meta.contains("gui") && meta["gui"].contains("scaling")) {
         const nlohmann::json& sc = meta["gui"]["scaling"];
         const std::string type = sc.value("type", "stretch");
@@ -136,8 +145,43 @@ bool Sprites::add(const std::string& key, const Image& img, const nlohmann::json
             }
         }
     }
-    sprites_[key] = s;
-    return true;
+}
+
+void Sprites::reload() {
+    // Every sprite and texture again from the asset stack as it is now (server resource packs). One of the same size
+    // keeps its atlas place, so Sprite pointers and everything else in the atlas stay valid; another size moves.
+    const float W = float(atlas_->width()), H = float(atlas_->height());
+    int changed = 0;
+    auto redo = [&](const std::string& path, Sprite& s, bool gui) {
+        Image img;
+        if (!res_->image(path, img)) return;
+        const nlohmann::json meta = res_->exists(path + ".mcmeta") ? res_->json(path + ".mcmeta") : nlohmann::json();
+        Animation anim;
+        const bool animated = parseAnimation(img, meta, anim);
+        const int w = animated ? anim.fw : img.w, h = animated ? anim.fh : img.h;
+        const int x = int(std::lround(s.u0 * W)), y = int(std::lround(s.v0 * H));
+        auto old = std::find_if(animated_.begin(), animated_.end(), [&](const Animated& a) { return a.x == x && a.y == y; });
+        ++changed;
+        if (w != s.w || h != s.h) {
+            if (old != animated_.end()) animated_.erase(old);
+            Sprite moved;
+            if (!place(img, meta, moved)) return;
+            if (gui) scaling(meta, moved);
+            s = moved;
+            return;
+        }
+        if (animated) {
+            if (old == animated_.end()) old = animated_.insert(animated_.end(), Animated{{}, {}, x, y});
+            old->anim = std::move(anim), old->strip = std::move(img), old->shown = ~u64(0);
+        } else {
+            if (old != animated_.end()) animated_.erase(old);
+            atlas_->blit(x, y, w, h, img.rgba.data(), w * 4);
+        }
+    };
+    for (auto& [key, s] : sprites_) redo("assets/minecraft/textures/gui/sprites/" + key + ".png", s, true);
+    for (auto& [name, s] : textures_)
+        if (s.w) redo("assets/minecraft/textures/" + name + ".png", s, false);
+    LOG("ui: %d GUI sprites and textures reloaded", changed);
 }
 
 const Sprite* Sprites::sprite(std::string_view name) const {

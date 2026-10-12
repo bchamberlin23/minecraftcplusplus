@@ -38,7 +38,7 @@ struct Node {
     std::vector<Node> with, extra;
     Style style;
     // click_event / hover_event / insertion (turned into Style::events when flattened)
-    std::string click, clickValue, hover, hoverId, hoverUuid, insertion;
+    std::string click, clickValue, clickNbt, hover, hoverId, hoverUuid, insertion;
     int hoverCount = 1;
     bool hasEvents = false, hasInsertion = false;
     std::vector<Node> hoverValue;  // show_text value / show_entity name (0 or 1)
@@ -213,6 +213,12 @@ Node parseNbt(NbtReader& r, u8 tag, int depth) {
                     n.clickValue = r.str();
                 } else if (click && en == "page" && et != TagCompound && et != TagList) {
                     n.clickValue = parseNbt(r, et, depth + 1).text;
+                } else if (click && (en == "dialog" || en == "payload")) {  // show_dialog / custom: kept as NBT
+                    const u8* start = r.p;
+                    r.skip(et);
+                    n.clickNbt = std::string(1, char(et)) + std::string(reinterpret_cast<const char*>(start), size_t(r.p - start));
+                } else if (click && en == "id" && et == TagString) {  // custom
+                    n.clickValue = r.str();
                 } else if (!click && (en == "value" || en == "name")) {
                     n.hoverValue.clear();
                     n.hoverValue.push_back(parseNbt(r, et, depth + 1));
@@ -384,7 +390,7 @@ void flatten(const Node& n, const Style& parent, const Lang* lang, Text& out, in
     Style own = n.style;
     if (n.hasEvents) {  // Style.applyTo: unset click / hover / insertion come from the parent
         auto ev = std::make_shared<TextEvents>(parent.events ? *parent.events : TextEvents{});
-        if (!n.click.empty()) ev->click = n.click, ev->clickValue = n.clickValue;
+        if (!n.click.empty()) ev->click = n.click, ev->clickValue = n.clickValue, ev->clickNbt = n.clickNbt;
         if (!n.hover.empty()) {
             ev->hover = n.hover, ev->hoverId = n.hoverId, ev->hoverCount = n.hoverCount, ev->hoverUuid = n.hoverUuid;
             ev->hoverText = Text();
@@ -498,6 +504,16 @@ Text parseComponent(std::string_view nbt, const Lang* lang) {
     const Node n = parseNbt(r, u8(nbt[0]), 0);
     flatten(n, Style{}, lang, out, 0);
     return out;
+}
+
+Style parseStyle(std::string_view nbt, const Lang* lang) {
+    if (nbt.empty()) return {};
+    NbtReader r(reinterpret_cast<const u8*>(nbt.data()) + 1, nbt.size() - 1);
+    Node n = parseNbt(r, u8(nbt[0]), 0);
+    n.kind = Node::Literal, n.text = "\x01", n.extra.clear();
+    Text t;
+    flatten(n, Style{}, lang, t, 0);
+    return t.spans.empty() ? Style{} : t.spans[0].style;
 }
 
 Text parseJsonComponent(const nlohmann::json& j, const Lang* lang) {

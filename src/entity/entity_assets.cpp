@@ -19,6 +19,7 @@ namespace {
 
 // Bumped whenever the dump format changes, so old caches are regenerated.
 constexpr const char* kDumpFile = "entities_v2.json";
+constexpr const char* kAnimFile = "animations_v1.json";
 
 // Runs against the client jar: bakes every LayerDefinition (exactly what the game renders) and lists every
 // entity type's dimensions, update interval and synched-data ids. Launched as a single-file source program.
@@ -125,6 +126,77 @@ public class EntityDump {
 }
 )JAVA";
 
+// Runs against the client jar: every keyframe AnimationDefinition (net.minecraft.client.animation.definitions) as
+// baked keyframes (radians, model-space positions, scale offsets), for KeyframeAnimation.
+constexpr const char* kAnimDumpSource = R"JAVA(
+import java.io.*;
+import java.lang.reflect.*;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
+import java.util.zip.*;
+import net.minecraft.client.animation.*;
+import org.joml.Vector3fc;
+
+public class AnimDump {
+    static void f(StringBuilder sb, float v) { if (!Float.isFinite(v)) sb.append(0); else if (v == (int) v) sb.append((int) v); else sb.append(v); }
+    static void v(StringBuilder sb, Vector3fc x) { sb.append(','); f(sb, x.x()); sb.append(','); f(sb, x.y()); sb.append(','); f(sb, x.z()); }
+
+    public static void main(String[] args) throws Exception {
+        StringBuilder sb = new StringBuilder("{\"anims\":{");
+        boolean first = true;
+        List<String> names = new ArrayList<>();
+        try (ZipFile zip = new ZipFile(args[1])) {
+            for (Enumeration<? extends ZipEntry> e = zip.entries(); e.hasMoreElements();) {
+                String n = e.nextElement().getName();
+                if (n.startsWith("net/minecraft/client/animation/definitions/") && n.endsWith(".class") && !n.contains("$"))
+                    names.add(n.substring(0, n.length() - 6).replace('/', '.'));
+            }
+        }
+        Collections.sort(names);
+        for (String cn : names) {
+            Class<?> c = Class.forName(cn);
+            for (Field fd : c.getDeclaredFields()) {
+                if (!Modifier.isStatic(fd.getModifiers()) || fd.getType() != AnimationDefinition.class) continue;
+                fd.setAccessible(true);
+                AnimationDefinition d = (AnimationDefinition) fd.get(null);
+                if (!first) sb.append(',');
+                first = false;
+                sb.append('"').append(c.getSimpleName()).append('.').append(fd.getName()).append("\":[");
+                f(sb, d.lengthInSeconds());
+                sb.append(',').append(d.looping() ? 1 : 0).append(",[");
+                boolean firstChannel = true;
+                for (Map.Entry<String, List<AnimationChannel>> b : new TreeMap<>(d.boneAnimations()).entrySet())
+                    for (AnimationChannel ch : b.getValue()) {
+                        if (!firstChannel) sb.append(',');
+                        firstChannel = false;
+                        int target = ch.target() == AnimationChannel.Targets.POSITION ? 0 : ch.target() == AnimationChannel.Targets.ROTATION ? 1 : 2;
+                        sb.append("[\"").append(b.getKey()).append("\",").append(target).append(",[");
+                        boolean firstKey = true;
+                        for (Keyframe k : ch.keyframes()) {
+                            if (!firstKey) sb.append(',');
+                            firstKey = false;
+                            sb.append('[');
+                            f(sb, k.timestamp());
+                            sb.append(',').append(k.interpolation() == AnimationChannel.Interpolations.CATMULLROM ? 1 : 0);
+                            v(sb, k.preTarget());
+                            v(sb, k.postTarget());
+                            sb.append(']');
+                        }
+                        sb.append("]]");
+                    }
+                sb.append("]]");
+            }
+        }
+        sb.append("}}\n");
+        File out = new File(args[0]);
+        File tmp = new File(args[0] + ".tmp");
+        try (Writer w = new OutputStreamWriter(new FileOutputStream(tmp), StandardCharsets.UTF_8)) { w.write(sb.toString()); }
+        out.delete();
+        if (!tmp.renameTo(out)) throw new IOException("rename failed");
+    }
+}
+)JAVA";
+
 json readJson(const fs::path& p) {
     std::vector<u8> bytes;
     if (!readFile(p, bytes)) return nullptr;
@@ -162,8 +234,9 @@ bool runHidden(const std::wstring& commandLine, const fs::path& workDir, DWORD t
     return finished && code == 0;
 }
 
-// Runs the dump program with the client jar and its libraries on the class path.
-bool generateDump(const fs::path& minecraftDir, const std::string& version, const fs::path& jar, const fs::path& out) {
+// Runs a dump program (kDumpSource / kAnimDumpSource) with the client jar and its libraries on the class path.
+bool generateDump(const fs::path& minecraftDir, const std::string& version, const fs::path& jar, const fs::path& out,
+                  const char* sourceName = "EntityDump.java", const char* sourceText = kDumpSource) {
     const fs::path versionDir = minecraftDir / "versions" / version;
     const json v = readJson(versionDir / (version + ".json"));
     if (!v.is_object()) return false;
@@ -188,16 +261,16 @@ bool generateDump(const fs::path& minecraftDir, const std::string& version, cons
         cp += L";" + (minecraftDir / "libraries" / lib["downloads"]["artifact"].value("path", "")).wstring();
     }
     const fs::path dir = out.parent_path();
-    const fs::path source = dir / "EntityDump.java";
+    const fs::path source = dir / sourceName;
     {
         std::ofstream f(source, std::ios::binary);
-        f << kDumpSource;
+        f << sourceText;
         if (!f) return false;
     }
     LOG("entities: extracting entity models from the game (one time, ~5 s)...");
     // Single-file source launch: needs only java.exe from the game's runtime, no separate compiler step.
     const std::wstring cmd = L"\"" + java.wstring() + L"\" -cp \"" + cp + L"\" \"" + source.wstring() + L"\" \"" +
-                             out.wstring() + L"\"";
+                             out.wstring() + L"\" \"" + jar.wstring() + L"\"";
     return runHidden(cmd, dir, 300000);
 }
 
@@ -247,6 +320,7 @@ bool EntityAssets::parseModels(const std::vector<u8>& bytes) {
             std::string name;
         };
         std::vector<Item> stack = {{&layer, -1, ""}};
+        std::vector<int> depth;
         while (!stack.empty()) {
             Item it = std::move(stack.back());
             stack.pop_back();
@@ -276,7 +350,14 @@ bool EntityAssets::parseModels(const std::vector<u8>& bytes) {
             m.quadCount += p.quadCount;
             if (p.role != RoleNone && m.roles[p.role] < 0) m.roles[p.role] = i16(index);
             m.parts.push_back(p);
+            depth.push_back(it.parent >= 0 ? depth[size_t(it.parent)] + 1 : 0);
             for (const auto& [childName, child] : n["c"].items()) stack.push_back({&child, index, childName});
+        }
+        m.baby = name.find("_baby#") != std::string::npos;
+        m.partIndex["root"] = 0;
+        for (size_t i = 1; i < m.parts.size(); ++i) {
+            auto [it, added] = m.partIndex.emplace(m.parts[i].name, i16(i));
+            if (!added && depth[i] < depth[size_t(it->second)]) it->second = i16(i);
         }
         modelIndex_[name] = int(models_.size());
         models_.push_back(std::move(m));
@@ -293,6 +374,31 @@ bool EntityAssets::parseModels(const std::vector<u8>& bytes) {
             types_.push_back(std::move(ti));
         }
     return !models_.empty();
+}
+
+bool EntityAssets::parseAnimations(const std::vector<u8>& bytes) {
+    const json root = json::parse(bytes.begin(), bytes.end(), nullptr, false);
+    if (!root.is_object() || !root.contains("anims")) return false;
+    for (const auto& [name, a] : root["anims"].items()) {
+        if (!a.is_array() || a.size() < 3) continue;
+        KeyAnimation& k = animations_[name];
+        k.length = a[0].get<float>();
+        k.looping = a[1].get<int>() != 0;
+        for (const auto& c : a[2]) {
+            KeyChannel ch;
+            ch.bone = c[0].get<std::string>();
+            ch.target = u8(c[1].get<int>());
+            for (const auto& f : c[2]) {
+                Keyframe kf{};
+                kf.t = f[0].get<float>();
+                kf.catmullRom = u8(f[1].get<int>());
+                for (int i = 0; i < 3; ++i) kf.pre[i] = f[size_t(2 + i)].get<float>(), kf.post[i] = f[size_t(5 + i)].get<float>();
+                ch.keys.push_back(kf);
+            }
+            if (!ch.keys.empty()) k.channels.push_back(std::move(ch));
+        }
+    }
+    return !animations_.empty();
 }
 
 bool EntityAssets::loadTextures(const fs::path& jar) {
@@ -319,6 +425,15 @@ bool EntityAssets::loadTextures(const fs::path& jar) {
         // (Banner patterns, pot sherds, beacon beams and the end portal are kept: the block entity renderer uses them.)
         if (n.starts_with("entity/shield/") && !n.starts_with("entity/shield/shield_base")) continue;
         texs.push_back({file, std::string(n.substr(0, n.size() - 4))});
+    }
+    for (const Tex& t : texs) {  // villager hats (VillagerMetadataSection) from the textures' .mcmeta
+        if (!t.key.starts_with("entity/villager/") && !t.key.starts_with("entity/zombie_villager/")) continue;
+        std::vector<u8> meta;
+        if (!src.read(t.path + ".mcmeta", meta)) continue;
+        const json j = json::parse(meta.begin(), meta.end(), nullptr, false);
+        if (!j.is_object() || !j.contains("villager") || !j["villager"].is_object()) continue;
+        const std::string hat = j["villager"].value("hat", "none");
+        villagerHats_[t.key] = hat == "full" ? 2 : hat == "partial" ? 1 : 0;
     }
     Jobs::parallelFor(texs.size(), [&](size_t i) {
         Tex& t = texs[i];
@@ -402,6 +517,13 @@ bool EntityAssets::loadImpl(const fs::path& minecraftDir, const std::string& ver
         return false;
     }
     if (!loadTextures(jar)) return false;
+    {  // keyframe animations (optional: without them those models keep their procedural poses)
+        const fs::path animFile = dir / kAnimFile;
+        std::vector<u8> animBytes;
+        if (!fs::exists(animFile, ec)) generateDump(minecraftDir, version, jar, animFile, "AnimDump.java", kAnimDumpSource);
+        if (!readFile(animFile, animBytes) || !parseAnimations(animBytes))
+            LOG("entities: no keyframe animations (%s)", animFile.string().c_str());
+    }
 
     // Protocol ids from the game's registry report.
     const json& reg = reports.registries();
@@ -464,8 +586,8 @@ bool EntityAssets::loadImpl(const fs::path& minecraftDir, const std::string& ver
             std::sort(list.begin(), list.end(), [](const Variant& a, const Variant& b) { return a.name < b.name; });
         }
     }
-    LOG("entities %6.1f ms  %zu model layers, %zu quads, %zu textures in a %ux%u atlas, %zu entity types", t.ms(),
-        models_.size(), quads_.size(), rects_.size(), atlasW_, atlasH_, types_.size());
+    LOG("entities %6.1f ms  %zu model layers, %zu quads, %zu textures in a %ux%u atlas, %zu entity types, %zu animations",
+        t.ms(), models_.size(), quads_.size(), rects_.size(), atlasW_, atlasH_, types_.size(), animations_.size());
     return true;
 }
 
@@ -482,6 +604,11 @@ int EntityAssets::texture(std::string_view path) const {
 
 int EntityAssets::itemTexture(std::string_view item) const { return texture("item/" + std::string(item)); }
 
+int EntityAssets::villagerHat(std::string_view path) const {
+    auto it = villagerHats_.find(std::string(path));
+    return it == villagerHats_.end() ? 0 : it->second;
+}
+
 const TypeInfo* EntityAssets::type(int protocolId) const {
     return protocolId >= 0 && size_t(protocolId) < types_.size() ? &types_[size_t(protocolId)] : nullptr;
 }
@@ -489,6 +616,11 @@ const TypeInfo* EntityAssets::type(int protocolId) const {
 int EntityAssets::typeId(std::string_view name) const {
     auto it = typeIndex_.find(name.find(':') == std::string_view::npos ? "minecraft:" + std::string(name) : std::string(name));
     return it == typeIndex_.end() ? -1 : it->second;
+}
+
+const KeyAnimation* EntityAssets::animation(std::string_view name) const {
+    auto it = animations_.find(std::string(name));
+    return it == animations_.end() ? nullptr : &it->second;
 }
 
 const std::vector<Variant>& EntityAssets::variants(std::string_view registry) const {

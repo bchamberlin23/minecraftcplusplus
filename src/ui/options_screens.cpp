@@ -393,8 +393,7 @@ void optionsBuild(UiState& s) {
     grid.push_back(screenButton(s, "options.accessibility", Screen::Accessibility));
     grid.push_back(screenButton(s, "options.telemetry", Screen::None, false));
     grid.back().tooltip = [p] { return Text(p->res.translate("options.telemetry.disabled")); };
-    grid.push_back(screenButton(s, "options.credits_and_attribution", Screen::None, false));
-    grid.back().tooltip = notAvailable;
+    grid.push_back(screenButton(s, "options.credits_and_attribution", Screen::CreditsAttribution));
     const float gridX = float((W - 316) / 2), gridY = float(std::min(61 + 30, H - kFooterH - 120));
     for (size_t i = 0; i < grid.size(); ++i) {
         grid[i].x = gridX + 4 + float(i % 2) * 158, grid[i].y = gridY + float(i / 2) * 24, grid[i].w = 150;
@@ -566,11 +565,23 @@ Button holdToggleButton(UiState& s, const char* keyName, bool* toggle) {  // Opt
         });
 }
 
+Button sprintWindowSlider(UiState& s) {  // Options.sprintWindow: IntRange(0, 10), 0 shows Off
+    UiState* p = &s;
+    return sliderButton(float(s.settings.sprintWindow) / 10.0f,
+                        [p] {
+                            const int v = p->settings.sprintWindow;
+                            return optionLabel(*p, "options.sprintWindow",
+                                               v == 0 ? Text(p->res.translate("options.off"))
+                                                      : translatable("options.value", {Text(std::to_string(v))}, p->lang()));
+                        },
+                        [p](float v) { p->settings.sprintWindow = int(std::lround(v * 10.0f)); });
+}
+
 void controlsBuild(UiState& s) {
     OptionsList l(s, Text(s.res.translate("controls.title")), Screen::Options);
     l.half(screenButton(s, "options.mouse_settings", Screen::MouseSettings), screenButton(s, "controls.keybinds", Screen::KeyBinds));
     l.halves({holdToggleButton(s, "key.sneak", &s.settings.toggleCrouch), holdToggleButton(s, "key.sprint", &s.settings.toggleSprint),
-              onOffButton(s, "options.autoJump", &s.settings.autoJump)});
+              onOffButton(s, "options.autoJump", &s.settings.autoJump), sprintWindowSlider(s)});
     l.footer();
 }
 

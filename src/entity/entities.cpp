@@ -72,13 +72,15 @@ const ui::Items* gItems = nullptr;  // EntityWorld::setItemDecoder
 // ItemStack.OPTIONAL_STREAM_CODEC. Component patches are not length-prefixed: without the item registry a stack
 // with added components cannot be skipped and returns false (after reading the item id); the caller stops there.
 bool readItemStack(net::Reader& r, i64& item, int& count, i32* dye = nullptr, bool* foil = nullptr, i32* mapId = nullptr,
-                   std::string* fireworks = nullptr) {
+                   std::string* fireworks = nullptr, std::shared_ptr<const ui::ItemStack>* full = nullptr) {
     if (dye) *dye = -1;
     if (foil) *foil = false;
     if (mapId) *mapId = -1;
     if (gItems) {
-        ui::ItemStack st;
+        auto stack = std::make_shared<ui::ItemStack>();
+        ui::ItemStack& st = *stack;
         const bool ok = gItems->read(r, st);
+        if (full && !st.empty()) *full = std::move(stack);
         item = st.empty() ? -1 : st.item;
         count = st.count;
         if (dye) *dye = st.dyedColor >= 0 ? i32(st.dyedColor & 0xFFFFFF) : -1;
@@ -333,8 +335,10 @@ void readEntityData(net::Reader& r, EventQueue& q, int entityEffect) {
                 i32 dye = -1, mapId = -1;
                 bool foil = false;
                 std::string fireworks;
-                const bool complete = readItemStack(r, v.i, count, &dye, &foil, &mapId, &fireworks);
+                std::shared_ptr<const ui::ItemStack> full;
+                const bool complete = readItemStack(r, v.i, count, &dye, &foil, &mapId, &fireworks, &full);
                 v.f[0] = float(count), v.f[1] = float(dye), v.f[2] = foil ? 1.0f : 0.0f, v.f[3] = float(mapId);
+                if (full) q.stacks.push_back(std::move(full)), v.stack = i32(q.stacks.size() - 1);
                 if (!fireworks.empty()) q.strings.push_back(std::move(fireworks)), v.str = i32(q.strings.size() - 1);
                 stop = !complete;
                 break;
@@ -359,7 +363,7 @@ void readEntityData(net::Reader& r, EventQueue& q, int entityEffect) {
                 keep = false;
                 break;
             }
-            case 18: v.i = r.varInt(), v.f[0] = float(r.varInt()), r.varInt(); break;  // villager data
+            case 18: v.i = r.varInt(), v.f[0] = float(r.varInt()), v.f[1] = float(r.varInt()); break;  // villager data
             case 19: case 20: v.i = r.varInt(); break;  // optional unsigned int, pose
             case 21: case 22: case 23: case 24: case 25: case 26: case 27: case 28: case 29: case 30: case 31: case 32:
                 v.i = r.varInt();  // registry holders (variants)
@@ -523,12 +527,15 @@ void EntityWorld::attach(net::Client& client) {
             int count;
             i32 dye;
             bool foil;
-            const bool complete = readItemStack(r, item, count, &dye, &foil);
+            std::shared_ptr<const ui::ItemStack> full;
+            const bool complete = readItemStack(r, item, count, &dye, &foil, nullptr, nullptr, &full);
             if (!r.ok) break;
             q.ints.push_back(slot & 127), q.ints.push_back(i32(item)), q.ints.push_back(dye), q.ints.push_back(foil);
+            q.ints.push_back(full ? i32(q.stacks.size()) : -1);
+            if (full) q.stacks.push_back(std::move(full));
             if (!complete || !(slot & 0x80)) break;
         }
-        e.count = (u32(q.ints.size()) - e.first) / 4;
+        e.count = (u32(q.ints.size()) - e.first) / 5;
         if (e.count) q.events.push_back(e);
     });
     on("player_info_update", [](net::Reader& r, EventQueue& q) {
@@ -574,7 +581,9 @@ void EntityWorld::attach(net::Client& client) {
         Event e;
         e.type = EventType::Swing;
         e.id = r.varInt();
-        e.a = r.varInt();  // hand
+        e.a = r.varInt();      // hand
+        e.b = r.varInt();      // SwingAnimation: type (0 none, 1 whack, 2 stab), duration
+        e.count = u32(r.varInt());
         if (r.ok) q.events.push_back(e);
     });
     on("animate", [](net::Reader& r, EventQueue& q) {  // wake up / critical hit particles
@@ -595,6 +604,9 @@ void EntityWorld::attach(net::Client& client) {
         Event e;
         e.type = EventType::Damage;
         e.id = r.varInt();
+        e.a = r.varInt();      // damage_type network id (Client::registryId("minecraft:damage_type", ...))
+        r.varInt(), r.varInt();  // cause / direct entity id + 1
+        if (r.boolean()) r.f64(), r.f64(), r.f64();  // source position
         if (r.ok) q.events.push_back(e);
     });
     on("entity_event", [](net::Reader& r, EventQueue& q) {
@@ -623,6 +635,31 @@ void EntityWorld::attach(net::Client& client) {
         if (r.ok) q.events.push_back(e);
     });
     on("update_attributes", [](net::Reader&, EventQueue&) {});  // not needed for drawing
+    client.onPlayPeek("set_time", [this](net::Reader& r) {  // the game time (species animations)
+        const i64 t = r.i64v();
+        if (r.ok) netGameTime_ = t;
+    });
+    client.onPlayPeek("game_event", [this](net::Reader& r) {  // rain / thunder levels (scared pandas)
+        const int type = r.u8v();
+        const float param = r.f32();
+        if (!r.ok) return;
+        if (type == 1) rainLevel_ = 0;  // START_RAINING (the level rises from 0)
+        else if (type == 2) rainLevel_ = 1;  // STOP_RAINING
+        else if (type == 7) rainLevel_ = param;
+        else if (type == 8) thunderLevel_ = param;
+        setSpeciesThundering(thunderLevel_.load() * rainLevel_.load() > 0.9f);
+    });
+    on("level_event", [](net::Reader& r, EventQueue& q) {  // jukebox songs: parrots dance, allays follow
+        const i32 type = r.i32v();
+        int x, y, z;
+        r.blockPos(x, y, z);
+        if (!r.ok || (type != 1010 && type != 1011)) return;
+        Event e;
+        e.type = EventType::Jukebox;
+        e.d[0] = x, e.d[1] = y, e.d[2] = z;
+        e.flag = type == 1010;
+        q.events.push_back(e);
+    });
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -738,6 +775,14 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
         p.skin = assets_.texture(std::string("entity/player/") + (p.slim ? "slim/" : "wide/") + kSkins[skin % 9]);
         return;
     }
+    if (ev.type == EventType::Jukebox) {  // LevelRenderer.notifyNearbyEntities: living entities within 3 blocks
+        const int pos[3] = {int(ev.d[0]), int(ev.d[1]), int(ev.d[2])};
+        for (auto& [id, other] : entities_)
+            if (other.category == Category::Living && other.pos[0] > pos[0] - 3 && other.pos[0] < pos[0] + 4 &&
+                other.pos[1] > pos[1] - 3 && other.pos[1] < pos[1] + 4 && other.pos[2] > pos[2] - 3 && other.pos[2] < pos[2] + 4)
+                speciesJukebox(other, pos, ev.flag);
+        return;
+    }
     if (ev.type == EventType::PlayerRemove) {
         players_.erase(uuidKey(ev.uuid));
         return;
@@ -764,6 +809,14 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
         e.lerpHeadYaw = ev.f[2];
         if (e.category == Category::Block) e.blockState = ev.b;
         e.direction = ev.b;
+        if (e.info && (e.info->name == "minecraft:item_frame" || e.info->name == "minecraft:glow_item_frame")) {
+            // ItemFrame.recreateFromPacket: the packet holds the block position; the frame sits at the block's centre
+            // moved 0.46875 back against the wall it hangs on (createBoundingBox).
+            static constexpr int kDir[6][3] = {{0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}};
+            const int d = std::clamp(ev.b, 0, 5);
+            for (int a = 0; a < 3; ++a)
+                e.pos[a] = e.prevPos[a] = std::floor(ev.d[a]) + 0.5 - kDir[d][a] * 0.46875;
+        }
         e.display.is = size_t(ev.a) < dataIds_.size() && dataIds_[size_t(ev.a)].dTranslation >= 0;
         if (e.category == Category::Player) {
             auto it = players_.find(uuidKey(ev.uuid));
@@ -792,7 +845,10 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
         }
         return;
     }
-    if (it == entities_.end()) return;
+    if (it == entities_.end()) {
+        if (ev.type == EventType::EntityEvent && onUntrackedEntityEvent) onUntrackedEntityEvent(ev.id, ev.a);
+        return;
+    }
     Entity& e = it->second;
     switch (ev.type) {
         case EventType::Move: {
@@ -855,14 +911,19 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
         case EventType::Data: applyData(e, &q.meta[ev.first], ev.count, q); break;
         case EventType::Equipment:
             for (u32 i = 0; i < ev.count; ++i) {
-                const int slot = q.ints[ev.first + i * 4];
+                const int slot = q.ints[ev.first + i * 5];
                 if (slot < 0 || slot >= 8) continue;
-                e.equipment[slot] = q.ints[ev.first + i * 4 + 1];
-                e.equipDye[slot] = q.ints[ev.first + i * 4 + 2];
-                e.equipFoil = u8((e.equipFoil & ~(1 << slot)) | (q.ints[ev.first + i * 4 + 3] ? 1 << slot : 0));
+                e.equipment[slot] = q.ints[ev.first + i * 5 + 1];
+                e.equipDye[slot] = q.ints[ev.first + i * 5 + 2];
+                e.equipFoil = u8((e.equipFoil & ~(1 << slot)) | (q.ints[ev.first + i * 5 + 3] ? 1 << slot : 0));
+                const i32 stack = q.ints[ev.first + i * 5 + 4];
+                e.equipStack[slot] = stack >= 0 ? q.stacks[size_t(stack)] : nullptr;
             }
             break;
-        case EventType::Swing: e.swingTime = 0; break;
+        case EventType::Swing:
+            e.swingTime = 0, e.swingHand = ev.a == 1 ? 1 : 0, e.swingType = int(ev.b);
+            e.swingDuration = std::max<int>(int(ev.count), 1);
+            break;
         case EventType::Hurt:
             e.hurtTime = 10;
             if (verbose_) LOG("entities: %d hurt animation", e.id);
@@ -873,7 +934,8 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
             break;
         case EventType::EntityEvent:
             if (ev.a == 3 && e.category == Category::Living) e.dying = true;  // death
-            if (ev.a == 2) e.hurtTime = 10;                                     // legacy hurt
+            if (ev.a == 2 && (e.kineticHitTicks < 0 || e.kineticHitTicks > 10)) e.kineticHitTicks = 0;  // KINETIC_HIT
+            speciesEvent(e, ev.a);
             if (onEntityEvent) onEntityEvent(e, ev.a);
             break;
         case EventType::Animate:
@@ -898,6 +960,7 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
         const MetaValue& v = values[i];
         const int idx = v.index;
         if (e.display.is && applyDisplayData(e, d, v, q)) continue;
+        if (idx < SpeciesState::kData) e.sp.data[idx] = v.i, e.sp.dataF[idx] = v.f[0], e.sp.seen |= 1u << idx;
         if (idx == d.flags) e.sharedFlags = u8(v.i);
         else if (idx == d.silent && v.serializer == 8) e.silent = v.i != 0;
         else if (idx == d.staysStill && v.serializer == 8) e.staysStill = v.i != 0;
@@ -920,7 +983,7 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
         else if (idx == d.horseVariant) e.variant = int(v.i & 0xFF), e.variant2 = int((v.i >> 8) & 0xFF);
         else if (idx == d.item && v.serializer == 7)
             e.itemId = int(v.i), e.itemCount = std::max(1, int(v.f[0])), e.itemDye = i32(v.f[1]), e.itemFoil = v.f[2] > 0.5f,
-            e.mapId = int(v.f[3]);
+            e.mapId = int(v.f[3]), e.itemStack = v.stack >= 0 ? q.stacks[size_t(v.stack)] : nullptr;
         else if (idx == d.rotation && v.serializer == 1) e.rotation = int(v.i);
         else if (idx == d.painting && v.serializer == 34) e.painting = int(v.i);
         else if (idx == d.nameVisible && v.serializer == 8) e.nameVisible = v.i != 0;
@@ -929,7 +992,7 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
         else if (idx == d.powered) e.powered = v.i != 0;
         else if (idx == d.mainHand) e.mainArm = int(v.i);
         else if (idx == d.skinParts) e.skinParts = int(v.i);
-        else if (idx == d.villagerData) e.villagerType = int(v.i), e.variant2 = int(v.f[0]);
+        else if (idx == d.villagerData) e.villagerType = int(v.i), e.variant2 = int(v.f[0]), e.villagerLevel = int(v.f[1]);
         else if (idx == d.tameFlags && (name == "minecraft:wolf" || name == "minecraft:cat" || name == "minecraft:nautilus" ||
                                         name == "minecraft:zombie_nautilus"))
             e.tame = (v.i & 4) != 0;  // TamableAnimal.DATA_FLAGS_ID
@@ -960,6 +1023,7 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
         else if (idx == d.peek) e.peekRaw = int(v.i);
         else if (idx == d.mainGene) e.variant = int(v.i);
         else if (idx == d.hiddenGene) e.variant2 = int(v.i);
+        speciesDataChanged(e, idx);
     }
 }
 
@@ -983,6 +1047,7 @@ bool EntityWorld::applyDisplayData(Entity& e, const DataIds& d, const MetaValue&
     else if (idx == d.dBlock && v.serializer == 14) e.blockState = int(v.i), s.updateRender = true;
     else if (idx == d.dItem && v.serializer == 7) {
         e.itemId = int(v.i), e.itemCount = std::max(1, int(v.f[0])), e.itemDye = i32(v.f[1]), e.itemFoil = v.f[2] > 0.5f;
+        e.itemStack = v.stack >= 0 ? q.stacks[size_t(v.stack)] : nullptr;
         s.updateRender = true;
     } else if (idx == d.dItemContext) s.itemContext = int(v.i), s.updateRender = true;
     else if (idx == d.dText && v.str >= 0) s.text = q.strings[size_t(v.str)], ++s.textVersion, s.updateRender = true;
@@ -1090,6 +1155,8 @@ u32 displayLight(const Entity& e, u32 worldLight) {
 }
 
 void EntityWorld::tick() {
+    if (const i64 t = netGameTime_.exchange(INT64_MIN); t != INT64_MIN) gameTime_ = t;
+    else ++gameTime_;
     for (auto& [id, e] : entities_)  // TickRateManager.isEntityFrozen: all but players and what they drive
         if (tickRate.runs || e.category == Category::Player || e.id == localControl_) tickEntity(e);
     for (auto it = entities_.begin(); it != entities_.end();)  // ItemPickupParticle.LIFE_TIME
@@ -1138,6 +1205,7 @@ void EntityWorld::tickEntity(Entity& e) {
     if (e.vehicleDamage > 0) e.vehicleDamage = std::max(0.0f, e.vehicleDamage - 1.0f);
     if (e.dying && e.deathTime < 20) ++e.deathTime;
     if (e.swingTime >= 0 && ++e.swingTime >= e.swingDuration) e.swingTime = -1;
+    if (e.kineticHitTicks >= 0) ++e.kineticHitTicks;
     if (e.livingFlags & 1) ++e.useTicks;
 
     // Interpolation (a vehicle the local player drives moves itself).
@@ -1225,7 +1293,7 @@ void EntityWorld::tickEntity(Entity& e) {
 
     // AbstractBoat.tick: the paddles turn pi/8 per tick while rowing (getRowingTime lerps from the previous step).
     for (int i = 0; i < 2; ++i) e.paddlePos[i] = e.paddle[i] ? e.paddlePos[i] + kPi / 8 : 0.0f;
-    if (e.category != Category::Living && e.category != Category::Player) return;
+    if (e.category != Category::Living && e.category != Category::Player) return tickSpecies(e, gameTime_, entities_);
     {  // pose animation state (swimming / gliding / elytra wings), the bed of a sleeping entity
         const double move[3] = {e.pos[0] - e.prevPos[0], e.pos[1] - e.prevPos[1], e.pos[2] - e.prevPos[2]};
         std::shared_lock lock(world_.mutex());
@@ -1242,17 +1310,21 @@ void EntityWorld::tickEntity(Entity& e) {
     }
     const double dx = e.pos[0] - e.prevPos[0], dz = e.pos[2] - e.prevPos[2];
     const std::string& n = e.info ? e.info->name : std::string();
-    const bool flier = n == "minecraft:bat" || n == "minecraft:bee" || n == "minecraft:allay" || n == "minecraft:vex" ||
-                       n == "minecraft:parrot" || n == "minecraft:ghast" || n == "minecraft:blaze" ||
-                       n == "minecraft:phantom" || n == "minecraft:happy_ghast";
+    // calculateEntityAnimation(omnidirectionalAirMover): only bees and parrots count vertical movement.
+    const bool flier = n == "minecraft:bee" || n == "minecraft:parrot";
     const double dy = flier ? e.pos[1] - e.prevPos[1] : 0.0;
     if (e.vehicle < 0 && !e.dying) {
         const float distance = float(std::sqrt(dx * dx + dy * dy + dz * dz));
-        const float target = std::min(distance * 4.0f, 1.0f);
+        // updateWalkAnimation and its overrides (Camel, Frog, Creaking).
+        float target = std::min(distance * 4.0f, 1.0f), rate = 0.4f;
+        if (n == "minecraft:camel" || n == "minecraft:camel_husk")
+            target = e.pose == 0 && e.sp.anim[kCamelDash] == INT_MIN ? std::min(distance * 6.0f, 1.0f) : 0.0f, rate = 0.2f;
+        else if (n == "minecraft:frog") target = e.sp.anim[kFrogJump] != INT_MIN ? 0.0f : std::min(distance * 25.0f, 1.0f);
+        else if (n == "minecraft:creaking") target = std::min(distance * 25.0f, 3.0f);
         e.walkSpeedOld = e.walkSpeed;
-        e.walkSpeed += (target - e.walkSpeed) * 0.4f;
+        e.walkSpeed += (target - e.walkSpeed) * rate;
         e.walkPos += e.walkSpeed;
-        e.walkScale = e.baby ? 3.0f : 1.0f;
+        e.walkScale = e.baby && n != "minecraft:creaking" ? 3.0f : 1.0f;
     } else {
         e.walkSpeedOld = e.walkSpeed = e.walkPos = 0;
     }
@@ -1306,10 +1378,24 @@ void EntityWorld::tickEntity(Entity& e) {
         e.oldSwell = e.swell;
         e.swell = std::clamp(e.swell + (e.swellDir > 0 ? 1 : e.swellDir < 0 ? -1 : 0), 0, 30);
     }
+    tickSpecies(e, gameTime_, entities_);
 }
 
 // ---------------------------------------------------------------------------------------------------------
 // Picking and interaction.
+
+void entitySize(const Entity& e, double& w, double& h) {
+    w = e.info ? e.info->width : 0.6, h = e.info ? e.info->height : 1.8;
+    if (!e.info) return;
+    if (e.baby && e.category == Category::Living) w *= 0.5, h *= 0.5;
+    if (e.info->dataId("ID_SIZE") >= 0) w *= e.size, h *= e.size;
+    if (e.info->name == "minecraft:armor_stand" && (e.standFlags & 1)) w *= 0.5, h *= 0.5;
+    if (e.category == Category::Player) {
+        if (e.pose == 5) h = 1.5;
+        else if (e.pose == 1 || e.pose == 3 || e.pose == 4) h = 0.6;
+        else if (e.pose == 2) w = h = 0.2;
+    }
+}
 
 PickResult EntityWorld::pick(const double o[3], const double dir[3], double maxDistance) const {
     PickResult best;
@@ -1327,15 +1413,8 @@ PickResult EntityWorld::pick(const double o[3], const double dir[3], double maxD
             pickable = true;
         if (n == "minecraft:ender_dragon" || (n == "minecraft:armor_stand" && (e.standFlags & 16))) pickable = false;
         if (!pickable || e.deathTime > 0) continue;
-        double w = e.info->width, h = e.info->height;
-        if (e.baby && e.category == Category::Living) w *= 0.5, h *= 0.5;
-        if (e.info->dataId("ID_SIZE") >= 0) w *= e.size, h *= e.size;
-        if (n == "minecraft:armor_stand" && (e.standFlags & 1)) w *= 0.5, h *= 0.5;
-        if (e.category == Category::Player) {
-            if (e.pose == 5) h = 1.5;
-            else if (e.pose == 1 || e.pose == 3 || e.pose == 4) h = 0.6;
-            else if (e.pose == 2) w = h = 0.2;
-        }
+        double w, h;
+        entitySize(e, w, h);
         double c[3];
         for (int a = 0; a < 3; ++a) c[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt;
         const double lo[3] = {c[0] - w / 2, c[1], c[2] - w / 2}, hi[3] = {c[0] + w / 2, c[1] + h, c[2] + w / 2};
@@ -1360,13 +1439,111 @@ PickResult EntityWorld::pick(const double o[3], const double dir[3], double maxD
     return best;
 }
 
+bool EntityWorld::attackInRange(const double eye[3], const double dir[3], double minReach, double maxReach, double margin,
+                                double forward, const BlockRay& blockRay) {
+    const PickResult p = pickAttackRange(eye, dir, minReach, maxReach, margin, forward, blockRay);
+    if (verbose_) LOG("entities: attack range %.2f..%.2f margin %.2f -> %d", minReach, maxReach, margin, p.id);
+    if (p.id < 0) {  // a miss: only the swing goes out
+        if (client_ && client_->alive()) client_->sendPlay("punch", net::Writer{});
+        return true;
+    }
+    attack(p.id);
+    return true;
+}
+
+PickResult EntityWorld::pickAttackRange(const double eye[3], const double dir[3], double minReach, double maxReach,
+                                        double margin, double forward, const BlockRay& blockRay) const {
+    PickResult best;
+    double from[3], to[3];
+    double toDist = maxReach + std::max(0.0, forward);
+    const double blockT = blockRay(eye, dir, toDist);
+    if (blockT < minReach) return best;  // a block before the reach starts
+    toDist = std::min(toDist, blockT);
+    for (int a = 0; a < 3; ++a) from[a] = eye[a] + dir[a] * minReach, to[a] = eye[a] + dir[a] * toDist;
+    // Segment entry into a box (AABB.clip): the parameter along from..to, false if it misses.
+    auto clip = [](const double lo[3], const double hi[3], const double a[3], const double b[3], double& t) {
+        double t0 = 0, t1 = 1;
+        for (int k = 0; k < 3; ++k) {
+            const double d = b[k] - a[k];
+            if (std::abs(d) < 1e-12) {
+                if (a[k] < lo[k] || a[k] > hi[k]) return false;
+                continue;
+            }
+            double ta = (lo[k] - a[k]) / d, tb = (hi[k] - a[k]) / d;
+            if (ta > tb) std::swap(ta, tb);
+            t0 = std::max(t0, ta), t1 = std::min(t1, tb);
+            if (t0 > t1) return false;
+        }
+        t = t0;
+        return true;
+    };
+    const float pt = partialTick();
+    int bestId = -1;
+    double bestDist = 1e30;
+    for (const auto& [id, e] : entities_) {
+        if (!e.info || e.deathTime > 0) continue;
+        const std::string& n = e.info->name;
+        // EntitySelector.CAN_BE_PICKED: the entities the crosshair can target (EntityWorld::pick).
+        bool pickable = e.category == Category::Living || e.category == Category::Player || e.category == Category::Vehicle ||
+                        e.category == Category::Block || n == "minecraft:item_frame" || n == "minecraft:glow_item_frame" ||
+                        n == "minecraft:painting" || n == "minecraft:end_crystal" || n == "minecraft:interaction" ||
+                        n == "minecraft:shulker_bullet" || n == "minecraft:fireball" || n == "minecraft:small_fireball" ||
+                        n == "minecraft:wind_charge" || n == "minecraft:breeze_wind_charge";
+        if (n == "minecraft:ender_dragon" || (n == "minecraft:armor_stand" && (e.standFlags & 16))) pickable = false;
+        if (!pickable) continue;
+        double w, h, c[3];
+        entitySize(e, w, h);
+        for (int a = 0; a < 3; ++a) c[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt;
+        const double lo[3] = {c[0] - w / 2, c[1], c[2] - w / 2}, hi[3] = {c[0] + w / 2, c[1] + h, c[2] + w / 2};
+        double hit[3];
+        double t;
+        const bool inside = from[0] >= lo[0] && from[0] <= hi[0] && from[1] >= lo[1] && from[1] <= hi[1] && from[2] >= lo[2] &&
+                            from[2] <= hi[2];
+        if (inside) {
+            std::copy(from, from + 3, hit);
+        } else if (clip(lo, hi, from, to, t)) {
+            for (int a = 0; a < 3; ++a) hit[a] = from[a] + (to[a] - from[a]) * t;
+        } else if (margin > 0) {
+            const double ilo[3] = {lo[0] - margin, lo[1] - margin, lo[2] - margin}, ihi[3] = {hi[0] + margin, hi[1] + margin, hi[2] + margin};
+            if (!clip(ilo, ihi, from, to, t)) continue;
+            double outside[3], toward[3] = {(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2};
+            for (int a = 0; a < 3; ++a) outside[a] = from[a] + (to[a] - from[a]) * t;
+            double d[3] = {toward[0] - outside[0], toward[1] - outside[1], toward[2] - outside[2]};
+            const double len = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+            if (len > 1e-9) {  // a block between the margin and the box stops it
+                for (double& k : d) k /= len;
+                const double bt = blockRay(outside, d, len);
+                if (bt < len)
+                    for (int a = 0; a < 3; ++a) toward[a] = outside[a] + d[a] * bt;
+            }
+            if (!clip(lo, hi, outside, toward, t)) continue;
+            for (int a = 0; a < 3; ++a) hit[a] = outside[a] + (toward[a] - outside[a]) * t;  // the surface hit
+        } else {
+            continue;
+        }
+        const double dx = hit[0] - eye[0], dy = hit[1] - eye[1], dz = hit[2] - eye[2];
+        const double dist = dx * dx + dy * dy + dz * dz;
+        if (dist < bestDist) {
+            bestDist = dist, bestId = id;
+            best.id = id, best.distance = std::sqrt(dist);
+            for (int a = 0; a < 3; ++a) best.hit[a] = hit[a] - c[a];  // relative to the entity
+        }
+    }
+    (void)bestId;
+    return best;
+}
+
 bool EntityWorld::click(const double eye[3], const double dir[3], bool attack, bool use, double blockDistance,
-                        double reach, bool sneaking) {
+                        double reach, bool sneaking, double minReach) {
     const double limit = blockDistance >= 0 ? std::min(blockDistance, reach) : reach;
     const PickResult p = pick(eye, dir, limit);
     if (verbose_)
         LOG("entities: click attack=%d use=%d block=%.2f -> entity %d at %.2f", attack, use, blockDistance, p.id, p.distance);
     if (p.id < 0) return false;
+    if (attack && p.distance < minReach) {  // AttackRange.isInRange: too close for the weapon, only the swing goes out
+        if (client_ && client_->alive()) client_->sendPlay("punch", net::Writer{});
+        return true;
+    }
     if (attack) this->attack(p.id);
     else if (use) this->use(p.id, p.hit, sneaking);
     return true;

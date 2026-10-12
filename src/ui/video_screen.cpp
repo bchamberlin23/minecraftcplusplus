@@ -20,8 +20,8 @@ namespace {
 constexpr u32 kFpsSteps[] = {30, 40, 45, 50, 60, 72, 75, 90, 100, 120, 144, 165, 180, 200, 240, 300, 360, 0};  // 0 = off
 
 const char* presetName(u8 p) {
-    static const char* n[] = {"Off", "Low", "Medium", "High", "Ultra"};
-    return n[std::min<int>(p, 4)];
+    static const char* n[] = {"Off", "Low", "Medium", "High", "Ultra", "Path Traced"};
+    return n[std::min<int>(p, 5)];
 }
 
 std::string frameGenLabel(const VideoSettings& v) {
@@ -347,14 +347,22 @@ void extraBuild(UiState& s) {
     const std::function<Text()> needsShaders = [] { return Text("Needs the shader pipeline (Shaders: Low or higher)"); };
 
     l.header(Text("Shaders"));
+    const bool ptOk = s.init.renderer->pathTracingSupported();
     Button preset = cycleButton([p, cur] { return value(*p, "Shaders", presetName(cur.shaders)); },
-                                [p, cur]() mutable {
-                                    cur.shaders = u8((cur.shaders + 1) % 5);
+                                [p, cur, ptOk]() mutable {
+                                    cur.shaders = u8((cur.shaders + 1) % (ptOk ? 6 : 5));
                                     p->applyVideo(cur);
                                     p->settings.save();
                                 },
-                                [] { return Text("The built-in renderer's lighting and effects. Off is the plain look; upscaling and frame "
-                                                 "generation need Low or higher."); });
+                                [p] {
+                                    std::string why, t = "The built-in renderer's lighting and effects. Off is the plain look; upscaling and "
+                                                         "frame generation need Low or higher.";
+                                    if (p->init.renderer->pathTracingSupported(&why))
+                                        t += "\nPath Traced: ray traced light, shadows and reflections near you (DirectX Raytracing).";
+                                    else
+                                        t += "\nPath Traced " + why + ".";
+                                    return Text(t);
+                                });
     const auto packList = packs::listPacks();
     Button pack = cycleButton(
         [p] {
@@ -384,6 +392,39 @@ void extraBuild(UiState& s) {
         options.label = Text("Shader Pack Options...");
         options.onPress = [p] { p->openPackOptions(); };
         l.half(std::move(options));
+    }
+
+    if (cur.shaders == u8(ShaderPreset::PathTraced)) {  // path tracing quality and its denoiser
+        static const char* kQuality[] = {"Low", "Medium", "High", "Ultra"};
+        Button quality = cycleButton(
+            [p, cur] { return value(*p, "Path Tracing", kQuality[std::min<int>(cur.pathTracing, 3)]); },
+            [p, cur]() mutable {
+                cur.pathTracing = u8((cur.pathTracing + 1) % 4);
+                p->applyVideo(cur);
+                p->settings.save();
+            },
+            [p, cur] {
+                ShaderSettings q;
+                q.setPathTraceQuality(PathTraceQuality(cur.pathTracing));
+                char b[200];
+                std::snprintf(b, sizeof(b), "%u bounce%s, %u sample%s per pixel, traced within %.0f chunks; beyond that the world "
+                              "is lit like Ultra.\n", q.ptBounces, q.ptBounces == 1 ? "" : "s", q.ptSamples,
+                              q.ptSamples == 1 ? "" : "s", q.ptRadius / 16.0f);
+                return Text(b + p->init.renderer->pathTracingStatus());
+            });
+        Upscalers& u = up;
+        const bool rr = u.rayReconstruction() != nullptr;
+        Button denoiser = cycleButton(
+            [p, rr] { return value(*p, "Denoiser", rr ? "DLSS RR" : "Built-in"); },
+            [] {},
+            [p, rr, &u] {
+                if (rr) return Text("DLSS Ray Reconstruction denoises and upscales the path traced image (Upscaler: DLSS).");
+                std::string t = "Built-in temporal denoiser. ";
+                t += u.rrWhy().empty() ? "Select the DLSS upscaler for DLSS Ray Reconstruction." : "DLSS Ray Reconstruction: " + u.rrWhy();
+                return Text(t);
+            });
+        denoiser.active = false;  // follows the upscaler
+        l.half(std::move(quality), std::move(denoiser));
     }
 
     l.header(Text("Upscaling"));

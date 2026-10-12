@@ -4,6 +4,8 @@
 #include "render/renderer.h"
 #include "ui/narrator.h"
 #include "ui/options_list.h"
+#include "ui/item_props.h"
+#include "ui/item_ui.h"
 #include "ui/ui_state.h"
 #include "world/terrain.h"
 #include "world/world.h"
@@ -79,16 +81,13 @@ void Ui::State::tickHud() {
     }
     lastToolHighlight = selected;
     // Air supply, simulated locally like LivingEntity.baseTick (the server's entity data is not decoded).
+    // Entity.isEyeInFluid(WATER): the player's fluid tracker (the eyes under the water's surface).
     const Player& p = game->player();
-    const CameraState cam = game->camera();
-    const u16 eye = world->block(int(std::floor(cam.x)), int(std::floor(cam.y)), int(std::floor(cam.z)));
-    const BlockInfo& bi = registry->infos()[eye];
-    const bool eyeInWater = (bi.fluid && eye == registry->waterId()) || bi.waterlogged ||
-                            registry->name(eye).starts_with("minecraft:water") || registry->name(eye).starts_with("minecraft:bubble_column");
-    (void)p;
+    const bool eyeInWater = p.eyeInWater;
     tickViewEffects(eyeInWater);  // view_effects.cpp
     if (!serverAir) {
-        if (eyeInWater && survivalLike()) air = std::max(-20, air - 1);
+        const u16 eye = world->block(int(std::floor(p.pos[0])), int(std::floor(p.pos[1] + p.eyeHeight())), int(std::floor(p.pos[2])));
+        if (eyeInWater && !registry->name(eye).starts_with("minecraft:bubble_column") && survivalLike()) air = std::max(-20, air - 1);
         else air = std::min(maxAir, air + 4);
     }
     // Health blink (Hud.extractPlayerHealth bookkeeping).
@@ -100,14 +99,18 @@ void Ui::State::tickHud() {
     lastHealthInt = hp;
     // Camera.tickFov with AbstractClientPlayer.getFieldOfViewModifier: flying, and the movement speed attribute
     // (the server's value with effects and equipment, x1.3 sprinting) against the ability's walking speed.
+    // The FOV Effects option scales the change (Mth.lerp(effectScale, 1, modifier)), except the spyglass's 0.1; a
+    // camera on another entity keeps 1.
     float target = 1.0f;
     if (p.flying) target *= 1.1f;
     if (p.walkingSpeed != 0.0f) {
         const float speed = float(p.attr.moveSpeed * (p.sprinting ? 1.3 : 1.0)) / p.walkingSpeed;
         target *= (speed + 1.0f) / 2.0f;
     }
-    target *= game->useFovModifier();                         // bow drawing (game/game.h)
+    target *= game->useFovModifier();  // bow drawing (game/game.h)
+    target = 1.0f + (target - 1.0f) * settings.fovEffectScale;
     if (game->scoping() && game->cameraMode == 0) target = 0.1f;  // spyglass
+    if (game->cameraEntity >= 0) target = 1.0f;
     oldFovModifier = fovModifier;
     fovModifier = std::clamp(fovModifier + (target - fovModifier) * 0.5f, 0.1f, 1.5f);
     for (const UiModule& m : uiModules())  // modules.h
@@ -116,10 +119,29 @@ void Ui::State::tickHud() {
 
 // --- items --------------------------------------------------------------------------------------------------
 
-void Ui::State::drawItem(Canvas& c, const ItemStack& s, float x, float y, bool decorations, const char* countOverride) {
+void Ui::State::drawItem(Canvas& c, const ItemStack& s, float x, float y, bool decorations, const char* countOverride,
+                         int playerSlot) {
     if (s.empty()) return;
+    // The item model context: GUI, the local player as the owner and what its state says about this stack (the game
+    // compares stack identity: the player inventory slot it is).
+    const ItemWorld& w = itemWorld();
+    ItemContext ctx;
+    ctx.owner = w.player;
+    ctx.seed = int(x) + int(y) * 1000;  // GuiGraphics.renderItem seed: varies per slot position
+    auto is = [&](int slot) {
+        if (slot < 0 || size_t(slot) >= inventory.slots.size()) return false;
+        return slot == playerSlot || &inventory.slots[size_t(slot)] == &s;
+    };
+    if (ctx.owner.present) {
+        ctx.owner.selected = is(w.selectedSlot);
+        ctx.owner.carried = &s == &carried;
+        if (w.useSlot >= 0 && is(w.useSlot))
+            ctx.owner.usingThis = true, ctx.owner.useTicks = w.useTicks, ctx.owner.remaining = w.useRemaining;
+        ctx.owner.fishing = w.fishingSlot >= 0 && is(w.fishingSlot);
+        ctx.owner.cooldown = w.cooldown ? w.cooldown(s) : 0.0f;
+    }
     float uv[4];
-    if (icons.icon(s, uv)) {
+    if (icons.icon(s, uv, &ctx)) {
         c.quad(x, y, x + 16, y + 16, uv[0], uv[1], uv[2], uv[3], kWhite, ModeIcon);
         if (items.foil(s)) {  // enchantment glint (glintStrength 0.75)
             c.setBlend(2);
@@ -130,11 +152,16 @@ void Ui::State::drawItem(Canvas& c, const ItemStack& s, float x, float y, bool d
     if (!decorations) return;
     // GuiGraphics.itemDecorations: durability bar, then the count.
     const int md = items.maxDamage(s);
+    int barWidth = 0;
+    u32 barColor = 0;
     if (s.damage > 0 && md > 0) {
         const float f = std::max(0.0f, float(md - s.damage) / float(md));
         const int width = int(std::lround(13.0f - float(s.damage) * 13.0f / float(md)));
         c.fill(x + 2, y + 13, x + 15, y + 15, 0xFF000000);
         c.fill(x + 2, y + 13, x + 2 + float(std::clamp(width, 0, 13)), y + 14, hsvToRgb(f / 3.0f, 1.0f, 1.0f));
+    } else if (bundleBar(items, s, barWidth, barColor)) {  // item_ui.h: a bundle's fullness
+        c.fill(x + 2, y + 13, x + 15, y + 15, 0xFF000000);
+        c.fill(x + 2, y + 13, x + 2 + float(barWidth), y + 14, barColor);
     }
     if (s.count != 1 || countOverride) {
         const std::string n = countOverride ? countOverride : std::to_string(s.count);
@@ -149,10 +176,12 @@ void Ui::State::drawItem(Canvas& c, const ItemStack& s, float x, float y, bool d
     }
 }
 
-void Ui::State::drawTooltip(Canvas& c, const std::vector<Text>& lines, float mx, float my) {
+void Ui::State::drawTooltip(Canvas& c, const std::vector<Text>& lines, float mx, float my, const TooltipImage* image) {
     if (lines.empty()) return;
-    int w = 0, h = lines.size() == 1 ? -2 : 0;
+    const size_t count = lines.size() + (image ? 1 : 0);
+    int w = 0, h = count == 1 ? -2 : 0;
     for (const Text& l : lines) w = std::max(w, font.width(l)), h += 10;
+    if (image) w = std::max(w, image->width), h += image->height;
     float x = mx + 12, y = my - 12;
     if (x + float(w) > float(c.guiWidth())) x = std::max(x - 24 - float(w), 4.0f);
     if (y + float(h) + 3 > float(c.guiHeight())) y = float(c.guiHeight() - h - 3);
@@ -163,6 +192,10 @@ void Ui::State::drawTooltip(Canvas& c, const std::vector<Text>& lines, float mx,
     for (size_t i = 0; i < lines.size(); ++i) {
         font.draw(c, lines[i], x, ly, kWhite, true);
         ly += 10 + (i == 0 ? 2 : 0);
+        if (i == 0 && image) {  // the image follows the first line
+            image->draw(c, x, ly, w);
+            ly += float(image->height);
+        }
     }
 }
 
@@ -186,8 +219,9 @@ void Ui::State::drawHud(Canvas& c) {
         blitSprite(c, sprites.sprite("hud/hotbar_selection"), float(center - 91 - 1 + game->selectedSlot() * 20), H - 23, 24, 23);
         const ItemStack& offhand = inventory.slots[45];
         if (!offhand.empty()) blitSprite(c, sprites.sprite("hud/hotbar_offhand_left"), float(center - 91 - 29), H - 23, 29, 24);
-        for (int i = 0; i < 9; ++i) drawItem(c, inventory.slots[size_t(36 + i)], float(center - 90 + i * 20 + 2), H - 16 - 3);
-        if (!offhand.empty()) drawItem(c, offhand, float(center - 91 - 26), H - 16 - 3);
+        for (int i = 0; i < 9; ++i)
+            drawItem(c, inventory.slots[size_t(36 + i)], float(center - 90 + i * 20 + 2), H - 16 - 3, true, nullptr, 36 + i);
+        if (!offhand.empty()) drawItem(c, offhand, float(center - 91 - 26), H - 16 - 3, true, nullptr, 45);
         drawHotbarAttackIndicator(*this, c);  // gameplay_hud.cpp
     }
     // Status effect icons (Hud.extractEffects), top right: beneficial first row, the rest below.
@@ -428,34 +462,40 @@ void Ui::State::scrollChat(int lines) {
 }
 
 void Ui::State::addChat(const Text& message, int source) {
-    if (!chatVisible(source)) return;
-    nativeMods.chatReceived(message.plain());
-    chatMessages.insert(chatMessages.begin(), {message, guiTicks, u8(source)});
-    if (chatMessages.size() > 100) chatMessages.pop_back();
+    addChatMessage({message, guiTicks, {}, source == 0 ? kTagSystemSinglePlayer : kTagSystem, u8(source)});
+}
+
+void Ui::State::addChatMessage(ChatMessage m) {
+    if (!chatVisible(m.source)) return;
+    nativeMods.chatReceived(m.text.plain());
     const int maxWidth = int(std::floor(double(chatWidthPixels(settings.chatWidth)) / std::max(0.01, chatScale(*this))));
-    const std::vector<Text> lines = wrapChat(*this, message, maxWidth);
+    const std::vector<Text> lines = wrapChat(*this, m.text, maxWidth);
     for (size_t i = 0; i < lines.size(); ++i) {
         if (screen == Screen::Chat && chatScroll > 0) newMessageSinceScroll = true, scrollChat(1);
-        chatLines.insert(chatLines.begin(), ChatLine{lines[i], guiTicks, i == lines.size() - 1});
+        chatLines.insert(chatLines.begin(), ChatLine{lines[i], m.addedTick, i == lines.size() - 1, m.tag});
     }
     if (chatLines.size() > 100) chatLines.resize(100);
-    narrator::chat(*this, message, source);
+    narrator::chat(*this, m.text, m.source);
+    chatMessages.insert(chatMessages.begin(), std::move(m));
+    if (chatMessages.size() > 100) chatMessages.pop_back();
+}
+
+void Ui::State::refreshChatLines() {  // ChatComponent.refreshTrimmedMessages: the messages the Chat option shows
+    chatLines.clear();
+    const int maxWidth = int(std::floor(double(chatWidthPixels(settings.chatWidth)) / std::max(0.01, settings.chatScale)));
+    for (size_t i = chatMessages.size(); i-- > 0;) {
+        const ChatMessage& msg = chatMessages[i];
+        if (!chatVisible(msg.source)) continue;
+        const std::vector<Text> lines = wrapChat(*this, msg.text, maxWidth);
+        for (size_t k = 0; k < lines.size(); ++k)
+            chatLines.insert(chatLines.begin(), ChatLine{lines[k], msg.addedTick, k == lines.size() - 1, msg.tag});
+    }
+    if (chatLines.size() > 100) chatLines.resize(100);
 }
 
 void chatRescale(UiState& s) {  // rescaleChat: resetChatScroll + refreshTrimmedMessages
     s.chatScroll = 0, s.newMessageSinceScroll = false;
-    const std::vector<UiState::ChatMessage> all = std::move(s.chatMessages);
-    s.chatMessages.clear();
-    s.chatLines.clear();
-    for (size_t i = all.size(); i-- > 0;) {
-        if (!s.chatVisible(all[i].source)) continue;
-        const int maxWidth = int(std::floor(double(chatWidthPixels(s.settings.chatWidth)) / std::max(0.01, s.settings.chatScale)));
-        const std::vector<Text> lines = wrapChat(s, all[i].text, maxWidth);
-        s.chatMessages.insert(s.chatMessages.begin(), all[i]);
-        for (size_t k = 0; k < lines.size(); ++k)
-            s.chatLines.insert(s.chatLines.begin(), ChatLine{lines[k], all[i].addedTick, k == lines.size() - 1});
-    }
-    if (s.chatLines.size() > 100) s.chatLines.resize(100);
+    s.refreshChatLines();
 }
 
 void Ui::State::handleChatMessage(std::function<bool()> show) {
@@ -528,6 +568,8 @@ void Ui::State::drawChat(Canvas& c, bool focused) {
         if (alpha <= 1e-5f) continue;
         const int textTop = chatBottom - i * entryHeight - entryBottomToMessageY;
         font.draw(c, line.text, 0, float(textTop), withAlpha(0xFFFFFF, alpha * textOpacity), true);
+        if (line.tag.color)  // GuiMessageTag indicator
+            c.fill(-4, float(entryTop), -2, float(entryBottom), withAlpha(line.tag.color, alpha * textOpacity));
     }
     if (!chatQueue.empty())  // "[+n pending lines]": clicking it shows the next one (QUEUE_EXPAND_ID)
         font.draw(c, translatable("chat.queue", {Text(std::to_string(chatQueue.size()))}, lang()), 0, float(chatBottom + 9 - 8),

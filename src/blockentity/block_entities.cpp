@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <ctime>
 #include <functional>
 #include <shared_mutex>
@@ -194,6 +195,30 @@ const BlockEntityRenderer::Data* BlockEntityRenderer::dataAt(int x, int y, int z
         if (in.x == x && in.y == y && in.z == z)
             return in.data >= 0 && size_t(in.data) < it->second.data.size() ? &it->second.data[size_t(in.data)] : nullptr;
     return nullptr;
+}
+
+void BlockEntityRenderer::shownItems(std::vector<ShownItem>& out) const {
+    if (!itemDrawer_) return;
+    // The same poses the geometry would use: emitInstance with emitItem / the player heads recording instead.
+    std::vector<BeQuad> sink[3];
+    Emit e{};
+    for (int k = 0; k < 3; ++k) e.out[k] = &sink[k];
+    shownOut_ = &out;
+    for (const auto& [key, s] : sections_)
+        for (const Instance& in : s.list) {
+            if (in.data < 0 || size_t(in.data) >= s.data.size()) continue;
+            const Kind kind = in.block < defs_.size() ? defs_[in.block].kind : Kind::None;
+            if (kind != Kind::Campfire && kind != Kind::Shelf && kind != Kind::Vault && kind != Kind::Brushable &&
+                kind != Kind::Skull)
+                continue;
+            const Data& d = s.data[size_t(in.data)];
+            bool any = false;
+            for (const std::string& n : d.itemNbt) any |= !n.empty();
+            if (!any) continue;
+            e.origin[0] = in.x, e.origin[1] = in.y, e.origin[2] = in.z;
+            emitInstance(e, in, &d, partial_);
+        }
+    shownOut_ = nullptr;
 }
 
 BlockEntityRenderer::~BlockEntityRenderer() {
@@ -463,12 +488,16 @@ void BlockEntityRenderer::decode(const std::string& nbt, const BlockDef& d, Data
             std::string id;
             u8 t;
             std::string_view n;
+            const u8* start = r.p;
             while (r.field(t, n)) {
                 if (n == "Slot" && t == TagByte) slot = i8(r.u8v());
                 else if (n == "id" && t == TagString) id = std::string(r.str());
                 else r.skip(t);
             }
-            if (slot >= 0 && slot < 4 && !id.empty()) out.items[slot] = std::string(stripNs(id));
+            if (slot >= 0 && slot < 4 && !id.empty()) {
+                out.items[slot] = std::string(stripNs(id));
+                out.itemNbt[slot].assign(reinterpret_cast<const char*>(start), size_t(r.p - start));
+            }
         }
     };
     u8 t;
@@ -498,7 +527,24 @@ void BlockEntityRenderer::decode(const std::string& nbt, const BlockDef& d, Data
                 if (tex >= 0 && out.patterns.size() < 16) out.patterns.push_back({tex, u8(color)});
             }
         } else if (d.kind == Kind::Skull && n == "profile") {
-            // ResolvableProfile: a name, or {id: int[4], name, properties}. Default skins by UUID only.
+            // ResolvableProfile: a name, or {id: int[4], name, properties}. Default skins by UUID here; for an item
+            // drawer, a player_head stack carrying the profile ({id, components: {profile}}).
+            {
+                NbtReader peek = r;
+                const u8* start = peek.p;
+                peek.skip(t);
+                if (peek.ok) {
+                    std::string& s = out.itemNbt[0];
+                    auto name = [&](std::string_view v) {
+                        s.push_back(char(u8(v.size() >> 8))), s.push_back(char(u8(v.size()))), s.append(v);
+                    };
+                    s.push_back(char(TagString)), name("id"), name("minecraft:player_head");
+                    s.push_back(char(TagCompound)), name("components");
+                    s.push_back(char(t)), name("minecraft:profile");
+                    s.append(reinterpret_cast<const char*>(start), size_t(peek.p - start));
+                    s.push_back(char(TagEnd)), s.push_back(char(TagEnd));
+                }
+            }
             if (t == TagCompound) {
                 u8 t2;
                 std::string_view n2;
@@ -574,11 +620,17 @@ void BlockEntityRenderer::decode(const std::string& nbt, const BlockDef& d, Data
             u8 t2;
             std::string_view n2;
             while (r.field(t2, n2)) {
-                if (n2 == "display_item") out.items[0] = std::string(stripNs(readId(r, t2)));
+                if (n2 == "display_item") {
+                    const u8* start = r.p;
+                    out.items[0] = std::string(stripNs(readId(r, t2)));
+                    if (t2 == TagCompound) out.itemNbt[0].assign(reinterpret_cast<const char*>(start), size_t(r.p - start));
+                }
                 else r.skip(t2);
             }
         } else if (d.kind == Kind::Brushable && n == "item") {
+            const u8* start = r.p;
             out.items[0] = std::string(stripNs(readId(r, t)));
+            if (t == TagCompound) out.itemNbt[0].assign(reinterpret_cast<const char*>(start), size_t(r.p - start));
         } else if (d.kind == Kind::Brushable && n == "hit_direction" && (t == TagByte || t == TagInt)) {  // Direction.LEGACY_ID_CODEC
             out.hitDir = i8(std::clamp(t == TagByte ? int(i8(r.u8v())) : r.i32v(), -1, 5));
         } else if (d.kind == Kind::EndGateway && n == "Age" && t == TagLong) {
@@ -804,11 +856,10 @@ void BlockEntityRenderer::attach(net::Client& client) {
 void BlockEntityRenderer::applyNetwork() {
     std::vector<NetChunk> chunks;
     std::vector<NetBlockEntity> data;
-    std::vector<NetEvent> events;
     {
         std::lock_guard lock(netMutex_);
-        if (netChunks_.empty() && netData_.empty() && netEvents_.empty()) return;
-        chunks.swap(netChunks_), data.swap(netData_), events.swap(netEvents_);
+        if (netChunks_.empty() && netData_.empty()) return;
+        chunks.swap(netChunks_), data.swap(netData_);  // block events: applyBlockEvents (pistons need them too)
     }
     for (NetChunk& c : chunks) {
         std::vector<World::BlockEntityNbt> list;
@@ -817,7 +868,6 @@ void BlockEntityRenderer::applyNetwork() {
         world_.setChunkBlockEntities(c.cx, c.cz, std::move(list));
     }
     for (NetBlockEntity& e : data) world_.setBlockEntity({e.x, e.y, e.z, std::move(e.nbt)});
-    for (const NetEvent& e : events) handleEvent(e.x, e.y, e.z, e.type, e.param);
 }
 
 void BlockEntityRenderer::handleEvent(int x, int y, int z, int type, int param) {
@@ -1316,6 +1366,31 @@ void BlockEntityRenderer::pistonEvent(int px, int py, int pz, int type, int para
     if (!edits.empty()) blockSink_(edits);
 }
 
+void BlockEntityRenderer::pistonMovers(std::vector<Physics::Piston>& out) {
+    out.clear();
+    for (const Moving& m : moving_) {
+        if (m.gone >= 0 || !registry_.name(world_.block(m.x, m.y, m.z)).starts_with("minecraft:moving_piston")) continue;
+        Physics::Piston p;
+        p.x = m.x, p.y = m.y, p.z = m.z, p.moved = m.moved, p.dir = m.dir, p.extending = m.extending, p.source = m.source;
+        u64 bits;
+        std::memcpy(&bits, &m.start, sizeof(bits));
+        p.key = bits ^ (u64(u32(m.x)) * 0x9E3779B97F4A7C15ull) ^ (u64(u32(m.y)) << 20) ^ (u64(u32(m.z)) << 40);
+        const std::string facing = kDirNames[m.dir];
+        for (int s = 0; s < 2; ++s)
+            p.head[s] = registry_.idFor("minecraft:piston_head[facing=" + facing + ",short=" + (s ? "true" : "false") + ",type=normal]");
+        const std::string& moved = registry_.name(m.moved);
+        if (m.source && (moved.starts_with("minecraft:piston[") || moved.starts_with("minecraft:sticky_piston["))) {
+            const std::string own(registry_.property(m.moved, "facing"));
+            const bool sticky = moved.starts_with("minecraft:sticky_piston");
+            for (int s = 0; s < 2; ++s)
+                p.headMoved[s] = registry_.idFor("minecraft:piston_head[facing=" + own + ",short=" + (s ? "true" : "false") +
+                                                 ",type=" + (sticky ? "sticky" : "normal") + "]");
+            p.extendedBase = registry_.withProperty(m.moved, "extended", "true");
+        }
+        out.push_back(p);
+    }
+}
+
 float BlockEntityRenderer::movingProgress(const Moving& m, double now) const {
     return float(std::clamp((now - m.start) * tickRate_ / 2.0, 0.0, 1.0));  // 0.5 per tick
 }
@@ -1571,6 +1646,16 @@ void BlockEntityRenderer::emitBeam(Emit& e, const M34& base, int tex, float scal
 // An item as the item renderer shows it in a display context: block items as their block, others as a flat sprite.
 // context: 0 fixed, 1 on_shelf, 2 ground.
 void BlockEntityRenderer::emitItem(Emit& e, const std::string& item, const M34& m, u32 light, int context) const {
+    if (itemDrawer_) {  // the item drawer shows it (shownItems)
+        if (shownOut_ && shownNbt_ && !shownNbt_->empty()) {
+            ShownItem s;
+            s.nbt = shownNbt_, s.context = context, s.light = light, s.seed = shownSeed_;
+            std::copy(m.m, m.m + 12, s.m);
+            for (int a = 0; a < 3; ++a) s.origin[a] = int(e.origin[a]);
+            shownOut_->push_back(s);
+        }
+        return;
+    }
     auto ib = itemBlocks_.try_emplace(item, -1).first;
     if (ib->second < 0) {
         const std::string key = "minecraft:" + item;
@@ -1803,6 +1888,16 @@ void BlockEntityRenderer::emitInstance(Emit& e, const Instance& in, const Data* 
             } else {
                 root = mul(base, mul(translate(0.5f, 0, 0.5f), mul(rotY(-float(d.rotation) * 22.5f * kDeg), scale(-1, -1, 1))));
             }
+            if (type == 6 && itemDrawer_ && data && !data->itemNbt[0].empty()) {  // drawn with the profile's skin
+                if (shownOut_) {
+                    ShownItem s;
+                    s.nbt = &data->itemNbt[0], s.kind = 1, s.light = light;
+                    std::copy(root.m, root.m + 12, s.m);
+                    for (int k = 0; k < 3; ++k) s.origin[k] = int(e.origin[k]);
+                    shownOut_->push_back(s);
+                }
+                return;
+            }
             ent::PartPose* p = initPoses(mdl);
             if (!p) return;
             const float anim = a ? float(a->skullTicks) + (d.flag ? pt : 0.0f) : 0.0f;
@@ -1985,7 +2080,13 @@ void BlockEntityRenderer::emitInstance(Emit& e, const Instance& in, const Data* 
                     // Model bounds after the display transform are [-0.5, 0.5]: centre or bottom-align the item.
                     m = mul(m, translate(0, data->alignBottom ? 0.5f : 0.0f, 0));
                 }
+                shownNbt_ = &data->itemNbt[slot], shownSeed_ = slot;
+                if (itemDrawer_ && d.kind == Kind::Shelf) {  // ShelfRenderer: the model's bounding box is aligned there
+                    m = mul(m, translate(0, data->alignBottom ? -0.5f : 0.0f, 0));  // (undo the fixed alignment above)
+                }
                 emitItem(e, item, m, light, d.kind == Kind::Campfire ? 0 : 1);
+                if (shownOut_ && d.kind == Kind::Shelf && !shownOut_->empty()) shownOut_->back().shelfBottom = data->alignBottom;
+                shownNbt_ = nullptr;
             }
             break;
         }
@@ -2065,7 +2166,9 @@ void BlockEntityRenderer::emitInstance(Emit& e, const Instance& in, const Data* 
             if (a) {  // Mth.rotLerp
                 spin = a->oSpin + std::remainder(a->spin - a->oSpin, 360.0f) * pt;
             }
+            shownNbt_ = &data->itemNbt[0];
             emitItem(e, data->items[0], mul(base, mul(translate(0.5f, 0.4f, 0.5f), rotY(spin * kDeg))), light, 2);
+            shownNbt_ = nullptr;
             break;
         }
         case Kind::Brushable: {  // BrushableBlockRenderer: the item coming out of the brushed face
@@ -2084,7 +2187,9 @@ void BlockEntityRenderer::emitInstance(Emit& e, const Instance& in, const Data* 
             const bool eastWest = hit == 4 || hit == 5;
             const M34 m = mul(base, mul(mul(translate(t[0], 0.5f + t[1], t[2]), rotY(75.0f * kDeg)),
                                         mul(rotY(float((eastWest ? 90 : 0) + 11) * kDeg), scale(0.5f))));
+            shownNbt_ = &data->itemNbt[0];
             emitItem(e, data->items[0], m, sampleLight(in.x + stepX(hit), in.y + stepY(hit), in.z + stepZ(hit)), 0);
+            shownNbt_ = nullptr;
             break;
         }
         case Kind::Statue: {  // CopperGolemStatueBlockRenderer / CopperGolemStatueModel

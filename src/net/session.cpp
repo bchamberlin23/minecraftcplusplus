@@ -16,9 +16,10 @@ namespace net {
 namespace {
 constexpr double kTick = 0.05;
 constexpr double kPi = 3.14159265358979;
-constexpr int kChunksPerFrame = 8;       // like generated chunks in main.cpp
+constexpr int kChunksPerFrame = 32;      // cheap chunks can drain faster even at a low frame rate
 constexpr double kChunkBudgetMs = 4.0;   // ...but never more than this per frame
 constexpr int kReleaseUseItem = 6;
+constexpr int kStab = 8;  // ServerboundPlayerActionPacket.Action.STAB
 
 u64 posKey(int x, int y, int z) { return (u64(x & 0x3FFFFFF) << 38) | (u64(z & 0x3FFFFFF) << 12) | u64(y & 0xFFF); }
 void unpackPos(u64 k, int& x, int& y, int& z) {
@@ -39,19 +40,26 @@ Session::Session(Client& client, World& world, BlockRegistry& registry, const Ga
     verbose_ = verbose && *verbose == '1';
 }
 
-bool Session::join(double timeoutSeconds, PlayerStart& start, Dimension& dimension) {
-    const double deadline = nowSeconds() + timeoutSeconds;
+bool Session::join(double timeoutSeconds, PlayerStart& start, Dimension& dimension, bool* deferred, bool patient) {
+    double deadline = nowSeconds() + timeoutSeconds;
     bool joined = false;
     while (nowSeconds() < deadline) {
+        if (patient && !client_.inPlay()) deadline = nowSeconds() + timeoutSeconds;
+        if (deferred && !joined && client_.hasCommon()) {
+            *deferred = true;
+            return false;
+        }
         client_.poll(incoming_);
         for (Event& e : incoming_) {
             if (auto* d = std::get_if<DisconnectEvent>(&e)) {
                 LOG("net: disconnected: %s", d->reason.c_str());
+                disconnectReason_ = d->reason;
                 return false;
             }
             if (auto* j = std::get_if<JoinEvent>(&e); j && !joined) {
                 joined = true;
                 dimension_ = dimension = j->dimension;
+                levelStart_ = j->receivedAt;
                 entityId_ = j->entityId;
                 gameMode_ = j->gameMode;
                 instabuild_ = gameMode_ == 1;
@@ -83,6 +91,8 @@ bool Session::join(double timeoutSeconds, PlayerStart& start, Dimension& dimensi
 void Session::attach(Game& game, Terrain& terrain) {
     game_ = &game;
     terrain_ = &terrain;
+    if (dimension_.name != "minecraft:overworld") clearWorld();  // discard the disk preview on a Nether/End login
+    terrain_->setFarActive(dimension_.name == "minecraft:overworld");
     world_.setTrackChanges(false);  // nothing received from a server is saved
     game.onEdit = [this](const Game::EditAction& a) { onEdit(a); };
     game.player().noClip = gameMode_ == 3;
@@ -90,8 +100,11 @@ void Session::attach(Game& game, Terrain& terrain) {
     game.onPunch = [this] {
         if (gameMode_ != 3) client_.sendPlay("punch", Writer{});  // spectators do not attack
     };
-    game.onUseItem = [this](const RayHit*, bool afterEntity) {
-        if (!afterEntity) useItem(0);
+    game.onUseItem = [this](int hand) { useItem(hand); };
+    game.onStab = [this] {  // ServerboundPlayerActionPacket STAB (piercing weapons)
+        syncHotbar();
+        client_.sendPlayerAction(kStab, 0, 0, 0, 0, 0);
+        if (verbose_) LOG("net: player_action stab");
     };
     game.onReleaseUseItem = [this] {  // ServerPlayerGameMode.releaseUsingItem (bows; stops eating early)
         client_.sendPlayerAction(kReleaseUseItem, 0, 0, 0, 0, 0);
@@ -101,8 +114,25 @@ void Session::attach(Game& game, Terrain& terrain) {
 
 void Session::frame(double dt) {
     client_.poll(incoming_);
+    const bool changingLevel = std::any_of(incoming_.begin(), incoming_.end(),
+                                         [](const Event& e) { return std::holds_alternative<JoinEvent>(e); });
     for (Event& e : incoming_) pending_.push_back(std::move(e));
     incoming_.clear();
+    if (changingLevel) {
+        // A respawn/portal packet supersedes terrain updates for the previous level. Keep
+        // control events ordered (especially teleport acknowledgements), but do not spend
+        // frames applying/meshing chunks that clearWorld is about to discard.
+        const auto lastJoin = std::prev(std::find_if(pending_.rbegin(), pending_.rend(),
+            [](const Event& e) { return std::holds_alternative<JoinEvent>(e); }).base());
+        const auto keptEnd = std::remove_if(pending_.begin(), lastJoin, [](const Event& e) {
+            return std::holds_alternative<ChunkEvent>(e) || std::holds_alternative<LightEvent>(e) ||
+                   std::holds_alternative<BlocksEvent>(e) || std::holds_alternative<BiomesEvent>(e) ||
+                   std::holds_alternative<ForgetEvent>(e);
+        });
+        const size_t discarded = size_t(std::distance(keptEnd, lastJoin));
+        pending_.erase(keptEnd, lastJoin);
+        if (discarded) LOG("net: skipped %zu obsolete terrain events before dimension change", discarded);
+    }
     // Strictly in order; chunks and block updates (relight + remesh each; the server sends bursts of them while
     // it generates around a travelling player) are the costly events and share a per-frame budget.
     Timer budget;
@@ -134,6 +164,9 @@ void Session::frame(double dt) {
     if (loaded && haveServerPos_ && !loadedSent_) {
         client_.sendPlayerLoaded();
         loadedSent_ = true;
+        if (levelStart_ > 0)
+            LOG("net: player chunk ready in %.1f ms in %s", (nowSeconds() - levelStart_) * 1000,
+                dimension_.name.c_str());
     }
     syncHotbar();
     game_->instabuild = instabuild_;  // MultiPlayerGameMode: creative digging
@@ -168,6 +201,7 @@ void Session::handle(Event& e) {
         predictions_.clear();
         sentInput_ = 0, sentSprinting_ = false;  // a new server player (respawn): nothing pressed, not sprinting
         dimension_ = j->dimension;
+        levelStart_ = j->receivedAt;
         if (!j->respawn) entityId_ = j->entityId;
         gameMode_ = j->gameMode;
         game_->player().noClip = gameMode_ == 3;
@@ -194,6 +228,13 @@ void Session::handle(Event& e) {
     } else if (auto* d = std::get_if<DisconnectEvent>(&e)) {
         LOG("net: disconnected: %s", d->reason.c_str());
         disconnectReason_ = d->reason;
+    } else if (std::holds_alternative<ReconfigureEvent>(e)) {
+        // ClientPacketListener.handleConfigurationStart: the level goes; the login after the configuration brings
+        // the next one (and the player's position).
+        clearWorld();
+        predictions_.clear();
+        loadedSent_ = false;
+        LOG("net: reconfiguration: the level was cleared");
     }
 }
 
@@ -235,21 +276,16 @@ void Session::applyChunk(ChunkEvent& e) {
 }
 
 void Session::clearWorld() {
-    std::vector<std::pair<int, int>> all;
+    Timer timer;
+    // Invalidate jobs before clearing storage, so results built in the old dimension never appear
+    // in the new one. World keeps region objects alive for jobs already holding their pointers.
+    terrain_->clearChunks();
     {
-        std::shared_lock lock(world_.mutex());
-        for (const auto& r : world_.regions())
-            for (int idx = 0; idx < 1024; ++idx)
-                if (r->columns[idx].count) all.push_back({r->rx * 32 + (idx & 31), r->rz * 32 + (idx >> 5)});
+        std::unique_lock lock(world_.mutex());
+        world_.clearChunks();
     }
-    for (auto [cx, cz] : all) {
-        chunks_.erase(World::chunkKey(cx, cz));
-        {
-            std::unique_lock lock(world_.mutex());
-            world_.removeChunk(cx, cz);
-        }
-        terrain_->removeChunk(cx, cz);
-    }
+    chunks_.clear();
+    LOG("net: dimension cleared in %.2f ms", timer.ms());
 }
 
 void Session::forget(int cx, int cz, bool drop) {
@@ -497,7 +533,7 @@ void Session::onEdit(const Game::EditAction& a) {
         return;
     }
     const float cursor[3] = {float(a.hit[0] - a.x), float(a.hit[1] - a.y), float(a.hit[2] - a.z)};
-    client_.sendUseItemOn(a.x, a.y, a.z, a.face, cursor, sequence);
+    client_.sendUseItemOn(a.x, a.y, a.z, a.face, cursor, sequence, a.hand, a.inside);
 }
 
 void Session::useItem(int hand) {  // ServerboundUseItemPacket
@@ -510,12 +546,6 @@ void Session::useItem(int hand) {  // ServerboundUseItemPacket
     w.f32(float(p.pitch * 180.0 / kPi));
     client_.sendPlay("use_item", w);
     if (verbose_) LOG("net: use_item hand %d (sequence %d)", hand, sequence_);
-}
-
-void Session::useItemOn(int hand, const RayHit& hit) {  // ServerboundUseItemOnPacket, not predicted
-    const float cursor[3] = {float(hit.point[0] - hit.x), float(hit.point[1] - hit.y), float(hit.point[2] - hit.z)};
-    client_.sendUseItemOn(hit.x, hit.y, hit.z, hit.face, cursor, ++sequence_, hand);
-    if (verbose_) LOG("net: use_item_on hand %d %d %d %d face %d (sequence %d)", hand, hit.x, hit.y, hit.z, hit.face, sequence_);
 }
 
 void Session::report() const {

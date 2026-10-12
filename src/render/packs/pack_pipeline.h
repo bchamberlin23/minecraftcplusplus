@@ -65,6 +65,7 @@ struct Renderer::Packs : PackSink {
         u32 activeCount;
         bool haveWorld;
         u32 frameIndex;
+        float fade[4];  // the renderer's section cross-fade: clock, 1 / duration, frame index, unused
     };
     void record(ID3D12GraphicsCommandList* list, const FrameInput& in, PassContext& pc, ID3D12Resource* backbuffer,
                 D3D12_CPU_DESCRIPTOR_HANDLE backbufferRtv);
