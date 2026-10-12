@@ -71,11 +71,13 @@ struct Settings {
     bool videoSaved = false;   // options.txt had video settings
     std::string shaderPack;    // shader pack in use (render/packs; "" = the built-in pipeline)
     bool bobView = true;       // "View Bobbing" (options.txt bobView)
+    float fovEffectScale = 1;  // "FOV Effects" (options.txt fovEffectScale): how much speed / flight change the FOV
     int attackIndicator = 1;   // AttackIndicatorStatus id: 0 off, 1 crosshair, 2 hotbar (options.txt attackIndicator)
     std::array<int, kKeyCount> keys = defaultKeys();  // key_<name>
     bool fullscreen = false;
     // Controls / Mouse Settings
     bool toggleCrouch = false, toggleSprint = false, autoJump = false;
+    int sprintWindow = 7;  // ticks a double-tapped forward key starts sprinting within (0: off)
     bool invertMouseX = false, invertMouseY = false, discreteMouseScroll = false;
     double mouseWheelSensitivity = 1.0;  // 10^(-2..1) like Options.logMouse
     // Skin Customization (client_information): main hand 0 left 1 right, PlayerModelPart bits (cape 0 .. hat 6)
@@ -182,6 +184,10 @@ public:
     // Player inventory menu slot (5-8 armour, 36-44 hotbar, 45 offhand); nullptr when empty.
     const ItemStack* playerSlot(int slot) const;
     const Items& items() const;
+    // LivingEntity.getEquipmentSlotForItem / isEquippableInSlot for the player (the stack's equippable component, set
+    // by the gameplay layer): the EquipmentSlot id (0 main hand, 1 feet .. 4 head, 5 off hand...), allowed: the
+    // equippable allows players. Unset: armour by name.
+    void setEquipmentRule(std::function<int(const ItemStack& s, bool& allowed)> rule);
     int ticksFrozen() const;  // our DATA_TICKS_FROZEN (the third-person avatar shakes when fully frozen)
     // The local player's mob effects as the view shows them (fog, lightmap: view_effects.cpp), and the nausea / nether
     // portal warp of the world camera (GameRenderer.renderLevel).

@@ -99,7 +99,19 @@ const Template* TemplateManager::get(std::string_view rawId) const {
     }
     const SB& b = env_.b;
     if (NbtValue* s = root.find("size")) t->size = {listInt(s, 0), listInt(s, 1), listInt(s, 2)};
-    if (NbtValue* e = root.find("entities")) t->hasEntities = !e->items.empty();
+    if (NbtValue* e = root.find("entities")) {
+        t->hasEntities = !e->items.empty();
+        for (NbtValue& info : e->items) {
+            NbtValue* pos = info.find("pos");
+            NbtValue* blockPos = info.find("blockPos");
+            NbtValue* nbt = info.find("nbt");
+            if (!pos || pos->items.size() != 3 || !blockPos || !nbt) continue;
+            t->nbtStore.push_back(std::make_unique<NbtValue>(std::move(*nbt)));
+            t->entities.push_back({{pos->items[0].d, pos->items[1].d, pos->items[2].d},
+                                   {listInt(blockPos, 0), listInt(blockPos, 1), listInt(blockPos, 2)},
+                                   t->nbtStore.back().get()});
+        }
+    }
     std::vector<NbtValue*> palettes;
     if (NbtValue* ps = root.find("palettes"))
         for (NbtValue& p : ps->items) palettes.push_back(&p);
@@ -648,6 +660,66 @@ void placeLiquid(PlaceCtx& c, const BlockPos& p, u16 state, u16 fluidFrom) {
 
 }  // namespace
 
+// StructureTemplate.placeEntities: the entity tags at their transformed positions (and facing), without UUIDs. The
+// game also runs Mob.finalizeSpawn when the settings finalize entities; the tags are saved as they are here.
+static void placeEntities(PlaceCtx& c, const Template& t, const BlockPos& position, const PlaceSettings& s) {
+    auto transform = [&](double x, double y, double z, double out[3]) {  // StructureTemplate.transform(Vec3)
+        if (s.mirror == Mir::LeftRight) z = 1.0 - z;
+        else if (s.mirror == Mir::FrontBack) x = 1.0 - x;
+        const double px = s.pivot.x, pz = s.pivot.z;
+        switch (s.rotation) {
+        case Rot::CCW90: out[0] = px - pz + z, out[2] = px + pz + 1 - x; break;
+        case Rot::CW90: out[0] = px + pz + 1 - z, out[2] = pz - px + x; break;
+        case Rot::CW180: out[0] = px + px + 1 - x, out[2] = pz + pz + 1 - z; break;
+        default: out[0] = x, out[2] = z; break;
+        }
+        out[1] = y;
+    };
+    auto wrap = [](float a) {  // Mth.wrapDegrees
+        a = std::fmod(a, 360.0f);
+        if (a >= 180.0f) a -= 360.0f;
+        if (a < -180.0f) a += 360.0f;
+        return a;
+    };
+    for (const Template::EntityInfo& e : t.entities) {
+        const BlockPos bp = transformPos(e.blockPos, s.mirror, s.rotation, s.pivot).offset(position.x, position.y, position.z);
+        if (s.box && !s.box->isInside(bp)) continue;
+        NbtValue tag = *e.nbt;
+        double rel[3];
+        transform(e.pos[0], e.pos[1], e.pos[2], rel);
+        NbtValue pos = NbtValue::make(TagList);
+        pos.listType = TagDouble;
+        for (double v : {rel[0] + position.x, rel[1] + position.y, rel[2] + position.z}) {
+            NbtValue d = NbtValue::make(TagDouble);
+            d.d = v;
+            pos.items.push_back(d);
+        }
+        tag.set("Pos", std::move(pos));
+        tag.erase("UUID");
+        if (NbtValue* b = tag.find("block_pos"); b && b->type == TagIntArray && b->ints.size() == 3) b->ints = {bp.x, bp.y, bp.z};
+        // HangingEntity.rotate / mirror: the facing turns; any other entity's yaw (Entity.rotate + mirror - yRot).
+        static constexpr Direction k2D[4] = {South, West, North, East};  // Direction.LEGACY_ID_CODEC_2D
+        auto turn = [&](Direction d) {  // rotate, then mirror the rotated facing
+            if (!horizontal(d)) return d;
+            d = rotate(s.rotation, d);
+            return rotate(mirrorRotation(s.mirror, d), d);
+        };
+        if (NbtValue* f = tag.find("Facing"); f && f->i >= 0 && f->i < 6) {  // item frames (3D data value)
+            f->i = turn(Direction(f->i));
+        } else if (NbtValue* f2 = tag.find("facing"); f2 && f2->i >= 0 && f2->i < 4) {  // paintings (2D data value)
+            const Direction d = turn(k2D[f2->i]);
+            for (int k = 0; k < 4; ++k)
+                if (k2D[k] == d) f2->i = k;
+        } else if (NbtValue* r = tag.find("Rotation"); r && r->items.size() == 2) {
+            const float yaw = float(r->items[0].d), a = wrap(yaw);
+            const float turned = a + (s.rotation == Rot::CW180 ? 180.0f : s.rotation == Rot::CCW90 ? 270.0f : s.rotation == Rot::CW90 ? 90.0f : 0.0f);
+            const float mirrored = s.mirror == Mir::LeftRight ? -a : s.mirror == Mir::FrontBack ? 180.0f - a : a;
+            r->items[0].d = turned + mirrored - yaw;
+        }
+        c.addEntity(std::move(tag));
+    }
+}
+
 bool placeTemplate(PlaceCtx& c, const Template& t, const BlockPos& position, const BlockPos& ref, const PlaceSettings& s,
                    RandomSource& random) {
     if (t.palettes.empty()) return false;
@@ -684,7 +756,23 @@ bool placeTemplate(PlaceCtx& c, const Template& t, const BlockPos& position, con
         const u16 state = b.rotate(b.mirror(info.state, s.mirror), s.rotation);
         if (!c.level.setBlock(p, state)) continue;
         placed.push_back(p);
-        if (info.hasNbt && isRandomizableContainer(b.blockName(state))) random.nextLong();  // LootTableSeed
+        if (info.hasNbt) {
+            // The block entity loads the template's data; a RandomizableContainer's gets a LootTableSeed.
+            const std::string name(b.blockName(state));
+            const bool container = isRandomizableContainer(name);
+            const i64 seed = container ? random.nextLong() : 0;
+            if (NbtValue* be = info.nbt ? c.level.blockEntity(p, blockEntityId(name)) : nullptr) {
+                for (size_t k = 0; k < info.nbt->names.size(); ++k) {
+                    const std::string& key = info.nbt->names[k];
+                    if (key != "x" && key != "y" && key != "z" && key != "id") be->set(key, info.nbt->items[k]);
+                }
+                if (container) {
+                    NbtValue s = NbtValue::make(TagLong);
+                    s.i = seed;
+                    be->set("LootTableSeed", std::move(s));
+                }
+            }
+        }
         if (s.applyWaterlogging) {
             if (b.fluidSource(state)) {
                 locked.push_back(p);
@@ -756,6 +844,7 @@ bool placeTemplate(PlaceCtx& c, const Template& t, const BlockPos& position, con
             if (ns != st) c.set(p, ns);
         }
     }
+    if (!s.ignoreEntities) placeEntities(c, t, position, s);
     return true;
 }
 
@@ -878,6 +967,56 @@ u16 wallShape(PlaceCtx& c, u16 state, u16 top, const bool conn[4]) {
 
 }  // namespace
 
+namespace {
+
+bool speleothemWithDirection(const SB& b, u16 s, Direction tip) {
+    return b.tag(s, "minecraft:speleothems") && dirFromName(b.prop(s, "vertical_direction")) == tip;
+}
+
+// SpeleothemBlock.updateShape (pointed dripstone and its kin): a tip without support breaks on a scheduled tick.
+u16 speleothemShape(PlaceCtx& c, u16 s, const BlockPos& p, Direction toNeighbour) {
+    const SB& b = c.b;
+    if (toNeighbour != Up && toNeighbour != Down) return s;
+    const Direction tip = dirFromName(b.prop(s, "vertical_direction")).value_or(Up);
+    if (tip == Down && c.level.hasScheduledTick(p, s)) return s;
+    const Direction base = opposite(tip);
+    if (toNeighbour == base) {
+        const BlockPos behind = relative(p, base);
+        const u16 bs = c.level.block(behind);
+        if (!(b.f.sturdy(bs, tip) || (speleothemWithDirection(b, bs, tip) && b.f.blockOf(bs) == b.f.blockOf(s)))) {
+            c.level.scheduleTick(p, s, tip == Down ? 2 : 1);
+            return s;
+        }
+    }
+    const bool mergeOpposingTips = b.prop(s, "thickness") == "tip_merge";
+    const u16 front = c.level.block(relative(p, tip));
+    const char* thickness;
+    if (speleothemWithDirection(b, front, base) && b.f.blockOf(front) == b.f.blockOf(s))
+        thickness = !mergeOpposingTips && b.prop(front, "thickness") != "tip_merge" ? "tip" : "tip_merge";
+    else if (!speleothemWithDirection(b, front, tip))
+        thickness = "tip";
+    else if (const std::string_view ft = b.prop(front, "thickness"); ft != "tip" && ft != "tip_merge")
+        thickness = speleothemWithDirection(b, c.level.block(relative(p, base)), tip) ? "middle" : "base";
+    else
+        thickness = "frustum";
+    return b.with(s, "thickness", thickness);
+}
+
+// PotentSulfurBlock.validBlockState
+u16 potentSulfurState(PlaceCtx& c, u16 s, const BlockPos& p) {
+    const SB& b = c.b;
+    const u16 above = c.level.block(p.offset(0, 1, 0));
+    if (!(b.waterFluid(above) && b.fluidSource(above))) return b.with(s, "potent_sulfur_state", "dry");
+    const u16 below = c.level.block(p.offset(0, -1, 0));
+    const bool sourceIfFluid = b.fluidEmpty(below) || b.fluidSource(below);
+    if (b.tag(below, "minecraft:causes_continuous_geyser_eruptions") && sourceIfFluid) return b.with(s, "potent_sulfur_state", "continuous");
+    if (b.tag(below, "minecraft:causes_periodic_geyser_eruptions") && sourceIfFluid)
+        return b.prop(s, "potent_sulfur_state") == "erupting" ? s : b.with(s, "potent_sulfur_state", "dormant");
+    return b.with(s, "potent_sulfur_state", "wet");
+}
+
+}  // namespace
+
 u16 updateShape(PlaceCtx& c, u16 state, const BlockPos& pos, Direction dir, const BlockPos& npos, u16 neighbour) {
     const SB& b = c.b;
     if (b.isAir(state)) return state;
@@ -911,6 +1050,8 @@ u16 updateShape(PlaceCtx& c, u16 state, const BlockPos& pos, Direction dir, cons
     if (dir == Up && b.has(state, "snowy") && (b.is(state, "minecraft:grass_block") || b.is(state, "minecraft:podzol") ||
                                                b.is(state, "minecraft:mycelium")))
         return b.with(state, "snowy", b.tag(neighbour, "minecraft:snow"));
+    if (b.tag(state, "minecraft:speleothems")) return speleothemShape(c, state, pos, dir);
+    if (b.is(state, "minecraft:potent_sulfur")) return potentSulfurState(c, state, pos);
     if (horizontal(dir)) {
         const char* side = kDirNames[dir];
         if (b.tag(state, "minecraft:fences")) {

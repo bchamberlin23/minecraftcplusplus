@@ -128,6 +128,7 @@ struct Ui::State {
     Settings settings;
     Canvas* canvas = nullptr;
     std::function<std::string(int, int, int)> biomeLookup;
+    std::function<int(const ItemStack&, bool& allowed)> equipmentRule;  // Ui::setEquipmentRule
     int lastGuiW = 0, lastGuiH = 0;
     int guiW() const { return int((window->width() + u32(guiScale()) - 1) / u32(guiScale())); }
     int guiH() const { return int((window->height() + u32(guiScale()) - 1) / u32(guiScale())); }
@@ -180,7 +181,7 @@ struct Ui::State {
     Menu inventory;                   // 46 slots, container 0
     std::unique_ptr<Menu> container;  // open server container
     ItemStack carried;
-    int hotbarSynced[9] = {-2, -2, -2, -2, -2, -2, -2, -2, -2};
+    int hotbarSynced[10] = {-2, -2, -2, -2, -2, -2, -2, -2, -2, -2};  // hotbar items, then the off hand
 
     // HUD
     bool hudHidden = false, debug = false;

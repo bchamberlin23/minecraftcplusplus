@@ -2235,7 +2235,7 @@ public:
         if (!b.sameBlock(level.block(below(origin)), validBase_)) return false;
         int totalHeight = random.nextInt(10) + 4;  // Mth.nextInt(random, 4, 13)
         if (random.nextInt(12) == 0) totalHeight *= 2;
-        if (!planted_ && origin.y + totalHeight + 1 >= level.maxY() - level.minY()) return false;  // getGenDepth()
+        if (!planted_ && origin.y + totalHeight + 1 >= level.genDepth()) return false;
         const bool isHuge = !planted_ && random.nextFloat() < 0.06f;
         level.setBlock(origin, b.air);
         placeStem(level, random, origin, totalHeight, isHuge);

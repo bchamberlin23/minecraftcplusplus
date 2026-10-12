@@ -11,6 +11,8 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
+#include <regex>
 #include <unordered_map>
 
 class AssetPack {
@@ -40,6 +42,13 @@ public:
     void children(std::string_view root, std::vector<std::string>& out) const;
     // The file on disk for folder and index packs (empty for zips).
     fs::path diskPath(std::string_view path) const;
+    // pack.mcmeta "filter" (ResourceFilterSection): whether it hides `path` ("assets/<ns>/..." or "data/<ns>/...") in
+    // the packs below this one.
+    bool filters(std::string_view path) const;
+    bool hasFilter() const { return !filter_.empty(); }
+    // The game's pack formats (version.json pack_version), for pack.mcmeta "overlays": resource (assets/) and data
+    // (data/) formats as major, minor. Set once the jar is known (AssetSource::addVanilla).
+    static void setFormats(int resourceMajor, int resourceMinor, int dataMajor, int dataMinor);
 
 private:
     struct File {
@@ -49,12 +58,17 @@ private:
     };
     const File* lookup(std::string_view path) const;
     void finish();  // sorts files_ and builds the index
+    void applyMeta();  // pack.mcmeta: overlay directories over the root, the filter
 
     std::string id_;
     fs::path path_;
     std::shared_ptr<ZipArchive> zip_;
     std::vector<File> files_;  // sorted by path
     std::unordered_map<std::string_view, u32> index_;
+    struct FilterEntry {  // ResourceFilterSection block entry: a missing pattern matches everything
+        std::optional<std::regex> ns, path;
+    };
+    std::vector<FilterEntry> filter_;
 };
 
 class AssetSource {
@@ -67,7 +81,7 @@ public:
     const std::shared_ptr<AssetPack>& packPtr(size_t i) const { return packs_[i]; }  // to share with another stack
     bool empty() const { return packs_.empty(); }
 
-    bool read(std::string_view path, std::vector<u8>& out) const;  // topmost pack with the file
+    bool read(std::string_view path, std::vector<u8>& out) const;  // topmost pack with the file (filters apply)
     bool exists(std::string_view path) const { return find(path) >= 0; }
     int find(std::string_view path) const;                          // topmost pack index, -1 if none
     // Every pack's files under `prefix` ending with `suffix`, unique and sorted.
@@ -87,5 +101,6 @@ public:
     static void addVanilla(AssetSource& src, const fs::path& jar, bool clientAssets);
 
 private:
+    bool visible(size_t pack, std::string_view path) const;  // not filtered out by a pack above it
     std::vector<std::shared_ptr<AssetPack>> packs_;
 };

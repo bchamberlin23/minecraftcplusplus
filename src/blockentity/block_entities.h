@@ -18,6 +18,7 @@
 // bells, enchanting books, ...) are rebuilt on the CPU each frame. World edits arrive through
 // World::takeBlockChanges; light is re-sampled round-robin.
 #include "core/common.h"
+#include "game/player.h"
 #include "entity/entity_assets.h"
 #include "render/range_allocator.h"
 #include "render/renderer.h"
@@ -88,6 +89,8 @@ public:
     // client too; the server sends the final blocks later). Called from applyBlockEvents.
     using BlockSink = std::function<void(const std::vector<net::BlockChange>&)>;
     void setBlockSink(BlockSink sink) { blockSink_ = std::move(sink); }
+    // The moving blocks for the player's physics (MovingPistonBlock collisions, PistonMovingBlockEntity pushes).
+    void pistonMovers(std::vector<Physics::Piston>& out);
 
     bool create(Renderer& renderer) override;
     void draw(const PassContext& ctx) override;

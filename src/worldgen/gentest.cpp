@@ -80,7 +80,7 @@ struct SavedChunk {
 // each chunk once, with its neighbours at terrain status or later) and compares the result.
 int runDecorationTest(BlockRegistry& registry, wg::ChunkGenerator& gen, i64 seed, const std::vector<SavedChunk>& saved) {
     Timer t;
-    wg::FeatureSystem features(gen.noise(), registry, gen.biomes(), gen.possibleBiomes());
+    wg::FeatureSystem features(gen, registry);
     LOG("gentest: feature system ready in %.1f ms", t.ms());
     {
         std::string order;
@@ -178,15 +178,38 @@ int runDecorationTest(BlockRegistry& registry, wg::ChunkGenerator& gen, i64 seed
 
 }  // namespace
 
-int runGenTest(BlockRegistry& registry, const fs::path& jar, const fs::path& regionDir, i64 seed, int maxChunks) {
-    if (const char* mode = std::getenv("GENTEST_STRUCTURES")) return runStructureTest(registry, jar, regionDir, seed, mode);
+GenTestTarget genTestTarget(const wg::DataPack& data, const fs::path& dir, i64 seed) {
+    GenTestTarget t;
+    t.seed = seed;
+    t.regionDir = dir;
+    wg::WorldGenSettings settings;
+    const char* dim = std::getenv("GENTEST_DIM");
+    const std::string name = dim ? dim : "minecraft:overworld";
+    if (fs::exists(dir / "level.dat") && wg::readWorldGenSettings(dir, data, settings)) {
+        t.seed = settings.seed;
+        t.structures = settings.generateStructures;
+        const size_t colon = name.find(':');
+        t.regionDir = dir / "dimensions" / name.substr(0, colon) / name.substr(colon + 1) / "region";
+    } else {
+        settings = wg::defaultWorldGenSettings(data, seed);
+    }
+    if (const wg::DimensionSpec* d = settings.find(name)) t.dim = *d;
+    LOG("gentest: %s of %s, seed %lld, generator %s", name.c_str(), dir.string().c_str(), (long long)t.seed, t.dim.generator.dump().c_str());
+    return t;
+}
+
+int runGenTest(BlockRegistry& registry, const fs::path& jar, const fs::path& dir, i64 seedArg, int maxChunks) {
+    if (const char* mode = std::getenv("GENTEST_STRUCTURES")) return runStructureTest(registry, jar, dir, seedArg, mode);
     wg::DataPack data;
     if (!data.open(jar)) {
         LOG("gentest: cannot read game data");
         return 1;
     }
+    const GenTestTarget target = genTestTarget(data, dir, seedArg);
+    const fs::path& regionDir = target.regionDir;
+    const i64 seed = target.seed;
     Timer t;
-    wg::ChunkGenerator gen(data, registry, seed);
+    wg::ChunkGenerator gen(data, registry, seed, target.dim);
     if (!gen.ok()) return 1;
     LOG("gentest: generator ready in %.1f ms (seed %lld)", t.ms(), (long long)seed);
     if (const char* far = std::getenv("GENTEST_FAR")) {  // time far-terrain regions single-threaded

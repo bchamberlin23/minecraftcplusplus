@@ -22,14 +22,16 @@ bool DataPack::open(const fs::path& jar) {
     std::vector<u8> bytes;
     for (const std::string& ns : src.namespaces("data")) {
         const std::string root = "data/" + ns + "/";
-        for (const char* kind : {"worldgen/", "tags/"}) {
+        for (const char* kind : {"worldgen/", "tags/", "dimension_type/", "dimension/"}) {
             for (const std::string& file : src.list(root + kind, ".json")) {
                 std::string_view rel = file;
                 rel.remove_prefix(root.size());
                 rel.remove_suffix(5);
                 // "worldgen/<registry>/<path>", "tags/<kind>/<path>" (kind "block" or "worldgen/<registry>")
                 const size_t typeEnd = rel.find('/');
-                size_t regEnd = rel.find('/', typeEnd + 1);
+                // dimension_type/<path>, dimension/<path>: no registry folder level
+                const bool flat = rel.starts_with("dimension");
+                size_t regEnd = flat ? typeEnd : rel.find('/', typeEnd + 1);
                 if (regEnd == std::string_view::npos) continue;
                 if (rel.starts_with("tags/worldgen/")) {
                     regEnd = rel.find('/', regEnd + 1);
@@ -65,6 +67,23 @@ bool DataPack::open(const fs::path& jar) {
 
 bool DataPack::readFile(std::string_view path, std::vector<u8>& out) const {
     return AssetSource::data(jar_).read(path, out);
+}
+
+const nlohmann::json* DataPack::file(std::string_view folder, std::string_view id) const {
+    auto it = files_.find(std::string(folder) + "/" + normalize(id));
+    return it == files_.end() ? nullptr : &it->second;
+}
+
+std::vector<std::string> DataPack::fileIds(std::string_view folder) const {
+    const std::string prefix = std::string(folder) + "/";
+    std::vector<std::string> out;
+    for (const auto& [key, j] : files_)
+        if (key.starts_with(prefix)) {
+            const std::string rest = key.substr(prefix.size());
+            out.push_back(rest.find(':') == std::string::npos ? "minecraft:" + rest : rest);
+        }
+    std::sort(out.begin(), out.end());
+    return out;
 }
 
 const nlohmann::json* DataPack::worldgen(std::string_view registry, std::string_view id) const {

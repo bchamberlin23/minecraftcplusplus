@@ -40,6 +40,7 @@ VSOut DetailVS(uint vid : SV_VertexID) {
 }
 
 float4 DetailPS(VSOut i) : SV_Target {
+    if (fadedOut(i.pos.xy)) discard;
     float4 c = shadePixel(i);
     clip(c.a - 0.5);
     return float4(c.rgb, 1);
@@ -92,6 +93,7 @@ struct GbufTargets {
 };
 
 GbufTargets DetailGbufPS(DetailGbufVSOut i) {
+    if (fadedOut(i.pos.xy)) discard;
     float4 c = sampleBlock(i.uvl);
     clip(c.a - 0.5);
     float3 n = normalize(cross(ddy(i.rel), ddx(i.rel)));

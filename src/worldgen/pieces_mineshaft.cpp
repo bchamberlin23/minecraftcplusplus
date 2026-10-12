@@ -176,7 +176,26 @@ public:
         if (chunkBB.isInside(pos) && level.get(pos).isAir() && !level.get(pos.offset(0, -1, 0)).isAir()) {
             const St state = B("minecraft:rail").with("shape", random.nextBoolean() ? "north_south" : "east_west");
             placeBlock(level, state, x, y, z, chunkBB);
-            random.nextLong();  // MinecartChest.setLootTable seed
+            // MinecartChest at the block's centre with its loot table.
+            NbtValue cart = NbtValue::make(TagCompound);
+            NbtValue id = NbtValue::make(TagString);
+            id.s = "minecraft:chest_minecart";
+            cart.set("id", std::move(id));
+            NbtValue at = NbtValue::make(TagList);
+            at.listType = TagDouble;
+            for (int v : {pos.x, pos.y, pos.z}) {
+                NbtValue d = NbtValue::make(TagDouble);
+                d.d = v + 0.5;
+                at.items.push_back(d);
+            }
+            cart.set("Pos", std::move(at));
+            NbtValue table = NbtValue::make(TagString);
+            table.s = "minecraft:chests/abandoned_mineshaft";
+            cart.set("LootTable", std::move(table));
+            NbtValue seed = NbtValue::make(TagLong);
+            seed.i = random.nextLong();
+            cart.set("LootTableSeed", std::move(seed));
+            level.addEntity(std::move(cart));
             return true;
         }
         return false;
@@ -210,6 +229,7 @@ public:
                 if (chunkBB.isInside(pos) && isInterior(level, 1, 0, newZ, chunkBB)) {
                     hasPlacedSpider = true;
                     level.set(pos, B("minecraft:spawner"));
+                    if (level.get(pos).is("minecraft:spawner")) level.setSpawner(pos, "minecraft:cave_spider");
                 }
             }
         }

@@ -1,5 +1,6 @@
 #pragma once
 #include "core/common.h"
+#include "world/nbt_dom.h"
 
 #include <array>
 #include <deque>
@@ -14,6 +15,7 @@ struct PlayerStart {
     double x = 0.5, y = 100, z = 0.5;
     float yaw = 0, pitch = 0;
     bool found = false;
+    std::string dimension = "minecraft:overworld";  // where the player is (the viewer shows that dimension)
 };
 
 struct LoadStats {
@@ -87,9 +89,10 @@ public:
     // World seed: data/minecraft/world_gen_settings.dat (26.x) or level.dat WorldGenSettings (older).
     static bool readSeed(const fs::path& saveDir, i64& seed);
 
-    // Loads every fully generated chunk within `radius` chunks of the centre (radius <= 0: all).
+    // Loads every fully generated chunk within `radius` chunks of the centre (radius <= 0: all), of one dimension
+    // (its region folder: world/region_codec.h).
     bool load(const fs::path& saveDir, BlockRegistry& registry, int centerCx, int centerCz, int radius,
-              LoadStats& stats);
+              LoadStats& stats, const std::string& dimension = "minecraft:overworld");
 
     std::shared_mutex& mutex() const { return mutex_; }
 
@@ -132,6 +135,9 @@ public:
     // the build range).
     void replaceChunk(int cx, int cz, int firstSy, const std::vector<PackedSection>& sections);
     void removeChunk(int cx, int cz);
+    // Whole dimension unload, holding mutex() exclusively. Region objects/indices stay stable
+    // for background terrain jobs; all chunk data and block entities are discarded at once.
+    void clearChunks();
     // Sets one light layer of a section of a loaded column (data: 2048 bytes, or null for `ref`).
     // Returns true if the stored values changed.
     bool setLight(int cx, int sy, int cz, bool sky, u32 ref, const u8* data);
@@ -139,7 +145,15 @@ public:
     // Chunks changed since the last save, as (cx << 32 | cz) keys.
     const std::unordered_set<u64>& dirtyChunks() const { return dirtyChunks_; }
     void clearDirtyChunks() { dirtyChunks_.clear(); }
+    void clearDirtyChunk(int cx, int cz) { dirtyChunks_.erase(chunkKey(cx, cz)); }
     void markChunkDirty(int cx, int cz) { dirtyChunks_.insert(chunkKey(cx, cz)); }  // saved like an edited chunk
+    // What a chunk generated this session saves besides its blocks (a compound with block_entities, entities,
+    // block_ticks, fluid_ticks and PostProcessing, in the game's chunk format); WorldSaver::newChunk writes it.
+    void setGenExtras(int cx, int cz, NbtValue extras) { genExtras_[chunkKey(cx, cz)] = std::move(extras); }
+    const NbtValue* genExtras(int cx, int cz) const {
+        const auto it = genExtras_.find(chunkKey(cx, cz));
+        return it == genExtras_.end() ? nullptr : &it->second;
+    }
     // Generated chunks regenerate identically from the seed, so lighting them is not a change.
     void setTrackChanges(bool track) { trackChanges_ = track; }
     static u64 chunkKey(int cx, int cz) { return (u64(u32(cx)) << 32) | u32(cz); }
@@ -186,6 +200,7 @@ private:
     int minSy_ = 0, maxSy_ = 0;
     mutable std::shared_mutex mutex_;
     std::unordered_set<u64> dirtyChunks_;
+    std::unordered_map<u64, NbtValue> genExtras_;
     bool trackChanges_ = true;
     std::unordered_map<u64, std::vector<BlockEntityNbt>> blockEntities_;
     std::vector<u64> blockChanges_;

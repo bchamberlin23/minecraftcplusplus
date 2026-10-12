@@ -101,6 +101,10 @@ Backend* Upscalers::backend(UpscalerKind k) const {
     }
 }
 
+::Upscaler* Upscalers::rayReconstruction() const {
+    return settings_.upscaler == UpscalerKind::Dlss && caps_.rayReconstruction ? dlss_->rayReconstruction() : nullptr;
+}
+
 Backend* Upscalers::backend(FrameGenKind k) const {
     switch (k) {
         case FrameGenKind::Dlss: return dlss_.get();
@@ -261,7 +265,8 @@ FrameGenKind Upscalers::effectiveFrameGen() const {
 // ---- settings ----------------------------------------------------------------------------------------------
 
 VideoSettings Upscalers::apply(VideoSettings s) {
-    s.shaders = std::min<u8>(s.shaders, 4);
+    s.shaders = std::min<u8>(s.shaders, u8(ShaderPreset::PathTraced));
+    if (s.shaders == u8(ShaderPreset::PathTraced) && !r.pathTracingSupported()) s.shaders = u8(ShaderPreset::Ultra);
     if (!caps_.upscaler[int(s.upscaler)]) s.upscaler = UpscalerKind::Taa;
     {  // quality the vendor offers (nearest otherwise)
         const auto modes = qualityModes(s.upscaler);
@@ -283,6 +288,12 @@ VideoSettings Upscalers::apply(VideoSettings s) {
     // Shader preset, then the render scale and sharpening on top of it.
     const ShaderPreset preset = ShaderPreset(s.shaders);
     if (preset != r.shaderPreset()) r.setShaderPreset(preset);
+    s.pathTracing = std::min<u8>(s.pathTracing, 3);
+    if (preset == ShaderPreset::PathTraced) {  // bounces, samples and radius of the path tracing quality
+        ShaderSettings ss = r.shaderSettings(), q = ss;
+        q.setPathTraceQuality(PathTraceQuality(s.pathTracing));
+        if (q.ptBounces != ss.ptBounces || q.ptSamples != ss.ptSamples || q.ptRadius != ss.ptRadius) r.setShaderSettings(q);
+    }
     if (preset != ShaderPreset::Off) {
         ShaderSettings ss = r.shaderSettings();
         const float scale = s.upscaler == UpscalerKind::Taa && s.renderScaleOverride > 0 ? s.renderScaleOverride
@@ -332,6 +343,9 @@ std::string Upscalers::status() const {
                           caps_.version[int(k)].empty() ? "" : " ", caps_.version[int(k)].c_str(), r.renderWidth(),
                           r.renderHeight(), r.width(), r.height());
     if (!on) n = std::snprintf(buf, sizeof(buf), "shaders off: no upscaling | %ux%u", r.width(), r.height());
+    if (on && r.shaderPreset() == ShaderPreset::PathTraced)
+        n += std::snprintf(buf + n, sizeof(buf) - n, " | path traced %s, %s", VideoSettings::pathTracingKey(settings_.pathTracing),
+                           rayReconstruction() ? "DLSS Ray Reconstruction" : "built-in denoiser");
     if (fg_)
         n += std::snprintf(buf + n, sizeof(buf) - n, " | %s %ux", frameGenName(effectiveFrameGen()), settings_.frameGenMultiplier);
     for (Backend* b : {dlss_.get(), fsr_.get(), xess_.get()})

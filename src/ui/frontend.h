@@ -4,6 +4,7 @@
 #include "net/status.h"
 #include "platform/launch.h"
 #include "ui/ui_state.h"
+#include "world/nbt_dom.h"
 
 #include <memory>
 #include <unordered_map>
@@ -21,12 +22,16 @@ struct WorldEntry {
     i64 lastPlayed = -1;  // ms since 1970
     int gameMode = 0, dataVersion = 0;
     bool hardcore = false, cheats = false, locked = false;
+    bool broken = false;  // level.dat unreadable (LevelSummary.CorruptedLevelSummary): Play recovers it
     Image icon;  // icon.png (64x64), empty when the world has none
 };
 bool readWorld(const fs::path& dir, WorldEntry& out);       // level.dat summary; false: not a world
 std::vector<WorldEntry> scanWorlds(const fs::path& saves);  // most recently played first
 bool worldLocked(const fs::path& dir);                      // session.lock held by a running game / server
 std::string worldFolderFor(const fs::path& saves, const std::string& name);  // FileUtil.findAvailableName
+// Gzipped NBT files of a save (level.dat...); writing keeps the old file as <name>_old like the game.
+bool readNbtGz(const fs::path& p, NbtValue& root, std::string* rootName = nullptr);
+bool writeNbtGz(const fs::path& p, const NbtValue& root, std::string_view rootName);
 
 // --- servers.cpp --------------------------------------------------------------------------------------------------
 
@@ -115,6 +120,7 @@ struct FrontEndState {
     float progress = 0;
     double loadingStart = 0;
     bool loadingCancel = false;
+    std::function<void()> loadingCancelFn;  // Cancel on the loading screen when it is not a starting instance
     Screen failBack = Screen::Title;
     std::function<void()> failAction;  // instead of returning to failBack (a transfer: back to the server list)
     Text failTitle;
@@ -160,9 +166,13 @@ void worldsInput(State& s, const Window::InputEvent& e);
 void openWorlds(State& s);  // rescans the saves
 void buildCreateWorld(State& s);
 void drawCreateWorld(State& s, Canvas& c);
-void openCreateWorld(State& s);
+void openCreateWorld(State& s);                         // world_create.cpp (tabs, Superflat, Single Biome, rules...)
+void createWorldInput(State& s, const Window::InputEvent& e);
+bool recreateWorld(State& s, const fs::path& dir);      // Re-Create: Create New World filled in from a world
 void buildEditWorld(State& s);
 void drawEditWorld(State& s, Canvas& c);
+void editWorldInput(State& s, const Window::InputEvent& e);
+void worldsFrame(State& s);  // Edit World's backups and optimizations running in the background
 void buildServers(State& s);
 void drawServers(State& s, Canvas& c);
 void serversInput(State& s, const Window::InputEvent& e);
