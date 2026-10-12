@@ -776,6 +776,14 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
         e.lerpHeadYaw = ev.f[2];
         if (e.category == Category::Block) e.blockState = ev.b;
         e.direction = ev.b;
+        if (e.info && (e.info->name == "minecraft:item_frame" || e.info->name == "minecraft:glow_item_frame")) {
+            // ItemFrame.recreateFromPacket: the packet holds the block position; the frame sits at the block's centre
+            // moved 0.46875 back against the wall it hangs on (createBoundingBox).
+            static constexpr int kDir[6][3] = {{0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}};
+            const int d = std::clamp(ev.b, 0, 5);
+            for (int a = 0; a < 3; ++a)
+                e.pos[a] = e.prevPos[a] = std::floor(ev.d[a]) + 0.5 - kDir[d][a] * 0.46875;
+        }
         e.display.is = size_t(ev.a) < dataIds_.size() && dataIds_[size_t(ev.a)].dTranslation >= 0;
         if (e.category == Category::Player) {
             auto it = players_.find(uuidKey(ev.uuid));

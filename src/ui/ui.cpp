@@ -566,8 +566,11 @@ bool Ui::init(const Init& in) {
     return true;
 }
 
+static void resetConnection(Ui::State& s);
+
 void Ui::registerHandlers(net::Client& client) {
     State* s = s_.get();
+    resetConnection(*s);
     client.setInformation(clientInformation(s->settings));  // the login sends it
     const Lang* lang = &s->res.lang();
     const Items* items = &s->items;
@@ -971,20 +974,26 @@ void Ui::registerHandlers(net::Client& client) {
         if (m.registerHandlers) m.registerHandlers(*s, client);
 }
 
-void Ui::attachSession(net::Client* client, net::Session* session) {
-    State& s = *s_;
-    s.client = client;
-    s.session = session;
-    if (session) session->creativeHotbarSync = false;  // the inventory is server-driven now
+// Per-connection state starts over: when a new client's handlers are registered (before any of its packets is
+// applied: the join completes on a worker and its first packets can be applied before attachSession) and when the
+// session goes away.
+static void resetConnection(Ui::State& s) {
     s.inventory.slots.assign(46, ItemStack{});
     s.effects.clear();
     std::fill(std::begin(s.hotbarSynced), std::end(s.hotbarSynced), -2);
     s.carried = ItemStack{};
     s.container.reset();
-    if (s.screen != Screen::None && s.screen != Screen::Chat) s.closeScreen(false);
     for (const UiModule& m : uiModules())
         if (m.attached) m.attached(s);
-    if (!session) return;
+}
+
+void Ui::attachSession(net::Client* client, net::Session* session) {
+    State& s = *s_;
+    s.client = client;
+    s.session = session;
+    if (session) session->creativeHotbarSync = false;  // the inventory is server-driven now
+    if (s.screen != Screen::None && s.screen != Screen::Chat) s.closeScreen(false);
+    if (!session) return resetConnection(s);
     // Minecraft.startUseItem reached this hand's item use (Game::startUseItem decides the hands' turns from the
     // gameplay layer's predicted results): ServerboundUseItemPacket; a book and quill opens client side.
     s.game->onUseItem = [&s, session](int hand) {

@@ -596,6 +596,7 @@ void attachItemWorld(net::Client& client) {
         GlobalPos p;
         p.dimension = std::string(r.str());
         r.blockPos(p.pos[0], p.pos[1], p.pos[2]);
+        r.f32(), r.f32();  // yaw, pitch
         if (!r.ok) return;
         std::lock_guard lock(gPending.mutex);
         gPending.spawn = true;
