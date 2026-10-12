@@ -84,6 +84,7 @@ fs::path Settings::path() {
 bool Settings::load() {
     std::ifstream f(path());
     if (!f) return false;
+    tutorialStep = "none";  // options from before the tutorial: an experienced player (a new file starts it)
     std::string line;
     while (std::getline(f, line)) {
         const size_t c = line.find(':');
@@ -122,6 +123,7 @@ bool Settings::load() {
         else if (k == "allowServerListing") allowServerListing = v == "true";
         else if (k == "pauseOnLostFocus") pauseOnLostFocus = v == "true";
         else if (k == "advancedItemTooltips") advancedItemTooltips = v == "true";
+        else if (k == "tutorialStep") tutorialStep = v;
         else if (k.starts_with("modelPart_")) {
             for (int i = 0; i < 7; ++i)
                 if (k.substr(10) == kModelParts[i]) modelParts = v == "true" ? modelParts | (1 << i) : modelParts & ~(1 << i);
@@ -154,7 +156,8 @@ void Settings::save() const {
       << "\nautoJump:" << b(autoJump) << "\nsprintWindow:" << sprintWindow << "\ninvertXMouse:" << b(invertMouseX) << "\ninvertYMouse:" << b(invertMouseY)
       << "\ndiscrete_mouse_scroll:" << b(discreteMouseScroll) << "\nmouseWheelSensitivity:" << mouseWheelSensitivity
       << "\nmainHand:" << (mainHand == 0 ? "left" : "right") << "\nallowServerListing:" << b(allowServerListing)
-      << "\npauseOnLostFocus:" << b(pauseOnLostFocus) << "\nadvancedItemTooltips:" << b(advancedItemTooltips) << "\n";
+      << "\npauseOnLostFocus:" << b(pauseOnLostFocus) << "\nadvancedItemTooltips:" << b(advancedItemTooltips)
+      << "\ntutorialStep:" << tutorialStep << "\n";
     for (int i = 0; i < 7; ++i) f << "modelPart_" << kModelParts[i] << ":" << b(modelParts & (1 << i)) << "\n";
     for (size_t i = 0; i < kKeyCount; ++i) f << "key_" << keyDef(Key(i)).name << ":" << keyName(keys[i]) << "\n";
 }

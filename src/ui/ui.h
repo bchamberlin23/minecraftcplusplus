@@ -85,6 +85,7 @@ struct Settings {
     int modelParts = 0x7F;
     bool allowServerListing = true;
     bool pauseOnLostFocus = true, advancedItemTooltips = false;
+    std::string tutorialStep = "movement";  // TutorialSteps name (client/tutorial)
     bool loaded = false;
 
     int key(Key k) const { return keys[size_t(k)]; }
