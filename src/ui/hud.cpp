@@ -566,7 +566,8 @@ void Ui::State::drawChat(Canvas& c, bool focused) {
         const ChatLine& line = chatLines[size_t(i + chatScroll)];
         const float alpha = alphaOf(line);
         if (alpha <= 1e-5f) continue;
-        const int textTop = chatBottom - i * entryHeight - entryBottomToMessageY;
+        const int entryBottom = chatBottom - i * entryHeight, entryTop = entryBottom - entryHeight;
+        const int textTop = entryBottom - entryBottomToMessageY;
         font.draw(c, line.text, 0, float(textTop), withAlpha(0xFFFFFF, alpha * textOpacity), true);
         if (line.tag.color)  // GuiMessageTag indicator
             c.fill(-4, float(entryTop), -2, float(entryBottom), withAlpha(line.tag.color, alpha * textOpacity));

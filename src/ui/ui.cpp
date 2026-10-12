@@ -102,7 +102,6 @@ bool Settings::load() {
         else if (k == "maxFps") video.fpsLimit = u32(std::clamp(std::atoi(v.c_str()), 0, 1000));
         else if (k == "shaderPack") shaderPack = v;
         else if (k == "bobView") bobView = v == "true";
-        else if (k == "fovEffectScale") fovEffectScale = std::clamp(float(std::atof(v.c_str())), 0.0f, 1.0f);
         else if (k == "attackIndicator") attackIndicator = ((std::atoi(v.c_str()) % 3) + 3) % 3;  // ByIdMap WRAP
         else if (k == "fullscreen") fullscreen = v == "true";
         else if (k == "toggleCrouch") toggleCrouch = v == "true";
@@ -143,7 +142,6 @@ void Settings::save() const {
       << "\nvsync:" << (video.vsync ? "true" : "false") << "\nmaxFps:" << video.fpsLimit << "\n";
     f << "shaderPack:" << shaderPack << "\n";
     f << "bobView:" << (bobView ? "true" : "false") << "\nattackIndicator:" << attackIndicator << "\n";
-    f << "fovEffectScale:" << fovEffectScale << "\n";
     auto b = [](bool v) { return v ? "true" : "false"; };
     f << "fullscreen:" << b(fullscreen) << "\ntoggleCrouch:" << b(toggleCrouch) << "\ntoggleSprint:" << b(toggleSprint)
       << "\nautoJump:" << b(autoJump) << "\nsprintWindow:" << sprintWindow << "\ninvertXMouse:" << b(invertMouseX) << "\ninvertYMouse:" << b(invertMouseY)

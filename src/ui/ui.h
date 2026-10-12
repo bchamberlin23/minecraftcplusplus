@@ -72,7 +72,6 @@ struct Settings {
     bool videoSaved = false;   // options.txt had video settings
     std::string shaderPack;    // shader pack in use (render/packs; "" = the built-in pipeline)
     bool bobView = true;       // "View Bobbing" (options.txt bobView)
-    float fovEffectScale = 1;  // "FOV Effects" (options.txt fovEffectScale): how much speed / flight change the FOV
     int attackIndicator = 1;   // AttackIndicatorStatus id: 0 off, 1 crosshair, 2 hotbar (options.txt attackIndicator)
     std::array<int, kKeyCount> keys = defaultKeys();  // key_<name>
     bool fullscreen = false;

@@ -119,7 +119,7 @@ void Client::pauseDispatch(const std::function<void()>& fn, const std::string& l
 }
 
 bool Client::hasFeature(const std::string& id) const {
-    std::lock_guard lock(mutex_);
+    std::lock_guard lock(registryMutex_);
     return std::find(features_.begin(), features_.end(), id) != features_.end();
 }
 
@@ -531,12 +531,6 @@ bool Client::handleConfiguration(const std::string& name, Reader& r, bool& handl
         Writer w;
         w.varInt(0);
         send(Configuration, "select_known_packs", w);
-    } else if (name == "update_enabled_features") {  // the world's feature flags (experiments)
-        std::vector<std::string> features;
-        const i32 n = r.varInt();
-        for (i32 i = 0; i < n && r.ok; ++i) features.emplace_back(r.str());
-        std::lock_guard lock(mutex_);
-        features_ = std::move(features);
     } else if (name == "registry_data") {
         // RegistryDataCollector: a registry sent again (reconfiguration) replaces its previous entries.
         const std::string registry(r.str());

@@ -1197,6 +1197,7 @@ int wmain(int argc, wchar_t** argv) {
         sky.setWorldBorder(session ? &game.border : nullptr, game.partialTick(),
                            float(std::min(ui.settings().renderDistance, opt.detail) * 16));
         sky.setViewEffects(ui.viewEffects());  // blindness, darkness, night vision, water vision (fog, lightmap)
+        renderer.setFadeSeconds(float(ui.settings().chunkFade));  // Video Settings: Chunk Fade (chunkSectionFadeInTime)
         sky.update(cam, dt);
         ui.endFrame();
         if (haveReports) packs::updatePlayer(renderer, ui, game.selectedSlot(), reports, registry);  // held light

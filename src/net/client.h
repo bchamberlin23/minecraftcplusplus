@@ -261,7 +261,6 @@ private:
     mutable std::mutex mutex_;  // events_, stats_
     std::mutex sendMutex_;  // phase check + send are atomic w.r.t. phase changes
     std::mutex dispatchMutex_;  // held while a packet is handled (pauseDispatch)
-    std::vector<std::string> features_;  // guarded by mutex_
     std::vector<Event> events_;
     std::unordered_map<std::string, std::vector<PacketHandler>> playHandlers_;
     std::unordered_map<std::string, std::vector<PacketHandler>> playPeeks_;
