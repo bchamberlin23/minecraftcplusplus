@@ -4,6 +4,7 @@
 #include "world/nbt_dom.h"
 #include "worldgen/feature_api.h"
 #include "worldgen/generator.h"
+#include "worldgen/structures.h"
 
 #include <libdeflate.h>
 
@@ -78,10 +79,11 @@ struct SavedChunk {
 
 // Decoration check: decorates every chunk around the saved "minecraft:full" chunks (the game decorates
 // each chunk once, with its neighbours at terrain status or later) and compares the result.
-int runDecorationTest(BlockRegistry& registry, wg::ChunkGenerator& gen, i64 seed, const std::vector<SavedChunk>& saved) {
+// Structures (when the world generates them) take part as in the game: the terrain adaptation around their pieces, their
+// placement in the features step and the post-processing of the full chunks.
+int runDecorationTest(BlockRegistry& registry, wg::ChunkGenerator& gen, i64 seed, const std::vector<SavedChunk>& saved,
+                      wg::FeatureSystem& features, const wg::StructureSystem* structures) {
     Timer t;
-    wg::FeatureSystem features(gen, registry);
-    LOG("gentest: feature system ready in %.1f ms", t.ms());
     {
         std::string order;
         for (u16 b : gen.possibleBiomes()) order += " " + gen.biomes().name(b);
@@ -95,7 +97,8 @@ int runDecorationTest(BlockRegistry& registry, wg::ChunkGenerator& gen, i64 seed
         auto& c = chunks[{x, z}];
         if (!c) {
             c = std::make_unique<wg::GenChunk>();
-            gen.generate(x, z, *c, ctx);
+            const auto beardifier = structures ? structures->beardifier(x, z) : nullptr;
+            gen.generate(x, z, *c, ctx, nullptr, beardifier.get());
         }
         return *c;
     };
@@ -144,6 +147,13 @@ int runDecorationTest(BlockRegistry& registry, wg::ChunkGenerator& gen, i64 seed
             for (int dx = -1; dx <= 1; ++dx) region[size_t((dz + 1) * 3 + dx + 1)] = &chunkAt(x + dx, z + dz);
         features.decorate(region, zoom, noiseBiome);
     }
+    if (structures)  // LevelChunk.postProcessGeneration of the full chunks
+        for (const SavedChunk& s : saved) {
+            std::array<wg::GenChunk*, 9> region{};
+            for (int dz = -1; dz <= 1; ++dz)
+                for (int dx = -1; dx <= 1; ++dx) region[size_t((dz + 1) * 3 + dx + 1)] = &chunkAt(s.cx + dx, s.cz + dz);
+            structures->postProcess(region);
+        }
     const double decorateMs = t.ms();
 
     std::map<std::pair<std::string, std::string>, size_t> confusion;
@@ -211,6 +221,14 @@ int runGenTest(BlockRegistry& registry, const fs::path& jar, const fs::path& dir
     Timer t;
     wg::ChunkGenerator gen(data, registry, seed, target.dim);
     if (!gen.ok()) return 1;
+    wg::FeatureSystem features(gen, registry);
+    std::unique_ptr<wg::StructureSystem> structures;
+    if (target.structures) {
+        structures = std::make_unique<wg::StructureSystem>(gen, &features, registry, seed);
+        if (structures->ok()) features.setStructures(structures.get());
+        else structures.reset();
+    }
+    LOG("gentest: features%s ready", structures ? " and structures" : "");
     LOG("gentest: generator ready in %.1f ms (seed %lld)", t.ms(), (long long)seed);
     if (const char* far = std::getenv("GENTEST_FAR")) {  // time far-terrain regions single-threaded
         const int level = std::atoi(far);
@@ -281,7 +299,8 @@ int runGenTest(BlockRegistry& registry, const fs::path& jar, const fs::path& dir
 
             const int cx = rx * 32 + (idx & 31), cz = rz * 32 + (idx >> 5);
             Timer tc;
-            gen.generate(cx, cz, chunk, ctx, &timings);
+            const auto beardifier = structures ? structures->beardifier(cx, cz) : nullptr;  // starts precede the noise
+            gen.generate(cx, cz, chunk, ctx, &timings, beardifier.get());
             ++chunks;
             size_t chunkBad = 0;
             NbtValue* sections = root.find("sections");
@@ -344,6 +363,6 @@ int runGenTest(BlockRegistry& registry, const fs::path& jar, const fs::path& dir
     for (size_t i = 0; i < std::min<size_t>(topBiomes.size(), 10); ++i)
         LOG("gentest:   %8zu  biome %s", topBiomes[i].first, topBiomes[i].second.c_str());
     int result = (biomeBad || blockBad) ? 2 : 0;
-    if (!fullChunks.empty() && runDecorationTest(registry, gen, seed, fullChunks)) result = 2;
+    if (!fullChunks.empty() && runDecorationTest(registry, gen, seed, fullChunks, features, structures.get())) result = 2;
     return result;
 }
