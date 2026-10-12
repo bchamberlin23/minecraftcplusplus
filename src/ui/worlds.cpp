@@ -2,7 +2,10 @@
 // world (to the Recycle Bin). Worlds are played through the local official server (--play), created by it, or opened
 // in the fast local viewer (--world, read only).
 #include "ui/frontend.h"
+#include "net/local_server.h"
+#include "ui/toasts.h"
 #include "world/nbt_dom.h"
+#include "world/world_backup.h"
 
 #include <libdeflate.h>
 #include <shellapi.h>
@@ -10,14 +13,13 @@
 #include <algorithm>
 #include <cwctype>
 #include <fstream>
+#include <future>
 
 namespace ui {
 
-namespace {
-
 constexpr int kHeader = 49, kFooter = 60, kRowH = 36, kRowW = 270;
 
-bool readNbtGz(const fs::path& p, NbtValue& root, std::string* rootName = nullptr) {
+bool readNbtGz(const fs::path& p, NbtValue& root, std::string* rootName) {
     std::vector<u8> gz;
     if (!readFile(p, gz) || gz.size() < 18) return false;
     libdeflate_decompressor* d = libdeflate_alloc_decompressor();
@@ -52,6 +54,8 @@ bool writeNbtGz(const fs::path& p, const NbtValue& root, std::string_view rootNa
     return !ec;
 }
 
+namespace {
+
 // WorldSelectionList.DATE_FORMAT: the short localized date and time.
 std::string formatDate(i64 ms) {
     ULARGE_INTEGER u;
@@ -76,8 +80,6 @@ std::string trim(std::string s) {
     return s;
 }
 
-const char* kModes[] = {"survival", "hardcore", "creative"};
-const char* kDifficulties[] = {"peaceful", "easy", "normal", "hard"};
 
 WorldEntry* selected(State& s) {
     FrontEndState& f = *s.fe;
@@ -108,32 +110,26 @@ std::vector<std::wstring> worldArgs(const WorldEntry& w, bool play) {
     return a;
 }
 
+void openRecover(State& s);
+
 void playWorld(State& s, bool play) {
     WorldEntry* w = selected(s);
     if (!w || w->locked) return;
+    if (w->broken) return openRecover(s);  // CorruptedLevelSummary: the primary action recovers
     s.fe->failTitle = Text("Could not open the world");
     startChild(s, worldArgs(*w, play), Text((play ? "Loading \"" : "Viewing \"") + w->name + "\""), Screen::Worlds, false);
 }
 
-void createWorld(State& s) {
-    FrontEndState& f = *s.fe;
-    std::string name = trim(f.createName.text.value);
-    if (name.empty()) name = s.res.translate("selectWorld.newWorld");
-    const std::string folder = worldFolderFor(f.cfg.savesDir, name);
-    std::vector<std::wstring> a = launch::stickyArguments();
-    a.insert(a.end(), {L"--play", L"--world", (f.cfg.savesDir / widen(folder)).wstring(), L"--create-name", widen(name),
-                       L"--create-seed", widen(trim(f.createSeed.text.value)), L"--create-mode", widen(kModes[f.createMode]),
-                       L"--create-difficulty", widen(kDifficulties[f.createMode == 1 ? 3 : f.createDifficulty]),
-                       L"--create-cheats", f.createCheats && f.createMode != 1 ? L"1" : L"0", L"--create-structures",
-                       f.createStructures ? L"1" : L"0"});
-    LOG("ui: creating world \"%s\" in %s", name.c_str(), folder.c_str());
-    f.failTitle = Text("Could not create the world");
-    startChild(s, a, Text("Creating \"" + name + "\""), Screen::Worlds, false);
-}
+// The pages of the Edit World screen: Edit World itself, Optimize World's backup question, and Recover World
+// (RecoverWorldDataScreen, for a world whose level.dat cannot be read).
+enum class EditPage { Edit, Optimize, Recover };
+EditPage editPage = EditPage::Edit;
+bool eraseCache = false;  // BackupConfirmScreen's "Erase cached data"
 
 void openEditWorld(State& s) {
     WorldEntry* w = selected(s);
     if (!w) return;
+    editPage = EditPage::Edit;
     s.fe->editName.text = TextField{};
     s.fe->editName.text.value = w->name;
     s.fe->editName.text.cursor = s.fe->editName.text.selection = int(w->name.size());
@@ -241,7 +237,18 @@ std::vector<WorldEntry> scanWorlds(const fs::path& saves) {
     for (const auto& d : fs::directory_iterator(saves, ec)) {
         if (!d.is_directory(ec)) continue;
         WorldEntry w;
-        if (readWorld(d.path(), w)) out.push_back(std::move(w));
+        if (readWorld(d.path(), w)) {
+            out.push_back(std::move(w));
+        } else if (fs::exists(d.path() / "level.dat", ec) || fs::exists(d.path() / "level.dat_old", ec)) {
+            // A save whose level.dat cannot be read (LevelStorageSource: CorruptedLevelSummary).
+            w.dir = d.path(), w.folder = w.name = utf8(d.path().filename()), w.broken = true;
+            const auto t = fs::last_write_time(d.path() / "level.dat", ec);
+            if (!ec)
+                w.lastPlayed = i64(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                       std::chrono::clock_cast<std::chrono::system_clock>(t).time_since_epoch()).count());
+            w.locked = worldLocked(d.path());
+            out.push_back(std::move(w));
+        }
     }
     std::stable_sort(out.begin(), out.end(), [](const WorldEntry& a, const WorldEntry& b) {
         if (a.lastPlayed != b.lastPlayed) return a.lastPlayed > b.lastPlayed;
@@ -293,11 +300,18 @@ void buildWorlds(State& s) {
     const WorldEntry* w = selected(s);
     const bool can = w && !w->locked;
     const float x0 = float(W / 2 - 154), y0 = float(H - 52), y1 = float(H - 28);
-    addButton(s, x0, y0, 150, tr(s, "selectWorld.select"), [p] { playWorld(*p, true); }, can);
+    // Shift: the world in the fast local viewer instead (read only, no server), like the game's Shift alternatives.
+    const bool view = s.window->keyDown(VK_SHIFT) && can && !w->broken;
+    addButton(s, x0, y0, 150, w && w->broken ? tr(s, "recover_world.button") : view ? Text("View Only") : tr(s, "selectWorld.select"),
+              [p, view] { playWorld(*p, !view); }, can);
     addButton(s, x0 + 158, y0, 150, tr(s, "selectWorld.create"), [p] { openCreateWorld(*p); });
-    addButton(s, x0, y1, 71, tr(s, "selectWorld.edit"), [p] { openEditWorld(*p); }, w != nullptr);
+    addButton(s, x0, y1, 71, tr(s, "selectWorld.edit"), [p] { openEditWorld(*p); }, w != nullptr && !w->broken);
     addButton(s, x0 + 79, y1, 71, tr(s, "selectWorld.delete"), [p] { deleteWorld(*p); }, can);
-    addButton(s, x0 + 158, y1, 71, Text("View Only"), [p] { playWorld(*p, false); }, can);
+    addButton(s, x0 + 158, y1, 71, tr(s, "selectWorld.recreate"), [p] {
+        if (const WorldEntry* we = selected(*p); we && !recreateWorld(*p, we->dir))
+            showMessage(*p, tr(*p, "selectWorld.recreate.error.title"), tr(*p, "selectWorld.recreate.error.text"),
+                        p->res.translate("gui.back"), [p] { openWorlds(*p); });
+    }, can && !w->broken);
     addButton(s, x0 + 237, y1, 71, tr(s, "gui.back"), [p] { p->openScreen(Screen::Title); });
     f.onBack = [p] { p->openScreen(Screen::Title); };
     f.onEnter = [p] { playWorld(*p, true); };
@@ -335,7 +349,9 @@ void drawWorlds(State& s, Canvas& c) {
         s.drawText(c, Text(fitText(s.font, line2, textW)), rowLeft + 35, y + 12, 0xFF808080, true);
         // LevelSummary.getInfo: game mode, commands, version.
         Text info;
-        if (w.locked) {
+        if (w.broken) {
+            info = Text(fitText(s.font, s.res.translate("recover_world.warning"), textW), colorStyle(0xFF0000));
+        } else if (w.locked) {
             info = Text(fitText(s.font, s.res.translate("selectWorld.locked"), textW), colorStyle(0xFF5555));
         } else {
             if (w.hardcore) info.append(s.res.translate("gameMode.hardcore"), colorStyle(0xFF0000));
@@ -380,6 +396,7 @@ void worldsInput(State& s, const Window::InputEvent& e) {
         f.worldScroll = std::clamp(f.worldScroll - float(e.code) * kRowH / 2, 0.0f, maxScroll(s, f.worldView.size()));
         return;
     }
+    if (e.type == E::Key && e.code == VK_SHIFT && !e.repeat) s.buildButtons();  // Play / View Only
     if (e.type == E::Key && e.down && (e.code == VK_UP || e.code == VK_DOWN) && !f.worldView.empty()) {
         auto it = std::find(f.worldView.begin(), f.worldView.end(), f.worldSel);
         int i = it == f.worldView.end() ? -1 : int(it - f.worldView.begin());
@@ -415,112 +432,296 @@ void worldsInput(State& s, const Window::InputEvent& e) {
     s.buttonsInput(e);
 }
 
-// --- create world (CreateWorldScreen, one page) -------------------------------------------------------------------
+// --- edit world (EditWorldScreen), Optimize World (BackupConfirmScreen, OptimizeWorldScreen), Recover World ----------
 
-void openCreateWorld(State& s) {
-    FrontEndState& f = *s.fe;
-    f.createName.text = TextField{};
-    f.createName.text.value = s.res.translate("selectWorld.newWorld");
-    f.createName.text.cursor = f.createName.text.selection = int(f.createName.text.value.size());
-    f.createName.text.maxLength = 32;
-    f.createSeed.text = TextField{};
-    f.createSeed.text.maxLength = 32;
-    f.createSeed.hint = s.res.translate("selectWorld.seedInfo");
-    f.createMode = 0, f.createDifficulty = 2, f.createCheats = false, f.createStructures = true;
-    s.openScreen(Screen::CreateWorld);
+namespace {
+
+// A backup / optimization running in the background (main thread state).
+struct WorldTask {
+    enum class After { List, Optimize, Restore } after = After::List;
+    fs::path dir;
+    std::string folder, name;
+    bool eraseCache = false;
+    std::future<std::optional<u64>> backup;
+    std::unique_ptr<LocalServer> server;
+    std::future<void> stopping;
+    bool cancelled = false;
+};
+std::unique_ptr<WorldTask> task;
+
+fs::path backupsDir(State& s) {  // LevelStorageSource.getBackupPath: backups next to the saves folder
+    return s.fe->cfg.savesDir.parent_path() / "backups";
 }
 
-void buildCreateWorld(State& s) {
+void openFolder(const fs::path& dir) { ShellExecuteW(nullptr, L"open", dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL); }
+
+void showWaiting(State& s, Text title, std::string status, float progress, std::function<void()> cancel) {
     FrontEndState& f = *s.fe;
-    const int W = s.guiW(), H = s.guiH();
+    f.loadingTitle = std::move(title);
+    f.loadingStatus = std::move(status);
+    f.progress = progress;
+    f.loadingStart = s.clock;
+    f.loadingCancel = bool(cancel);
+    f.loadingCancelFn = std::move(cancel);
+    s.openScreen(Screen::Loading);
+}
+
+// EditWorldScreen.makeBackupAndShowToast, then what the backup was for.
+void startTask(State& s, const WorldEntry& w, WorldTask::After after, bool backupFirst) {
+    task = std::make_unique<WorldTask>();
+    task->after = after, task->dir = w.dir, task->folder = w.folder, task->name = w.name, task->eraseCache = eraseCache;
+    if (backupFirst) {
+        const fs::path world = w.dir, backups = backupsDir(s);
+        task->backup = std::async(std::launch::async, [world, backups] { return makeWorldBackup(world, backups); });
+        showWaiting(s, tr(s, after == WorldTask::After::Restore ? "recover_world.restoring" : "selectWorld.waitingForBackup.title"),
+                    s.res.translate("selectWorld.waitingForBackup.message"), -1, nullptr);
+    }
+}
+
+void startOptimize(State& s) {
+    WorldTask& t = *task;
+    const FrontEndState& f = *s.fe;
+    LocalServer::Config cfg;
+    cfg.minecraftDir = f.cfg.minecraftDir, cfg.version = f.cfg.version, cfg.world = t.dir;
+    if (!f.cfg.playerName.empty()) cfg.player = f.cfg.playerName;
+    cfg.forceUpgrade = true, cfg.eraseCache = t.eraseCache;
+    t.server = std::make_unique<LocalServer>();
+    LOG("ui: optimizing world %s%s", t.folder.c_str(), t.eraseCache ? " (erasing cached data)" : "");
+    if (!t.server->start(cfg)) {
+        task.reset();
+        return showMessage(s, tr(s, "optimizeWorld.stage.failed"), Text("The local server could not start; see the log."),
+                           s.res.translate("gui.back"), [&s] { openWorlds(s); });
+    }
     State* p = &s;
-    const float x = float(W / 2 - 100);
-    f.createName.x = x, f.createName.y = 39, f.createName.w = 200;
-    f.createSeed.x = x, f.createSeed.y = 157, f.createSeed.w = 200;
-    setFields(s, {&f.createName, &f.createSeed}, 0);
-    Button& mode = addButton(s, x, 76, 200, Text(), [p] {
-        FrontEndState& fe = *p->fe;
-        fe.createMode = (fe.createMode + 1) % 3;
-        fe.createCheats = fe.createMode == 2;  // creative worlds start with commands on, like the game's default
-        p->buildButtons();
-    });
-    mode.labelFn = [p] {
-        return trf(*p, "options.generic_value",
-                   {tr(*p, "selectWorld.gameMode"), Text(p->res.translate(std::string("selectWorld.gameMode.") + kModes[p->fe->createMode]))});
-    };
-    const bool hardcore = f.createMode == 1;
-    Button& diff = addButton(s, x, 120, 98, Text(), [p] { p->fe->createDifficulty = (p->fe->createDifficulty + 1) % 4; }, !hardcore);
-    diff.labelFn = [p] {
-        const int d = p->fe->createMode == 1 ? 3 : p->fe->createDifficulty;
-        return trf(*p, "options.generic_value",
-                   {tr(*p, "options.difficulty"), Text(p->res.translate(std::string("options.difficulty.") + kDifficulties[d]))});
-    };
-    Button& cheats = addButton(s, x + 102, 120, 98, Text(), [p] { p->fe->createCheats = !p->fe->createCheats; }, !hardcore);
-    cheats.labelFn = [p] {
-        const bool on = p->fe->createCheats && p->fe->createMode != 1;
-        return trf(*p, "options.generic_value", {Text("Commands"), tr(*p, on ? "options.on" : "options.off")});
-    };
-    Button& structures = addButton(s, x, 182, 200, Text(), [p] { p->fe->createStructures = !p->fe->createStructures; });
-    structures.labelFn = [p] {
-        return trf(*p, "options.generic_value",
-                   {tr(*p, "selectWorld.mapFeatures"), tr(*p, p->fe->createStructures ? "options.on" : "options.off")});
-    };
-    addButton(s, float(W / 2 - 155), float(H - 28), 150, tr(s, "selectWorld.create"), [p] { createWorld(*p); });
-    addButton(s, float(W / 2 + 5), float(H - 28), 150, tr(s, "gui.cancel"), [p] { openWorlds(*p); });
-    f.onBack = [p] { openWorlds(*p); };
-    f.onEnter = [p] { createWorld(*p); };
+    showWaiting(s, trf(s, "optimizeWorld.title", {Text(t.name)}), s.res.translate("optimizeWorld.stage.counting"), 0,
+                [p] {
+                    if (task) task->cancelled = true;  // OptimizeWorldScreen's Cancel: stop where it is
+                });
 }
 
-void drawCreateWorld(State& s, Canvas& c) {
-    FrontEndState& f = *s.fe;
-    const int W = c.guiWidth();
-    const float x = float(W / 2 - 100);
-    menuBackground(s, c);
-    s.drawCentered(c, tr(s, "selectWorld.create"), float(W / 2), 12, 0xFFFFFFFF);
-    s.drawText(c, tr(s, "selectWorld.enterName"), x, 28, 0xFFA0A0A0, true);
-    std::string name = trim(f.createName.text.value);
-    if (name.empty()) name = s.res.translate("selectWorld.newWorld");
-    s.drawText(c, Text(fitText(s.font, s.res.translate("selectWorld.resultFolder") + " " + worldFolderFor(f.cfg.savesDir, name), 200)),
-               x, 62, 0xFFA0A0A0, true);
-    const std::string mode = std::string("selectWorld.gameMode.") + kModes[f.createMode];
-    s.drawText(c, Text(s.res.translate(mode + ".line1")), x, 99, 0xFFA0A0A0, true);
-    s.drawText(c, Text(s.res.translate(mode + ".line2")), x, 108, 0xFFA0A0A0, true);
-    s.drawText(c, tr(s, "selectWorld.enterSeed"), x, 146, 0xFFA0A0A0, true);
-    drawFields(s, c);
-    s.drawButtons(c);
+void restoreLevelData(State& s, const fs::path& dir) {  // LevelStorageAccess.restoreLevelDataFromOld
+    std::error_code ec;
+    const fs::path dat = dir / "level.dat", old = dir / "level.dat_old";
+    fs::copy_file(dat, dir / "level.dat_corrupted", fs::copy_options::overwrite_existing, ec);
+    ec.clear();
+    fs::copy_file(old, dat, fs::copy_options::overwrite_existing, ec);
+    WorldEntry check;
+    const bool ok = !ec && readWorld(dir, check);
+    LOG("ui: restoring %s from level.dat_old %s", utf8(dir).c_str(), ok ? "worked" : "failed");
+    showMessage(s, tr(s, "recover_world.done.title"), tr(s, ok ? "recover_world.done.success" : "recover_world.done.failed"),
+                s.res.translate("gui.back"), [&s] { openWorlds(s); });
 }
 
-// --- edit world (EditWorldScreen: rename, open folder) ------------------------------------------------------------
+}  // namespace
+
+void worldsFrame(State& s) {
+    if (!task) return;
+    WorldTask& t = *task;
+    if (t.backup.valid()) {
+        if (t.backup.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+        const std::optional<u64> size = t.backup.get();
+        if (size) {
+            showToast(trf(s, "selectWorld.edit.backupCreated", {Text(t.folder)}),
+                      trf(s, "selectWorld.edit.backupSize", {Text(std::to_string((*size + 1048575) / 1048576))}));
+        } else {
+            showToast(tr(s, "selectWorld.edit.backupFailed"));
+        }
+        LOG("ui: backup of %s %s", t.folder.c_str(), size ? "written" : "failed");
+        if (t.after == WorldTask::After::Optimize) return startOptimize(s);
+        const fs::path dir = t.dir;
+        const WorldTask::After after = t.after;
+        task.reset();
+        if (after == WorldTask::After::Restore) return restoreLevelData(s, dir);
+        return openWorlds(s);
+    }
+    if (t.stopping.valid()) {
+        if (t.stopping.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+        const bool cancelled = t.cancelled;
+        task.reset();
+        if (!cancelled) showToast(tr(s, "optimizeWorld.stage.finished"));
+        return openWorlds(s);
+    }
+    if (t.server) {
+        FrontEndState& f = *s.fe;
+        if (const int pct = t.server->upgradePercent(); pct >= 0) {
+            f.progress = float(pct) / 100.0f;
+            f.loadingStatus = t.server->upgradeStatus();
+        }
+        // The upgrade is done once the server goes on to start (or it stopped): save and stop it off this thread.
+        if (t.cancelled || t.server->ready() || !t.server->running()) {
+            f.loadingStatus = s.res.translate(t.cancelled ? "optimizeWorld.stage.canceled" : "optimizeWorld.stage.finished");
+            f.loadingCancel = false, f.loadingCancelFn = nullptr;
+            s.buildButtons();
+            LocalServer* server = t.server.get();
+            t.stopping = std::async(std::launch::async, [server] { server->stop(); });
+        }
+    }
+}
 
 void buildEditWorld(State& s) {
     FrontEndState& f = *s.fe;
-    const int W = s.guiW();
+    const int W = s.guiW(), H = s.guiH();
     State* p = &s;
-    const float x = float(W / 2 - 100);
-    f.editName.x = x, f.editName.y = 52, f.editName.w = 200;
-    setFields(s, {&f.editName}, 0);
     const WorldEntry* w = selected(s);
-    addButton(s, x, 84, 200, tr(s, "selectWorld.edit.openFolder"), [p] {
-        if (const WorldEntry* we = selected(*p)) ShellExecuteW(nullptr, L"open", we->dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    f.onBack = [p] {
+        editPage = EditPage::Edit;
+        openWorlds(*p);
+    };
+    if (editPage == EditPage::Optimize) {  // BackupConfirmScreen(optimizeWorld.confirm.*, erase cache prompt)
+        const int lines = int(s.font.split(tr(s, "optimizeWorld.confirm.description"), W - 50).size());
+        const float textSize = float((lines + 1) * 9);
+        auto proceed = [p](bool backup) {
+            const WorldEntry* we = selected(*p);
+            editPage = EditPage::Edit;
+            if (!we) return openWorlds(*p);
+            startTask(*p, *we, WorldTask::After::Optimize, backup);
+            if (!backup) startOptimize(*p);
+        };
+        addButton(s, float(W / 2 - 155), 100 + textSize, 150, tr(s, "optimizeWorld.confirm.proceed"), [proceed] { proceed(true); });
+        addButton(s, float(W / 2 + 5), 100 + textSize, 150, tr(s, "selectWorld.backupJoinSkipButton"), [proceed] { proceed(false); });
+        addButton(s, float(W / 2 - 75), 124 + textSize, 150, tr(s, "gui.cancel"), [p] {
+            editPage = EditPage::Edit;
+            p->buildButtons();
+        });
+        f.onBack = [p] {
+            editPage = EditPage::Edit;
+            p->buildButtons();
+        };
+        return;
+    }
+    if (editPage == EditPage::Recover) {  // RecoverWorldDataScreen
+        std::error_code ec;
+        WorldEntry fallback;
+        const bool hasOld = w && fs::exists(w->dir / "level.dat_old", ec);
+        const float top = float(H / 2 - 40);
+        addButton(s, float(W / 2 - 61), top + 52, 120, tr(s, "recover_world.restore"), [p] {
+            const WorldEntry* we = selected(*p);
+            editPage = EditPage::Edit;
+            if (we) startTask(*p, *we, WorldTask::After::Restore, true);
+        }, hasOld && w && !w->locked);
+        addButton(s, float(W / 2 - 61), top + 80, 120, tr(s, "gui.back"), [p] {
+            editPage = EditPage::Edit;
+            openWorlds(*p);
+        });
+        return;
+    }
+    // LinearLayout(spacing 5), centred: spacer, label, name, Reset Icon, Open World Folder, Make Backup, Open Backups
+    // Folder, Optimize World, spacer, Save | Cancel.
+    const float x = float(W / 2 - 100), top = float(std::max(0, (H - 234) / 2));
+    f.editName.x = x, f.editName.y = top + 39, f.editName.w = 200;
+    setFields(s, {&f.editName}, 0);
+    std::error_code ec;
+    const bool hasIcon = w && fs::is_regular_file(w->dir / "icon.png", ec);
+    const bool can = w && !w->locked;
+    addButton(s, x, top + 64, 200, tr(s, "selectWorld.edit.resetIcon"), [p] {
+        if (WorldEntry* we = selected(*p)) {
+            std::error_code e;
+            fs::remove(we->dir / "icon.png", e);
+            we->icon = Image{};
+            p->buildButtons();
+        }
+    }, hasIcon && can);
+    addButton(s, x, top + 89, 200, tr(s, "selectWorld.edit.openFolder"), [p] {
+        if (const WorldEntry* we = selected(*p)) openFolder(we->dir);
     });
-    addButton(s, x, 120, 98, tr(s, "selectWorld.edit.save"), [p] { saveEditWorld(*p); }, w && !w->locked);
-    addButton(s, x + 102, 120, 98, tr(s, "gui.cancel"), [p] { openWorlds(*p); });
-    f.onBack = [p] { openWorlds(*p); };
+    addButton(s, x, top + 114, 200, tr(s, "selectWorld.edit.backup"), [p] {
+        if (const WorldEntry* we = selected(*p)) startTask(*p, *we, WorldTask::After::List, true);
+    }, w != nullptr);
+    addButton(s, x, top + 139, 200, tr(s, "selectWorld.edit.backupFolder"), [p] {
+        std::error_code e;
+        fs::create_directories(backupsDir(*p), e);
+        openFolder(backupsDir(*p));
+    });
+    addButton(s, x, top + 164, 200, tr(s, "selectWorld.edit.optimize"), [p] {
+        editPage = EditPage::Optimize, eraseCache = false;
+        p->buildButtons();
+    }, can);
+    addButton(s, x, top + 214, 98, tr(s, "selectWorld.edit.save"), [p] { saveEditWorld(*p); },
+              can && !trim(f.editName.text.value).empty());
+    addButton(s, x + 102, top + 214, 98, tr(s, "gui.cancel"), [p] { openWorlds(*p); });
     f.onEnter = [p] { saveEditWorld(*p); };
 }
 
 void drawEditWorld(State& s, Canvas& c) {
-    const int W = c.guiWidth();
-    const float x = float(W / 2 - 100);
+    const int W = c.guiWidth(), H = c.guiHeight();
     menuBackground(s, c);
+    if (editPage == EditPage::Optimize) {
+        s.drawCentered(c, tr(s, "optimizeWorld.confirm.title"), float(W / 2), 50, 0xFFFFFFFF);
+        const std::vector<Text> lines = s.font.split(tr(s, "optimizeWorld.confirm.description"), W - 50);
+        for (size_t i = 0; i < lines.size(); ++i) s.drawCentered(c, lines[i], float(W / 2), 70 + float(i) * 9, 0xFFFFFFFF);
+        // Checkbox "Erase cached data" (17 x 17 box, label 4 to the right, the label colour -2039584).
+        const float bx = float(W / 2 - 155 + 80), by = 76 + float((lines.size() + 1) * 9);
+        const bool over = s.mouseX >= bx && s.mouseX < bx + 17 + 4 + s.font.width(tr(s, "selectWorld.backupEraseCache")) &&
+                          s.mouseY >= by && s.mouseY < by + 17;
+        const char* sprite = eraseCache ? (over ? "widget/checkbox_selected_highlighted" : "widget/checkbox_selected")
+                                        : (over ? "widget/checkbox_highlighted" : "widget/checkbox");
+        blitSprite(c, s.sprites.sprite(sprite), bx, by, 17, 17);
+        s.drawText(c, tr(s, "selectWorld.backupEraseCache"), bx + 21, by + 4, 0xFFE0E0E0, true);
+        s.drawButtons(c);
+        return;
+    }
+    if (editPage == EditPage::Recover) {
+        const WorldEntry* w = selected(s);
+        const float top = float(H / 2 - 40);
+        s.drawCentered(c, tr(s, "recover_world.title"), float(W / 2), top - 40, 0xFFFFFFFF);
+        const Text msg = trf(s, "recover_world.message", {Text(w ? w->folder : std::string(), colorStyle(0xAAAAAA))});
+        const std::vector<Text> lines = s.font.split(msg, W - 50);
+        for (size_t i = 0; i < lines.size(); ++i) s.drawCentered(c, lines[i], float(W / 2), top - 26 + float(i) * 9, 0xFFFFFFFF);
+        // The state of level.dat and its fallback (recover_world.state_entry / issue.*).
+        if (w) {
+            std::error_code ec;
+            float y = top + 10;
+            for (const char* file : {"level.dat", "level.dat_old"}) {
+                const fs::path path = w->dir / file;
+                NbtValue root;
+                Text issue = !fs::exists(path, ec) ? Text(s.res.translate("recover_world.issue.missing_file"), colorStyle(0xFF5555))
+                             : readNbtGz(path, root) ? Text(s.res.translate("recover_world.issue.none"), colorStyle(0x55FF55))
+                                                     : Text("Failed to read the file", colorStyle(0xFF5555));
+                Text line(std::string(file) + ": ");
+                line.append(issue);  // Text& append(const Text&)
+                s.drawCentered(c, line, float(W / 2), y, 0xFFFFFFFF);
+                y += 12;
+            }
+        }
+        s.drawButtons(c);
+        return;
+    }
+    const float x = float(W / 2 - 100), top = float(std::max(0, (H - 234) / 2));
     s.drawCentered(c, tr(s, "selectWorld.edit.title"), float(W / 2), 15, 0xFFFFFFFF);
-    s.drawText(c, tr(s, "selectWorld.enterName"), x, 40, 0xFFA0A0A0, true);
-    if (const WorldEntry* w = selected(s))
-        s.drawCentered(c, Text(fitText(s.font, formatJava(s.res.translate("selectWorld.targetFolder"), {w->folder}), 300)),
-                       float(W / 2), 148, 0xFF808080);
+    s.drawText(c, tr(s, "selectWorld.enterName"), x, top + 25, 0xFFA0A0A0, false);
     drawFields(s, c);
     s.drawButtons(c);
 }
+
+void editWorldInput(State& s, const Window::InputEvent& e) {
+    using E = Window::InputEvent;
+    if (editPage == EditPage::Optimize && e.type == E::Button && e.down && e.code == 0) {
+        const int lines = int(s.font.split(tr(s, "optimizeWorld.confirm.description"), s.guiW() - 50).size());
+        const float bx = float(s.guiW() / 2 - 155 + 80), by = 76 + float((lines + 1) * 9);
+        if (s.mouseX >= bx && s.mouseX < bx + 21 + s.font.width(tr(s, "selectWorld.backupEraseCache")) && s.mouseY >= by &&
+            s.mouseY < by + 17) {
+            eraseCache = !eraseCache;
+            return;
+        }
+    }
+    if (editPage == EditPage::Edit) {
+        const std::string before = s.fe->editName.text.value;
+        if (fieldsInput(s, e)) {
+            if (trim(before).empty() != trim(s.fe->editName.text.value).empty()) s.buildButtons();  // Save needs a name
+            return;
+        }
+    }
+    s.buttonsInput(e);
+}
+
+namespace {
+
+void openRecover(State& s) {
+    editPage = EditPage::Recover;
+    s.openScreen(Screen::EditWorld);
+}
+
+}  // namespace
 
 }  // namespace ui
 

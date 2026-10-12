@@ -11,8 +11,10 @@
 #include <array>
 #include <atomic>
 #include <functional>
+#include <map>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <variant>
 
 class BlockRegistry;
@@ -23,6 +25,8 @@ namespace net {
 struct Dimension {
     std::string name;  // e.g. "minecraft:overworld"
     int minY = -64, height = 384;
+    bool fastLava = false;  // EnvironmentAttributes.FAST_LAVA (the nether): lava currents push harder
+    bool waterEvaporates = false;  // EnvironmentAttributes.WATER_EVAPORATES (the nether): buckets cannot place water
 };
 
 // login (respawn = false) or respawn: the world must be cleared on respawn.
@@ -30,6 +34,7 @@ struct JoinEvent {
     bool respawn = false;
     int entityId = 0, gameMode = 0, viewDistance = 0;
     Dimension dimension;
+    double receivedAt = 0;  // time the login/respawn packet was decoded, for destination readiness timing
 };
 struct ChunkEvent {
     int cx = 0, cz = 0, firstSy = 0;  // sections[i] is section y firstSy + i (light included)
@@ -79,8 +84,35 @@ struct BiomesEvent {
 struct DisconnectEvent {
     std::string reason;
 };
+// start_configuration: the server takes the player out of the level (reconfiguration); a new login follows.
+struct ReconfigureEvent {};
 using Event = std::variant<JoinEvent, ChunkEvent, ForgetEvent, BlocksEvent, LightEvent, TeleportEvent, AckEvent,
-                           AbilitiesEvent, GameModeEvent, HeldSlotEvent, DisconnectEvent, BiomesEvent>;
+                           AbilitiesEvent, GameModeEvent, HeldSlotEvent, DisconnectEvent, BiomesEvent, ReconfigureEvent>;
+
+// Requests of the configuration / play phases that the main thread answers (Client::pollCommon): server resource
+// packs, the code of conduct, chat reset, transfers, reconfiguration.
+struct PackPushEvent {  // ClientboundResourcePackPushPacket
+    std::string id;     // 16 bytes (UUID)
+    std::string url, hash;
+    bool required = false;
+    std::string prompt;  // network NBT component, "" when none
+};
+struct PackPopEvent {  // ClientboundResourcePackPopPacket
+    std::string id;    // 16 bytes, "" = every pack
+};
+struct CodeOfConductEvent {
+    std::string text;
+};
+struct ResetChatEvent {};
+struct TransferEvent {
+    std::string host;
+    int port = 25565;
+};
+struct ConfigurationEvent {  // the client entered (reconfiguration) or left the configuration phase
+    bool started = true;
+};
+using CommonEvent = std::variant<PackPushEvent, PackPopEvent, CodeOfConductEvent, ResetChatEvent, TransferEvent,
+                                 ConfigurationEvent>;
 
 struct ClientStats {
     double connectMs = -1, joinMs = -1, firstChunkMs = -1;  // since start()
@@ -96,6 +128,8 @@ public:
         std::string name = "Player";
         fs::path jar;  // client jar: protocol version and chat translations
         fs::path serverRegistries;  // optional: a local Fabric server's block table (net/fabric_sync.h)
+        bool transfer = false;      // handshake with the transfer intent (ClientboundTransferPacket)
+        std::map<std::string, std::string> cookies;  // the previous server's cookies (TransferState)
     };
 
     // ClientInformation (Options.buildPlayerInformation): sent in the configuration phase, again when it changes.
@@ -125,7 +159,8 @@ public:
     void sendTickEnd();
     void sendPlayerLoaded();
     void sendPlayerAction(int action, int x, int y, int z, int face, int sequence);  // 0 start, 3 stop destroy
-    void sendUseItemOn(int x, int y, int z, int face, const float cursor[3], int sequence, int hand = 0);
+    // inside: BlockHitResult.isInside; the world border flag is never set by the client (hitBorder is unused).
+    void sendUseItemOn(int x, int y, int z, int face, const float cursor[3], int sequence, int hand = 0, bool inside = false);
     void sendCarriedItem(int slot);
     void sendCreativeSlot(int slot, int itemId, int count);  // inventory menu slot; itemId < 0 = empty
     // Any thread; before start() it only sets what the login sends. Options.broadcastOptions in the play phase.
@@ -141,20 +176,45 @@ public:
     void onPlayPeek(const std::string& packet, PacketHandler handler) { playPeeks_[packet].push_back(std::move(handler)); }
     bool sendPlay(const char* packet, const Writer& body) { return send(Play, packet, body); }  // any thread
     const Dimension& dimension() const { return dimension_; }  // network thread / after JoinEvent
-    // Data-driven registries the UI reads (enchantment, painting_variant, instrument, banner_pattern): entries in
-    // network id order with their network NBT ("" when the server sent none). Complete once inPlay().
+    // The synced dynamic registries ("minecraft:enchantment", "minecraft:cat_variant", "minecraft:chat_type"...):
+    // entries in network id order with their network NBT ("" when the server sent none). Complete once inPlay();
+    // registryVersion() changes whenever a configuration phase (re)defined them. Any thread.
     struct RegistryEntry {
         std::string id;   // "minecraft:sharpness"
         std::string nbt;  // network NBT (nameless root)
     };
-    const std::vector<RegistryEntry>& registryEntries(const std::string& registry) const;
-    // Tags (ClientboundUpdateTagsPacket of the configuration phase): registry -> tag name -> network ids; enabled
-    // feature flags (update_enabled_features). Complete once inPlay(). readTags decodes the packet (also sent in play).
+    std::vector<RegistryEntry> registryEntries(const std::string& registry) const;
+    std::string registryId(const std::string& registry, int networkId) const;  // "" when out of range
+    int registryVersion() const { return registryVersion_; }
+    // update_tags: network ids of a tag's entries ("minecraft:item", "minecraft:swords"; no '#').
+    std::vector<int> tagEntries(const std::string& registry, const std::string& tag) const;
+    std::vector<std::string> enabledFeatures() const;  // update_enabled_features ("minecraft:vanilla")
+    // All tags: registry -> tag name -> network ids (a copy); readTags decodes an update_tags payload.
     using TagMap = std::unordered_map<std::string, std::vector<int>>;
-    const std::unordered_map<std::string, TagMap>& tags() const { return tags_; }
-    const std::vector<std::string>& enabledFeatures() const { return enabledFeatures_; }
+    std::unordered_map<std::string, TagMap> tags() const;
     static bool readTags(Reader& r, std::unordered_map<std::string, TagMap>& out);
     bool inPlay() const { return phase_ == Play; }
+
+    // Configuration / common requests for the main thread (any thread may poll; normally the UI each frame).
+    void pollCommon(std::vector<CommonEvent>& out);
+    bool hasCommon() const;
+    // ServerboundResourcePackPacket in the current phase (Action ordinal: 0 loaded, 1 declined, 2 failed download,
+    // 3 accepted, 4 downloaded, 5 invalid URL, 6 failed reload, 7 discarded).
+    void sendPackStatus(const std::string& id, int action);
+    void acceptCodeOfConduct();
+    // Closes the connection on the client's side (Connection.disconnect): the reason shows as a DisconnectEvent.
+    void disconnect(const std::string& reason);
+    std::map<std::string, std::string> cookies() const;  // store_cookie (for a transfer)
+    std::map<std::string, std::string> reportDetails() const;  // custom_report_details (crash reports)
+    // ClientboundServerLinksPacket: a known link type (ServerLinks.KnownLinkType id) or the label component's NBT, and
+    // the URL. Replaced as a whole by every packet.
+    struct ServerLink {
+        int known = -1;
+        std::string label;  // network NBT of the component when known < 0
+        std::string url;
+    };
+    std::vector<ServerLink> serverLinks() const;
+    std::string serverBrand() const;                            // minecraft:brand ("vanilla")
     // The server's chunk cache view (set_chunk_cache_center / _radius, the login's distances) and simulation
     // distance (set_simulation_distance), in chunks; any thread.
     int viewDistance() const { return viewDistance_; }
@@ -169,12 +229,16 @@ private:
     bool send(Phase phase, const char* name, const Writer& body);  // only while in `phase`
     bool sendRaw(Phase phase, const char* name, const Writer& body);  // caller holds sendMutex_
     void switchPhase(Phase from, const char* ack, Phase to);           // sends `ack`, then switches
-    bool handleLogin(const std::string& name, Reader& r);
-    bool handleConfiguration(const std::string& name, Reader& r);
-    bool handlePlay(const std::string& name, Reader& r);
+    bool handleLogin(const std::string& name, Reader& r, bool& handled);
+    bool handleConfiguration(const std::string& name, Reader& r, bool& handled);
+    bool handlePlay(const std::string& name, Reader& r, bool& handled);
+    Writer cookieResponse(Reader& r);
     bool handleCommon(Phase phase, const std::string& name, Reader& r, bool& handled);
     void push(Event e);
+    void pushCommon(CommonEvent e);
     void chat(const std::string& line);
+    // NET-17: packets nothing handled, and readers that left bytes unread or overran, logged once per packet type.
+    void diagnose(Phase phase, const std::string& name, bool handled, size_t size, size_t left, bool overran);
     double sinceStart() const { return (nowSeconds() - startTime_) * 1000.0; }
 
     const GameReports& reports_;
@@ -205,9 +269,22 @@ private:
     std::vector<Dimension> dimensionTypes_;
     int biomeBits_ = 7;
     std::vector<u8> biomeIds_;  // the server's biome registry order -> World biome ids
-    std::unordered_map<std::string, std::vector<RegistryEntry>> registries_;  // written in configuration only
-    std::unordered_map<std::string, TagMap> tags_;                           // same
-    std::vector<std::string> enabledFeatures_;                               // same
+    mutable std::mutex registryMutex_;  // registries_, tags_, features_, cookies_, reportDetails_
+    std::unordered_map<std::string, std::vector<RegistryEntry>> registries_;
+    std::unordered_map<std::string, std::unordered_map<std::string, std::vector<int>>> tags_;
+    std::vector<std::string> features_;
+    std::map<std::string, std::string> cookies_, reportDetails_;
+    std::vector<ServerLink> serverLinks_;
+    std::string serverBrand_;
+    std::atomic<int> registryVersion_{0};
+    std::vector<CommonEvent> common_;  // guarded by mutex_
+    std::unordered_set<std::string> diagnosed_;
+    size_t readLeft_ = 0;       // this packet: the fewest bytes any of its readers left unread
+    bool readOverran_ = false;  // ...and whether one of them read past its end
+    void noteRead(const Reader& r) {
+        if (!r.ok) readOverran_ = true;
+        else readLeft_ = std::min(readLeft_, r.left());
+    }
     Dimension dimension_;
 };
 

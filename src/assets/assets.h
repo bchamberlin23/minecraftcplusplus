@@ -72,6 +72,9 @@ public:
 
     // reports (optional): completes partial state keys with the block's default properties.
     bool init(const fs::path& jarPath, const GameReports* reports = nullptr);
+    // Server resource packs (ui/server_config.cpp): re-reads every texture layer from the client asset stack as it is
+    // now (same layers; texturePixels() changes). Main thread, with no other thread creating states.
+    bool reloadTextures();
     // The game's exact selection / collision shapes for states created from now on (else: from the models).
     void setShapes(const BlockShapes* shapes) { shapes_ = shapes; }
 

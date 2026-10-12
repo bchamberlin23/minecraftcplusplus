@@ -23,6 +23,7 @@
 #include <unordered_map>
 
 class Game;
+class ItemRules;
 class GameReports;
 namespace net {
 class Client;
@@ -52,6 +53,7 @@ public:
     bool addPasses(Renderer& renderer);  // World, AfterTranslucent and Hud stages (+ an update in the Sky stage)
     // The local player: inventory from the UI, input hooks on the game. After the game, the UI and audio exist.
     void setPlayer(Game& game, ui::Ui& ui, const std::string& name, std::function<int()> gameMode);
+    void setItemRules(ItemRules* rules);  // item default components (spear timing in the arm / item animations)
 
     struct Stats {
         double updateMs = 0, worldMs = 0, afterMs = 0, hudMs = 0;

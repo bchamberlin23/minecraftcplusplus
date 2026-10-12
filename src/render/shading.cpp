@@ -1,4 +1,5 @@
 #include "render/shading.h"
+#include "render/pathtrace.h"
 
 #include <algorithm>
 #include <cmath>
@@ -47,7 +48,8 @@ constexpr D3D12_RESOURCE_STATES kDepthRead = D3D12_RESOURCE_STATE_DEPTH_READ | D
 
 // Root parameters of the renderer's root signature (renderer.cpp createPipelines).
 enum Root : u32 { RootDraw, RootFrame, RootQuads, RootSections, RootBlockTex, RootCounts, RootArgs, RootActive, RootColors,
-                  RootShade, RootSrvTable, RootUavTable, RootPass, RootRemap };
+                  RootShade, RootSrvTable, RootUavTable, RootPass, RootRemap, RootTlas, RootModelQuads, RootPtSrv, RootPtUav,
+                  RootPtConstants };
 
 // Must match cbuffer Shade in shading.hlsli.
 struct ShadeConstants {
@@ -155,8 +157,19 @@ ShaderSettings ShaderSettings::preset(ShaderPreset p) {
             s.shadowSplits[0] = 14, s.shadowSplits[1] = 44, s.shadowSplits[2] = 128, s.shadowSplits[3] = 320;
             s.volumetricSteps = 20, s.volumetricShift = 1, s.ssrSteps = 40, s.ssao = true;
             break;
+        case ShaderPreset::PathTraced:  // High for what lies beyond the traced radius (and the volumetrics)
+            s.pathTrace = true;
+            s.waving = false;  // the acceleration structures hold the blocks where they stand (no self-shadowing)
+            s.setPathTraceQuality(PathTraceQuality::High);
+            break;
     }
     return s;
+}
+
+void ShaderSettings::setPathTraceQuality(PathTraceQuality q) {
+    static const struct { u32 bounces, samples; float radius; } kQ[] = {{1, 1, 128}, {1, 1, 192}, {2, 1, 256}, {2, 2, 384}};
+    const auto& v = kQ[std::min(int(q), 3)];
+    ptBounces = v.bounces, ptSamples = v.samples, ptRadius = v.radius;
 }
 
 bool Renderer::parseShaderPreset(std::string_view name, ShaderPreset& out) {
@@ -164,20 +177,22 @@ bool Renderer::parseShaderPreset(std::string_view name, ShaderPreset& out) {
                                                                         {"low", ShaderPreset::Low},
                                                                         {"medium", ShaderPreset::Medium},
                                                                         {"high", ShaderPreset::High},
-                                                                        {"ultra", ShaderPreset::Ultra}};
+                                                                        {"ultra", ShaderPreset::Ultra},
+                                                                        {"pathtraced", ShaderPreset::PathTraced}};
     for (const auto& [n, p] : kNames)
         if (n == name) return out = p, true;
     return false;
 }
 
 const char* Renderer::shaderPresetName(ShaderPreset p) {
-    static const char* kNames[] = {"off", "low", "medium", "high", "ultra"};
+    static const char* kNames[] = {"off", "low", "medium", "high", "ultra", "pathtraced"};
     return kNames[int(p)];
 }
 
 void Renderer::setShaderPreset(ShaderPreset preset) {
     shaderPreset_ = preset;
     if (preset != ShaderPreset::Off) setShaderSettings(ShaderSettings::preset(preset));
+    else if (pt_) waitIdle(), pt_.reset();
 }
 
 void Renderer::setShaderSettings(const ShaderSettings& settings) {
@@ -199,6 +214,17 @@ void Renderer::setShaderSettings(const ShaderSettings& settings) {
     shading_->createShadowMap();
     if (shading_->renderW_ != shading_->renderSize(width_) || shading_->renderH_ != shading_->renderSize(height_))
         shading_->createTargets();
+    // The path tracer exists while Shaders: Path Traced is selected (its acceleration structures free with it).
+    if (shaderSettings_.pathTrace && !pt_ && pathTracingSupported()) {
+        pt_ = std::make_unique<PathTracer>(*this);
+        if (!pt_->create()) {
+            LOG("error: path tracing unavailable; using the High pipeline");
+            pt_.reset();
+        }
+    } else if (!shaderSettings_.pathTrace && pt_) {
+        pt_.reset();
+    }
+    if (pt_) pt_->createTargets();
     shading_->historyValid_ = false;
     shading_->exposureReset_ = true;
 }
@@ -831,6 +857,12 @@ void Renderer::Shading::record(ID3D12GraphicsCommandList* list, const FrameInput
     };
     const u32 zero8[8] = {};
 
+    // ---- path tracer: acceleration structures for this frame ----
+    if (r.pt_) {
+        r.pt_->build(list, in, cb, haveWorld ? activeCount : 0);
+        mark(list, "accel build");
+    }
+
     // ---- shadow maps ----
     const u32 cascades = updateMask_ ? set.cascades : 0;
     if (haveWorld && cascades && shadowMap_) {
@@ -974,6 +1006,14 @@ void Renderer::Shading::record(ID3D12GraphicsCommandList* list, const FrameInput
     list->SetPipelineState(psoDeferred_.Get());
     list->Dispatch(groups(w, 8), groups(h, 8), 1);
     mark(list, "deferred");
+    if (r.pt_) {  // the traced radius, over the deferred result
+        uavBarrier(scene_.Get());
+        uavBarrier(sceneCopy_.Get());
+        uavBarrier(linDepth_.Get());
+        flushBarriers(list);
+        r.pt_->trace(list, in, cb);
+        mark(list, "path trace");
+    }
 
     // ---- translucent terrain (water, glass) ----
     barrier(scene_.Get(), kUav, kRt);
@@ -991,7 +1031,8 @@ void Renderer::Shading::record(ID3D12GraphicsCommandList* list, const FrameInput
     passConstants(list, false, zero8);
     if (haveWorld) {
         bindWorldBuffers();
-        worldPass(psoFwd_.Get(), 2, r.cubeQuads_.Get());
+        ID3D12PipelineState* traced = r.pt_ ? r.pt_->bindTranslucent(list, in.frameIndex) : nullptr;
+        worldPass(traced ? traced : psoFwd_.Get(), 2, r.cubeQuads_.Get());
     }
     mark(list, "translucent");
 
@@ -1064,6 +1105,10 @@ void Renderer::Shading::record(ID3D12GraphicsCommandList* list, const FrameInput
         u.frameTimeMs = dt_ * 1000.0f;
         u.reset = !historyValid_;
         Upscaler* up = r.upscaler_ ? r.upscaler_ : &taa_;
+        if (r.pt_ && r.pt_->rayReconstruction()) {  // path tracing: DLSS-RR denoises and upscales
+            up = r.pt_->rayReconstruction();
+            r.pt_->fillGuides(u);
+        }
         up->evaluate(u);
         if (up != &taa_) {  // external: restore the pipeline's bindings
             list->SetDescriptorHeaps(1, heaps);

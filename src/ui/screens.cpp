@@ -545,6 +545,11 @@ void Ui::State::buildButtons() {
         half(1, y, Text(), [this] { openFriendsScreen(*this); });  // friends_screen.cpp
         buttons.back().labelFn = friendsButtonLabel;
         y += 24;
+        if (client && !client->serverLinks().empty()) {  // PauseScreen.getCustomAdditions: Dialogs.SERVER_LINKS
+            full(y, tr("menu.server_links"), [this] { openScreen(Screen::ServerLinks); });
+            buttons.back().tooltip = [this] { return Text(res.translate("menu.custom_options.tooltip")); };
+            y += 24;
+        }
         half(0, y, tr("menu.options"), [this] { openScreen(Screen::Options); });
         if (fe->cfg.singleplayer)  // title.cpp
             half(1, y, tr("menu.shareToLan"), [this] { openToLanScreen(*this); }, fe->lanOpenPort == 0);

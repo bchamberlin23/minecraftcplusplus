@@ -28,7 +28,9 @@
 #include "world/biome_colors.h"
 #include "world/lighting.h"
 #include "world/save.h"
+#include "world/io_test.h"
 #include "world/terrain.h"
+#include "worldgen/dimensions.h"
 #include "worldgen/feature_api.h"
 #include "worldgen/gen_service.h"
 #include "worldgen/gentest.h"
@@ -53,12 +55,13 @@ constexpr float kPi = 3.14159265f;
 
 struct Options {
     fs::path world, jar, screenshot;
-    int radius = 0;   // chunks of the save to load (0 = all)
+    int radius = -1;  // automatic: nearby preview in --play, whole save in the viewer; 0 = all
     int detail = 32;  // full-detail radius in chunks; LOD beyond
     float fog = 16384.0f;
     int width = 1920, height = 1080;
     bool bench = false, fly = false, debug = false, vsync = false, selftest = false;
     bool readonly = false, forceSave = false;
+    bool worldIoTest = false;
     fs::path gentestDir;
     long long gentestSeed = 0;
     int gentestChunks = 1000;
@@ -83,6 +86,7 @@ struct Options {
     // Video settings for this run (override options.txt, not saved; render/upscalers/video_settings.h).
     bool shadersGiven = false;
     std::string upscaler, upscaleQuality, frameGen, lowLatency;  // --upscaler / --upscale-quality / --framegen / --low-latency
+    std::string pathTracing;  // --path-tracing low|medium|high|ultra (with --shaders pathtraced)
     float sharpness = -1;                  // --sharpness 0..1
     int fpsLimit = -1;                     // --fps-limit (0 = unlimited)
     // Front end (ui/title.cpp): the title screen when no world or server is given.
@@ -91,16 +95,20 @@ struct Options {
     std::wstring childScript;                    // --child-script: test script for the instance the menu starts
     std::optional<LocalServer::Config::Create> create;  // --create-*: a new world, made by the local server
     std::string friendJoin;                      // --friend-join <code>: a friend's world through the friends tunnel
+    fs::path transfer;                           // --transfer <file>: a server's transfer (cookies, the server entry)
 };
 
 void usage() {
     LOG("usage: minecraftCplusplus [--world <name|path>] [--radius <chunks to load, 0 = whole save>]\n"
+        "                          (default radius: detail + 16 in --play, whole save in viewer)\n"
         "                          [--detail <full-detail chunks>] [--fog <blocks>] [--jar <client.jar>]\n"
         "                          [--size WxH] [--vsync] [--debug] [--bench] [--fly] [--screenshot <file.png>]\n"
-        "                          [--cam x,y,z[,yaw,pitch]] [--readonly] [--selftest [--save]]\n"
+        "                          [--cam x,y,z[,yaw,pitch]] [--readonly] [--selftest [--save]] [--world-io-test]\n"
         "                          [--no-gen] [--gen-radius <chunks>] [--far <blocks>] [--lod-quality <x, default 2>] [--gentest <region dir> <seed>]\n"
-        "                          [--connect <host[:port]> [--name <player>]] [--play [--lan]] [--seconds <n>] [--mods-dir <dir>]\n"
-        "                          [--shaders off|low|medium|high|ultra (default high)] [--render-scale <0.33..1>]\n"
+        "                          [--connect <host[:port]> [--name <player>] [--transfer <file>]] [--play [--lan]]\n"
+        "                          [--seconds <n>] [--mods-dir <dir>]\n"
+        "                          [--shaders off|low|medium|high|ultra|pathtraced (default high)] [--render-scale <0.33..1>]\n"
+        "                          [--path-tracing low|medium|high|ultra (default high)]\n"
         "                          [--upscaler taa|dlss|fsr|xess] [--upscale-quality native|ultraqualityplus|ultraquality|quality|\n"
         "                           balanced|performance|ultraperformance] [--sharpness 0..1]\n"
         "                          [--framegen off|dlss|dlss2x|dlss3x|dlss4x|fsr|xess] [--low-latency off|on|boost] [--fps-limit <n>]\n"
@@ -204,6 +212,7 @@ int wmain(int argc, wchar_t** argv) {
                                   &opt.cam[3], &opt.cam[4]) >= 3;
         else if (a == L"--bench") opt.bench = true;
         else if (a == L"--selftest") opt.selftest = true;
+        else if (a == L"--world-io-test") opt.worldIoTest = true;
         else if (a == L"--readonly") opt.readonly = true;
         else if (a == L"--no-gen") opt.generate = false;
         else if (a == L"--shot-frame") opt.shotFrame = _wtoi(next().c_str());
@@ -234,6 +243,7 @@ int wmain(int argc, wchar_t** argv) {
         else if (a == L"--render-scale") opt.renderScale = float(_wtof(next().c_str()));
         else if (a == L"--upscaler") opt.upscaler = fs::path(next()).string();
         else if (a == L"--upscale-quality") opt.upscaleQuality = fs::path(next()).string();
+        else if (a == L"--path-tracing") opt.pathTracing = fs::path(next()).string();
         else if (a == L"--framegen") opt.frameGen = fs::path(next()).string();
         else if (a == L"--low-latency") opt.lowLatency = fs::path(next()).string();
         else if (a == L"--sharpness") opt.sharpness = float(_wtof(next().c_str()));
@@ -243,6 +253,7 @@ int wmain(int argc, wchar_t** argv) {
         else if (a == L"--servers-dat") opt.serversDat = next();
         else if (a == L"--menu") opt.menu = fs::path(next()).string();
         else if (a == L"--child-script") opt.childScript = next();
+        else if (a == L"--transfer") opt.transfer = next();
         else if (a == L"--friend-join") opt.friendJoin = fs::path(next()).string(), opt.connect = "friend", opt.generate = false;
         else if (a == L"--handoff" || a == L"--window") next();  // platform/launch.h
         else if (a == L"--shaderpack" || a == L"--pack-option") packs::commandLine(a, next());  // render/packs/pack_api.h
@@ -257,6 +268,20 @@ int wmain(int argc, wchar_t** argv) {
             else if (a == L"--create-difficulty") opt.create->difficulty = s;
             else if (a == L"--create-cheats") opt.create->cheats = v == L"1";
             else if (a == L"--create-structures") opt.create->structures = v != L"0";
+            else if (a == L"--create-type") opt.create->levelType = s;          // ui/world_create.cpp
+            else if (a == L"--create-generator") opt.create->generatorSettings = s;
+            else if (a == L"--create-biome") opt.create->singleBiome = s;
+            else if (a == L"--create-bonus") opt.create->bonusChest = v == L"1";
+            else if (a == L"--create-gamerule" && s.find('=') != std::string::npos)
+                opt.create->gameRules.emplace_back(s.substr(0, s.find('=')), s.substr(s.find('=') + 1));
+            else if (a == L"--create-packs" || a == L"--create-disabled-packs") {
+                auto& list = a == L"--create-packs" ? opt.create->enabledPacks : opt.create->disabledPacks;
+                for (size_t i = 0; i <= s.size();) {
+                    const size_t comma = std::min(s.find(',', i), s.size());
+                    if (comma > i) list.push_back(s.substr(i, comma - i));
+                    i = comma + 1;
+                }
+            }
         } else {
             usage();
             return 1;
@@ -267,11 +292,11 @@ int wmain(int argc, wchar_t** argv) {
         opt.create->gameMode = "survival", opt.create->hardcore = true, opt.create->difficulty = "hard";
     // No world, server or tool given: the title screen, over a live world panorama (ui/title.cpp).
     const bool menu = opt.world.empty() && opt.connect.empty() && !opt.play && opt.gentestDir.empty() && !opt.bench &&
-                      !opt.selftest && !opt.audioTest;
+                      !opt.selftest && !opt.audioTest && !opt.worldIoTest;
     if (menu) {
-        opt.detail = std::min(opt.detail, 10);        // a vista: little full detail, far terrain beyond
+        opt.detail = std::min(opt.detail, 10);  // like the game's panorama: full detail only, fogged at its edge
         if (opt.genRadius < 0) opt.genRadius = 10;
-        if (opt.farBlocks < 0) opt.farBlocks = opt.fog = std::min(opt.fog, 8192.0f);
+        if (opt.farBlocks < 0) opt.farBlocks = 0, opt.fog = std::min(opt.fog, float(opt.detail * 16));
         if (opt.sky.time < 0) opt.sky.time = 1500;  // morning light
     }
 
@@ -303,7 +328,7 @@ int wmain(int argc, wchar_t** argv) {
     }
     // Friends (social/friends.h): presence, invites and friends' worlds through a peer-to-peer tunnel. Off for tools and
     // benchmarks, and for scripted test runs unless they name a friends folder (MCPP_FRIENDS_DIR).
-    const bool friendsOn = !opt.friendJoin.empty() || (!opt.bench && !opt.selftest && !opt.audioTest && opt.gentestDir.empty() &&
+    const bool friendsOn = !opt.friendJoin.empty() || (!opt.bench && !opt.selftest && !opt.audioTest && !opt.worldIoTest && opt.gentestDir.empty() &&
                                                        (opt.script.empty() || _wgetenv(L"MCPP_FRIENDS_DIR")));
     if (friendsOn &&
         !social::Friends::get().start({social::Friends::defaultDir(), opt.name != "Player" ? opt.name : ownership.playerName, {}}))
@@ -316,7 +341,7 @@ int wmain(int argc, wchar_t** argv) {
             if (!social::Friends::parseCode(opt.friendJoin, key)) return friendError = "That is not a friend code.", u16(0);
             return social::Friends::get().join(key, 40.0, friendError);
         });
-    if (opt.gentestDir.empty() && !opt.audioTest) upscale::preinit();  // Streamline's slInit, beside the loading
+    if (opt.gentestDir.empty() && !opt.audioTest && !opt.worldIoTest) upscale::preinit();  // Streamline's slInit, beside the loading
     const fs::path saves = opt.savesDir.empty() ? mc / "saves" : opt.savesDir;
     // The title screen's panorama is a world of its own, generated once into a cache (seed and spot picked at
     // random, ui::writeTitleWorld) and loaded from it afterwards: detailed from the first frame.
@@ -334,7 +359,8 @@ int wmain(int argc, wchar_t** argv) {
                         : fs::exists(opt.world / "level.dat") ? opt.world
                                                               : saves / opt.world;
     if (opt.create && fs::exists(worldDir / "level.dat")) opt.create.reset();  // made already (a restart)
-    if (opt.connect.empty() && !menu && !(opt.play && opt.create) &&
+    if (opt.radius < 0) opt.radius = opt.play ? opt.detail + 16 : 0;
+    if (opt.connect.empty() && !menu && !opt.worldIoTest && !(opt.play && opt.create) &&
         (worldDir.empty() || !fs::exists(worldDir / "level.dat"))) {
         LOG("error: world not found");
         return 1;
@@ -367,12 +393,6 @@ int wmain(int argc, wchar_t** argv) {
             std::string error;
             lanHost.start(opt.name + " - " + worldDir.filename().string(), localServer->port(), localServer->port(), false, error);
         }
-        if (localServer->upgrading() || localServer->creating()) {  // the server writes the save first: read it after
-            LOG(localServer->creating() ? "server  creating the world first..." : "server  upgrading the world to %s first...",
-                version.c_str());
-            while (!localServer->ready() && localServer->running()) Sleep(100);
-            if (!localServer->ready()) return 1;
-        }
     }
 
     Timer t;
@@ -381,8 +401,10 @@ int wmain(int argc, wchar_t** argv) {
     const bool haveReports = reports.load(mc, version, fs::path(local ? local : L".") / "minecraftCplusplus" / "reports");
     if (!haveReports) LOG("warning: block definitions unavailable; generated terrain may miss some block states");
     audio::AudioSystem audio;  // loads in the background
+    // Automated runs (a script, or MCPP_HEADLESS=1) stay out of the owner's way: no focus, no cursor, no sound.
+    const bool headless = !opt.script.empty() || _wgetenv(L"MCPP_HEADLESS");
     audio.init({mc, version, fs::path(local ? local : L".") / "minecraftCplusplus", haveReports ? &reports : nullptr,
-                opt.audioCapture});
+                opt.audioCapture, headless});
     if (!opt.audioCapture.empty()) audio.waitReady(60.0);
     BlockShapes blockShapes;  // exact selection / collision shapes from the game's code (cached), parsed meanwhile
     auto shapesTask = std::async(std::launch::async, [&] {
@@ -391,6 +413,7 @@ int wmain(int argc, wchar_t** argv) {
     BlockRegistry registry;
     if (!registry.init(jar, haveReports ? &reports : nullptr)) return 1;
     if (shapesTask.get()) registry.setShapes(&blockShapes);  // before the world creates its block states
+    if (opt.worldIoTest) return runWorldIoTest(registry, gameDataVersion(jar));
     // Independent loaders run alongside the world load below (each on its own thread).
     BiomeColors biomeColors;  // grass / foliage / water tints from the game's biome data
     auto biomeTask = std::async(std::launch::async, [&] { return biomeColors.init(jar); });
@@ -404,11 +427,23 @@ int wmain(int argc, wchar_t** argv) {
     LOG("assets  %8.1f ms  %u textures from the installed game", t.ms(), registry.textureCount());
     if (!opt.gentestDir.empty()) return runGenTest(registry, jar, opt.gentestDir, opt.gentestSeed, opt.gentestChunks);
 
+    // Creating/upgrading writes the save first. Load independent assets while the JVM does that work,
+    // then wait only at the first read of player/chunk data.
+    if (localServer && (localServer->upgrading() || localServer->creating())) {
+        LOG(localServer->creating() ? "server  creating the world first..." : "server  upgrading the world to %s first...",
+            version.c_str());
+        while (!localServer->ready() && localServer->running()) Sleep(10);
+        if (!localServer->ready()) return 1;
+    }
     PlayerStart player = World::readPlayer(worldDir);
     if (opt.haveCam) {
         player.x = opt.cam[0], player.y = opt.cam[1] - 1.62, player.z = opt.cam[2];
         player.yaw = float(opt.cam[3]), player.pitch = float(opt.cam[4]);
     }
+    // The save's dimension to show: --dimension, else where the player is (Nether / End / a data pack's own).
+    const std::string viewDim = !opt.sky.dimension.empty() ? opt.sky.dimension : menu ? "minecraft:overworld" : player.dimension;
+    const bool viewOverworld = viewDim == "minecraft:overworld";
+    if (!opt.play && opt.connect.empty() && opt.sky.dimension.empty()) opt.sky.dimension = viewDim;  // its sky / fog
     t = Timer();
     World world;
     LoadStats ls;
@@ -417,8 +452,18 @@ int wmain(int argc, wchar_t** argv) {
     if (menu && !titleChunks) world.initEmpty(-4, 19);  // the title screen's world is all generated (overworld height)
     if (opt.connect.empty() && (!menu || titleChunks))
         worldTask = std::async(std::launch::async, [&] {
-            return world.load(worldDir, registry, int(std::floor(player.x)) >> 4, int(std::floor(player.z)) >> 4,
-                              opt.radius, ls);
+            if (localServer && !fs::exists(worldDir / "region") &&
+                !fs::exists(worldDir / "dimensions" / "minecraft" / "overworld" / "region")) {
+                // A freshly created server may still hold all its chunks in memory.
+                world.initEmpty(-4, 19);
+                return true;
+            }
+            const bool loaded = world.load(worldDir, registry, int(std::floor(player.x)) >> 4,
+                                           int(std::floor(player.z)) >> 4, opt.radius, ls, viewDim);
+            // An existing world can have no saved overworld chunks near this position (e.g. its
+            // owner logged out in the Nether). The server supplies the authoritative destination.
+            if (!loaded && localServer) world.initEmpty(-4, 19);
+            return loaded || bool(localServer);
         });
     const bool haveBiomeColors = biomeTask.get();
     if (!haveBiomeColors) LOG("warning: biome colours unavailable; using the default tints");
@@ -448,6 +493,9 @@ int wmain(int argc, wchar_t** argv) {
     // --- multiplayer (--connect): log in; the world then comes from the server instead of a save ---
     std::unique_ptr<net::Client> netClient;
     std::unique_ptr<net::Session> session;
+    std::unique_ptr<net::Session> joiningSession;  // logging in on a worker (see the loop)
+    bool connectDeferred = false;  // --connect: the configuration waits for the player (prompts): joined in the loop
+    std::string serverEntry = opt.connect;  // the server list entry of this connection (a transfer keeps the first)
     if (friendTunnel.valid()) {  // the friend's world: through the tunnel's loopback port
         const u16 port = friendTunnel.get();
         if (!port) {
@@ -467,28 +515,78 @@ int wmain(int argc, wchar_t** argv) {
         sky.attach(*netClient, haveReports ? &reports : nullptr);
         packs::attachNetwork(*netClient);  // shader pack uniforms (isElytraFlying, heavyFog)
         ui.registerHandlers(*netClient);
-        if (!netClient->start({host, port, opt.name, jar})) return 1;
+        net::Client::Config config{host, port, opt.name, jar};
+        if (!opt.transfer.empty()) {  // ClientboundTransferPacket: the previous server's cookies and list entry
+            config.transfer = true;
+            std::vector<u8> bytes;
+            const auto j = readFile(opt.transfer, bytes) ? nlohmann::json::parse(bytes.begin(), bytes.end(), nullptr, false)
+                                                         : nlohmann::json();
+            if (j.is_object()) {
+                serverEntry = j.value("entry", serverEntry);
+                for (const auto& [key, value] : j.value("cookies", nlohmann::json::object()).items()) {
+                    const std::string h = value.is_string() ? value.get<std::string>() : std::string();
+                    std::string& payload = config.cookies[key];
+                    for (size_t i = 0; i + 1 < h.size(); i += 2) payload += char(std::stoi(h.substr(i, 2), nullptr, 16));
+                }
+            }
+            std::error_code ec;
+            fs::remove(opt.transfer, ec);
+        }
+        if (!netClient->start(config)) return 1;
         session = std::make_unique<net::Session>(*netClient, world, registry, reports);
         net::Dimension dim;
-        if (!session->join(30.0, player, dim)) return 1;
-        world.initEmpty(std::min(-4, dim.minY >> 4), std::max(19, (dim.minY + dim.height - 1) >> 4));
-        LOG("server  %8.1f ms  joined %s as %s at %.1f %.1f %.1f", t.ms(), opt.connect.c_str(), opt.name.c_str(),
-            player.x, player.y, player.z);
+        if (!session->join(30.0, player, dim, &connectDeferred) && !connectDeferred) return 1;
+        if (connectDeferred) {  // a pack prompt or the code of conduct: the window shows them, the join goes on there
+            joiningSession = std::move(session);
+            world.initEmpty(-4, 19);
+            LOG("server  %8.1f ms  the server's configuration needs the player; joining continues in the window", t.ms());
+        } else {
+            world.initEmpty(std::min(-4, dim.minY >> 4), std::max(19, (dim.minY + dim.height - 1) >> 4));
+            LOG("server  %8.1f ms  joined %s as %s at %.1f %.1f %.1f", t.ms(), opt.connect.c_str(), opt.name.c_str(),
+                player.x, player.y, player.z);
+        }
     }
     // --- end multiplayer ---
     if (worldTask.valid() && !worldTask.get()) return 1;
     if (!session) LOG("world   %8.1f ms  %zu regions, %zu chunks, %zu sections, %.0f MB read, %zu block states%s", t.ms(),
         ls.regions, ls.chunks, ls.sections, double(ls.compressedBytes) / (1 << 20), registry.blockCount(),
-        ls.unsupportedChunks ? " (some LZ4 chunks skipped)" : "");
+        ls.unsupportedChunks ? " (some chunks in an unreadable format skipped)" : "");
+    if (!session && !viewOverworld) LOG("world   showing %s", viewDim.c_str());
+
+    std::future<bool> joining;
+    PlayerStart joinStart;
+    net::Dimension joinDim;
+    Timer joinTimer;
+    bool joinFailed = false;
+    auto beginLocalJoin = [&] {
+        joinTimer = Timer();
+        netClient = std::make_unique<net::Client>(reports, registry);
+        audio.attachNet(*netClient);
+        if (haveEntities) entities.attach(*netClient), blockEntityRenderer.attach(*netClient), visuals.attach(*netClient);
+        gameplay.attach(*netClient);
+        sky.attach(*netClient, haveReports ? &reports : nullptr);
+        packs::attachNetwork(*netClient);
+        ui.registerHandlers(*netClient);
+        const net::Client::Config config{"127.0.0.1", localServer->port(), opt.name, jar, localServer->stateTable()};
+        joining = std::async(std::launch::async, [&, config] {
+            if (!netClient->start(config)) return false;
+            joiningSession = std::make_unique<net::Session>(*netClient, world, registry, reports);
+            return joiningSession->join(30.0, joinStart, joinDim);
+        });
+    };
+    // New/upgraded worlds are already ready here: overlap their protocol setup/login with
+    // GPU initialization and the initial terrain builds instead of waiting for the frame loop.
+    if (localServer && localServer->ready()) beginLocalJoin();
 
     // Benchmarks and the self-test never write to a world unless --save is given.
-    WorldSaver saver(world, registry, worldDir);
+    WorldSaver saver(world, registry, worldDir, viewDim);
     const bool wantSave = !session && !localServer && (opt.forceSave || (!opt.readonly && !opt.bench && !opt.selftest));
     const bool canSave = wantSave && saver.lock();
     if (wantSave && !canSave) LOG("note: the world is open in another program (session.lock); running read-only");
 
     Window window;
     // An instance started by another (platform/launch.h) opens where that window was, invisible until its first frames.
+    window.setHeadless(headless);
     if (!window.create(L"minecraftCplusplus", opt.width, opt.height, launch::placement(), launch::handoffChild())) {
         LOG("error: cannot create window");
         return 1;
@@ -524,18 +622,24 @@ int wmain(int argc, wchar_t** argv) {
     LOG("lod     %8.1f ms  %zu coarse nodes (levels 1-%d) for the whole world", t.ms(), terrain.stats().coarseNodes,
         Terrain::kMaxLevel);
     t = Timer();
-    terrain.update(cam.x, cam.y, cam.z, true);
+    if (opt.bench || opt.selftest || menu) terrain.update(cam.x, cam.y, cam.z, true);
+    else terrain.prime(cam.x, cam.y, cam.z);
     LOG("detail  %8.1f ms  %zu full-detail sections around the camera", t.ms(), terrain.stats().detailResident);
     LOG("total   %8.1f ms  launch to first frame | %.0f / %.0f MB geometry arena on %s", total.ms(),
         double(renderer.arenaBytesUsed()) / (1 << 20), double(renderer.arenaBytesTotal()) / (1 << 20),
         renderer.adapterName().c_str());
 
-    // Chunks the save does not have are generated from the world seed with the game's own rules.
+    // Chunks the save does not have are generated from the world seed with the game's own rules: each dimension
+    // with the generator its WorldGenSettings name (noise settings and biome source, flat, debug; data-pack ones).
     std::unique_ptr<wg::DataPack> gamedata;
-    std::unique_ptr<wg::ChunkGenerator> generator;
+    wg::WorldGenSettings genSettings;
+    std::string genDimension;  // the dimension the generators below are for ("" while there are none)
+    std::shared_ptr<wg::ChunkGenerator> generator;  // shared with the far threads (they keep the one they started with)
+    std::mutex generatorMutex;
     std::unique_ptr<wg::FeatureSystem> features;
     std::unique_ptr<wg::StructureSystem> structures;  // villages, mineshafts... placed with the features
     std::unique_ptr<wg::GenService> genService;
+    std::deque<std::unique_ptr<wg::GenChunk>> genBacklog;  // generated chunks waiting for the per-frame budget
     struct FarStop {  // destroyed before the generator the far threads call into
         Terrain& terrain;
         ~FarStop() { terrain.stopFar(); }
@@ -543,65 +647,108 @@ int wmain(int argc, wchar_t** argv) {
     i64 seed = 0;
     std::mt19937_64 titleRandom(std::random_device{}());
     if (const char* s = std::getenv("MCPP_TITLE_SEED")) titleRandom.seed(std::strtoull(s, nullptr, 10));  // tests
-    if (opt.generate && (menu && !titleCached ? (seed = i64(titleRandom()), true) : World::readSeed(worldDir, seed))) {
-        t = Timer();
-        gamedata = std::make_unique<wg::DataPack>();
-        try {  // data packs can change worldgen in ways the generator cannot read: then no local generation
-            if (gamedata->open(jar)) generator = std::make_unique<wg::ChunkGenerator>(*gamedata, registry, seed);
-        } catch (const std::exception& e) {
-            LOG("error: world generation from the data packs failed: %s (the server still generates the world)", e.what());
+    // Saved chunks next to generated ones are read-only neighbours for decoration.
+    auto exists = [&world](int cx, int cz) {
+        std::shared_lock lock(world.mutex());
+        return world.hasChunk(cx, cz);
+    };
+    auto load = [&world, &generator](int cx, int cz, wg::GenChunk& out) {
+        out.init(cx, cz, generator->minY(), generator->height());
+        u16 ids[4096];
+        for (int sy = out.minY >> 4; sy < (out.minY + out.height) >> 4; ++sy) {
+            {  // the lock per section only: a preempted worker holding it for a whole chunk made the frame
+               // thread (inserting chunks) wait a scheduler quantum
+                std::shared_lock lock(world.mutex());
+                const World::Region* r = nullptr;
+                const World::Section* s = world.section(cx, sy, cz, &r);
+                if (!s) continue;
+                World::decode(*r, *s, ids);
+            }
+            for (int i = 0; i < 4096; ++i) out.set(i & 15, sy * 16 + (i >> 8), (i >> 4) & 15, ids[i]);
+        }
+    };
+    // The generator stack of one dimension; the previous one's workers are stopped first. In singleplayer too: the
+    // server sends the chunks it simulates, these fill the view beyond them (and are replaced by the server's).
+    bool farStarted = false;
+    auto startWorldgen = [&](const std::string& dim) {
+        genService.reset();           // joins its workers
+        terrain.setFarActive(false);  // drops the previous dimension's far terrain (running jobs finish unused)
+        genBacklog.clear();
+        structures.reset(), features.reset();
+        {
+            std::lock_guard lock(generatorMutex);
             generator.reset();
         }
-        if (generator && generator->ok()) {
-            // Saved chunks next to generated ones are read-only neighbours for decoration.
-            auto exists = [&world](int cx, int cz) {
-                std::shared_lock lock(world.mutex());
-                return world.hasChunk(cx, cz);
-            };
-            auto load = [&world, &generator](int cx, int cz, wg::GenChunk& out) {
-                out.init(cx, cz, generator->minY(), generator->height());
-                u16 ids[4096];
-                for (int sy = out.minY >> 4; sy < (out.minY + out.height) >> 4; ++sy) {
-                    {  // the lock per section only: a preempted worker holding it for a whole chunk made the frame
-                       // thread (inserting chunks) wait a scheduler quantum
-                        std::shared_lock lock(world.mutex());
-                        const World::Region* r = nullptr;
-                        const World::Section* s = world.section(cx, sy, cz, &r);
-                        if (!s) continue;
-                        World::decode(*r, *s, ids);
-                    }
-                    for (int i = 0; i < 4096; ++i) out.set(i & 15, sy * 16 + (i >> 8), (i >> 4) & 15, ids[i]);
-                }
-            };
-            // In singleplayer too: the server sends the chunks it simulates, these fill the view beyond them
-            // (and are replaced by the server's when it sends them).
-            Timer ft;
-            features = std::make_unique<wg::FeatureSystem>(generator->noise(), registry, generator->biomes(),
-                                                           generator->possibleBiomes());
-            LOG("features    %6.1f ms", ft.ms());
-            structures = std::make_unique<wg::StructureSystem>(*generator, features.get(), registry, seed);
-            if (structures->ok()) features->setStructures(structures.get());
-            const char* genThreads = std::getenv("MCPP_GEN_THREADS");  // profiling override
+        genDimension.clear();
+        const wg::DimensionSpec* spec = genSettings.find(dim);
+        if (!spec) return LOG("worldgen: no generator for %s", dim.c_str()), false;
+        auto fresh = std::make_shared<wg::ChunkGenerator>(*gamedata, registry, genSettings.seed, *spec);
+        if (!fresh->ok()) return false;
+        {
+            std::lock_guard lock(generatorMutex);
+            generator = std::move(fresh);
+        }
+        Timer ft;
+        try {  // data packs can change worldgen in ways the generator cannot read: then no local generation
+            features = std::make_unique<wg::FeatureSystem>(*generator, registry);
+            if (genSettings.generateStructures) {
+                structures = std::make_unique<wg::StructureSystem>(*generator, features.get(), registry, genSettings.seed);
+                if (structures->ok()) features->setStructures(structures.get());
+            }
+        } catch (const std::exception& e) {
+            LOG("error: decoration of %s from the data packs failed: %s (far terrain only)", dim.c_str(), e.what());
+            structures.reset(), features.reset();
+        }
+        LOG("features    %6.1f ms  %s (%s)", ft.ms(), dim.c_str(), spec->generator.value("type", std::string("?")).c_str());
+        const char* genThreads = std::getenv("MCPP_GEN_THREADS");  // profiling override
+        if (features)
             genService = std::make_unique<wg::GenService>(*generator, features.get(), exists, load,
                                                           genThreads ? unsigned(std::atoi(genThreads))
                                                                      : std::max(2u, Jobs::threadCount() / 2));
-            // Beyond the generated chunks: terrain approximated per region at LOD resolution.
+        // Beyond the generated chunks: terrain approximated per region at LOD resolution.
+        if (!farStarted)
             terrain.enableFar(
-                [&generator](int rx, int rz, int level, const FarColumns* coarser, FarColumns& out) {
+                [&generator, &generatorMutex](int rx, int rz, int level, const FarColumns* coarser, FarColumns& out) {
+                    std::shared_ptr<wg::ChunkGenerator> gen;
+                    {
+                        std::lock_guard lock(generatorMutex);
+                        gen = generator;
+                    }
+                    if (!gen) return;
                     thread_local wg::DensityContext ctx;
                     thread_local std::vector<u16> genBiomes;
                     thread_local std::vector<u8> toWorld;  // generator biome id -> World biome id
-                    generator->generateCoarse(rx, rz, level, out, ctx, coarser, nullptr, &genBiomes);
+                    thread_local const wg::ChunkGenerator* owner = nullptr;
+                    if (owner != gen.get()) toWorld.clear(), ctx.clear(), owner = gen.get();
+                    gen->generateCoarse(rx, rz, level, out, ctx, coarser, nullptr, &genBiomes);
                     std::vector<u8>& biomes = out.biomes;
                     biomes.resize(genBiomes.size());
                     for (size_t i = 0; i < genBiomes.size(); ++i) {
                         const u16 b = genBiomes[i];
                         if (b >= toWorld.size()) toWorld.resize(size_t(b) + 1, 0);
-                        if (!toWorld[b]) toWorld[b] = u8(World::biomeId(generator->biomes().name(b)) + 1);
+                        if (!toWorld[b]) toWorld[b] = u8(World::biomeId(gen->biomes().name(b)) + 1);
                         biomes[i] = u8(toWorld[b] - 1);
                     }
                 },
                 generator->minY(), std::max(2u, Jobs::threadCount() / 4));
+        farStarted = true;
+        terrain.setFarActive(true);
+        genDimension = dim;
+        return true;
+    };
+    if (opt.generate && (menu && !titleCached ? (seed = i64(titleRandom()), true) : World::readSeed(worldDir, seed))) {
+        t = Timer();
+        gamedata = std::make_unique<wg::DataPack>();
+        try {
+            if (gamedata->open(jar)) {
+                if (menu || !wg::readWorldGenSettings(worldDir, *gamedata, genSettings))
+                    genSettings = wg::defaultWorldGenSettings(*gamedata, seed);
+                startWorldgen(viewDim);  // the save's dimension; play mode switches with the server's
+            }
+        } catch (const std::exception& e) {
+            LOG("error: world generation from the data packs failed: %s (the server still generates the world)", e.what());
+            genService.reset(), structures.reset(), features.reset(), generator.reset();
+            genDimension.clear();
         }
         LOG("worldgen %7.1f ms  seed %lld, %s", t.ms(), (long long)seed,
             genService                       ? "generating missing chunks in the background"
@@ -618,7 +765,6 @@ int wmain(int argc, wchar_t** argv) {
             },
             gameDataVersion(jar));
     double genScan = 0, evictScan = 0;
-    std::deque<std::unique_ptr<wg::GenChunk>> genBacklog;  // generated chunks waiting for the per-frame budget
     Lighting genLighting(world, registry);
 
     if (menu && !titleCached && generator && generator->ok()) {
@@ -663,6 +809,7 @@ int wmain(int argc, wchar_t** argv) {
         if (!ui::writeTitleWorld(titleDir, seed, gameDataVersion(jar), pos, player.yaw, player.pitch))
             LOG("warning: could not write the title screen world to %s", titleDir.string().c_str());
     }
+    bool texturesReloaded = false;  // server resource packs: the block textures need uploading
     Game game(world, registry, terrain, renderer, player);
     if (session) session->attach(game, terrain);
     {  // Front end: title screen, lists, switching instances (ui/title.cpp)
@@ -692,6 +839,11 @@ int wmain(int argc, wchar_t** argv) {
             LOG("lan: open to LAN on port %u as \"%s\"", port, motd.c_str());
             return true;
         };
+        fe.serverAddress = serverEntry;
+        fe.reloadResources = [&] {  // server resource packs: the block textures (uploaded before the next frame)
+            texturesReloaded = registry.reloadTextures();
+            return texturesReloaded;
+        };
         fe.pauseServer = [&](bool paused) {  // the local server's console (op level 4)
             if (localServer) localServer->command(paused ? "tick freeze" : "tick unfreeze");
         };
@@ -700,7 +852,8 @@ int wmain(int argc, wchar_t** argv) {
     if (!ui.init({&registry, &renderer, &window, &game, &world, &terrain, opt.detail})) return 1;
     if (session) ui.attachSession(netClient.get(), session.get());
     if (!opt.script.empty()) ui.loadScript(opt.script);
-    if (!packs::commandLinePack() && !ui.settings().shaderPack.empty())  // the saved shader pack (render/packs)
+    // The saved shader pack (render/packs), unless this run's command line picks a pack or a shader mode.
+    if (!packs::commandLinePack() && !opt.shadersGiven && !ui.settings().shaderPack.empty())
         packs::selectPack(renderer, ui.settings().shaderPack);
     {  // Video settings: options.txt, then this run's command line (not saved). Applies shaders, upscaler, frame gen.
         VideoSettings v = ui.settings().video;
@@ -714,6 +867,8 @@ int wmain(int argc, wchar_t** argv) {
         if (!opt.upscaleQuality.empty() && !VideoSettings::parseQuality(opt.upscaleQuality, v.quality))
             LOG("warning: unknown --upscale-quality %s", opt.upscaleQuality.c_str());
         if (!opt.frameGen.empty() && !v.parseFrameGen(opt.frameGen)) LOG("warning: unknown --framegen %s", opt.frameGen.c_str());
+        if (!opt.pathTracing.empty() && !VideoSettings::parsePathTracing(opt.pathTracing, v.pathTracing))
+            LOG("warning: unknown --path-tracing %s", opt.pathTracing.c_str());
         if (!opt.lowLatency.empty() && !VideoSettings::parseLowLatency(opt.lowLatency, v.lowLatency))
             LOG("warning: unknown --low-latency %s", opt.lowLatency.c_str());
         if (opt.sharpness >= 0) v.sharpness = opt.sharpness;
@@ -730,17 +885,32 @@ int wmain(int argc, wchar_t** argv) {
     if (haveEntities) {
         gameplay.setEntities(&entities);
         blockEntityRenderer.setRules(&gameplay.rules());
+        visuals.setItemRules(&gameplay.rules());
+        entities.onUntrackedEntityEvent = [&](int id, int event) {  // our own entity events
+            if (event == 2 && session && id == session->entityId()) gameplay.kineticHit();  // EntityEvent.KINETIC_HIT
+        };
         blockEntityRenderer.setBlockSink([&](const std::vector<net::BlockChange>& c) {
             if (session) session->applyClientBlocks(c);
         });
+        game.pistonSource = [&](std::vector<Physics::Piston>& out) { blockEntityRenderer.pistonMovers(out); };
     }
     gameplay.setPlayer(game, ui);
+    game.playerName = opt.name;
     if (haveEntities) ui.setEntities(&entities);  // inventory / mount previews, player list heads
     game.onEntityClick = [&](bool attack, bool use, double blockDistance) {  // attack / use entities first
         if (!session || !haveEntities) return false;
         const CameraState c = game.camera();
         const double eye[3] = {c.x, c.y, c.z}, cp = std::cos(c.pitch);
         const double dir[3] = {-std::sin(c.yaw) * cp, -std::sin(c.pitch), std::cos(c.yaw) * cp};
+        if (attack && game.attackMaxReach >= 0) {  // the held weapon's attack_range (LocalPlayer.raycastHitResult)
+            const double* v = game.player().vel;
+            const double forward = v[0] * dir[0] + v[1] * dir[1] + v[2] * dir[2];  // getKnownMovement . look
+            return entities.attackInRange(eye, dir, game.attackMinReach, game.attackMaxReach, game.attackMargin, forward,
+                                          [&](const double o[3], const double d[3], double max) {
+                                              const RayHit h = game.physics().raycast(o, d, max);
+                                              return h.hit ? h.distance : max;
+                                          });
+        }
         return entities.click(eye, dir, attack, use, blockDistance, game.entityReach, game.player().sneaking);
     };
     // Music, ambience, sky / fog colours and rain or snow follow the surface biome the world stores (from the
@@ -785,19 +955,20 @@ int wmain(int argc, wchar_t** argv) {
             st.ok ? "" : " (with errors)");
     };
     bool escWas = false;
-    std::future<bool> joining;  // singleplayer login on a worker (see the loop)
-    std::unique_ptr<net::Session> joiningSession;
-    PlayerStart joinStart;
-    net::Dimension joinDim;
-    Timer joinTimer;
-    bool joinFailed = false;
     const double loopStart = nowSeconds();
+    const bool smoothReveal = !opt.bench && !opt.selftest && !menu;
+    if (smoothReveal) renderer.beginWorldReveal(cam.x, cam.z);
+    double previousStreamX = cam.x, previousStreamZ = cam.z;
     Timer frameEnd;  // window.pump() + anything between frames
     for (int frame = 0; window.pump(); ++frame) {
         const double pumpMs = frameEnd.ms();
         u32 w, h;
         if (window.takeResize(w, h)) renderer.resize(w, h);
         const Timer frameTop;
+        if (texturesReloaded) {  // server resource packs changed block textures (ui/server_config.cpp)
+            texturesReloaded = false;
+            renderer.uploadTextures(registry.texturePixels(), registry.textureCount());
+        }
         renderer.beginFrame();  // low-latency sleep (Reflex / XeLL / Anti-Lag 2), frame limiter, simulation markers
         const double beginMs = frameTop.ms();
         double netMs = 0;
@@ -807,31 +978,29 @@ int wmain(int argc, wchar_t** argv) {
         // Singleplayer: once the local server is up, connect and log in on a worker (protocol tables, language,
         // block ids, then the server's login: ~1 s that used to freeze the already visible world), then attach here.
         if (localServer && !session && !joining.valid() && !joinFailed && localServer->ready()) {
+            beginLocalJoin();
+        }
+        if (connectDeferred && !joining.valid()) {  // --connect after the prompts: no timeout while configuring
+            connectDeferred = false;
             joinTimer = Timer();
-            netClient = std::make_unique<net::Client>(reports, registry);
-            audio.attachNet(*netClient);
-            if (haveEntities) entities.attach(*netClient), blockEntityRenderer.attach(*netClient), visuals.attach(*netClient);
-            gameplay.attach(*netClient);
-            sky.attach(*netClient, haveReports ? &reports : nullptr);
-            packs::attachNetwork(*netClient);
-            ui.registerHandlers(*netClient);
-            const net::Client::Config config{"127.0.0.1", localServer->port(), opt.name, jar, localServer->stateTable()};
-            joining = std::async(std::launch::async, [&, config] {
-                if (!netClient->start(config)) return false;
-                joiningSession = std::make_unique<net::Session>(*netClient, world, registry, reports);
-                return joiningSession->join(30.0, joinStart, joinDim);
-            });
+            joining = std::async(std::launch::async, [&] { return joiningSession->join(30.0, joinStart, joinDim, nullptr, true); });
         }
         if (joining.valid() && joining.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-            if (joining.get()) {
+            const bool joined = joining.get();
+            if (joined || !localServer) {  // --connect: a failure shows as the session's disconnect
+                if (!joined && netClient->alive()) netClient->disconnect("Timed out");
                 session = std::move(joiningSession);
                 Player& p = game.player();
-                p.pos[0] = joinStart.x, p.pos[1] = joinStart.y, p.pos[2] = joinStart.z;
-                p.yaw = joinStart.yaw * kPi / 180.0f, p.pitch = joinStart.pitch * kPi / 180.0f;
-                session->setKeepForgotten(true);  // unloaded server chunks stay visible
+                if (joined) {
+                    p.pos[0] = joinStart.x, p.pos[1] = joinStart.y, p.pos[2] = joinStart.z;
+                    p.yaw = joinStart.yaw * kPi / 180.0f, p.pitch = joinStart.pitch * kPi / 180.0f;
+                }
+                if (localServer) session->setKeepForgotten(true);  // unloaded server chunks stay visible
                 session->attach(game, terrain);
                 ui.attachSession(netClient.get(), session.get());
-                LOG("server  %8.1f ms  playing through the local server as %s", joinTimer.ms(), opt.name.c_str());
+                if (joined)
+                    LOG("server  %8.1f ms  playing through %s as %s", joinTimer.ms(),
+                        localServer ? "the local server" : opt.connect.c_str(), opt.name.c_str());
             } else {
                 joinFailed = true;
                 joiningSession.reset();
@@ -849,10 +1018,22 @@ int wmain(int argc, wchar_t** argv) {
             netMs = t.ms();
         }
         if (session && session->dimension().name != lastDimension) {
+            if (smoothReveal && (!lastDimension.empty() || session->dimension().name != "minecraft:overworld")) {
+                renderer.beginWorldReveal(game.player().pos[0], game.player().pos[2]);
+                previousStreamX = game.player().pos[0], previousStreamZ = game.player().pos[2];
+            }
             lastDimension = session->dimension().name;
             renderer.resetTemporal();
+            // Each dimension is generated (chunks beyond the server's, far terrain) by its own generator.
+            if (gamedata && lastDimension != genDimension && !(menu && ui.switching())) {
+                const Timer tw;
+                startWorldgen(lastDimension);
+                LOG("worldgen %7.1f ms  now generating %s", tw.ms(), lastDimension.c_str());
+            }
         }
-        if (session) terrain.setFarActive(session->dimension().name == "minecraft:overworld");
+        if (session) terrain.setFarActive(!genDimension.empty() && session->dimension().name == genDimension);
+        if (session) game.player().fastLava = session->dimension().fastLava;
+        if (session) game.player().waterEvaporates = session->dimension().waterEvaporates;
         if (haveEntities) entities.frame(dt);
         if (haveEntities) entities.viewEntity = game.cameraMode == 0 ? game.cameraEntity : -1;  // set_camera
         ui.beginFrame(dt);  // UI input first: an open screen takes the game's input
@@ -882,9 +1063,13 @@ int wmain(int argc, wchar_t** argv) {
                                session ? std::string_view(session->dimension().name) : "minecraft:overworld"});
 
         const double preMs = frameTop.ms();
+        // Only a discontinuous move restarts the entrance wave; walking does not.
+        const double stepX = cam.x - previousStreamX, stepZ = cam.z - previousStreamZ;
+        if (smoothReveal && stepX * stepX + stepZ * stepZ > 128.0 * 128.0) renderer.beginWorldReveal(cam.x, cam.z);
+        previousStreamX = cam.x, previousStreamZ = cam.z;
         Timer phase;
         double genMs = 0, terrainMs = 0;
-        if (genService && (!session || session->dimension().name == "minecraft:overworld") && !(menu && ui.switching())) {
+        if (genService && (!session || session->dimension().name == genDimension) && !(menu && ui.switching())) {
             // Play mode: chunks far behind the player leave memory (the server owns the world; chunks it no longer
             // sends and locally generated ones come back when needed). Kept, they grew ~150 MB/s while travelling.
             if (session && now - evictScan > 2.0) {
@@ -953,11 +1138,19 @@ int wmain(int argc, wchar_t** argv) {
                         genService->averageMs(), genService->debugCounts().c_str());
             }
             // Apply generated chunks within a time budget (each costs ~2 ms of insert + lighting).
-            if (genBacklog.size() < 16) {
+            if (genBacklog.size() < 64) {
                 const Timer tt;
-                for (auto& c : genService->take(32)) genBacklog.push_back(std::move(c));
+                const int ccx = int(std::floor(cam.x)) >> 4, ccz = int(std::floor(cam.z)) >> 4;
+                for (auto& c : genService->take(64 - genBacklog.size(), ccx, ccz)) genBacklog.push_back(std::move(c));
                 if (opt.profile && tt.ms() > 5.0) LOG("gen: take %.1f ms", tt.ms());
             }
+            std::sort(genBacklog.begin(), genBacklog.end(), [&](const auto& a, const auto& b) {
+                auto distance = [&](const auto& c) {
+                    const double dx = c->cx * 16.0 + 8 - cam.x, dz = c->cz * 16.0 + 8 - cam.z;
+                    return dx * dx + dz * dz;
+                };
+                return distance(a) < distance(b);
+            });
             Timer budget;
             while (!genBacklog.empty() && budget.ms() < 3.0) {
                 std::unique_ptr<wg::GenChunk> c = std::move(genBacklog.front());
@@ -969,6 +1162,7 @@ int wmain(int argc, wchar_t** argv) {
                     std::unique_lock lock(world.mutex());
                     waitMs = ct.ms();
                     if (!world.insertChunk(c->cx, c->cz, c->minY, c->height, c->blocks.data())) continue;
+                    world.setGenExtras(c->cx, c->cz, wg::saveExtras(*c, [&registry](u16 s) { return registry.name(s); }));
                     if (menu) world.markChunkDirty(c->cx, c->cz);  // the title screen's world keeps what it generates
                     insertMs = ct.ms();
                     u8 surface[16];  // surface biome of each 4x4 column, for biome colours
@@ -1064,6 +1258,10 @@ int wmain(int argc, wchar_t** argv) {
         ui.showSaving();
         if (netClient) netClient->stop();
         auto stopping = std::async(std::launch::async, [&] {
+            // The saving JVM should not compete with queues of terrain work for a world we
+            // are leaving. Executing jobs finish; the idle UI never dispatches new ones.
+            terrain.stopBackground();
+            if (genService) genService->stop();
             saveNow("exit");
             if (localServer) localServer->stop();
         });
@@ -1080,12 +1278,14 @@ int wmain(int argc, wchar_t** argv) {
             renderer.render(cam, opt.fog, ui.screenshotRequest());
         };
         while ((open = window.pump()) && stopping.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) idleFrame();
-        stopping.wait();
+        stopping.get();
         if (open) {
             ui.startTitle();
             while (window.pump() && !ui.quitRequested()) idleFrame();
         }
     }
+    terrain.stopBackground();
+    if (genService) genService->stop();
     saveNow("exit");
     social::Friends::get().stop();  // goodbye to friends; closes tunnels (a guest's connection ends here)
     if (session) session->report();

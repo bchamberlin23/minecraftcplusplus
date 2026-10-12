@@ -228,6 +228,7 @@ void Particles::attach(net::Client& client) {
         int x, y, z;
         r.blockPos(x, y, z);
         const int data = r.i32v();
+        r.boolean();  // global event
         if (!r.ok || (type != 2001 && type != 2019 && type != 2020)) return;
         std::lock_guard lock(netMutex_);
         if (type == 2001) netBreaks_.push_back({x, y, z, data});

@@ -103,6 +103,8 @@ enum class Screen {
     // Registered screens (modules.h ScreenDef): signs and books, advancements, statistics, game mode switcher, bed
     Sign, BookEdit, BookView, Advancements, Stats, GameModeSwitcher, InBed,
     Friends, AddFriend,  // friends_screen.cpp
+    ServerPackPrompt, CodeOfConduct, Reconfiguring,  // server_config.cpp
+    Win, CreditsAttribution, ServerLinks,  // credits.cpp
     // Front end (frontend.h)
     Title, Worlds, CreateWorld, EditWorld, Confirm, Servers, EditServer, DirectConnect, Loading, Message, OpenToLan
 };
@@ -185,7 +187,7 @@ struct Ui::State {
     Menu inventory;                   // 46 slots, container 0
     std::unique_ptr<Menu> container;  // open server container
     ItemStack carried;
-    int hotbarSynced[9] = {-2, -2, -2, -2, -2, -2, -2, -2, -2};
+    int hotbarSynced[10] = {-2, -2, -2, -2, -2, -2, -2, -2, -2, -2};  // hotbar items, then the off hand
 
     // HUD
     bool hudHidden = false, debug = false;

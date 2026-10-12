@@ -34,6 +34,7 @@ public:
         fs::path dataDir;  // %LOCALAPPDATA%\minecraftCplusplus: settings and the block sound cache
         const GameReports* reports = nullptr;
         fs::path capture;  // debug: WAV of the final mix (+ .json log of every sound started)
+        bool muted = false;  // automated runs: master gain 0 (the saved volumes stay as they are)
     };
 
     AudioSystem() = default;
@@ -65,6 +66,9 @@ public:
              bool relative = false, bool looping = false, float* soundVolume = nullptr);
     // SimpleSoundInstance.forUI: not positioned, UI category.
     u32 playUi(std::string_view event, float pitch = 1.0f, float volume = 0.25f);
+    // Screen.getBackgroundMusic: a screen's own music (WinScreen: music.credits) over the situational one; "" ends
+    // it (stopping it if it plays).
+    void setScreenMusic(std::string_view event);
     // A sound the server named by Holder<SoundEvent>: registry id (>= 0), else the inline name.
     u32 playNetwork(int registryId, std::string_view name, Category category, const double pos[3], float volume, float pitch);
     void stop(u32 handle);
@@ -158,6 +162,7 @@ private:
     // MusicManager
     u32 music_ = 0;
     int musicEvent_ = -1;
+    MusicDef screenMusic_;  // setScreenMusic (event < 0: none)
     int nextSongDelay_ = 100;
     float musicGain_ = 1.0f;
     // BiomeAmbientSoundsHandler
