@@ -258,7 +258,6 @@ struct Ui::State {
     float vignetteBrightness = 1.0f;    // Hud.vignetteBrightness (smoothed darkness of the camera's light)
     int skyDarken = 0;                  // Level.getSkyDarken
     float ambientLight = 0;             // DimensionType.ambientLight
-    Screen effectsShownBy = Screen::None;  // the screen drew the effects itself (showsActiveEffects)
     // MobEffectInstance.compareTo order (descending for the HUD: Ordering.natural().reverse()).
     std::vector<const Effect*> sortedEffects(bool descending) const;
     // EffectsInInventory: the effects right of a container screen, when 32 px fit (showsActiveEffects).

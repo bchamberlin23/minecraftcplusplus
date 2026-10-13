@@ -805,8 +805,7 @@ Button narratorButton(UiState& s) {
             p->settings.save();
             narrator::statusChanged(*p);
         });
-    b.active = narrator::available();
-    return b;
+    return b;  // clickable without a narrator too (the value cycles; the label reads Not Available)
 }
 
 namespace {

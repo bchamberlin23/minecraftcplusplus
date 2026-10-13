@@ -91,8 +91,8 @@ std::vector<const Ui::State::Effect*> Ui::State::sortedEffects(bool descending) 
 
 void Ui::State::drawEffectsInInventory(Canvas& c, Screen self, int leftPos, int imageWidth, int topPos) {
     const int x0 = leftPos + imageWidth + 2, available = c.guiWidth() - x0;
-    effectsShownBy = available >= 32 ? self : Screen::None;  // canSeeEffects
-    if (effects.empty() || available < 32) return;
+    (void)self;
+    if (effects.empty() || available < 32) return;  // canSeeEffects
     const int maxWidth = available >= 120 ? available - 7 : 32;
     const int yStep = effects.size() > 5 ? 132 / int(effects.size() - 1) : 33;
     int y0 = topPos;
@@ -387,7 +387,15 @@ void Ui::State::drawHud(Canvas& c) {
         drawHotbarAttackIndicator(*this, c);  // gameplay_hud.cpp
     }
     // Status effect icons (Hud.extractEffects), top right: beneficial first row, the rest below.
-    if (screen == Screen::None || screen != effectsShownBy) {
+    // Hud: unless the open screen shows the effects itself (showsActiveEffects: canSeeEffects, decided this frame)
+    bool screenShowsEffects = false;
+    if (screen == Screen::Inventory) {
+        const Layout l = layoutFor(inventory);
+        screenShowsEffects = guiW() - (recipeBookLeft(*this, inventory, l.width) + l.width + 2) >= 32;
+    } else if (screen == Screen::Creative) {
+        screenShowsEffects = guiW() - ((guiW() - 195) / 2 + 195 + 2) >= 32;  // CreativeModeInventoryScreen: 195 wide
+    }
+    if (!screenShowsEffects) {
         static const char* kHarmful[] = {"slowness", "mining_fatigue", "instant_damage", "nausea", "blindness", "hunger",
                                          "weakness", "poison", "wither", "levitation", "unluck", "darkness", "wind_charged",
                                          "weaving", "oozing", "infested", "bad_omen", "trial_omen", "raid_omen", "glowing"};
