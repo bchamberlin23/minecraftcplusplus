@@ -45,7 +45,10 @@ particles and ambience, note block notes), team-formatted name tags with the bel
 links, pick block on entities (Ctrl: with data), the fuller F3 + B hitboxes, the happy ghast harness goggles, F3 + Esc
 (pause without the menu), the window icon, the quick-craft drag preview, mouse editing in text fields and the
 container key / mouse bindings, and the sounds the server leaves to the acting player (doors, trapdoors, fence gates,
-buttons, comparators, buckets, bottles, block transformers, shears, dye, allays, milking, igniting creepers). ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
+buttons, comparators, buckets, bottles, block transformers, shears, dye, allays, milking, igniting creepers), the
+sound engine's pause / distance delay / canStartSilent / music volume, the camera_distance attribute and FOV (death
+zoom, hand at 70), burning entity flames, the guardian beam and invisible entities (armour shown, the body for
+spectators / teammates). ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
 switch (automated runs never change the display mode) and the LAN publish from World Options (it would open a
 listening socket).
 
