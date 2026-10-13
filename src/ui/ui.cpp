@@ -1292,7 +1292,7 @@ void Ui::endFrame() {
     if ((c.guiWidth() != s.lastGuiW || c.guiHeight() != s.lastGuiH) && !s.buttons.empty()) s.buildButtons();  // resized
     s.lastGuiW = c.guiWidth(), s.lastGuiH = c.guiHeight();
     if (const Sprite* g = s.sprites.texture("misc/enchanted_glint_item")) {  // ItemRenderer glint scrolling
-        const double ms = s.clock * 1000.0 * 8.0;
+        const double ms = s.clock * 1000.0 * 8.0 * s.settings.glintSpeed;  // TextureTransform.setupGlintTexturing
         s.pass->glint[0] = g->u0, s.pass->glint[1] = g->v0, s.pass->glint[2] = g->u1 - g->u0, s.pass->glint[3] = g->v1 - g->v0;
         s.pass->glint[4] = -float(std::fmod(ms, 110000.0) / 110000.0), s.pass->glint[5] = float(std::fmod(ms, 30000.0) / 30000.0);
         s.pass->glint[6] = float(16 * scale) * 2.0f;

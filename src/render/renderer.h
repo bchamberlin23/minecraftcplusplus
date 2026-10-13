@@ -177,6 +177,18 @@ struct Lightmap {
 
 // The camera entity's mob effects as the view shows them (FogRenderer's fog environments, the lightmap inputs),
 // gathered by the UI from the local player each frame and applied by the sky system.
+// Accessibility Settings: Glint Speed / Glint Strength (GameRenderer's options render state), read by every glint
+// pass (TextureTransform.setupGlintTexturing scrolls by speed; the glint shader's alpha is the strength).
+struct GlintOptions {
+    double speed = 0.5;
+    float strength = 0.75f;
+    u32 white() const { return (u32(std::clamp(strength, 0.0f, 1.0f) * 255.0f + 0.5f) << 24) | 0xFFFFFFu; }  // ARGB / ABGR
+};
+inline GlintOptions& glintOptions() {
+    static GlintOptions g;
+    return g;
+}
+
 struct ViewEffects {
     float blindFog = -1;      // BlindnessFogEnvironment: min(1, duration / 20) (1: infinite); < 0 without blindness
     float blindDarkness = 0;  // BlindnessFogEnvironment.getModifiedDarkness (fog colour darkening)

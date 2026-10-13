@@ -148,9 +148,9 @@ void Ui::State::drawItem(Canvas& c, const ItemStack& s, float x, float y, bool d
     float uv[4];
     if (icons.icon(s, uv, &ctx)) {
         c.quad(x, y, x + 16, y + 16, uv[0], uv[1], uv[2], uv[3], kWhite, ModeIcon);
-        if (items.foil(s)) {  // enchantment glint (glintStrength 0.75)
+        if (items.foil(s)) {  // enchantment glint (the Glint Strength)
             c.setBlend(2);
-            c.quad(x, y, x + 16, y + 16, uv[0], uv[1], uv[2], uv[3], withAlpha(0xFFFFFF, 0.75f), ModeGlint);
+            c.quad(x, y, x + 16, y + 16, uv[0], uv[1], uv[2], uv[3], withAlpha(0xFFFFFF, float(glintOptions().strength)), ModeGlint);
             c.setBlend(0);
         }
     }

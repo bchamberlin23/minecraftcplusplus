@@ -2164,12 +2164,12 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         const bool translucent = (L.flags & (Translucent | Additive)) != 0 || appearanceAlpha_ >= 0;
         if (pack_) {  // shader pack: the posed quads as vertices (entity atlas coordinates)
             const auto& quads = assets_.quads();
-            // Armour glint (TextureTransform.setupGlintTexturing, scale 0.16, glint speed 0.5) as gbuffers_armor_glint
+            // Armour glint (TextureTransform.setupGlintTexturing, scale 0.16, the Glint Speed) as gbuffers_armor_glint
             // geometry: the texture transform is applied here (the glint texture wraps).
             const bool glint = (L.flags & Glint) && pack_->glintTexture(false);
             float scroll[2] = {};
             if (glint) {
-                const double ms = nowSeconds() * 1000.0 * 8.0 * 0.5;
+                const double ms = nowSeconds() * 1000.0 * 8.0 * glintOptions().speed;
                 scroll[0] = -float(std::fmod(ms, 110000.0) / 110000.0), scroll[1] = float(std::fmod(ms, 30000.0) / 30000.0);
             }
             for (size_t i = 0; i < parts; ++i) {
@@ -2192,7 +2192,7 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
                             const float gx = gq.uv[c][0] * 0.16f, gy = gq.uv[c][1] * 0.16f;
                             uv[c][0] = gx * gc - gy * gs + scroll[0], uv[c][1] = gx * gs + gy * gc + scroll[1];
                         }
-                        packQuad(4, pos, uv, n, 0xBFFFFFFFu, 256u, 0);  // alpha: glint strength 0.75 (option default)
+                        packQuad(4, pos, uv, n, glintOptions().white(), 256u, 0);  // alpha: the Glint Strength
                     }
                 }
             }
@@ -3135,12 +3135,12 @@ void EntityRenderer::build(const PassContext& ctx) {
     const float n0 = 1.0f / std::sqrt(0.04f + 1.0f + 0.49f);
     for (int a = 0; a < 3; ++a) k.light0[a] = l0[a] * n0, k.light1[a] = l1[a] * n0;
     static const int glintTex = assets_.texture("misc/enchanted_glint_armor");
-    if (glintTex >= 0) {  // TextureTransform.setupGlintTexturing (glint speed 0.5)
+    if (glintTex >= 0) {  // TextureTransform.setupGlintTexturing (the Glint Speed / Strength)
         const TexRect& g = assets_.rect(glintTex);
         k.glintRect[0] = g.u0, k.glintRect[1] = g.v0, k.glintRect[2] = g.du, k.glintRect[3] = g.dv;
-        const double ms = nowSeconds() * 1000.0 * 8.0 * 0.5;
+        const double ms = nowSeconds() * 1000.0 * 8.0 * glintOptions().speed;
         k.glint[0] = -float(std::fmod(ms, 110000.0) / 110000.0), k.glint[1] = float(std::fmod(ms, 30000.0) / 30000.0);
-        k.glint[2] = 0.75f;
+        k.glint[2] = glintOptions().strength;
     }
     if (ctx.prevViewProj) std::memcpy(k.prevViewProj, ctx.prevViewProj, sizeof(k.prevViewProj));
     std::memcpy(k.motion, ctx.motionScale, sizeof(k.motion));

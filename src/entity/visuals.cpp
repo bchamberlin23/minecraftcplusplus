@@ -1008,10 +1008,10 @@ void Visuals::Impl::writeCb(int slot, const PassContext& ctx, const float* viewP
         const ItemModels::Rect& g = models.rect(glintRect);
         k.glintRect[0] = g.u0, k.glintRect[1] = g.v0, k.glintRect[2] = g.du, k.glintRect[3] = g.dv;
     }
-    // TextureTransform.setupGlintTexturing: offsets scrolling with time (glint speed 0.5).
-    const double ms = nowSeconds() * 1000.0 * 8.0 * 0.5;
+    // TextureTransform.setupGlintTexturing: offsets scrolling with time (the Glint Speed).
+    const double ms = nowSeconds() * 1000.0 * 8.0 * glintOptions().speed;
     k.glint[0] = -float(std::fmod(ms, 110000.0) / 110000.0), k.glint[1] = float(std::fmod(ms, 30000.0) / 30000.0);
-    k.glint[2] = glintRect >= 0 ? 0.75f : 0.0f;
+    k.glint[2] = glintRect >= 0 ? glintOptions().strength : 0.0f;
     k.glint[3] = hand ? 1.0f : 0.0f;
     std::memcpy(frameBase + kCbBytes * u64(slot), &k, sizeof(k));
 }
@@ -3498,8 +3498,8 @@ void Visuals::Impl::packList(PackSink& pack, const List& l, PackRole role, PackB
     static thread_local std::vector<PackVertex> verts[5];
     if (glint && (l.v.empty() || !pack.glintTexture(true))) return;
     float scroll[2] = {};
-    if (glint) {  // TextureTransform.setupGlintTexturing (glint speed 0.5), as writeCb
-        const double ms = nowSeconds() * 1000.0 * 8.0 * 0.5;
+    if (glint) {  // TextureTransform.setupGlintTexturing (the Glint Speed), as writeCb
+        const double ms = nowSeconds() * 1000.0 * 8.0 * glintOptions().speed;
         scroll[0] = -float(std::fmod(ms, 110000.0) / 110000.0), scroll[1] = float(std::fmod(ms, 30000.0) / 30000.0);
     }
     auto unpack = [](u32 v, int shift) { return float(i8((v >> shift) & 255)) / 127.0f; };
@@ -3536,7 +3536,7 @@ void Visuals::Impl::packList(PackSink& pack, const List& l, PackRole role, PackB
                     uv[c][0] = gx * gc - gy * gs + scroll[0], uv[c][1] = gx * gs + gy * gc + scroll[1];
                 }
             }
-            if (glint) v.color = 0xBFFFFFFF, v.light = 240 | (240u << 16);  // alpha: glint strength 0.75 (option default)
+            if (glint) v.color = glintOptions().white(), v.light = 240 | (240u << 16);  // alpha: the Glint Strength
             v.midUv[0] = (uv[0][0] + uv[2][0]) * 0.5f, v.midUv[1] = (uv[0][1] + uv[2][1]) * 0.5f;
             for (int c = 0; c < 4; ++c) {
                 for (int r = 0; r < 3; ++r)
