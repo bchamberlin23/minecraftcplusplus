@@ -68,7 +68,7 @@ multipart lists), random block offsets (models, outlines, picking, collision), f
 shaded by their nearest direction), smooth lighting of block models (BlockModelLighter: per corner light and ambient
 occlusion with partial-face weights; flat lighting by the culled / boundary face's cell) and fluid shapes (FluidRenderer:
 averaged corner heights, flow-turned flowing textures, side faces with the water overlay; full detail only, LOD keeps
-cubes). ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
+cubes); then audits of weather, block breaking, music / ambient sound, sky / clouds, camera, HUD overlays and status bars, entity layers (shadows, fire, name tags, leashes, player layers, carried items, wool / saddles / armour), projectiles, signs, maps, spawners / vaults, block entity animations, first-person hands, chat, GUI item decorations / tooltips and entity interpolation, with their mismatches fixed (fog: FogRenderer's environmental + render distance fogs). ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
 switch (automated runs never change the display mode) and the LAN publish from World Options (it would open a
 listening socket).
 
@@ -90,6 +90,7 @@ listening socket).
 - **Block rendering audit, still open**: smooth lighting (cubes and models, one BlockModelLighter port) clamps its
   lookups to the section's one-cell border (Java reads up to two cells beyond a face for light permeability). Fluids skip self-occlusion of waterlogged partial blocks (faces hidden inside them). Moving pistons and other block
   displays draw a block's first variant without its offset (falling blocks pick theirs from the start position).
+- **Audit leftovers (2026-10-13)**: interpolation does not shift pending steps by locally predicted movement (AbstractInterpolationHandler.applyPredictedMovement), remote players' motion is set at once (RemotePlayer spreads it), passengers are placed at render time; widget tooltips use the default positioner (no MenuTooltipPositioner / BelowOrAboveWidgetTooltipPositioner); the chat's MODIFIED tag and RestrictionsScreen; shadow radius ignores the scale attribute; minecarts ignore the minecart_improvements flag; the world border wall has no depth write / bias.
 - **VIS-06 residual**: glowing outlines under a shader pack (entities go through the pack's gbuffers there).
 - Test instance blocks: optional tests' failure beam is red, not orange (the test registry is not sent to clients);
   the error markers and game test highlights are drawn in the UI layer (no depth test).
