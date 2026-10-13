@@ -26,6 +26,7 @@ public:
         u16 port = 0;           // 0: any free port
         bool lan = false;       // listen on all interfaces (friends can join) instead of loopback only
         int viewDistance = 12;  // chunks the server sends; farther terrain is this engine's own LOD
+        int simulationDistance = -1;  // the Simulation Distance option (IntegratedServer); < 0: min(view, 10)
         // A new world (Create New World): the server creates `world` with these settings; once it stops, level.dat
         // gets the singleplayer setup the game expects (LevelName, cheats, the owner's player data).
         struct Create {

@@ -391,6 +391,10 @@ int wmain(int argc, wchar_t** argv) {
         LocalServer::Config sc{mc, version, worldDir, opt.name, 0, opt.lan, std::min(opt.detail, 32)};
         sc.create = opt.create;
         sc.ownerUuid = ownership.playerId;
+        {  // Video Settings: Simulation Distance (IntegratedServer.setSimulationDistance)
+            ui::Settings saved;
+            if (saved.load()) sc.simulationDistance = saved.simulationDistance;
+        }
         if (!localServer->start(sc)) return 1;
         if (opt.lan) {  // already listening on all interfaces: announce it on the LAN like the game
             std::string error;

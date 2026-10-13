@@ -146,6 +146,9 @@ bool UiPass::create(Renderer& renderer) {
     rt.SrcBlend = D3D12_BLEND_ZERO;  // RenderPipelines.VIGNETTE: dst * (1 - src colour), alpha kept
     rt.DestBlend = D3D12_BLEND_INV_SRC_COLOR;
     if (!ok(device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&psoVignette_)), "UI pipeline")) return false;
+    rt.SrcBlend = D3D12_BLEND_ONE;  // BlendFunction.ADDITIVE (GUI_NAUSEA_OVERLAY)
+    rt.DestBlend = D3D12_BLEND_ONE;
+    if (!ok(device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&psoAdditive_)), "UI pipeline")) return false;
 
     vertices_ = uploadBuffer(device, kVertexBytes * Renderer::kFrames);
     upload_ = uploadBuffer(device, kUploadBytes * Renderer::kFrames);
@@ -210,7 +213,7 @@ void UiPass::draw(const PassContext& ctx) {
     const D3D12_RECT full{0, 0, LONG(ctx.width), LONG(ctx.height)};
     for (const Canvas::Batch& b : canvas_.batches()) {
         if (!b.count || b.first >= maxVerts) continue;
-        if (ctx.uiLayer && (b.blend == 1 || b.blend == 3) != afterUi) continue;
+        if (ctx.uiLayer && (b.blend == 1 || b.blend == 3 || b.blend == 4) != afterUi) continue;
         D3D12_RECT r = full;
         if (b.clip) {
             r = {LONG(b.scissor[0]), LONG(b.scissor[1]), LONG(b.scissor[2]), LONG(b.scissor[3])};
@@ -223,6 +226,7 @@ void UiPass::draw(const PassContext& ctx) {
             list->SetPipelineState(blend == 1   ? psoInvert_.Get()
                                    : blend == 2 ? psoGlint_.Get()
                                    : blend == 3 ? psoVignette_.Get()
+                                   : blend == 4 ? psoAdditive_.Get()
                                                 : pso_.Get());
         }
         list->RSSetScissorRects(1, &r);

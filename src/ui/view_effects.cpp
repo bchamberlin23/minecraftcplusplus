@@ -112,8 +112,11 @@ ViewEffects Ui::viewEffects() const {
         v.blindDarkness = e->duration >= 0 && e->duration <= 19 ? float(e->duration) / 20.0f : 1.0f;
     }
     v.darkness = s.findEffect("darkness") != nullptr;
-    v.darknessBlend = s.effectBlend("darkness");  // x darknessEffectScale (1)
-    v.darknessScale = std::max(0.0f, std::cos((float(s.guiTicks) - pt) * kPi * 0.025f) * 0.45f * v.darknessBlend);
+    v.darknessBlend = s.effectBlend("darkness");
+    // LightmapRenderStateExtractor: the Darkness Pulsing option scales the brightness loss and the pulse.
+    v.darknessEffectScale = float(s.settings.darknessEffectScale);
+    v.darknessScale = std::max(0.0f, std::cos((float(s.guiTicks) - pt) * kPi * 0.025f) * 0.45f * v.darknessBlend * v.darknessEffectScale) *
+                      v.darknessEffectScale;
     if (s.eyeInWater) {  // LocalPlayer.getWaterVision
         const float t = float(s.waterVisionTime);
         v.waterVision = t >= 600.0f ? 1.0f
@@ -136,7 +139,8 @@ void Ui::warpCamera(CameraState& cam) const {
     const State& s = *s_;
     const float pt = s.partialTick;
     const float portal = s.portalIntensityO + (s.portalIntensity - s.portalIntensityO) * pt;
-    const float intensity = std::max(portal, s.effectBlend("nausea"));  // x screenEffectScale^2 (1)
+    const float effects = float(s.settings.screenEffectScale);
+    const float intensity = std::max(portal, s.effectBlend("nausea")) * effects * effects;  // x screenEffectScale^2
     if (intensity <= 0.0f) return;
     float skew = 5.0f / (intensity * intensity + 5.0f) - intensity * 0.04f;
     skew *= skew;
@@ -267,7 +271,22 @@ void drawEffectOverlays(Ui::State& s, Canvas& c, bool scoping) {
 void drawPortalOverlay(Ui::State& s, Canvas& c) {
     // Hud.extractPortalOverlay: the nether portal texture over the screen, fading in with the portal intensity.
     float alpha = s.portalIntensityO + (s.portalIntensity - s.portalIntensityO) * s.partialTick;
-    if (alpha <= 0.0f) return;
+    if (alpha <= 0.0f) {
+        // Hud.extractConfusionOverlay: with Distortion Effects below 1, nausea tints the screen instead of warping it
+        // as much (misc/nausea, additive, scaled 2 -> 1 about the centre).
+        const float nausea = s.effectBlend("nausea"), scale = float(s.settings.screenEffectScale);
+        if (nausea <= 0.0f || scale >= 1.0f) return;
+        const float strength = nausea * (1.0f - scale);
+        const Sprite* tex = s.sprites.texture("misc/nausea");
+        if (!tex) return;
+        const float gw = float(c.guiWidth()), gh = float(c.guiHeight()), size = 2.0f + (1.0f - 2.0f) * strength;
+        const u32 rgb = (u32(0.2f * strength * 255.0f) << 16) | (u32(0.4f * strength * 255.0f) << 8) | u32(0.2f * strength * 255.0f);
+        c.setBlend(4);
+        blitTexture(c, tex, gw * 0.5f * (1.0f - size), gh * 0.5f * (1.0f - size), 0, 0, gw * size, gh * size, int(gw * size), int(gh * size),
+                    0xFF000000u | rgb);
+        c.setBlend(0);
+        return;
+    }
     if (alpha < 1.0f) alpha = alpha * alpha * alpha * alpha * 0.8f + 0.2f;
     if (const Sprite* tex = s.sprites.texture("block/nether_portal"))
         c.quad(0, 0, float(c.guiWidth()), float(c.guiHeight()), tex->u0, tex->v0, tex->u1, tex->v1, withAlpha(0xFFFFFF, alpha), ModeGui);

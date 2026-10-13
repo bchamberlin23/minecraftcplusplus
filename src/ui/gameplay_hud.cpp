@@ -20,7 +20,7 @@ static void textureOverlay(Canvas& c, const Sprite* tex, float alpha) {
 }
 
 void drawCameraOverlays(Ui::State& s, Canvas& c) {
-    drawVignette(s, c);
+    if (s.settings.vignette) drawVignette(s, c);  // Hud.extractCameraOverlays: the Vignette option
     drawSpyglass(s, c);
     const Game::ItemUse& use = s.game->use;
     drawEffectOverlays(s, c, use.active && ItemRules::Anim(use.anim) == ItemRules::Anim::Spyglass);  // view_effects.cpp

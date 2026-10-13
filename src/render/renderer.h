@@ -183,6 +183,7 @@ struct ViewEffects {
     bool darkness = false;    // has the darkness effect
     float darknessBlend = 0;  // its blend factor (fade in / out)
     float darknessScale = 0;  // LightmapRenderStateExtractor.calculateDarknessScale (the pulse)
+    float darknessEffectScale = 1;  // the Darkness Pulsing option
     float fogBrighten = 0;    // night vision scale when it brightens the fog (not with darkness)
     float lightmapNightVision = 0;  // night vision scale, or the water vision with conduit power
     float waterVision = 0;    // LocalPlayer.getWaterVision

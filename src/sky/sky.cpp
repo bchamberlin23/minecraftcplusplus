@@ -732,7 +732,7 @@ void Sky::update(const CameraState& cam, double dt) {
         // The darkness effect: color - DarknessScale before the clamp (the sum's constant part, so the ambient term),
         // and the brightness option lowered by its blend factor.
         for (float& c : lm.ambient) c -= fx_.darknessScale;
-        lm.brightness = std::max(0.0f, options_.brightness - fx_.darknessBlend);  // the Brightness option
+        lm.brightness = std::max(0.0f, options_.brightness - fx_.darknessBlend * fx_.darknessEffectScale);  // the Brightness option
         renderer_->setLightmap(lm);
     }
     {  // the renderer's shader pipeline lights the world from the same sun / moon and weather
