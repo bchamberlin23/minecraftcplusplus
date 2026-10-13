@@ -229,7 +229,7 @@ void Game::frame(Window& w, double dt) {
         player_.useSpeed = use.active ? use.speed : 1.0f;
         player_.useBlocksSprint = use.active && !use.canSprint;
         eyeHeightOld_ = eyeHeight_;
-        eyeHeight_ += (player_.eyeHeight() - eyeHeight_) * 0.5;
+        eyeHeight_ += ((sleeping ? 0.2 : player_.eyeHeight()) - eyeHeight_) * 0.5;  // Camera.tick (SLEEPING_DIMENSIONS: 0.2)
         if (riding()) {  // a passenger does not move itself (LocalPlayer.rideTick)
             player_.lastInput = input;
             rideTick(input);

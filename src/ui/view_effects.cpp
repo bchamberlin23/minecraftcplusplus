@@ -84,6 +84,11 @@ void Ui::State::tickViewEffects(bool eyeWater) {
                 for (int z = int(std::floor(b.min[2] + 1e-5)); z <= int(std::floor(b.max[2] - 1e-5)) && !inPortal; ++z)
                     inPortal = registry->name(world->block(x, y, z)).starts_with("minecraft:nether_portal");
     }
+    // Screens not allowed in a portal (Screen.isAllowedInPortal: the non-pause ones but chat and death) close, a
+    // container's with closeContainer.
+    if (inPortal && (screen == Screen::Inventory || screen == Screen::Container || screen == Screen::Creative ||
+                     screen == Screen::Sign || screen == Screen::GameModeSwitcher || screen == Screen::SocialInteractions))
+        closeScreen(true);
     if (inPortal && portalIntensity == 0.0f)  // SimpleSoundInstance.forLocalAmbience(PORTAL_TRIGGER, 0.8 .. 1.2, 0.25)
         if (audio::AudioSystem* a = audio::instance()) {
             const CameraState c = game->camera();
@@ -171,10 +176,9 @@ void drawScreenEffects(Ui::State& s, Canvas& c) {
     const float W = float(c.guiWidth()), H = float(c.guiHeight());
     const Player& p = s.game->player();
     const CameraState cam = s.game->camera();
-    // GameRenderer.render3dHud: the HUD projection (70 degrees, x 6/7 with the eyes in water or lava).
-    const std::string& eyeName = s.registry->name(s.world->block(int(std::floor(cam.x)), int(std::floor(cam.y)), int(std::floor(cam.z))));
-    const bool eyeLava = eyeName.starts_with("minecraft:lava");
-    const float fov = 70.0f * (s.eyeInWater || eyeLava ? 0.85714287f : 1.0f) * kPi / 180.0f;
+    // GameRenderer.render3dHud: the HUD projection (Camera.calculateHudFov: 70 degrees by death or fluid, with the FOV
+    // Effects scale).
+    const float fov = s.fovDeathOrFluid(70.0f) * kPi / 180.0f;
     const float f = 1.0f / std::tan(fov * 0.5f), aspect = W / std::max(H, 1.0f);
     auto project = [&](float x, float y, float z, float out[2]) {
         out[0] = (f / aspect * x / -z + 1.0f) * 0.5f * W;
