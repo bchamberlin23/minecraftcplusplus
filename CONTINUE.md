@@ -87,9 +87,8 @@ listening socket).
 - **Improved Transparency** (video option) is stored but not read; this engine's translucency path (OIT under the
   shader pipeline) is its own. The nausea overlay and vignette draw after the UI layer (they also tint the HUD).
 
-- **Block rendering audit, still open**: cube faces use this port's own
-  smooth lighting (equivalent to BlockModelLighter for full faces, without its light-permeability lookups two cells
-  out); model smooth lighting clamps its lookups to the section's one-cell border. Fluids skip self-occlusion of waterlogged partial blocks (faces hidden inside them). Moving pistons and other block
+- **Block rendering audit, still open**: smooth lighting (cubes and models, one BlockModelLighter port) clamps its
+  lookups to the section's one-cell border (Java reads up to two cells beyond a face for light permeability). Fluids skip self-occlusion of waterlogged partial blocks (faces hidden inside them). Moving pistons and other block
   displays draw a block's first variant without its offset (falling blocks pick theirs from the start position).
 - **VIS-06 residual**: glowing outlines under a shader pack (entities go through the pack's gbuffers there).
 - Test instance blocks: optional tests' failure beam is red, not orange (the test registry is not sent to clients);

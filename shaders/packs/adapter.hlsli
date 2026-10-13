@@ -186,7 +186,7 @@ McppVertex mcppPull(uint vid) {
     v.midTex = float4(tile.xy + 0.5 * tile.zw, 0, 1);
 
     uint colorIndex = ((q.y >> 20) << 4) | ((q.x >> 25) & 15);
-    float ao = mcppFluidQuad(q) ? 1.0 : 1.0 - 0.2 * float((q.y >> (12 + corner * 2)) & 3);
+    float ao = mcppFluidQuad(q) ? 1.0 : 1.0 - 0.2 * float(((q.y >> (12 + corner * 2)) & 3) + (q.x >> 31));
     float3 tint = mcppTint(colorIndex);
     v.color = mcppAtlas.w > 0.5 ? float4(tint, ao) : float4(tint * ao, 1);
     float sky = float((q.z >> (corner * 8)) & 0xFF), block = float((q.w >> (corner * 8)) & 0xFF);

@@ -77,7 +77,9 @@ CubeVertex pullCube(uint vid) {
 
 float cornerSky(CubeVertex v) { return isFluidQuad(v.q) ? fluidSky(v.q) : float((v.q.z >> (v.corner * 8)) & 0xFF) / 16.0; }
 float cornerBlock(CubeVertex v) { return isFluidQuad(v.q) ? fluidBlock(v.q) : float((v.q.w >> (v.corner * 8)) & 0xFF) / 16.0; }
-float cornerAo(CubeVertex v) { return isFluidQuad(v.q) ? 1.0 : 1.0 - 0.2 * float((v.q.y >> (12 + v.corner * 2)) & 3); }
+float cornerAo(CubeVertex v) {
+    return isFluidQuad(v.q) ? 1.0 : 1.0 - 0.2 * float(((v.q.y >> (12 + v.corner * 2)) & 3) + (v.q.x >> 31));
+}
 uint colorIndex(CubeVertex v) { return ((v.q.y >> 20) << 4) | ((v.q.x >> 25) & 15); }
 // Texture coordinates + layer; coarse LOD nodes mark theirs negative for the flat-colour path (sampleTerrain).
 float3 lodUvl(CubeVertex v, float layer) { return float3(v.st, v.origin.w > 0 ? -(layer + 1.0) : layer); }

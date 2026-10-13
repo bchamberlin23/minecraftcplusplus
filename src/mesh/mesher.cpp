@@ -237,6 +237,107 @@ u32 smoothWeightedBlend(const u32 c[4], const float w[4]) {
     for (int i = 0; i < 4; ++i) sky += float((c[i] >> 16) & 0xFF) * w[i], block += float(c[i] & 0xFF) * w[i];
     return (u32(int(block)) & 0xFF) | (u32(int(sky)) & 0xFF) << 16;
 }
+
+// The light grid of a padded section as BlockModelLighter sees it.
+struct LightGrid {
+    const u16* ids;
+    const u8* light;
+    const BlockInfo* infos;
+    const u8* solid;  // getShadeBrightness 0.2
+    int cell(int x, int y, int z) const {  // clamped to the one-cell border (lookups further out read the border)
+        return padIndex(std::clamp(x, -1, 16), std::clamp(y, -1, 16), std::clamp(z, -1, 16));
+    }
+    u32 coords(int c, const BlockInfo& state) const {  // LightCoordsUtil.getLightCoords
+        if (state.emissiveRendering) return 0xF000F0u;
+        u32 l = javaLight(light[c]);
+        if (((l >> 4) & 15) < state.emission) l = (l & 0xFF0000) | (u32(state.emission) << 4);
+        return l;
+    }
+    float shade(int c) const { return solid[c] ? 0.2f : 1.0f; }
+};
+
+// BlockModelLighter.prepareQuadAmbientOcclusion for a quad (vertices pos, block-local, our vertex order) facing `dir` of
+// the block at cell (x, y, z): per vertex smooth light coords and ambient occlusion brightness. Returns shadeCenter == 0.2.
+bool smoothQuad(const LightGrid& g, int x, int y, int z, int dir, const float pos[4][3], bool fullCollision, u32 outLight[4],
+                float outAo[4]) {
+    // prepareQuadShape
+    float lo[3] = {32, 32, 32}, hi[3] = {-32, -32, -32};
+    for (int v = 0; v < 4; ++v)
+        for (int k = 0; k < 3; ++k) lo[k] = std::min(lo[k], pos[v][k]), hi[k] = std::max(hi[k], pos[v][k]);
+    const int axis = dir < 2 ? 1 : dir < 4 ? 2 : 0;
+    const bool partial = dir < 2   ? lo[0] >= 1e-4f || lo[2] >= 1e-4f || hi[0] <= 0.9999f || hi[2] <= 0.9999f
+                         : dir < 4 ? lo[0] >= 1e-4f || lo[1] >= 1e-4f || hi[0] <= 0.9999f || hi[1] <= 0.9999f
+                                   : lo[1] >= 1e-4f || lo[2] >= 1e-4f || hi[1] <= 0.9999f || hi[2] <= 0.9999f;
+    const bool cubic = lo[axis] == hi[axis] && (((dir & 1) ? hi[axis] > 0.9999f : lo[axis] < 1e-4f) || fullCollision);
+    // Our vertices -> the FaceInfo vertex at the same corner of the quad's box.
+    int javaIndex[4];
+    for (int v = 0; v < 4; ++v) {
+        javaIndex[v] = v;
+        for (int i = 0; i < 4; ++i) {
+            bool match = true;
+            for (int k = 0; k < 3 && match; ++k)
+                if (k != axis && hi[k] - lo[k] > 1e-5f) match = (pos[v][k] > (lo[k] + hi[k]) * 0.5f) == (kFaceInfo[dir][i][k] != 0);
+            if (match) {
+                javaIndex[v] = i;
+                break;
+            }
+        }
+    }
+    float shape[12];
+    shape[SW] = lo[0], shape[SE] = hi[0], shape[SD] = lo[1], shape[SU] = hi[1], shape[SN] = lo[2], shape[SS] = hi[2];
+    for (int k = 0; k < 6; ++k) shape[6 + k] = 1.0f - shape[k];
+    const int* s = kStep[dir];
+    const int bx = x + (cubic ? s[0] : 0), by = y + (cubic ? s[1] : 0), bz = z + (cubic ? s[2] : 0);
+    const Adjacency& info = kAdjacency[dir];
+    u32 l[4];
+    float sh[4];
+    bool permeable[4];
+    for (int k = 0; k < 4; ++k) {
+        const int* c = kStep[info.corners[k]];
+        const int ci = g.cell(bx + c[0], by + c[1], bz + c[2]);
+        l[k] = g.coords(ci, g.infos[g.ids[ci]]);
+        sh[k] = g.shade(ci);
+        const int pi = g.cell(bx + c[0] + s[0], by + c[1] + s[1], bz + c[2] + s[2]);
+        permeable[k] = !g.infos[g.ids[pi]].occludes;  // BlockState.isLightPermeable
+    }
+    auto corner = [&](int a, int b, float& shade, u32& lc) {
+        if (!permeable[b] && !permeable[a]) {
+            shade = sh[0], lc = l[0];
+            return;
+        }
+        const int* ca = kStep[info.corners[a]];
+        const int* cb = kStep[info.corners[b]];
+        const int ci = g.cell(bx + ca[0] + cb[0], by + ca[1] + cb[1], bz + ca[2] + cb[2]);
+        shade = g.shade(ci), lc = g.coords(ci, g.infos[g.ids[ci]]);
+    };
+    float s02, s03, s12, s13;
+    u32 l02, l03, l12, l13;
+    corner(0, 2, s02, l02), corner(0, 3, s03, l03), corner(1, 2, s12, l12), corner(1, 3, s13, l13);
+    const int center = g.cell(x, y, z), next = g.cell(x + s[0], y + s[1], z + s[2]);
+    u32 lightCenter = g.coords(center, g.infos[g.ids[center]]);
+    if (cubic || !g.infos[g.ids[next]].occludes) lightCenter = g.coords(next, g.infos[g.ids[next]]);
+    const float shadeCenter = g.shade(cubic ? g.cell(bx, by, bz) : center);
+    const int* remap = kRemap[dir];
+    const float t[4] = {(sh[3] + sh[0] + s03 + shadeCenter) * 0.25f, (sh[2] + sh[0] + s02 + shadeCenter) * 0.25f,
+                        (sh[2] + sh[1] + s12 + shadeCenter) * 0.25f, (sh[3] + sh[1] + s13 + shadeCenter) * 0.25f};
+    const u32 tc[4] = {smoothBlend(l[3], l[0], l03, lightCenter), smoothBlend(l[2], l[0], l02, lightCenter),
+                       smoothBlend(l[2], l[1], l12, lightCenter), smoothBlend(l[3], l[1], l13, lightCenter)};
+    u32 vertLight[4];
+    float vertAo[4];
+    for (int k = 0; k < 4; ++k) {
+        if (partial) {
+            const int* w = info.weights[k];
+            const float wt[4] = {shape[w[0]] * shape[w[1]], shape[w[2]] * shape[w[3]], shape[w[4]] * shape[w[5]], shape[w[6]] * shape[w[7]]};
+            vertAo[remap[k]] = std::clamp(t[0] * wt[0] + t[1] * wt[1] + t[2] * wt[2] + t[3] * wt[3], 0.0f, 1.0f);
+            vertLight[remap[k]] = smoothWeightedBlend(tc, wt);
+        } else {
+            vertAo[remap[k]] = t[k];
+            vertLight[remap[k]] = tc[k];
+        }
+    }
+    for (int v = 0; v < 4; ++v) outLight[v] = vertLight[javaIndex[v]], outAo[v] = vertAo[javaIndex[v]];
+    return shadeCenter < 0.5f;
+}
 }  // namespace
 
 // FluidRenderer.tesselate: each fluid cell's faces with the corner heights averaged from its neighbours, the top
@@ -458,6 +559,7 @@ void meshGrid(const u16* ids, const u8* light, const BlockRegistry& registry, bo
                             const int q = p + off;  // the cell the face looks into
                             const u32 lq = light ? light[q] : kFullSky;
                             u32 ao = 0, sky = 0, block = 0;
+                            bool centerShade = false;
                             // Light-emitting blocks are lit flat (ModelBlockRenderer.tesselateBlock: no ambient occlusion
                             // with a light emission), their block light at least their emission; emissiveRendering ones
                             // full bright.
@@ -467,24 +569,27 @@ void meshGrid(const u16* ids, const u8* light, const BlockRegistry& registry, bo
                                 sky = ((lq >> 4) * 16) * 0x01010101u;
                                 block = (std::max(lq & 15, u32(bc.emission)) * 16) * 0x01010101u;
                             } else if (light && smooth && !bc.fluid && bc.modelAo) {
-                                // Smooth lighting: each corner averages the four cells in front of it (dark solid
-                                // cells take the centre's light) and darkens by the solid cells beside it; a corner
-                                // behind two solid sides counts as solid itself.
-                                const int sa = d < 4 ? kStrideX : kStrideZ, sb = d < 2 ? kStrideZ : kStrideY;
+                                // Smooth lighting (BlockModelLighter.prepareQuadAmbientOcclusion of a full face): per
+                                // corner light and the count of darkening cells beside it (2 bits; the cell in front
+                                // goes in centerShade, geo bit 31).
+                                const float nx = std::max(float(kStep[d][0]), 0.0f), ny = std::max(float(kStep[d][1]), 0.0f),
+                                            nz = std::max(float(kStep[d][2]), 0.0f);
+                                float corners[4][3];
                                 for (int corner = 0; corner < 4; ++corner) {
-                                    const int s1 = q + ((corner & 1) ? sa : -sa), s2 = q + ((corner >> 1) ? sb : -sb);
-                                    const bool o1 = sc.solid[s1], o2 = sc.solid[s2];
-                                    const int sc3 = s1 + ((corner >> 1) ? sb : -sb);
-                                    const u32 n = u32(o1) + u32(o2) + u32(o1 && o2 ? 1 : sc.solid[sc3]);
-                                    u32 l1 = light[s1], l2 = light[s2], l3 = o1 && o2 ? l1 : light[sc3];
-                                    if (!l1) l1 = lq;
-                                    if (!l2) l2 = lq;
-                                    if (!l3) l3 = lq;
-                                    const u32 cs = ((l1 >> 4) + (l2 >> 4) + (l3 >> 4) + (lq >> 4)) * 4;
-                                    const u32 cb = ((l1 & 15) + (l2 & 15) + (l3 & 15) + (lq & 15)) * 4;
-                                    ao |= n << (corner * 2);
-                                    sky |= cs << (corner * 8);
-                                    block |= cb << (corner * 8);
+                                    const float ca = float(corner & 1), cb = float(corner >> 1);
+                                    corners[corner][0] = d < 4 ? ca : nx;
+                                    corners[corner][1] = d < 2 ? ny : cb;
+                                    corners[corner][2] = d < 2 ? cb : d < 4 ? nz : ca;
+                                }
+                                u32 cl[4];
+                                float faceAo[4];
+                                const LightGrid grid{ids, light, infos, sc.solid};
+                                centerShade = smoothQuad(grid, x, y, z, d, corners, true, cl, faceAo);
+                                for (int corner = 0; corner < 4; ++corner) {
+                                    const u32 n = u32(std::lround((1.0f - faceAo[corner]) * 5.0f)) - (centerShade ? 1u : 0u);
+                                    ao |= std::min(n, 3u) << (corner * 2);
+                                    sky |= std::min<u32>((cl[corner] >> 16) & 0xFF, 240) << (corner * 8);
+                                    block |= std::min<u32>(cl[corner] & 0xFF, 240) << (corner * 8);
                                 }
                             } else {
                                 sky = ((lq >> 4) * 16) * 0x01010101u;
@@ -496,6 +601,7 @@ void meshGrid(const u16* ids, const u8* light, const BlockRegistry& registry, bo
                             key.color = colors && kind >= 0 ? colors->index[kind][(z + 1) * 18 + (x + 1)] : f.tint;
                             // Fluid surface (no more of the same fluid above): the game draws it 2/16 lower.
                             if (bc.fluid && sc.cube[p + kStrideY] != c && d != 0) key.color |= 1u << 16;
+                            if (centerShade) key.color |= 1u << 17;
                             any = true;
                         }
                     }
@@ -525,7 +631,7 @@ void meshGrid(const u16* ids, const u8* light, const BlockRegistry& registry, bo
                     int x, y, z;
                     slicePos(d, s, i, j, x, y, z);
                     const CubeQuad q{u32(x) | (u32(y) << 4) | (u32(z) << 8) | (u32(w - 1) << 12) | (u32(h - 1) << 16) |
-                                         (u32(d) << 20) | (rot << 23) | ((k.color & 15) << 25) | (((k.color >> 16) & 1) << 29),
+                                         (u32(d) << 20) | (rot << 23) | ((k.color & 15) << 25) | (((k.color >> 16) & 1) << 29) | (((k.color >> 17) & 1) << 31),
                                      tex | (ao << 12) | (((k.color & 0xFFFF) >> 4) << 20), k.sky, k.block};
                     sc.buckets[layer * 6 + d].push_back(q);
                     i += w - 1;
@@ -554,108 +660,28 @@ void meshGrid(const u16* ids, const u8* light, const BlockRegistry& registry, bo
                     // out; else flat (BlockModelLighter.prepareQuadFlat).
                     const bool ao = light && smooth && b.emission == 0 && b.modelAo;
                     const bool fullCollision = sc.solid[p];  // isCollisionShapeFullBlock (approximately: its shade solidity)
-                    auto cellAt = [&](int cx, int cy, int cz) {  // padded cell, clamped to the one-cell border
-                        return padIndex(std::clamp(cx, -1, 16), std::clamp(cy, -1, 16), std::clamp(cz, -1, 16));
-                    };
-                    auto coordsAt = [&](int c, const BlockInfo& state) -> u32 {  // LightCoordsUtil.getLightCoords
-                        if (state.emissiveRendering) return 0xF000F0u;
-                        u32 l = javaLight(light[c]);
-                        if (((l >> 4) & 15) < state.emission) l = (l & 0xFF0000) | (u32(state.emission) << 4);
-                        return l;
-                    };
+                    const LightGrid grid{ids, light, infos, sc.solid};
                     for (u32 qi = quadFirst; qi < quadFirst + quadCount; ++qi) {
                         const ModelQuad& m = registry.modelQuad(qi);
                         if (m.cull >= 0 && infos[ids[p + kDirOffset[m.cull]]].occludes) continue;
                         u32 cornerLight[4], cornerAo[4] = {255, 255, 255, 255};  // smooth coords per our vertex
-                        if (light) {
-                            // prepareQuadShape
-                            float lo[3] = {32, 32, 32}, hi[3] = {-32, -32, -32};
-                            for (int v = 0; v < 4; ++v)
-                                for (int k = 0; k < 3; ++k) lo[k] = std::min(lo[k], m.pos[v][k]), hi[k] = std::max(hi[k], m.pos[v][k]);
-                            const int dir = m.dir, axis = dir < 2 ? 1 : dir < 4 ? 2 : 0;
-                            const bool partial = dir < 2   ? lo[0] >= 1e-4f || lo[2] >= 1e-4f || hi[0] <= 0.9999f || hi[2] <= 0.9999f
-                                                 : dir < 4 ? lo[0] >= 1e-4f || lo[1] >= 1e-4f || hi[0] <= 0.9999f || hi[1] <= 0.9999f
-                                                           : lo[1] >= 1e-4f || lo[2] >= 1e-4f || hi[1] <= 0.9999f || hi[2] <= 0.9999f;
-                            const bool cubicFace = lo[axis] == hi[axis] && (((dir & 1) ? hi[axis] > 0.9999f : lo[axis] < 1e-4f) || fullCollision);
-                            // Our vertices -> the FaceInfo vertex at the same corner of the quad's box.
-                            int javaIndex[4];
-                            for (int v = 0; v < 4; ++v) {
-                                javaIndex[v] = v;
-                                for (int i = 0; i < 4; ++i) {
-                                    bool match = true;
-                                    for (int k = 0; k < 3 && match; ++k)
-                                        if (k != axis && hi[k] - lo[k] > 1e-5f)
-                                            match = (m.pos[v][k] > (lo[k] + hi[k]) * 0.5f) == (kFaceInfo[dir][i][k] != 0);
-                                    if (match) {
-                                        javaIndex[v] = i;
-                                        break;
-                                    }
-                                }
+                        if (ao) {
+                            float vertAo[4];
+                            smoothQuad(grid, x, y, z, m.dir, m.pos, fullCollision, cornerLight, vertAo);
+                            for (int v = 0; v < 4; ++v) cornerAo[v] = u32(std::clamp(vertAo[v], 0.0f, 1.0f) * 255.0f + 0.5f);
+                        } else if (light) {  // prepareQuadFlat: a culled face by the cell it faces, else its own (or the
+                                             // next if it lies on the block's boundary)
+                            int lc = p;
+                            if (m.cull >= 0) {
+                                lc = p + kDirOffset[m.cull];
+                            } else {
+                                const int dir = m.dir, axis = dir < 2 ? 1 : dir < 4 ? 2 : 0;
+                                float lo = 32, hi = -32;
+                                for (int v = 0; v < 4; ++v) lo = std::min(lo, m.pos[v][axis]), hi = std::max(hi, m.pos[v][axis]);
+                                if (lo == hi && (((dir & 1) ? hi > 0.9999f : lo < 1e-4f) || fullCollision))
+                                    lc = grid.cell(x + kStep[dir][0], y + kStep[dir][1], z + kStep[dir][2]);
                             }
-                            u32 vertLight[4];
-                            float vertAo[4] = {1, 1, 1, 1};
-                            if (ao) {  // prepareQuadAmbientOcclusion
-                                float shape[12];
-                                shape[SW] = lo[0], shape[SE] = hi[0], shape[SD] = lo[1], shape[SU] = hi[1], shape[SN] = lo[2], shape[SS] = hi[2];
-                                for (int k = 0; k < 6; ++k) shape[6 + k] = 1.0f - shape[k];
-                                const int* s = kStep[dir];
-                                const int bx = x + (cubicFace ? s[0] : 0), by = y + (cubicFace ? s[1] : 0), bz = z + (cubicFace ? s[2] : 0);
-                                const Adjacency& info = kAdjacency[dir];
-                                u32 l[4];
-                                float sh[4];
-                                bool permeable[4];
-                                for (int k = 0; k < 4; ++k) {
-                                    const int* c = kStep[info.corners[k]];
-                                    const int ci = cellAt(bx + c[0], by + c[1], bz + c[2]);
-                                    l[k] = coordsAt(ci, infos[ids[ci]]);
-                                    sh[k] = sc.solid[ci] ? 0.2f : 1.0f;
-                                    const int pi = cellAt(bx + c[0] + s[0], by + c[1] + s[1], bz + c[2] + s[2]);
-                                    permeable[k] = !infos[ids[pi]].occludes;  // BlockState.isLightPermeable
-                                }
-                                auto corner = [&](int a, int bb, float& shade, u32& lc) {
-                                    if (!permeable[bb] && !permeable[a]) {
-                                        shade = sh[0], lc = l[0];
-                                        return;
-                                    }
-                                    const int* ca = kStep[info.corners[a]];
-                                    const int* cb = kStep[info.corners[bb]];
-                                    const int ci = cellAt(bx + ca[0] + cb[0], by + ca[1] + cb[1], bz + ca[2] + cb[2]);
-                                    shade = sc.solid[ci] ? 0.2f : 1.0f, lc = coordsAt(ci, infos[ids[ci]]);
-                                };
-                                float s02, s03, s12, s13;
-                                u32 l02, l03, l12, l13;
-                                corner(0, 2, s02, l02), corner(0, 3, s03, l03), corner(1, 2, s12, l12), corner(1, 3, s13, l13);
-                                u32 lightCenter = coordsAt(p, b);
-                                const int next = cellAt(x + s[0], y + s[1], z + s[2]);
-                                if (cubicFace || !infos[ids[next]].occludes) lightCenter = coordsAt(next, infos[ids[next]]);
-                                const float shadeCenter = sc.solid[cubicFace ? cellAt(bx, by, bz) : p] ? 0.2f : 1.0f;
-                                const int* remap = kRemap[dir];
-                                const float t[4] = {(sh[3] + sh[0] + s03 + shadeCenter) * 0.25f, (sh[2] + sh[0] + s02 + shadeCenter) * 0.25f,
-                                                    (sh[2] + sh[1] + s12 + shadeCenter) * 0.25f, (sh[3] + sh[1] + s13 + shadeCenter) * 0.25f};
-                                const u32 tc[4] = {smoothBlend(l[3], l[0], l03, lightCenter), smoothBlend(l[2], l[0], l02, lightCenter),
-                                                   smoothBlend(l[2], l[1], l12, lightCenter), smoothBlend(l[3], l[1], l13, lightCenter)};
-                                for (int k = 0; k < 4; ++k) {
-                                    if (partial) {
-                                        const int* w = info.weights[k];
-                                        const float wt[4] = {shape[w[0]] * shape[w[1]], shape[w[2]] * shape[w[3]], shape[w[4]] * shape[w[5]],
-                                                             shape[w[6]] * shape[w[7]]};
-                                        vertAo[remap[k]] = std::clamp(t[0] * wt[0] + t[1] * wt[1] + t[2] * wt[2] + t[3] * wt[3], 0.0f, 1.0f);
-                                        vertLight[remap[k]] = smoothWeightedBlend(tc, wt);
-                                    } else {
-                                        vertAo[remap[k]] = t[k];
-                                        vertLight[remap[k]] = tc[k];
-                                    }
-                                }
-                            } else {  // prepareQuadFlat: a culled face by the cell it faces, else its own (or the next if on the boundary)
-                                int lc = p;
-                                if (m.cull >= 0) lc = p + kDirOffset[m.cull];
-                                else if (cubicFace) lc = cellAt(x + kStep[dir][0], y + kStep[dir][1], z + kStep[dir][2]);
-                                for (u32& v : vertLight) v = coordsAt(lc, b);
-                            }
-                            for (int v = 0; v < 4; ++v) {
-                                cornerLight[v] = vertLight[javaIndex[v]];
-                                cornerAo[v] = u32(std::clamp(vertAo[javaIndex[v]], 0.0f, 1.0f) * 255.0f + 0.5f);
-                            }
+                            for (u32& v : cornerLight) v = grid.coords(lc, b);
                         } else {
                             for (u32& v : cornerLight) v = 0xF000F0u;
                         }

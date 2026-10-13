@@ -29,7 +29,8 @@ public:
 
 // Cube quad (16 bytes), smooth-lit like the game's default lighting:
 //   geo   = x:4 y:4 z:4 (w-1):4 (h-1):4 face:3 rot:2 colour index low:4, fluid surface:1 (the top of water/lava
-//           sits 2/16 lower: all corners of an up face, the top corners of a side face)
+//           sits 2/16 lower: all corners of an up face, the top corners of a side face), fluid quad:1 (below),
+//           centre shade:1 (the cell in front darkens every corner once more: BlockModelLighter's shadeCenter)
 //   tex   = texture layer:12, per corner ambient occlusion (solid cells beside it, 0..3) 2 bits each,
 //           colour index high:12
 //   sky   = per corner sky light in 4.4 fixed point (average of the four cells in front of the corner)
