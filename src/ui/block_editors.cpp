@@ -3,6 +3,7 @@
 // minecarts, jigsaws (with Generate), structure blocks (by mode: save / load / corner / data), test blocks and test
 // instance blocks. Their values come from the block entities' NBT the world keeps; Done sends the game's packets.
 #include "ui/block_editors.h"
+#include "ui/mp_hud.h"
 
 #include "assets/assets.h"
 
@@ -203,6 +204,7 @@ void commandDraw(UiState& s, Canvas& c) {
         s.drawText(c, Text(fitText(s.font, f.text.value, int(f.w) - 8)), f.x + 3, f.y + (f.h - 8) / 2, 0xFF707070, true);
     }
     s.drawButtons(c);
+    commandSuggestionsDraw(s, g.command.text, g.command.x, g.command.y, g.command.w, g.command.h, c);
 }
 
 void commandInput(UiState& s, const Window::InputEvent& e) {
@@ -212,6 +214,7 @@ void commandInput(UiState& s, const Window::InputEvent& e) {
         if (s.buttons.size() >= 2 && s.buttons[s.buttons.size() - 2].onPress) s.buttons[s.buttons.size() - 2].onPress();
         return;
     }
+    if (commandSuggestionsInput(s, g.command.text, g.command.x, g.command.y, g.command.w, g.command.h, e)) return;
     if (fieldsInput(s, e)) return;
     s.buttonsInput(e);
 }

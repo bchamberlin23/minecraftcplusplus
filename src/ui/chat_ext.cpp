@@ -51,14 +51,39 @@ struct ChatExt {
     int usageX = 0, usageW = 0;
 };
 ChatExt cx;
+// CommandSuggestions' configuration and its EditBox: the chat input, or the command block editors' command field
+// (commandsOnly, onlyShowIfCursorPastError, lineStartOffset 0, 7 lines, below the field, fill Integer.MIN_VALUE).
+struct Target {
+    UiState::TextField* field = nullptr;
+    int originX = 4, innerW = 0;  // EditBox.getScreenX(0), getInnerWidth
+    int textY = 0;                // the EditBox's text line (the suggestion after the text)
+    bool bordered = false, anchorBottom = true, commandsOnly = false, pastError = false;
+    int lineStart = 1, limit = 10;
+    u32 fill = 0xD0000000;  // ChatScreen: fillColor
+    Screen screen = Screen::Chat;
+};
+Target tg;
+void useTarget(const Target& t) {  // another EditBox: its own suggestions state
+    if (t.field != tg.field || t.screen != tg.screen) {
+        const int next = cx.nextId;
+        cx = ChatExt{};
+        cx.nextId = next;
+    }
+    tg = t;
+}
+Target chatTarget(UiState& s) {  // ChatScreen: CommandSuggestions(..., false, false, 1, 10, true, -805306368)
+    Target t;
+    t.field = &s.chatInput;
+    t.originX = 4, t.innerW = s.guiW() - 4;
+    t.textY = s.guiH() - 12 + 2;
+    return t;
+}
 struct Commands {  // the server's command tree (ClientboundCommandsPacket); kept over ChatExt resets
     cmd::Tree tree;
     std::vector<std::string> customCompletions;  // ClientSuggestionProvider.customCompletionSuggestions (a set)
 };
 Commands commands;
 
-constexpr int kLimit = 10;          // ChatScreen: suggestionLineLimit
-constexpr u32 kFill = 0xD0000000;   // ChatScreen: fillColor
 
 void hide() {
     cx.visible = false;
@@ -66,9 +91,9 @@ void hide() {
 }
 
 int screenX(UiState& s, int pos) {  // EditBox.getScreenX with the field's scroll
-    const auto& f = s.chatInput;
+    const auto& f = *tg.field;
     pos = std::clamp(pos, f.scroll, int(f.value.size()));
-    return 4 + s.font.width(f.value.substr(size_t(f.scroll), size_t(pos - f.scroll)));
+    return tg.originX + s.font.width(f.value.substr(size_t(f.scroll), size_t(pos - f.scroll)));
 }
 
 std::string applySuggestion(const Suggestion& sg, const std::string& input) {  // Suggestion.apply
@@ -81,22 +106,22 @@ void select(UiState& s, int index) {
     const int n = int(cx.list.size());
     cx.current = ((index % n) + n) % n;
     const std::string applied = applySuggestion(cx.list[size_t(cx.current)], cx.original);
-    const std::string& v = s.chatInput.value;
+    const std::string& v = tg.field->value;
     cx.ghost = applied.starts_with(v) ? applied.substr(v.size()) : std::string();  // calculateSuggestionSuffix
 }
 
 void cycle(UiState& s, int dir) {
     select(s, cx.current + dir);
     const int n = int(cx.list.size());
-    const int first = cx.offset, last = cx.offset + kLimit - 1;
-    if (cx.current < first) cx.offset = std::clamp(cx.current, 0, std::max(n - kLimit, 0));
-    else if (cx.current > last) cx.offset = std::clamp(cx.current + 1 - kLimit, 0, std::max(n - kLimit, 0));  // lineStartOffset 1
+    const int first = cx.offset, last = cx.offset + tg.limit - 1;
+    if (cx.current < first) cx.offset = std::clamp(cx.current, 0, std::max(n - tg.limit, 0));
+    else if (cx.current > last) cx.offset = std::clamp(cx.current + tg.lineStart - tg.limit, 0, std::max(n - tg.limit, 0));
 }
 
 void useSuggestion(UiState& s) {
     if (cx.list.empty()) return;
     const Suggestion& sg = cx.list[size_t(cx.current)];
-    auto& f = s.chatInput;
+    auto& f = *tg.field;
     f.value = applySuggestion(sg, cx.original);
     f.cursor = f.selection = std::min(int(f.value.size()), cx.start + int(sg.text.size()));
     cx.lastValue = f.value;  // keepSuggestions: no new request for this change
@@ -106,12 +131,11 @@ void useSuggestion(UiState& s) {
 
 void showSuggestions(UiState& s) {  // CommandSuggestions.showSuggestions
     if (!cx.haveResult || cx.result.empty()) return;
-    const auto& f = s.chatInput;
+    const auto& f = *tg.field;
     int maxW = 0;
     for (const Suggestion& sg : cx.result) maxW = std::max(maxW, s.font.width(sg.text));
-    const int W = s.guiW(), H = s.guiH();
-    const int x = std::clamp(screenX(s, cx.start), 0, 4 + (W - 4) - maxW);
-    const int y = H - 12;
+    const int x = std::clamp(screenX(s, cx.start), 0, tg.originX + tg.innerW - maxW);
+    const int y = tg.anchorBottom ? s.guiH() - 12 : 72;
     // sortSuggestions: those starting with the last word first.
     const std::string partial = f.value.substr(0, size_t(std::clamp(f.cursor, 0, int(f.value.size()))));
     size_t lw = partial.find_last_of(" \t");
@@ -122,8 +146,10 @@ void showSuggestions(UiState& s) {  // CommandSuggestions.showSuggestions
         (sg.text.starts_with(lastWord) || sg.text.starts_with("minecraft:" + lastWord) ? front : back).push_back(sg);
     front.insert(front.end(), back.begin(), back.end());
     cx.list = std::move(front);
-    const int shown = std::min(int(cx.list.size()), kLimit);
-    cx.x = x - 1, cx.y = y - 3 - shown * 12, cx.w = maxW + 1, cx.h = shown * 12;
+    const int shown = std::min(int(cx.list.size()), tg.limit);
+    cx.x = x - (tg.bordered ? 0 : 1);
+    cx.y = tg.anchorBottom ? y - 3 - shown * 12 : y - (tg.bordered ? 1 : 0);
+    cx.w = maxW + 1, cx.h = shown * 12;
     cx.original = f.value;
     cx.offset = 0;
     cx.tabCycles = false;
@@ -133,12 +159,13 @@ void showSuggestions(UiState& s) {  // CommandSuggestions.showSuggestions
 
 // CommandDispatcher.parse of the input with the server's tree (redone when the text changes).
 void updateParse(UiState& s) {
-    const std::string& v = s.chatInput.value;
+    const std::string& v = tg.field->value;
     if (cx.parsed && v == cx.parsedValue) return;
     cx.parsed = true;
     cx.parsedValue = v;
-    cx.haveParse = !v.empty() && v[0] == '/' && commands.tree.valid();
-    if (cx.haveParse) cx.parse = cmd::parse(commands.tree, v, 1);
+    const bool slash = !v.empty() && v[0] == '/';
+    cx.haveParse = (slash || tg.commandsOnly) && commands.tree.valid();
+    if (cx.haveParse) cx.parse = cmd::parse(commands.tree, v, slash ? 1 : 0);
 }
 
 // CommandSuggestions.updateUsageInfo: parse errors when the cursor is at the end and nothing completes, else the
@@ -146,7 +173,7 @@ void updateParse(UiState& s) {
 void updateUsage(UiState& s) {
     cx.usage.clear();
     if (!cx.haveParse) return;
-    const auto& f = s.chatInput;
+    const auto& f = *tg.field;
     const Lang* lang = &s.res.lang();
     bool trailing = false;
     if (f.cursor == int(f.value.size())) {
@@ -170,7 +197,7 @@ void updateUsage(UiState& s) {
     }
     cx.usageW = 0;
     for (const Text& t : cx.usage) cx.usageW = std::max(cx.usageW, s.font.width(t));
-    cx.usageX = cx.usage.empty() ? 0 : std::clamp(screenX(s, cx.ctxStart), 0, 4 + (s.guiW() - 4) - cx.usageW);
+    cx.usageX = cx.usage.empty() ? 0 : std::clamp(screenX(s, cx.ctxStart), 0, tg.originX + tg.innerW - cx.usageW);
 }
 
 std::string lowerAscii(std::string v) {
@@ -210,7 +237,7 @@ std::vector<std::string> customTabSuggestions(const std::string& word) {
 // Input changed (ChatScreen.onEdited -> CommandSuggestions.updateCommandInfo): complete locally from the command tree
 // (literals, booleans) or ask the server (other arguments, or no tree).
 void update(UiState& s) {
-    const auto& f = s.chatInput;
+    const auto& f = *tg.field;
     updateParse(s);
     if (cx.tracking && f.value == cx.lastValue) return;
     cx.tracking = true;
@@ -218,7 +245,7 @@ void update(UiState& s) {
     hide();
     cx.haveResult = false;
     cx.usage.clear();
-    if (!f.value.empty() && f.value[0] != '/' && s.online()) {
+    if (!tg.commandsOnly && !f.value.empty() && f.value[0] != '/' && s.online()) {
         // Not a command: player names and the server's custom completions for the last word (Tab shows them).
         cx.pendingId = -1;
         if (f.value.find_first_not_of(" \t") == std::string::npos) return;
@@ -230,7 +257,9 @@ void update(UiState& s) {
         for (const std::string& t : customTabSuggestions(partial.substr(size_t(lastWord)))) cx.result.push_back({t});
         return;
     }
-    if (f.value.empty() || f.value[0] != '/' || f.cursor < 1 || !s.online()) {
+    const bool slash = !f.value.empty() && f.value[0] == '/';
+    const int parseStart = tg.pastError ? (slash ? 1 : 0) : 1;  // onlyShowIfCursorPastError: from the reader's cursor
+    if (!(tg.commandsOnly || slash) || f.cursor < parseStart || !s.online()) {
         cx.pendingId = -1;
         return;
     }
@@ -314,7 +343,7 @@ void registerHandlers(UiState& s, net::Client& client) {
             LOG("ui: command_suggestions #%d start %d length %d, %d: %s", id, start, length, n, names.c_str());
         }
         sp->post([sp, id, start, length, list = std::move(list)] {
-            if (id != cx.pendingId || sp->screen != Screen::Chat) return;
+            if (id != cx.pendingId || sp->screen != tg.screen) return;
             cx.haveResult = true, cx.start = start, cx.length = length, cx.result = list;
             updateUsage(*sp);
             showSuggestions(*sp);  // autoSuggestions (default on)
@@ -330,6 +359,7 @@ UiModuleRegistrar reg([] {
         cx = ChatExt{};
         UiState* sp = &s;
         s.chatFormatter = [sp](const std::string& visible, int offset, Text& out) {  // CommandSuggestions.formatChat
+            useTarget(chatTarget(*sp));
             updateParse(*sp);
             if (!cx.haveParse) return false;
             out = cmd::format(cx.parse, visible, offset);
@@ -337,7 +367,7 @@ UiModuleRegistrar reg([] {
         };
     };
     m.tick = [](UiState& s) {
-        if (s.screen != Screen::Chat) cx.open = false;
+        if (s.screen != tg.screen) cx.open = false;
     };
     return m;
 }());
@@ -400,9 +430,8 @@ bool clickStyle(UiState& s, const Style& st, bool shift) {
     return true;
 }
 
-}  // namespace
-
-bool chatExtInput(UiState& s, const InputEvent& e) {
+// CommandSuggestions.keyPressed / mouseScrolled / mouseClicked for the current target.
+bool suggestionsInput(UiState& s, const InputEvent& e) {
     using E = InputEvent;
     update(s);
     if (e.type == E::Key && e.down) {
@@ -429,7 +458,7 @@ bool chatExtInput(UiState& s, const InputEvent& e) {
     }
     if (e.type == E::Wheel && cx.visible) {
         if (s.mouseX >= cx.x && s.mouseX < cx.x + cx.w && s.mouseY >= cx.y && s.mouseY < cx.y + cx.h) {
-            cx.offset = std::clamp(cx.offset - (e.code > 0 ? 1 : -1), 0, std::max(int(cx.list.size()) - kLimit, 0));
+            cx.offset = std::clamp(cx.offset - (e.code > 0 ? 1 : -1), 0, std::max(int(cx.list.size()) - tg.limit, 0));
             return true;
         }
         return false;
@@ -443,29 +472,27 @@ bool chatExtInput(UiState& s, const InputEvent& e) {
             }
             return true;
         }
-        if (chatSpecialClick(s, s.mouseX, s.mouseY)) return true;
-        Style st;
-        if (chatStyleAt(s, s.mouseX, s.mouseY, st)) return clickStyle(s, st, s.window->keyDown(VK_SHIFT));
     }
     return false;
 }
 
-void chatExtDraw(UiState& s, Canvas& c) {
-    if (!cx.open) cx.open = true, cx.tracking = false, hide(), cx.pendingId = -1;  // the chat (re)opened
+// The suggestion after the text, then the list or the usage lines; true when the list is drawn.
+bool suggestionsDraw(UiState& s, Canvas& c) {
+    if (!cx.open) cx.open = true, cx.tracking = false, hide(), cx.pendingId = -1;  // the screen (re)opened
     update(s);
-    const auto& f = s.chatInput;
+    const auto& f = *tg.field;
     // EditBox suggestion: gray after the text when the cursor is at the end.
     if (!cx.ghost.empty() && f.cursor >= int(f.value.size()))
-        s.font.draw(c, cx.ghost, float(screenX(s, int(f.value.size())) - 1), float(s.guiH() - 12 + 2), 0xFF808080, true);
+        s.font.draw(c, cx.ghost, float(screenX(s, int(f.value.size())) - 1), float(tg.textY), 0xFF808080, true);
     const float mx = s.mouseX, my = s.mouseY;
     const bool moved = mx != cx.lastMx || my != cx.lastMy;
     cx.lastMx = mx, cx.lastMy = my;
     if (cx.visible && !cx.list.empty()) {  // SuggestionsList.extractRenderState
-        const int n = int(cx.list.size()), limit = std::min(n, kLimit);
+        const int n = int(cx.list.size()), limit = std::min(n, tg.limit);
         const bool prev = cx.offset > 0, next = n > cx.offset + limit;
         if (prev || next) {
-            c.fill(float(cx.x), float(cx.y - 1), float(cx.x + cx.w), float(cx.y), kFill);
-            c.fill(float(cx.x), float(cx.y + cx.h), float(cx.x + cx.w), float(cx.y + cx.h + 1), kFill);
+            c.fill(float(cx.x), float(cx.y - 1), float(cx.x + cx.w), float(cx.y), tg.fill);
+            c.fill(float(cx.x), float(cx.y + cx.h), float(cx.x + cx.w), float(cx.y + cx.h + 1), tg.fill);
             for (int x = 0; x < cx.w; x += 2) {
                 if (prev) c.fill(float(cx.x + x), float(cx.y - 1), float(cx.x + x + 1), float(cx.y), 0xFFFFFFFF);
                 if (next) c.fill(float(cx.x + x), float(cx.y + cx.h), float(cx.x + x + 1), float(cx.y + cx.h + 1), 0xFFFFFFFF);
@@ -475,7 +502,7 @@ void chatExtDraw(UiState& s, Canvas& c) {
         for (int i = 0; i < limit; ++i) {
             const Suggestion& sg = cx.list[size_t(i + cx.offset)];
             const int y = cx.y + 12 * i;
-            c.fill(float(cx.x), float(y), float(cx.x + cx.w), float(y + 12), kFill);
+            c.fill(float(cx.x), float(y), float(cx.x + cx.w), float(y + 12), tg.fill);
             if (mx > cx.x && mx < cx.x + cx.w && my > y && my < y + 12) {
                 if (moved) select(s, i + cx.offset);
                 hovered = true;
@@ -484,14 +511,35 @@ void chatExtDraw(UiState& s, Canvas& c) {
         }
         if (hovered && cx.list[size_t(cx.current)].hasTooltip)
             s.drawTooltip(c, {cx.list[size_t(cx.current)].tooltip}, mx, my);
-        return;
+        return true;
     }
-    // CommandSuggestions.extractUsage: anchored to the bottom, one line per entry.
+    // CommandSuggestions.extractUsage: one line per entry, up from the bottom or down from 72.
     for (size_t i = 0; i < cx.usage.size(); ++i) {
-        const int y = s.guiH() - 27 - 12 * int(i);
-        c.fill(float(cx.usageX - 1), float(y), float(cx.usageX + cx.usageW + 1), float(y + 12), kFill);
+        const int y = tg.anchorBottom ? s.guiH() - 27 - 12 * int(i) : 72 + 12 * int(i);
+        c.fill(float(cx.usageX - 1), float(y), float(cx.usageX + cx.usageW + 1), float(y + 12), tg.fill);
         s.font.draw(c, cx.usage[i], float(cx.usageX), float(y + 2), 0xFFFFFFFF, true);
     }
+    return false;
+}
+
+}  // namespace
+
+bool chatExtInput(UiState& s, const InputEvent& e) {
+    using E = InputEvent;
+    useTarget(chatTarget(s));
+    if (suggestionsInput(s, e)) return true;
+    if (e.type == E::Button && e.down && e.code == 0) {
+        if (chatSpecialClick(s, s.mouseX, s.mouseY)) return true;
+        Style st;
+        if (chatStyleAt(s, s.mouseX, s.mouseY, st)) return clickStyle(s, st, s.window->keyDown(VK_SHIFT));
+    }
+    return false;
+}
+
+void chatExtDraw(UiState& s, Canvas& c) {
+    useTarget(chatTarget(s));
+    if (suggestionsDraw(s, c)) return;
+    const float mx = s.mouseX, my = s.mouseY;
     // Hovered message tag indicator (DrawingFocusedGraphicsAccess.handleTag): the tag's text.
     const int chatBottom = s.guiH() - 40;
     const int line = int(std::floor((float(chatBottom) - my) / 9.0f));
@@ -508,6 +556,29 @@ void chatExtDraw(UiState& s, Canvas& c) {
         const std::vector<Text> lines = hoverLines(s, *st.events);
         if (!lines.empty()) s.drawTooltip(c, lines, mx, my);
     }
+}
+
+namespace {
+Target editorTarget(UiState& s, UiState::TextField& field, float x, float y, float w, float h) {
+    Target t;
+    t.field = &field;
+    t.originX = int(x + 3), t.innerW = int(w - 6);  // our fields' text inset (EditBox: x + 4, width - 8)
+    t.textY = int(y + (h - 8) / 2);
+    t.bordered = true, t.anchorBottom = false, t.commandsOnly = true, t.pastError = true;
+    t.lineStart = 0, t.limit = 7, t.fill = 0x80000000u;
+    t.screen = s.screen;
+    return t;
+}
+}  // namespace
+
+bool commandSuggestionsInput(UiState& s, UiState::TextField& field, float x, float y, float w, float h, const InputEvent& e) {
+    useTarget(editorTarget(s, field, x, y, w, h));
+    return suggestionsInput(s, e);
+}
+
+void commandSuggestionsDraw(UiState& s, UiState::TextField& field, float x, float y, float w, float h, Canvas& c) {
+    useTarget(editorTarget(s, field, x, y, w, h));
+    suggestionsDraw(s, c);
 }
 
 }  // namespace ui

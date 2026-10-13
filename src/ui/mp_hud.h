@@ -3,6 +3,7 @@
 // chat extras (chat_ext.cpp): command suggestions (CommandSuggestions) and chat click / hover events.
 #include "ui/modules.h"
 #include "ui/text.h"
+#include "ui/ui_state.h"
 
 #include <string>
 #include <vector>
@@ -44,6 +45,10 @@ std::vector<TeamView> teamViews();
 // Chat screen (screens.cpp, Screen::Chat): input first (true: consumed), drawing after the input box.
 bool chatExtInput(UiState& s, const InputEvent& e);
 void chatExtDraw(UiState& s, Canvas& c);
+// The command block editors' command field (AbstractCommandBlockEditScreen's CommandSuggestions): the field's
+// text box; input first (true: consumed), drawing after the widgets.
+bool commandSuggestionsInput(UiState& s, UiState::TextField& field, float x, float y, float w, float h, const InputEvent& e);
+void commandSuggestionsDraw(UiState& s, UiState::TextField& field, float x, float y, float w, float h, Canvas& c);
 // hud.cpp: the chat's geometry (scale, width, line spacing options): the style under a GUI point, and clicks on the
 // delayed-message line / the restricted prompt (true: handled).
 bool chatLineStyleAt(UiState& s, float mx, float my, Style& out);
