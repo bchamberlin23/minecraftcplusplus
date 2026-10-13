@@ -114,6 +114,11 @@ private:
         void draw(const PassContext& ctx) override { owner->drawOutline(ctx); }
     } outlinePass_;
     bool createOutline(Renderer& r);
+    // Runtime atlas slots (profile skins, capes) written since: copied into the GPU atlas (a few per frame).
+    void uploadSlots(ID3D12GraphicsCommandList* list, u32 frame);
+    ComPtr<ID3D12Resource> slotUpload_;
+    u8* slotMapped_ = nullptr;
+    std::vector<int> pendingSlots_;
     void drawOutline(const PassContext& ctx);
     struct Glow {  // one glowing entity's ranges (like Caster) and colour
         u32 ref, refN, tr, trN, free, freeN, color;

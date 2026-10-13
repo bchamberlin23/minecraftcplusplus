@@ -3,6 +3,8 @@
 #include "ui/mp_hud.h"
 
 #include "entity/entities.h"
+#include "entity/skin_cache.h"
+#include "ui/resources.h"
 #include "ui/frontend.h"
 #include "ui/ui_state.h"
 #include "world/nbt.h"
@@ -31,6 +33,8 @@ struct PlayerEntry {
     int listOrder = 0;
     bool showHat = true;
     bool chatSession = false;  // a profile key (RemoteChatSession) was sent for this player
+    std::string textures;      // the profile's "textures" property; skinState 1 while its skin downloads
+    int skinState = 0;
 };
 
 struct HealthState {  // PlayerTabOverlay.HealthState (hearts render type)
@@ -213,8 +217,10 @@ void registerHandlers(UiState& s, net::Client& client) {
                 e.name = std::string(r.str());
                 const i32 props = r.varInt();
                 for (i32 p = 0; p < props && r.ok; ++p) {
-                    r.str(), r.str();
+                    const std::string name(r.str());
+                    std::string value(r.str());
                     if (r.boolean()) r.str();
+                    if (name == "textures") e.textures = std::move(value), e.skinState = 1;
                 }
                 const int skin = ent::defaultSkinIndex(e.uuid);
                 e.skin = std::string("entity/player/") + (skin < 9 ? "slim/" : "wide/") + kSkins[skin % 9];
@@ -240,7 +246,7 @@ void registerHandlers(UiState& s, net::Client& client) {
                 if (actions & 1) {
                     PlayerEntry& p = g.players[key];
                     std::copy(e.uuid, e.uuid + 16, p.uuid);
-                    p.name = e.name, p.skin = e.skin;
+                    p.name = e.name, p.skin = e.skin, p.textures = e.textures, p.skinState = e.skinState;
                 }
                 auto it = g.players.find(key);
                 if (it == g.players.end()) continue;
@@ -657,12 +663,31 @@ void drawHud(UiState& s, Canvas& c) {
 
 void drawHudTop(UiState& s, Canvas& c) { drawPlayerList(s, c); }
 
+void tick(UiState& s) {  // downloaded profile skins for the faces (registered as UI textures "skin/<hash>")
+    for (auto& [key, p] : g.players) {
+        if (p.skinState != 1) continue;
+        ent::ProfileTextures t;
+        if (!ent::parseProfileTextures(p.textures, t) || t.skinUrl.empty()) {
+            p.skinState = 3;
+            continue;
+        }
+        Image img;
+        const int state = ent::fetchProfileTexture(t.skinUrl, true, &img.rgba, &img.w, &img.h);
+        if (state == 1) continue;
+        p.skinState = 3;
+        if (state != 2) continue;
+        const std::string name = "skin/" + ent::profileTextureHash(t.skinUrl);
+        if (s.sprites.addImage(name, img)) p.skin = name, p.skinState = 2;
+    }
+}
+
 UiModuleRegistrar reg([] {
     UiModule m;
     m.name = "mp_hud";
     m.registerHandlers = registerHandlers;
     m.drawHud = drawHud;
     m.drawHudTop = drawHudTop;
+    m.tick = tick;
     return m;
 }());
 

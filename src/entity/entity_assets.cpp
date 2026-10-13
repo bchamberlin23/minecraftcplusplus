@@ -469,6 +469,9 @@ bool EntityAssets::loadTextures(const fs::path& jar) {
     }
     atlasW_ = kW;
     atlasH_ = std::max(16u, (y + shelf + 3) & ~3u);
+    constexpr u32 kSlotRows = 2;  // runtime textures: 2 rows of 64 x 64 slots (128 profile skins / capes)
+    slotY_ = (atlasH_ + kGap + 3) & ~3u;
+    atlasH_ = slotY_ + kSlotRows * 64;
     atlas_.assign(size_t(atlasW_) * atlasH_ * 4, 0);
     for (u32 yy = 0; yy < 4; ++yy)
         for (u32 xx = 0; xx < 4; ++xx) std::memset(&atlas_[(size_t(yy) * atlasW_ + xx) * 4], 255, 4);
@@ -486,7 +489,43 @@ bool EntityAssets::loadTextures(const fs::path& jar) {
         texIndex_[t.key] = int(rects_.size());
         rects_.push_back(r);
     }
+    slotFirst_ = int(rects_.size());
+    slotCount_ = int((atlasH_ - slotY_) / 64 * (kW / 64));
+    for (int i = 0; i < slotCount_; ++i) {
+        TexRect r;
+        r.u0 = float(u32(i) % (kW / 64) * 64) / float(atlasW_), r.v0 = float(slotY_ + u32(i) / (kW / 64) * 64) / float(atlasH_);
+        r.du = 64.0f / float(atlasW_), r.dv = 64.0f / float(atlasH_);
+        r.w = r.h = 64;
+        rects_.push_back(r);
+    }
     return true;
+}
+
+int EntityAssets::allocSlot() const { return slotsUsed_ < slotCount_ ? slotFirst_ + slotsUsed_++ : -1; }
+
+void EntityAssets::slotOrigin(int tex, u32& x, u32& y) const {
+    const u32 i = u32(tex - slotFirst_);
+    x = i % (atlasW_ / 64) * 64, y = slotY_ + i / (atlasW_ / 64) * 64;
+}
+
+void EntityAssets::writeSlot(int tex, const u8* rgba, int w, int h) const {
+    if (tex < slotFirst_ || tex >= slotFirst_ + slotCount_ || w <= 0 || h <= 0 || w > 64 || h > 64) return;
+    u32 x, y;
+    slotOrigin(tex, x, y);
+    for (int row = 0; row < 64; ++row) {
+        u8* dst = &atlas_[(size_t(y + u32(row)) * atlasW_ + x) * 4];
+        if (row < h) std::memcpy(dst, rgba + size_t(row) * w * 4, size_t(w) * 4), std::memset(dst + w * 4, 0, size_t(64 - w) * 4);
+        else std::memset(dst, 0, 64 * 4);
+    }
+    TexRect& r = rects_[size_t(tex)];
+    r.du = float(w) / float(atlasW_), r.dv = float(h) / float(atlasH_), r.w = w, r.h = h;
+    dirtySlots_.push_back(tex);
+}
+
+std::vector<int> EntityAssets::takeDirtySlots() const {
+    std::vector<int> out;
+    out.swap(dirtySlots_);
+    return out;
 }
 
 bool EntityAssets::load(const fs::path& minecraftDir, const std::string& version, const fs::path& jar,

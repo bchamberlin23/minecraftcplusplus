@@ -123,6 +123,13 @@ public:
     const std::vector<u8>& atlas() const { return atlas_; }
     u32 atlasWidth() const { return atlasW_; }
     u32 atlasHeight() const { return atlasH_; }
+    // Runtime textures (profile skins and capes, at most 64 x 64): slots in rows below the packed textures, main
+    // thread. allocSlot returns a texture index (-1: all taken); writeSlot copies the pixels in (its rect takes their
+    // size) and queues the slot for the GPU atlas; takeDirtySlots hands the renderer the slots written since.
+    int allocSlot() const;
+    void writeSlot(int tex, const u8* rgba, int w, int h) const;
+    std::vector<int> takeDirtySlots() const;
+    void slotOrigin(int tex, u32& x, u32& y) const;
 
     const TypeInfo* type(int protocolId) const;
     int typeId(std::string_view name) const;  // protocol id or -1
@@ -145,9 +152,13 @@ private:
     std::vector<Model> models_;
     std::unordered_map<std::string, int> modelIndex_;
     std::vector<GpuQuad> quads_;
-    std::vector<TexRect> rects_;
+    mutable std::vector<TexRect> rects_;  // runtime slots: their sizes change when written
     std::unordered_map<std::string, int> texIndex_;
-    std::vector<u8> atlas_;
+    mutable std::vector<u8> atlas_;
+    int slotFirst_ = 0, slotCount_ = 0;
+    u32 slotY_ = 0;
+    mutable int slotsUsed_ = 0;
+    mutable std::vector<int> dirtySlots_;
     u32 atlasW_ = 0, atlasH_ = 0;
     std::vector<TypeInfo> types_;
     std::unordered_map<std::string, int> typeIndex_;

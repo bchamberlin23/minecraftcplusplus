@@ -2566,8 +2566,59 @@ bool inCascade(const float* m, const float c[3], float r) {
 }
 }  // namespace
 
+void EntityRenderer::uploadSlots(ID3D12GraphicsCommandList* list, u32 frame) {
+    for (int t : assets_.takeDirtySlots())
+        if (std::find(pendingSlots_.begin(), pendingSlots_.end(), t) == pendingSlots_.end()) pendingSlots_.push_back(t);
+    if (pendingSlots_.empty() || !atlas_) return;
+    constexpr u32 kPerFrame = 8, kSlotBytes = 64 * 256;  // 64 rows of 64 texels (256-byte pitch)
+    if (!slotUpload_) {
+        D3D12_HEAP_PROPERTIES hp{D3D12_HEAP_TYPE_UPLOAD};
+        D3D12_RESOURCE_DESC bd{};
+        bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        bd.Width = u64(kSlotBytes) * kPerFrame * Renderer::kFrames;
+        bd.Height = bd.DepthOrArraySize = bd.MipLevels = 1;
+        bd.SampleDesc.Count = 1;
+        bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        D3D12_RANGE none{0, 0};
+        if (!check(renderer_->device()->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                                                IID_PPV_ARGS(&slotUpload_)),
+                   "CreateCommittedResource(slots)") ||
+            !check(slotUpload_->Map(0, &none, reinterpret_cast<void**>(&slotMapped_)), "Map")) {
+            slotUpload_.Reset();
+            pendingSlots_.clear();
+            return;
+        }
+    }
+    auto barrier = [&](D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to) {
+        D3D12_RESOURCE_BARRIER b{};
+        b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        b.Transition.pResource = atlas_.Get();
+        b.Transition.Subresource = 0;
+        b.Transition.StateBefore = from, b.Transition.StateAfter = to;
+        list->ResourceBarrier(1, &b);
+    };
+    barrier(D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+    const u32 n = std::min<u32>(u32(pendingSlots_.size()), kPerFrame);
+    const std::vector<u8>& cpu = assets_.atlas();
+    for (u32 i = 0; i < n; ++i) {
+        u32 x, y;
+        assets_.slotOrigin(pendingSlots_[i], x, y);
+        const u64 offset = (u64(frame) * kPerFrame + i) * kSlotBytes;
+        for (u32 row = 0; row < 64; ++row)
+            std::memcpy(slotMapped_ + offset + row * 256, &cpu[(size_t(y + row) * assets_.atlasWidth() + x) * 4], 256);
+        D3D12_TEXTURE_COPY_LOCATION dst{atlas_.Get(), D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX, {}};
+        dst.SubresourceIndex = 0;
+        D3D12_TEXTURE_COPY_LOCATION src{slotUpload_.Get(), D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT, {}};
+        src.PlacedFootprint = {offset, {DXGI_FORMAT_R8G8B8A8_UNORM, 64, 64, 1, 256}};
+        list->CopyTextureRegion(&dst, x, y, 0, &src, nullptr);
+    }
+    barrier(D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    pendingSlots_.erase(pendingSlots_.begin(), pendingSlots_.begin() + n);
+}
+
 void EntityRenderer::build(const PassContext& ctx) {
     Timer timer;
+    uploadSlots(ctx.list, ctx.frame);
     const auto& entities = world_.entities();
     stats_ = {};
     stats_.entities = u32(entities.size());

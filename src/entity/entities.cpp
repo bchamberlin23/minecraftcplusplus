@@ -1,4 +1,5 @@
 #include "entity/entities.h"
+#include "entity/skin_cache.h"
 
 #include "assets/assets.h"
 #include "assets/game_reports.h"
@@ -206,6 +207,7 @@ EntityWorld::EntityWorld(EntityAssets& assets, World& world, BlockRegistry& regi
         d.commandName = id({"DATA_ID_COMMAND_NAME"});
         d.lastOutput = id({"DATA_ID_LAST_OUTPUT"});
         d.attackTarget = id({"DATA_ID_ATTACK_TARGET"});
+        d.profile = id({"DATA_PROFILE"});
         d.snifferState = id({"DATA_STATE"});
         d.damage = id({"DATA_ID_DAMAGE"});
         d.mainGene = id({"MAIN_GENE_ID", "DATA_MAIN_GENE_ID"});
@@ -402,7 +404,35 @@ void readEntityData(net::Reader& r, EventQueue& q, int entityEffect,
             case 35: case 36: case 37: case 38: case 42: case 43: v.i = r.varInt(); break;  // enums
             case 39: v.f[0] = r.f32(), v.f[1] = r.f32(), v.f[2] = r.f32(); break;
             case 40: v.f[0] = r.f32(), v.f[1] = r.f32(), v.f[2] = r.f32(), v.f[3] = r.f32(); break;
-            default: stop = true, keep = false; break;  // resolvable profile and anything newer
+            case 41: {  // resolvable profile: a full game profile or a partial one, then the skin patch
+                std::string textures;
+                auto properties = [&] {
+                    const i32 n = r.varInt();
+                    for (i32 i = 0; i < n && r.ok; ++i) {
+                        const std::string name(r.str());
+                        std::string value(r.str());
+                        if (r.boolean()) r.str();  // signature
+                        if (name == "textures") textures = std::move(value);
+                    }
+                };
+                if (r.boolean()) {  // GAME_PROFILE: id, name, properties
+                    r.skip(16), r.str();
+                } else {  // Partial: optional name, optional id, properties
+                    if (r.boolean()) r.str();
+                    if (r.boolean()) r.skip(16);
+                }
+                properties();
+                // PlayerSkin.Patch: optional body / cape / elytra textures (identifiers), optional model (slim)
+                std::string body;
+                if (r.boolean()) body = std::string(r.str());
+                if (r.boolean()) r.str();
+                if (r.boolean()) r.str();
+                v.i = r.boolean() ? (r.boolean() ? 3 : 1) : 0;  // bit 0: a model given, bit 1: slim
+                q.strings.push_back(std::move(textures)), v.str = i32(q.strings.size() - 1);
+                q.strings.push_back(std::move(body)), v.f[0] = float(q.strings.size() - 1);
+                break;
+            }
+            default: stop = true, keep = false; break;  // anything newer
         }
         if (!r.ok) return;
         if (keep) q.meta.push_back(v);
@@ -569,10 +599,13 @@ void EntityWorld::attach(net::Client& client) {
             if (actions & 1) {  // add player: name + properties
                 q.strings.emplace_back(r.str());
                 e.a = i32(q.strings.size() - 1);
+                e.b = -1;
                 const i32 props = r.varInt();
                 for (i32 p = 0; p < props && r.ok; ++p) {
-                    r.str(), r.str();
-                    if (r.boolean()) r.str();
+                    const std::string name(r.str());
+                    std::string value(r.str());
+                    if (r.boolean()) r.str();  // signature
+                    if (name == "textures") q.strings.push_back(std::move(value)), e.b = i32(q.strings.size() - 1);
                 }
             } else {
                 e.a = -1;
@@ -714,6 +747,51 @@ void EntityWorld::clear() {
     incoming_.clear();
 }
 
+void EntityWorld::updateProfileSkins() {
+    auto skinSlot = [&](const ProfileTextures& t, const std::vector<u8>& rgba, int w, int h) {  // one slot per texture
+        int& slot = skinSlots_[profileTextureHash(t.skinUrl)];
+        if (slot <= 0) {
+            slot = assets_.allocSlot();
+            if (slot > 0) assets_.writeSlot(slot, rgba.data(), w, h);
+        }
+        return slot;
+    };
+    for (auto& [id, e] : entities_) {  // mannequins' profiles
+        if (e.profileSkin != 1) continue;
+        ProfileTextures t;
+        if (!parseProfileTextures(e.profileTextures, t) || t.skinUrl.empty()) {
+            e.profileSkin = 3;
+            continue;
+        }
+        std::vector<u8> rgba;
+        int w = 0, h = 0;
+        const int state = fetchProfileTexture(t.skinUrl, true, &rgba, &w, &h);
+        if (state == 1) continue;
+        e.profileSkin = 3;
+        if (state != 2) continue;
+        if (const int slot = skinSlot(t, rgba, w, h); slot > 0) e.skin = slot, e.slim = t.slim, e.profileSkin = 2;
+    }
+    for (auto& [key, p] : players_) {
+        if (p.skinState != 1) continue;
+        ProfileTextures t;
+        if (!parseProfileTextures(p.textures, t) || t.skinUrl.empty()) {
+            p.skinState = 3;
+            continue;
+        }
+        std::vector<u8> rgba;
+        int w = 0, h = 0;
+        const int state = fetchProfileTexture(t.skinUrl, true, &rgba, &w, &h);
+        if (state == 1) continue;
+        p.skinState = 3;
+        if (state != 2) continue;
+        const int slot = skinSlot(t, rgba, w, h);
+        if (slot <= 0) continue;
+        p.skin = slot, p.slim = t.slim, p.skinState = 2;
+        for (auto& [id, e] : entities_)
+            if (e.category == Category::Player && uuidKey(e.uuid) == key) e.skin = p.skin, e.slim = p.slim;
+    }
+}
+
 void EntityWorld::frame(double dt) {
     Timer t;
     {
@@ -723,6 +801,7 @@ void EntityWorld::frame(double dt) {
     for (const Event& e : processing_.events) apply(e, processing_);
     stats_.events = processing_.events.size();
     processing_.clear();
+    updateProfileSkins();
     stats_.applyMs = t.ms();
     Timer tt;
     tickSeconds_ = tickRate.tickSeconds();
@@ -821,6 +900,8 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
         static const char* kSkins[9] = {"alex", "ari", "efe", "kai", "makena", "noor", "steve", "sunny", "zuri"};
         p.slim = skin < 9;
         p.skin = assets_.texture(std::string("entity/player/") + (p.slim ? "slim/" : "wide/") + kSkins[skin % 9]);
+        p.textures = ev.b >= 0 && size_t(ev.b) < q.strings.size() ? q.strings[size_t(ev.b)] : std::string();
+        p.skinState = p.textures.empty() ? 0 : 1;
         return;
     }
     if (ev.type == EventType::Jukebox) {  // LevelRenderer.notifyNearbyEntities: living entities within 3 blocks
@@ -1013,6 +1094,16 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
         if (idx < SpeciesState::kData) e.sp.data[idx] = v.i, e.sp.dataF[idx] = v.f[0], e.sp.seen |= 1u << idx;
         if (idx == d.flags) e.sharedFlags = u8(v.i);
         else if (idx == d.silent && v.serializer == 8) e.silent = v.i != 0;
+        else if (idx == d.profile && v.serializer == 41 && v.str >= 0) {  // Mannequin: the profile's skin
+            const std::string& body = q.strings[size_t(v.f[0])];
+            if (!body.empty()) {  // a resource texture ("minecraft:entity/player/wide/steve")
+                const int t = assets_.texture(body.starts_with("minecraft:") ? std::string_view(body).substr(10) : std::string_view(body));
+                if (t >= 0) e.skin = t;
+            }
+            if (v.i & 1) e.slim = (v.i & 2) != 0;
+            e.profileTextures = body.empty() ? q.strings[size_t(v.str)] : std::string();
+            e.profileSkin = e.profileTextures.empty() ? 0 : 1;
+        }
         else if (idx == d.staysStill && v.serializer == 8) e.staysStill = v.i != 0;
         else if (idx == d.fireworksItem && v.serializer == 7) e.fireworks = v.str >= 0 ? q.strings[size_t(v.str)] : std::string();
         else if (idx == d.mobFlags) e.mobFlags = u8(v.i);

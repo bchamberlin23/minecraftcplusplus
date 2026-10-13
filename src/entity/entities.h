@@ -204,6 +204,8 @@ struct Entity {
     int attackTarget = 0;    // Guardian DATA_ID_ATTACK_TARGET (0 none) and clientSideAttackTime
     int attackTime = 0;
     int snifferState = 0;    // Sniffer DATA_STATE (Sniffer.State id)
+    std::string profileTextures;  // Mannequin DATA_PROFILE: its "textures" property; profileSkin 1 while it downloads
+    int profileSkin = 0;
     bool staysStill = false; // happy ghast: STAYS_STILL (holding still: its rider does not steer)
     int unloadedTicks = 0;  // ticks spent outside the loaded world
     // ItemPickupParticle: a collected item flies to its collector (entity id; the local player when it is not one of
@@ -234,6 +236,8 @@ struct PlayerInfo {
     std::string name;
     int skin = -1;
     bool slim = false;
+    std::string textures;  // the profile's "textures" property (skin / cape URLs), "" none
+    int skinState = 0;     // 0 default skin, 1 the profile skin downloading, 2 applied, 3 failed
 };
 
 // Block hit distance for picking: entities further than this are behind the targeted block.
@@ -335,7 +339,7 @@ public:
            painting = -1, nameVisible = 3, livingFlags = -1, attachedTo = -1, sleepPos = -1, ticksFrozen = -1,
            paddleLeft = -1, paddleRight = -1, chest = -1, color = -1, attachFace = -1, peek = -1, fireworksItem = -1,
            silent = 4, staysStill = -1, dangerous = -1, cloudRadius = -1, cloudWaiting = -1, cloudParticle = -1,
-           commandName = -1, lastOutput = -1, attackTarget = -1, snifferState = -1;
+           commandName = -1, lastOutput = -1, attackTarget = -1, snifferState = -1, profile = -1;
         // Display entities.
         i8 dStart = -1, dDuration = -1, dPosRot = -1, dTranslation = -1, dScale = -1, dLeft = -1, dRight = -1,
            dBillboard = -1, dBrightness = -1, dViewRange = -1, dWidth = -1, dHeight = -1, dBlock = -1, dItem = -1,
@@ -348,6 +352,7 @@ private:
     bool applyDisplayData(Entity& e, const DataIds& d, const MetaValue& v, const EventQueue& q);
     void tick();
     void tickEntity(Entity& e);
+    void updateProfileSkins();  // SkinManager: downloaded profile skins replace the default ones
     void startInterpolation(Entity& e, const Step* steps, u32 count, float yaw, float pitch, bool hasRot);
     Category categoryFor(const std::string& name) const;
     static const std::string& name(const std::vector<std::string>& v, int id) {
@@ -365,6 +370,7 @@ private:
     EventQueue incoming_, processing_;  // network thread appends to incoming_; swapped each frame
 
     std::unordered_map<int, Entity> entities_;
+    std::unordered_map<std::string, int> skinSlots_;  // profile skin texture hash -> atlas slot
 
 public:
     // ClientboundAddTransientBlockPacket (a falling block landed): the block drawn where it landed until its section's
