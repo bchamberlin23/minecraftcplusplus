@@ -503,7 +503,11 @@ void crafterSetSlot(State& s, Menu& m, int slot, bool enabled) {
         w.boolean(enabled);
         s.client->sendPlay("container_slot_state_changed", w);
     }
-    audio::playUiClick();
+    // CrafterScreen.setSlotState: player.playSound(UI_BUTTON_CLICK, 0.4, enabled ? 1 : 0.75)
+    if (audio::AudioSystem* a = audio::instance(); a && s.game) {
+        const Player& p = s.game->player();
+        a->play("minecraft:ui.button.click", audio::Category::Player, p.pos[0], p.pos[1], p.pos[2], 0.4f, enabled ? 1.0f : 0.75f);
+    }
 }
 void crafterDrawBg(State& s, Canvas& c, Menu& m, const Layout& l, float left, float top) {
     for (int i = 0; i < 9; ++i) {
