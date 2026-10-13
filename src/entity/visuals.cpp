@@ -2528,6 +2528,34 @@ void Visuals::Impl::breakItem(int item, const double pos[3], double eyeHeight, f
     }
 }
 
+void Visuals::predictUse(const Entity& e) {
+    Impl& m = *impl_;
+    if (!m.game || !m.particles || !e.info || !e.baby) return;
+    // AbstractHorse / Llama / Camel.handleEating, fed to a baby (fedFood): a happy villager particle as it ages up.
+    int item;
+    i32 dye;
+    bool foil;
+    m.heldStack(36 + m.game->selectedSlot(), item, dye, foil);
+    if (item < 0) return;
+    const std::string food = m.models.itemName(item);
+    const std::string& n = e.info->name;
+    bool fed = false;
+    if (n == "minecraft:horse" || n == "minecraft:donkey" || n == "minecraft:mule")
+        for (const char* f : {"wheat", "sugar", "hay_block", "apple", "carrot", "golden_carrot", "golden_apple", "enchanted_golden_apple"})
+            fed |= food == f;
+    else if (n == "minecraft:llama" || n == "minecraft:trader_llama")
+        fed = food == "wheat" || food == "hay_block";
+    else if (n == "minecraft:camel")
+        fed = food == "cactus";
+    if (!fed) return;
+    float w, h;
+    entityBox(e, w, h);
+    std::uniform_real_distribution<double> u(0.0, 1.0);
+    std::shared_lock lock(m.world.world().mutex());
+    m.particles->spawn("happy_villager", e.pos[0] + (2 * u(m.fxRandom) - 1) * w, e.pos[1] + h * u(m.fxRandom) + 0.5,
+                       e.pos[2] + (2 * u(m.fxRandom) - 1) * w, 0, 0, 0);
+}
+
 void Visuals::localEntityEvent(int event) {  // our own entity's events (LocalPlayer.handleEntityEvent)
     Impl& m = *impl_;
     if (!m.game || !m.particles) return;

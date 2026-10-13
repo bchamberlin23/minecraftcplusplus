@@ -58,6 +58,7 @@ public:
     // and its sources: block tags, the biome foliage colour.
     void setAmbientEnv(bool night, bool nether, int skyDarken);
     void localEntityEvent(int event);  // our own entity's events: items breaking, honey, drowning
+    void predictUse(const Entity& e);  // our interaction's client-side half (Player.interactOn on the client)
     void setParticleSources(std::function<bool(std::string_view, std::string_view)> blockTag, std::function<u32(int, int)> foliage);
 
     struct Stats {

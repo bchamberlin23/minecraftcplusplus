@@ -935,6 +935,11 @@ int wmain(int argc, wchar_t** argv) {
         entities.sectionMeshSerial = [&](int cx, int sy, int cz) { return terrain.sectionMeshSerial(cx, sy, cz); };
     }
     if (haveEntities) ui.setEntities(&entities);  // inventory / mount previews, player list heads
+    if (haveEntities)
+        entities.onUse = [&, ui = std::move(entities.onUse)](const ent::Entity& e) {
+            if (ui) ui(e);
+            visuals.predictUse(e);
+        };
     game.onEntityClick = [&](bool attack, bool use, double blockDistance) {  // attack / use entities first
         if (!session || !haveEntities) return false;
         const CameraState c = game.camera();
