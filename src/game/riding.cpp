@@ -172,9 +172,13 @@ void Riding::seat(const ent::Entity& e, const double vehiclePos[3], float vehicl
     out[2] = vehiclePos[2] + z;
 }
 
+static bool camelRefusesToMove(const ent::Entity& e, i64 gameTime);
+
 bool Riding::jumpable() const {
     if (!controlled_ || kind_ != Kind::Living) return false;
     const std::string_view n = shortName(typeName_);
+    if (isCamel(n))  // Camel.canJump: not while it refuses to move
+        if (const ent::Entity* e = entity(); e && entities_ && camelRefusesToMove(*e, entities_->gameTime())) return false;
     return isHorseLike(n) || isNautilus(n);  // PlayerRideableJumping.canJump: saddled (checked by controlled_)
 }
 
@@ -574,9 +578,12 @@ void Riding::livingTick(ent::Entity& e) {
     if (n == "happy_ghast" || isNautilus(n)) return swimFlyTick(e);
     const bool horse = isHorseLike(n);
     const Player& p = game_.player();
-    // tickRidden: the vehicle faces where the rider looks.
-    e.yaw = p.yaw / kDegf;
-    e.pitch = p.pitch / kDegf * 0.5f;
+    // tickRidden: the vehicle faces where the rider looks (Camel.getRiddenRotation: not while it refuses to move).
+    const bool camelRefuses = isCamel(n) && entities_ && camelRefusesToMove(e, entities_->gameTime());
+    if (!camelRefuses) {
+        e.yaw = p.yaw / kDegf;
+        e.pitch = p.pitch / kDegf * 0.5f;
+    }
     e.bodyYaw = e.headYaw = e.yaw;
     // getRiddenInput: the rider's input (LocalPlayer.modifyInput: x 0.98); horses strafe at half, back off at a quarter;
     // pigs and striders always walk forward.
@@ -590,7 +597,10 @@ void Riding::livingTick(ent::Entity& e) {
         const bool standing = (ent::dataInt(e, "DATA_ID_FLAGS") & 32) != 0;
         if (!standing) allowStandSliding_ = false;
         if (!isCamel(n) && vehicleOnGround_ && pendingJump_ == 0 && standing && !allowStandSliding_) strafe = forward = 0;
-        if (isCamel(n) && entities_ && camelRefusesToMove(e, entities_->gameTime())) strafe = forward = 0, pendingJump_ = 0;
+        if (camelRefuses) {  // Camel.travel: no input, and on the ground the horizontal motion stops
+            strafe = forward = 0, pendingJump_ = 0;
+            if (vehicleOnGround_) e.vel[0] = e.vel[2] = 0;
+        }
     } else {
         strafe = 0, forward = 1;
     }
@@ -613,7 +623,10 @@ void Riding::livingTick(ent::Entity& e) {
             const float jumpHere = ph.jumpFactor(bx, int(std::floor(e.pos[1])), bz);
             const float jumpFactor = jumpHere == 1.0f ? ph.jumpFactor(bx, int(std::floor(e.pos[1] - 0.500001)), bz) : jumpHere;
             const float speedHere = ph.speedFactor(bx, int(std::floor(e.pos[1])), bz);
-            const float speedFactor = speedHere == 1.0f ? ph.speedFactor(bx, int(std::floor(e.pos[1] - 0.500001)), bz) : speedHere;
+            const float blockSpeed = speedHere == 1.0f ? ph.speedFactor(bx, int(std::floor(e.pos[1] - 0.500001)), bz) : speedHere;
+            // LivingEntity.getBlockSpeedFactor: towards 1 by the movement_efficiency attribute
+            const double efficiency = gameplay_.entityAttribute(vehicle_, "movement_efficiency", 0.0);
+            const double speedFactor = blockSpeed + (1.0 - blockSpeed) * efficiency;
             // getJumpPower: jump_strength x the block jump factor
             const double jumpStrength = gameplay_.entityAttribute(vehicle_, "jump_strength", 0.42) * jumpFactor;
             // the movement_speed attribute (not the sprinting ridden speed) x the block speed factor
