@@ -220,6 +220,7 @@ struct Entity {
     int lerpDelay = 0;
     bool newMinecart = false;
     std::string profileTextures;  // Mannequin DATA_PROFILE: its "textures" property; profileSkin 1 while it downloads
+    std::string profileResolve;   // ... given only by name ("N" + name) or id ("U" + 16 bytes): profileSkin 4 meanwhile
     int profileSkin = 0;
     bool staysStill = false; // happy ghast: STAYS_STILL (holding still: its rider does not steer)
     int unloadedTicks = 0;  // ticks spent outside the loaded world

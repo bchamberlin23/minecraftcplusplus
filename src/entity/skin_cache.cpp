@@ -109,6 +109,68 @@ bool parseProfileTextures(const std::string& property, ProfileTextures& out) {
 
 std::string profileTextureHash(const std::string& url) { return url.substr(url.rfind('/') + 1); }
 
+namespace {
+struct Lookup {
+    std::atomic<int> state{1};
+    std::string textures;  // written before state turns 2
+};
+std::unordered_map<std::string, std::unique_ptr<Lookup>> g_lookups;
+
+bool fetchJson(const std::wstring& url, json& out) {  // a GET into a temporary file
+    wchar_t dir[MAX_PATH], file[MAX_PATH];
+    if (!GetTempPathW(MAX_PATH, dir) || !GetTempFileNameW(dir, L"mcp", 0, file)) return false;
+    const bool ok = URLDownloadToFileW(nullptr, url.c_str(), file, BINDF_GETNEWESTVERSION, nullptr) == S_OK;
+    std::vector<u8> bytes;
+    const bool read = ok && readFile(file, bytes);
+    DeleteFileW(file);
+    if (!read) return false;
+    out = json::parse(bytes.begin(), bytes.end(), nullptr, false);
+    return out.is_object();
+}
+}  // namespace
+
+std::string resolveProfileTextures(const std::string& name, const u8* uuid, int* state) {
+    static const char* kHex = "0123456789abcdef";
+    std::string id;
+    if (uuid) {
+        bool nil = true;
+        for (int i = 0; i < 16; ++i) nil &= uuid[i] == 0, id += kHex[uuid[i] >> 4], id += kHex[uuid[i] & 15];
+        if (nil) id.clear();
+    }
+    bool validName = !name.empty() && name.size() <= 16;  // StringUtil.isValidPlayerName
+    for (char ch : name) validName = validName && (std::isalnum(u8(ch)) || ch == '_');
+    if (id.empty() && !validName) {
+        if (state) *state = 3;
+        return {};
+    }
+    std::string key = id.empty() ? "n:" + name : "u:" + id;
+    for (char& ch : key) ch = char(std::tolower(u8(ch)));
+    auto& entry = g_lookups[key];
+    if (!entry) {
+        entry = std::make_unique<Lookup>();
+        std::thread([e = entry.get(), id, name] {
+            std::string uid = id;
+            json j;
+            if (uid.empty()) {  // GameProfileRepository: the name's id
+                if (fetchJson(L"https://api.mojang.com/users/profiles/minecraft/" + std::wstring(name.begin(), name.end()), j) &&
+                    j.contains("id") && j["id"].is_string())
+                    uid = j["id"].get<std::string>();
+                for (char ch : uid)
+                    if (!std::isxdigit(u8(ch))) uid.clear();
+            }
+            if (!uid.empty() && fetchJson(L"https://sessionserver.mojang.com/session/minecraft/profile/" + std::wstring(uid.begin(), uid.end()), j) &&
+                j.contains("properties") && j["properties"].is_array())
+                for (const json& p : j["properties"])
+                    if (p.is_object() && p.value("name", "") == "textures" && p.contains("value") && p["value"].is_string())
+                        e->textures = p["value"].get<std::string>();
+            e->state = e->textures.empty() ? 3 : 2;
+        }).detach();
+    }
+    const int st = entry->state;
+    if (state) *state = st;
+    return st == 2 ? entry->textures : std::string();
+}
+
 int fetchProfileTexture(const std::string& url, bool skin, std::vector<u8>* rgba, int* w, int* h) {
     if (!officialUrl(url)) return 3;
     auto& entry = g_entries[url];

@@ -2,6 +2,7 @@
 
 #include "entity/entities.h"
 #include "entity/entity_assets.h"
+#include "entity/skin_cache.h"
 #include "ui/resources.h"
 #include "ui/sprites.h"
 
@@ -830,6 +831,9 @@ struct ItemModels::Impl {
                 int rect = -1;
                 ui::ProfileInfo prof;
                 if (type == "player_head" && ui::profile(items, s, prof)) {
+                    // ResolvableProfile.Dynamic (only a name or only an id): the textures the profile service knows
+                    if (prof.textures.empty() && prof.skinTexture.empty() && prof.hasId != !prof.name.empty())
+                        prof.textures = resolveProfileTextures(prof.name, prof.hasId ? prof.uuid : nullptr);
                     rect = profileSkin(prof.textures);
                     if (!prof.skinTexture.empty()) tex = prof.skinTexture, rect = -1;  // the profile's skin patch
                     else if (rect < 0) tex = defaultSkin(prof);
@@ -1046,6 +1050,11 @@ std::string ItemModels::specialKey(const nlohmann::json& sm, const ui::ItemStack
     } else if (type == "player_head") {
         ui::ProfileInfo prof;
         if (ui::profile(*items_, s, prof)) {
+            if (prof.textures.empty() && prof.skinTexture.empty() && prof.hasId != !prof.name.empty()) {
+                int resolving = 0;
+                prof.textures = resolveProfileTextures(prof.name, prof.hasId ? prof.uuid : nullptr, &resolving);
+                key += "r" + std::to_string(resolving);
+            }
             key += prof.skinTexture + "#" + prof.textures + "#" + std::to_string(impl_->skinState(prof.textures));
             key.append(reinterpret_cast<const char*>(prof.uuid), prof.hasId ? 16 : 0);
         }

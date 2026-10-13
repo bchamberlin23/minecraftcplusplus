@@ -415,13 +415,19 @@ void readEntityData(net::Reader& r, EventQueue& q, int entityEffect,
                         if (name == "textures") textures = std::move(value);
                     }
                 };
+                std::string resolve;  // ResolvableProfile.Dynamic: "N" + name or "U" + id (no properties, one of them)
                 if (r.boolean()) {  // GAME_PROFILE: id, name, properties
                     r.skip(16), r.str();
+                    properties();
                 } else {  // Partial: optional name, optional id, properties
-                    if (r.boolean()) r.str();
-                    if (r.boolean()) r.skip(16);
+                    std::string name, id;
+                    const bool hasName = r.boolean();
+                    if (hasName) name = std::string(r.str());
+                    const bool hasId = r.boolean();
+                    if (hasId) id = std::string(r.bytes(16));
+                    properties();
+                    if (textures.empty() && hasName != hasId) resolve = hasName ? "N" + name : "U" + id;
                 }
-                properties();
                 // PlayerSkin.Patch: optional body / cape / elytra textures (identifiers), optional model (slim)
                 std::string body;
                 if (r.boolean()) body = std::string(r.str());
@@ -430,6 +436,7 @@ void readEntityData(net::Reader& r, EventQueue& q, int entityEffect,
                 v.i = r.boolean() ? (r.boolean() ? 3 : 1) : 0;  // bit 0: a model given, bit 1: slim
                 q.strings.push_back(std::move(textures)), v.str = i32(q.strings.size() - 1);
                 q.strings.push_back(std::move(body)), v.f[0] = float(q.strings.size() - 1);
+                q.strings.push_back(std::move(resolve)), v.f[1] = float(q.strings.size() - 1);
                 break;
             }
             default: stop = true, keep = false; break;  // anything newer
@@ -790,8 +797,17 @@ void EntityWorld::updateProfileSkins() {
         if (c > 0) cape = c;
         return true;
     };
-    for (auto& [id, e] : entities_)  // mannequins' profiles
+    for (auto& [id, e] : entities_) {  // mannequins' profiles
+        if (e.profileSkin == 4) {  // only a name or an id: its textures from the profile service
+            int state = 0;
+            const bool byName = e.profileResolve[0] == 'N';
+            const std::string textures = resolveProfileTextures(byName ? e.profileResolve.substr(1) : std::string(),
+                                                                byName ? nullptr : reinterpret_cast<const u8*>(e.profileResolve.data() + 1), &state);
+            if (state == 2) e.profileTextures = textures, e.profileSkin = 1;
+            else if (state == 3) e.profileSkin = 3;
+        }
         if (e.profileSkin == 1 && resolve(e.profileTextures, e.skin, e.slim, e.cape)) e.profileSkin = 2;
+    }
     for (auto& [key, p] : players_) {
         if (p.skinState != 1 || !resolve(p.textures, p.skin, p.slim, p.cape)) continue;
         p.skinState = 2;
@@ -1115,6 +1131,8 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
             if (v.i & 1) e.slim = (v.i & 2) != 0;
             e.profileTextures = body.empty() ? q.strings[size_t(v.str)] : std::string();
             e.profileSkin = e.profileTextures.empty() ? 0 : 1;
+            e.profileResolve = body.empty() ? q.strings[size_t(v.f[1])] : std::string();
+            if (!e.profileResolve.empty()) e.profileSkin = 4;  // the profile service first
         }
         else if (idx == d.staysStill && v.serializer == 8) e.staysStill = v.i != 0;
         else if (idx == d.fireworksItem && v.serializer == 7) e.fireworks = v.str >= 0 ? q.strings[size_t(v.str)] : std::string();

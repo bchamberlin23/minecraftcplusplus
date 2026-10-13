@@ -22,4 +22,9 @@ int fetchProfileTexture(const std::string& url, bool skin, std::vector<u8>* rgba
 // The URL's file name: the texture's hash (a stable key for caches).
 std::string profileTextureHash(const std::string& url);
 
+// ProfileResolver for profiles given only by name or id (ResolvableProfile.Dynamic): their "textures" property from
+// Mojang's public profile service (name -> id -> session profile), looked up in the background and kept for the
+// session. state: 1 looking up, 2 found (the property returned), 3 none. uuid: 16 bytes or nullptr.
+std::string resolveProfileTextures(const std::string& name, const u8* uuid, int* state = nullptr);
+
 }  // namespace ent
