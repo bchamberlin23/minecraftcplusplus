@@ -517,6 +517,7 @@ bool Items::readPatch(net::Reader& r, ItemStack& out, int depth) const {
                 if (v.boolean()) v.f32();
             }
             if (v.boolean()) out.equipAsset = v.str();
+            if (v.boolean()) out.equipCameraOverlay = v.str();
         } else if (n == "attribute_modifiers") {
             out.hasAttributeModifiers = true;
             const i32 cnt = v.varInt();

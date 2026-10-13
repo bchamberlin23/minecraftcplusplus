@@ -55,6 +55,7 @@ struct ItemStack {
     std::string cooldownGroup;   // "" = the item
     int equipSlot = -1;          // equippable: EquipmentSlot id (0 main hand, 1..4 feet..head, 5 off hand, 6 body, 7 saddle)
     std::string equipAsset;      // equippable asset id ("minecraft:diamond"), "" none
+    std::string equipCameraOverlay;  // equippable camera_overlay ("minecraft:misc/pumpkinblur"), "" none
     struct AttributeModifier {
         int attribute = -1;  // attribute registry id
         std::string id;

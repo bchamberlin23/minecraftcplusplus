@@ -230,11 +230,30 @@ void drawScreenEffects(Ui::State& s, Canvas& c) {
 
 void drawEffectOverlays(Ui::State& s, Canvas& c, bool scoping) {
     const int gw = c.guiWidth(), gh = c.guiHeight();
-    // Equippable camera overlays in first person (not while scoping): the carved pumpkin's misc/pumpkinblur.
-    if (s.game->cameraMode == 0 && !scoping && s.inventory.slots.size() > 5) {
-        const ItemStack& head = s.inventory.slots[5];
-        if (!head.empty() && s.items.name(head.item) == "minecraft:carved_pumpkin")
-            if (const Sprite* tex = s.sprites.texture("misc/pumpkinblur")) blitTexture(c, tex, 0, 0, 0, 0, float(gw), float(gh), gw, gh);
+    // Equippable camera overlays in first person (not while scoping): every equipment slot (EquipmentSlot order) whose
+    // item's equippable component belongs in that slot and has a camera overlay (the carved pumpkin's misc/pumpkinblur).
+    if (s.game->cameraMode == 0 && !scoping && s.inventory.slots.size() > 45) {
+        static const std::pair<int, int> kSlots[6] = {{0, -1}, {5, 45}, {1, 8}, {2, 7}, {3, 6}, {4, 5}};  // slot id, menu slot
+        for (const auto& [slotId, menu] : kSlots) {
+            const ItemStack& st = s.inventory.slots[size_t(menu < 0 ? 36 + s.game->selectedSlot() : menu)];
+            if (st.empty()) continue;
+            int slot = -1;
+            std::string overlay;
+            const Items::ComponentValue v = s.items.component(st, "equippable");
+            if (v.patched) {
+                slot = st.equipSlot, overlay = st.equipCameraOverlay;
+            } else if (v.fallback && v.fallback->is_object()) {
+                static const char* const kNames[8] = {"mainhand", "feet", "legs", "chest", "head", "offhand", "body", "saddle"};
+                const std::string name = v.fallback->value("slot", "");
+                for (int i = 0; i < 8; ++i)
+                    if (name == kNames[i]) slot = i;
+                overlay = v.fallback->value("camera_overlay", "");
+            }
+            if (slot != slotId || overlay.empty()) continue;
+            const size_t colon = overlay.find(':');
+            if (const Sprite* tex = s.sprites.texture(colon == std::string::npos ? overlay : overlay.substr(colon + 1)))
+                blitTexture(c, tex, 0, 0, 0, 0, float(gw), float(gh), gw, gh);  // extractTextureOverlay, alpha 1
+        }
     }
 }
 
