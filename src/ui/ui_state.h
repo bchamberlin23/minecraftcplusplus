@@ -221,6 +221,7 @@ struct Ui::State {
     // HUD
     bool hudHidden = false, debug = false;
     int guiTicks = 0;
+    int cleanStartFrames = -1;  // frames since start-up while options.txt says startedCleanly:false (-1: done)
     // Where the Options sub-screens (Sounds, Accessibility, Language) go back to: the Options screen, or the
     // accessibility onboarding screen that opened them.
     Screen optionsParent = Screen::Options;

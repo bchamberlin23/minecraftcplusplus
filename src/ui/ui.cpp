@@ -566,6 +566,15 @@ bool Ui::init(const Init& in) {
     // (kept as saved: a launch with a smaller --detail must not overwrite the player's choice)
     if (!s.settings.loaded) s.settings.renderDistance = in.detailChunks;
     in.terrain->setDetailRadius(float(std::min(s.settings.renderDistance, in.detailChunks)) * 16.0f);
+    // Minecraft: a start-up that never finished (startedCleanly still false) starts windowed this time; the flag
+    // is false until the game is up (onGameLoadFinished: here a few frames in).
+    if (!s.settings.startedCleanly) {
+        LOG("ui: unexpected shutdown during the last start-up: fullscreen off");
+        s.settings.fullscreen = false, s.settings.fullscreenResolution.clear();
+    }
+    s.settings.startedCleanly = false;
+    s.settings.save();
+    s.cleanStartFrames = 0;
     // Minecraft: the override size for the window, the exclusive fullscreen mode, then options.txt fullscreen.
     if (s.settings.overrideWidth > 0 && s.settings.overrideHeight > 0 && !launch::placement())
         s.window->setClientSize(s.settings.overrideWidth, s.settings.overrideHeight);
@@ -1285,6 +1294,11 @@ void Ui::beginFrame(double dt) {
 
 void Ui::endFrame() {
     State& s = *s_;
+    if (s.cleanStartFrames >= 0 && ++s.cleanStartFrames > 3) {  // Minecraft.onGameLoadFinished
+        s.cleanStartFrames = -1;
+        s.settings.startedCleanly = true;
+        s.settings.save();
+    }
     Canvas& c = s.pass->canvas();
     s.canvas = &c;
     const int scale = s.guiScale();
