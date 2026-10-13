@@ -864,7 +864,8 @@ void EntityWorld::startInterpolation(Entity& e, const Step* steps, u32 count, fl
     const double* end = count ? steps[count - 1].pos : nullptr;
     const bool stepped = e.category == Category::Living || e.category == Category::Player;
     // Displays: LinearInterpolationHandler over teleport_duration steps (0: placed at once).
-    const bool linear = e.category == Category::Vehicle || (e.info && e.info->name == "minecraft:experience_orb") ||
+    const bool linear = e.category == Category::Vehicle ||
+                        (e.info && (e.info->name == "minecraft:experience_orb" || e.info->name == "minecraft:fishing_bobber")) ||
                         (e.display.is && e.display.posRotDuration > 0);
     if (!hasRot) {
         if (stepped && e.stepCount) yaw = e.steps[(e.stepHead + e.stepCount - 1) % Entity::kMaxSteps].yaw;
@@ -1146,22 +1147,43 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
             // Relative flags: X Y Z Y_ROT X_ROT DELTA_X DELTA_Y DELTA_Z ROTATE_DELTA.
             Step s{};
             s.ticks = -1;
+            // PositionMoveRotation.calculateAbsolute: the pitch clamped to +-90, ROTATE_DELTA turns the current motion
             for (int a = 0; a < 3; ++a) s.pos[a] = (ev.a & (1 << a)) ? e.pos[a] + ev.d[a] : ev.d[a];
             const float yaw = (ev.a & 8) ? e.yaw + ev.f[0] : ev.f[0];
-            const float pitch = (ev.a & 16) ? e.pitch + ev.f[1] : ev.f[1];
+            const float pitch = std::clamp((ev.a & 16) ? e.pitch + ev.f[1] : ev.f[1], -90.0f, 90.0f);
             std::copy(s.pos, s.pos + 3, e.codecBase);
             if (e.id == localControl_) break;
             if (const int kind = attachedKind(e)) {
                 placeAttached(*this, e, kind, s.pos);
                 break;
             }
-            for (int a = 0; a < 3; ++a) e.vel[a] = (ev.a & (32 << a)) ? e.vel[a] + ev.d[3 + a] : ev.d[3 + a];
-            startInterpolation(e, &s, 1, yaw, pitch, true);
+            double v[3] = {e.vel[0], e.vel[1], e.vel[2]};
+            if (ev.a & 256) {  // Vec3.xRot(diffX) then yRot(diffY)
+                const double ax = double(e.pitch - pitch) * 3.14159265358979 / 180.0, ay = double(e.yaw - yaw) * 3.14159265358979 / 180.0;
+                const double y1 = v[1] * std::cos(ax) + v[2] * std::sin(ax), z1 = v[2] * std::cos(ax) - v[1] * std::sin(ax);
+                v[1] = y1, v[2] = z1;
+                const double x2 = v[0] * std::cos(ay) + v[2] * std::sin(ay), z2 = v[2] * std::cos(ay) - v[0] * std::sin(ay);
+                v[0] = x2, v[2] = z2;
+            }
+            for (int a = 0; a < 3; ++a) e.vel[a] = (ev.a & (32 << a)) ? v[a] + ev.d[3 + a] : ev.d[3 + a];
+            const double dx = s.pos[0] - e.pos[0], dy = s.pos[1] - e.pos[1], dz = s.pos[2] - e.pos[2];
+            if (dx * dx + dy * dy + dz * dz > 4096.0) {  // setValuesFromPositionPacket: too far to interpolate, set
+                std::copy(s.pos, s.pos + 3, e.pos);
+                e.yaw = yaw, e.pitch = pitch;
+                e.stepCount = 0, e.remainingTicks = 0, e.linearRemaining = 0;
+            } else {
+                startInterpolation(e, &s, 1, yaw, pitch, true);
+            }
             e.onGround = ev.flag;
             break;
         }
         case EventType::Motion:
-            if (e.id != localControl_) std::copy(ev.d, ev.d + 3, e.vel);
+            if (e.id != localControl_) {
+                std::copy(ev.d, ev.d + 3, e.vel);
+                // AbstractArrow.lerpMotion: a moving arrow is no longer in the ground
+                const bool arrowLike = e.info && (e.info->name.ends_with("arrow") || e.info->name == "minecraft:trident");
+                if (arrowLike && e.inGround && ev.d[0] * ev.d[0] + ev.d[1] * ev.d[1] + ev.d[2] * ev.d[2] > 0.0) e.inGround = false;
+            }
             break;
         case EventType::MinecartSteps:  // ClientPacketListener.handleMinecartAlongTrack
             e.newMinecart = true;
@@ -1336,7 +1358,7 @@ bool EntityWorld::applyDisplayData(Entity& e, const DataIds& d, const MetaValue&
     auto copy = [&](float* out, int n) { std::copy(v.f, v.f + n, out); };
     if (idx == d.dStart) s.startDelta = int(v.i), s.updateStart = true;
     else if (idx == d.dDuration) s.duration = int(v.i), s.updateDuration = true;
-    else if (idx == d.dPosRot) s.posRotDuration = int(v.i);
+    else if (idx == d.dPosRot) s.posRotDuration = std::clamp(int(v.i), 0, 59);  // Display: teleport_duration 0..59
     else if (idx == d.dTranslation) copy(s.synched.t, 3), s.updateRender = true;
     else if (idx == d.dScale) copy(s.synched.s, 3), s.updateRender = true;
     else if (idx == d.dLeft) copy(s.synched.l, 4), s.updateRender = true;
