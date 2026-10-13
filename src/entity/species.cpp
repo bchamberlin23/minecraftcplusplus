@@ -1,5 +1,6 @@
 #include "entity/species.h"
 
+#include "audio/audio.h"
 #include "entity/entities.h"
 
 #include <algorithm>
@@ -400,10 +401,22 @@ void tickSpecies(Entity& e, i64 gameTime, const std::unordered_map<int, Entity>&
             break;
         }
         case Sp::Dragon: {  // EnderDragon.aiStep (client): flap time, flight history
+            static std::mt19937 dragonRng(0xD4A6);
+            std::uniform_real_distribution<float> u(0.0f, 1.0f);
+            audio::AudioSystem* a = e.silent ? nullptr : audio::instance();
+            // Mob.processFlappingMovement: onFlap as the wings pass the top of their beat
+            if (a && std::cos(s.ao[kFlap] * 6.2831853f) <= -0.3f && std::cos(s.a[kFlap] * 6.2831853f) >= -0.3f)
+                a->play("minecraft:entity.ender_dragon.flap", audio::Category::Hostile, e.pos[0], e.pos[1], e.pos[2], 5.0f, 0.8f + u(dragonRng) * 0.3f);
             s.ao[kFlap] = s.a[kFlap];
             if (e.health <= 0) {
                 ++s.t[1];  // dragonDeathTime
                 break;
+            }
+            const int dragonPhase = int(dataInt(e, "DATA_PHASE"));
+            if (s.t[2] == 0) s.t[2] = 100;  // growlTime
+            if (a && !(dragonPhase >= 5 && dragonPhase <= 7) && --s.t[2] < 0) {  // not while sitting
+                a->play("minecraft:entity.ender_dragon.growl", audio::Category::Hostile, e.pos[0], e.pos[1], e.pos[2], 2.5f, 0.8f + u(dragonRng) * 0.3f);
+                s.t[2] = 200 + int(dragonRng() % 200);
             }
             const double hv = std::sqrt(e.vel[0] * e.vel[0] + e.vel[2] * e.vel[2]);
             float flapSpeed = 0.2f / (float(hv) * 10.0f + 1.0f);

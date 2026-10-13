@@ -1406,6 +1406,13 @@ void EntityWorld::tickEntity(Entity& e) {
         return;
     }
     ++e.age;
+    if (e.age == 1 && !e.silent && e.info && e.info->name == "minecraft:lightning_bolt")  // LightningBolt.tick (life 2, client)
+        if (audio::AudioSystem* a = audio::instance()) {
+            static std::mt19937 boltRng(0xB017);
+            std::uniform_real_distribution<float> u(0.0f, 1.0f);
+            a->play("minecraft:entity.lightning_bolt.thunder", audio::Category::Weather, e.pos[0], e.pos[1], e.pos[2], 10000.0f, 0.8f + u(boltRng) * 0.2f);
+            a->play("minecraft:entity.lightning_bolt.impact", audio::Category::Weather, e.pos[0], e.pos[1], e.pos[2], 2.0f, 0.5f + u(boltRng) * 0.2f);
+        }
     if (e.fuse > 0 && e.info && (e.info->name == "minecraft:tnt" || e.info->name == "minecraft:tnt_minecart")) --e.fuse;  // PrimedTnt / MinecartTNT.tick
     if (e.attackTarget != 0 && e.attackTime < (e.info && e.info->name == "minecraft:elder_guardian" ? 60 : 80))
         ++e.attackTime;  // Guardian.aiStep (client): clientSideAttackTime up to getAttackDuration
