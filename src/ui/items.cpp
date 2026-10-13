@@ -141,6 +141,17 @@ void Items::setRegistries(const net::Client& client) {
             if (auto it = f.find("translation_key"); it != f.end() && it->second.size() > 3)  // TAG_String: type, length
                 info.translationKey = it->second.substr(3);
             if (auto it = f.find("asset_id"); it != f.end() && it->second.size() > 3) info.assetId = it->second.substr(3);
+            if (auto it = f.find("sound_event"); it != f.end() && it->second.size() > 3 && it->second[0] == 8)
+                info.soundEvent = it->second.substr(3);
+            auto number = [&](const char* key, float& out) {  // TAG_Float / TAG_Double
+                auto it = f.find(key);
+                if (it == f.end() || it->second.size() < 5) return;
+                net::Reader r(reinterpret_cast<const u8*>(it->second.data()) + 1, it->second.size() - 1);
+                if (it->second[0] == 5) out = r.f32();
+                else if (it->second[0] == 6 && it->second.size() >= 9) out = float(r.f64());
+            };
+            number("range", info.range);
+            number("use_duration", info.useDuration);
             out.push_back(std::move(info));
         }
     };

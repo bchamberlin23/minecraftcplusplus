@@ -119,6 +119,8 @@ public:
         bool hasTitle = false, hasAuthor = false;
         Text title, author;          // painting
         std::string translationKey, assetId;  // banner pattern
+        std::string soundEvent;               // instrument sound_event (a registered sound id)
+        float range = 256, useDuration = 7;   // instrument
     };
     void setRegistries(const net::Client& client);
     const std::vector<RegistryInfo>& registry(const std::string& name) const;  // jukebox_song, trim_material, ...

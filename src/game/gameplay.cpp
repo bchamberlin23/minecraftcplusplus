@@ -945,7 +945,29 @@ int Gameplay::predictItemUse(int hand, const RayHit* target) {
         if (riptideStrength(*s) > 0 && !inWaterOrRain()) return Game::kUseFail;
         return start();
     }
-    if (name == "spyglass" || name == "goat_horn" || name == "bundle" || name.ends_with("_bundle")) return start();
+    const Player& self = game_->player();
+    auto localSound = [&](std::string_view sound, audio::Category c, float volume, float pitch) {  // heard by the user only
+        if (audio::AudioSystem* a = audio::instance()) a->play(sound, c, self.pos[0], self.pos[1], self.pos[2], volume, pitch);
+    };
+    if (name == "spyglass") {  // SpyglassItem.use: player.playSound(SPYGLASS_USE)
+        localSound("minecraft:item.spyglass.use", audio::Category::Player, 1.0f, 1.0f);
+        return start();
+    }
+    if (name == "goat_horn") {  // InstrumentItem.use: the instrument's sound (RECORDS, range / 16) and its cooldown
+        if (!ui_) return Game::kUsePass;
+        const auto& list = ui_->items().instruments();
+        int id = s->instrument;
+        if (id < 0)  // the item's default component
+            for (size_t i = 0; i < list.size(); ++i)
+                if (list[i].id == "minecraft:ponder_goat_horn") id = int(i);
+        if (id < 0 || size_t(id) >= list.size()) return Game::kUseFail;
+        const ui::Items::RegistryInfo& ins = list[size_t(id)];
+        const int result = start();
+        if (!ins.soundEvent.empty()) localSound(ins.soundEvent, audio::Category::Record, ins.range / 16.0f, 1.0f);
+        game_->addCooldown(ui_->items().cooldownGroup(*s), int(std::floor(ins.useDuration * 20.0f)));
+        return result;
+    }
+    if (name == "bundle" || name.ends_with("_bundle")) return start();
     if (name == "bucket" || name == "water_bucket" || name == "lava_bucket" || name.ends_with("_bucket") && name != "milk_bucket" &&
         name != "powder_snow_bucket")
         return predictBucket(hand, name);
@@ -1060,7 +1082,18 @@ int Gameplay::predictUseOn(int hand, const RayHit& hit) {
     game_->useOnTakesItem = name == "fire_charge" || name.ends_with("_spawn_egg") || name == "armor_stand" || name == "item_frame" ||
                             name == "glow_item_frame" || name == "painting" || name == "end_crystal" ||
                             name.ends_with("minecart") || name == "honeycomb" || name == "ender_eye";
-    if (name == "flint_and_steel" || name == "fire_charge" || name.ends_with("_spawn_egg") || name == "armor_stand" ||
+    if (name == "flint_and_steel") {  // FlintAndSteelItem.useOn: only the user plays the strike (the server skips them)
+        const bool lightable = (block == "campfire" || block == "soul_campfire" || block.ends_with("candle") || block.ends_with("candle_cake")) &&
+                               state.find("lit=false") != std::string::npos;
+        static constexpr int kDir[6][3] = {{0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}};
+        const int fx = hit.x + (lightable ? 0 : kDir[hit.face][0]), fy = hit.y + (lightable ? 0 : kDir[hit.face][1]),
+                  fz = hit.z + (lightable ? 0 : kDir[hit.face][2]);
+        if (lightable || world_.block(fx, fy, fz) == 0)  // BaseFireBlock.canBePlacedAt: an empty cell
+            if (audio::AudioSystem* a = audio::instance())
+                a->play("minecraft:item.flintandsteel.use", audio::Category::Block, fx + 0.5, fy + 0.5, fz + 0.5, 1.0f, randf() * 0.4f + 0.8f);
+        return Game::kUseConsume;
+    }
+    if (name == "fire_charge" || name.ends_with("_spawn_egg") || name == "armor_stand" ||
         name == "item_frame" || name == "glow_item_frame" || name == "painting")
         return Game::kUseConsume;
     if (name == "brush") {  // BrushItem.useOn: starts brushing whatever it hits
@@ -1204,6 +1237,10 @@ void Gameplay::kineticHit() {
 void Gameplay::releaseUse() {
     Game::ItemUse& use = game_->use;
     const ui::ItemStack* s = use.hand == 0 ? mainHand() : offHand();
+    if (s && s->item == use.item && shortName(itemName(s->item)) == "spyglass")  // SpyglassItem.stopUsing
+        if (audio::AudioSystem* a = audio::instance())
+            a->play("minecraft:item.spyglass.stop_using", audio::Category::Player, game_->player().pos[0], game_->player().pos[1],
+                    game_->player().pos[2], 1.0f, 1.0f);
     if (!s || s->item != use.item || shortName(itemName(s->item)) != "trident" || use.ticksUsing() < 10) return;
     if (s->maxDamage > 0 && s->damage >= s->maxDamage - 1) return;  // nextDamageWillBreak
     const float strength = riptideStrength(*s);
@@ -1221,6 +1258,7 @@ void Gameplay::tickUse() {
         return;
     }
     const ItemRules::Use u = rules_.use(itemName(s->item));
+    if (shortName(itemName(s->item)) == "brush") return tickBrush();
     if (!u.consumable) return;
     // Consumable.shouldEmitParticlesAndSounds: after 21.875 % of the use, every 4 ticks.
     const int used = use.duration - use.remaining;
@@ -1252,6 +1290,46 @@ void Gameplay::tickUse() {
         const float pitch = drink ? 0.9f + randf() * 0.1f : 1.0f + 0.2f * (randf() - randf());
         a->play(u.sound, audio::Category::Player, p.pos[0], p.pos[1], p.pos[2], volume, pitch);
     }
+}
+
+// BrushItem.onUseTick on the client: 5 ticks into each 10-tick stroke, dust off the brushed face and the brush
+// sound (left to the user by the server); off any block the use ends.
+void Gameplay::tickBrush() {
+    Game::ItemUse& use = game_->use;
+    const RayHit& hit = game_->target();
+    if (!hit.hit) {  // releaseUsingItem
+        use.active = false;
+        if (game_->onReleaseUseItem) game_->onReleaseUseItem();
+        return;
+    }
+    if ((use.duration - use.remaining + 1) % 10 != 5) return;
+    const u16 state = world_.block(hit.x, hit.y, hit.z);
+    const std::string& full = registry_.name(state);
+    const std::string block(shortName(full.substr(0, full.find('['))));
+    const Player& p = game_->player();
+    if (game_->onBlockParticle && registry_.infos()[state].kind != KindAir) {  // spawnDustParticles
+        const bool rightArm = (use.hand == 0) == (!ui_ || ui_->settings().mainHand == 1);
+        const double flip = rightArm ? 1.0 : -1.0;
+        const double vx = -std::sin(p.yaw) * std::cos(p.pitch), vz = std::cos(p.yaw) * std::cos(p.pitch);  // view vector
+        double dx, dz;
+        switch (hit.face) {  // DustParticlesDelta.fromDirection
+            case 0: case 1: dx = vz, dz = -vx; break;
+            case 2: dx = 1.0, dz = -0.1; break;   // north
+            case 3: dx = -1.0, dz = 0.1; break;   // south
+            case 4: dx = -0.1, dz = -1.0; break;  // west
+            default: dx = 0.1, dz = 1.0; break;   // east
+        }
+        const int count = 7 + int(randf() * 5.0f);
+        for (int i = 0; i < count; ++i) {
+            const double pos[3] = {hit.point[0] - (hit.face == 4 ? 1e-6 : 0.0), hit.point[1], hit.point[2] - (hit.face == 2 ? 1e-6 : 0.0)};
+            const double vel[3] = {dx * flip * 3.0 * randf(), 0.0, dz * flip * 3.0 * randf()};
+            game_->onBlockParticle(state, pos, vel);
+        }
+    }
+    const char* sound = block == "suspicious_sand"     ? "minecraft:item.brush.brushing.sand"
+                        : block == "suspicious_gravel" ? "minecraft:item.brush.brushing.gravel"
+                                                       : "minecraft:item.brush.brushing.generic";
+    if (audio::AudioSystem* a = audio::instance()) a->play(sound, audio::Category::Block, hit.x + 0.5, hit.y + 0.5, hit.z + 0.5, 1.0f, 1.0f);
 }
 
 std::string Gameplay::itemName(int item) const {

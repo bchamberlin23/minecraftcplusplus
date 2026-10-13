@@ -96,6 +96,7 @@ private:
     bool onCooldown(const ui::ItemStack* s) const;
     bool startUsing(int hand);  // LivingEntity.startUsingItem
     void tickUse();
+    void tickBrush();
     bool hasProjectile() const;  // Player.getProjectile: arrows anywhere in the inventory (creative: always)
     float randf() { return std::uniform_real_distribution<float>(0.0f, 1.0f)(rng_); }
 

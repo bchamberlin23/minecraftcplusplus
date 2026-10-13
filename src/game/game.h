@@ -198,6 +198,8 @@ public:
     std::function<void(int item, const double pos[3], const double vel[3])> onItemParticle;
     // A particle of a type by name ("minecraft:large_smoke") at a position with a velocity (the client's own effects).
     std::function<void(std::string_view type, const double pos[3], const double vel[3])> onParticle;
+    // ParticleTypes.BLOCK of a block state at a position with a velocity (brushing dust).
+    std::function<void(u16 state, const double pos[3], const double vel[3])> onBlockParticle;
     bool usePressed() const { return usingItem_; }  // the use key is held after a use press
     // AbstractClientPlayer.getFieldOfViewModifier, item part: drawing a bow narrows the view (x 0.85 at full draw);
     // scoping with a spyglass in first person sets it to 0.1.
