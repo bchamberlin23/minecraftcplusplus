@@ -249,6 +249,7 @@ EntityWorld::EntityWorld(EntityAssets& assets, World& world, BlockRegistry& regi
             d.dText = id({"DATA_TEXT_ID"}), d.dLineWidth = id({"DATA_LINE_WIDTH_ID"});
             d.dBackground = id({"DATA_BACKGROUND_COLOR_ID"}), d.dOpacity = id({"DATA_TEXT_OPACITY_ID"});
             d.dStyle = id({"DATA_STYLE_FLAGS_ID"});
+            d.dShadowRadius = id({"DATA_SHADOW_RADIUS_ID"}), d.dShadowStrength = id({"DATA_SHADOW_STRENGTH_ID"});
         }
         d.fireworksItem = id({"DATA_ID_FIREWORKS_ITEM"});
         d.staysStill = id({"STAYS_STILL"});
@@ -1335,6 +1336,8 @@ bool EntityWorld::applyDisplayData(Entity& e, const DataIds& d, const MetaValue&
     else if (idx == d.dBillboard) s.billboard = u8(v.i), s.updateRender = true;
     else if (idx == d.dBrightness) s.brightness = int(v.i), s.updateRender = true;
     else if (idx == d.dViewRange) s.viewRange = v.f[0];
+    else if (idx == d.dShadowRadius) s.synched.shadow[0] = v.f[0], s.updateRender = true;
+    else if (idx == d.dShadowStrength) s.synched.shadow[1] = v.f[0], s.updateRender = true;
     else if (idx == d.dWidth) s.width = v.f[0];
     else if (idx == d.dHeight) s.height = v.f[0];
     else if (idx == d.dBlock && v.serializer == 14) e.blockState = int(v.i), s.updateRender = true;
@@ -1376,6 +1379,7 @@ DisplayState::Xform xformAt(const DisplayState& s, float progress) {
         x.t[k] = s.from.t[k] + (s.to.t[k] - s.from.t[k]) * progress, x.s[k] = s.from.s[k] + (s.to.s[k] - s.from.s[k]) * progress;
     slerp(s.from.l, s.to.l, progress, x.l);
     slerp(s.from.r, s.to.r, progress, x.r);
+    for (int k = 0; k < 2; ++k) x.shadow[k] = s.from.shadow[k] + (s.to.shadow[k] - s.from.shadow[k]) * progress;
     return x;
 }
 // Row-major 3x3 of a quaternion like JOML Matrix4f.rotation (not normalised).
@@ -1399,6 +1403,15 @@ int lerpArgb(float a, int from, int to) {  // ARGB.srgbLerp
 }
 
 }  // namespace
+
+void displayShadow(const Entity& e, float pt, float& radius, float& strength) {
+    if (!e.display.hasRender) {
+        radius = 0, strength = 0;
+        return;
+    }
+    const DisplayState::Xform x = xformAt(e.display, displayProgress(e, pt));
+    radius = x.shadow[0], strength = x.shadow[1];
+}
 
 void displayTextColors(const Entity& e, float pt, u32& background, int& opacity) {
     const DisplayState& s = e.display;

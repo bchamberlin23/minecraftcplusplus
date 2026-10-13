@@ -3064,6 +3064,7 @@ void EntityRenderer::build(const PassContext& ctx) {
             if (d.special == SpSlime || d.special == SpSulfurCube) radius = 0.25f * float(e.size);
             else if (e.baby) radius *= 0.5f;
             if (id == "minecraft:item" || id == "minecraft:experience_orb") strength = 0.75f;
+            if (e.display.is) displayShadow(e, pt, radius, strength);
             if (radius > 0)
                 blobs_.push_back({{c[0] + cam[0], c[1] + cam[1], c[2] + cam[2]}, std::min(radius, 32.0f), strength});
         }
@@ -3106,6 +3107,15 @@ void EntityRenderer::build(const PassContext& ctx) {
     auto visit = [&](const Entity& e) {
         float sphere[4];
         const int k = classify(e, sphere);
+        if (k == 0 && e.display.is && !pack_ && blobShadows_ && !(e.sharedFlags & 0x20)) {  // item / text displays' shadows
+            float radius, strength;
+            displayShadow(e, pt, radius, strength);
+            double p[3];
+            for (int a = 0; a < 3; ++a) p[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt;
+            const double dx = p[0] - cam[0], dy = p[1] - cam[1], dz = p[2] - cam[2];
+            if (radius > 0 && dx * dx + dy * dy + dz * dz <= double(e.display.viewRange) * 64.0 * double(e.display.viewRange) * 64.0)
+                blobs_.push_back({{p[0], p[1], p[2]}, std::min(radius, 32.0f), strength});
+        }
         if (k == 1) drawEntity(e, sphere);
         else if (k == 2) shadowOnly.push_back({&e, {sphere[0], sphere[1], sphere[2], sphere[3]}});
     };

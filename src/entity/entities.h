@@ -92,6 +92,7 @@ struct DisplayState {
     // Transformation: translation, left rotation, scale, right rotation (quaternions x y z w).
     struct Xform {
         float t[3] = {}, l[4] = {0, 0, 0, 1}, s[3] = {1, 1, 1}, r[4] = {0, 0, 0, 1};
+        float shadow[2] = {0, 1};  // shadow radius and strength (the render state's FloatInterpolators)
     };
     Xform synched, from, to;  // synched data; the render state's TransformationInterpolator (from -> to)
     int startDelta = 0, duration = 0;            // synched interpolation start delay / duration (ticks)
@@ -379,7 +380,8 @@ public:
         // Display entities.
         i8 dStart = -1, dDuration = -1, dPosRot = -1, dTranslation = -1, dScale = -1, dLeft = -1, dRight = -1,
            dBillboard = -1, dBrightness = -1, dViewRange = -1, dWidth = -1, dHeight = -1, dBlock = -1, dItem = -1,
-           dItemContext = -1, dText = -1, dLineWidth = -1, dBackground = -1, dOpacity = -1, dStyle = -1;
+           dItemContext = -1, dText = -1, dLineWidth = -1, dBackground = -1, dOpacity = -1, dStyle = -1,
+           dShadowRadius = -1, dShadowStrength = -1;
     };
 
 private:
@@ -483,5 +485,7 @@ bool displayMatrix(const Entity& e, float partialTick, float camYaw, float camPi
 u32 displayLight(const Entity& e, u32 worldLight);
 // Text display: the interpolated background (ARGB) and text opacity (signed byte value) at a partial tick.
 void displayTextColors(const Entity& e, float partialTick, u32& background, int& opacity);
+// DisplayRenderer.getShadowRadius / getShadowStrength at this frame.
+void displayShadow(const Entity& e, float pt, float& radius, float& strength);
 
 }  // namespace ent
