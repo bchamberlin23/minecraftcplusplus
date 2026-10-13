@@ -1011,17 +1011,17 @@ int Gameplay::equipSlot(const ui::ItemStack& s, bool& allowed, bool* swappable) 
 // that rains rather than snows.
 bool Gameplay::rainingAt(int x, int y, int z) const {
     if (rainLevel_ <= 0.2f) return false;
-    for (int yy = y; yy < y + 384; ++yy) {  // the motion-blocking heightmap: nothing solid or liquid above
-        const BlockInfo& b = registry_.infos()[world_.block(x, yy, z)];
-        if (b.collisionCount || b.fluid || b.waterlogged) return false;
-        if (yy > y + 2 && world_.block(x, yy, z) == 0 && yy > 320) break;
+    if (motionBlocking) {  // the MOTION_BLOCKING heightmap: nothing above
+        if (motionBlocking(x, z) > y) return false;
+    } else {
+        for (int yy = y; yy < y + 384; ++yy) {
+            const BlockInfo& b = registry_.infos()[world_.block(x, yy, z)];
+            if (b.collisionCount || b.fluid || b.waterlogged) return false;
+            if (yy > y + 2 && world_.block(x, yy, z) == 0 && yy > 320) break;
+        }
     }
-    const u8 biome = world_.biomeAt(x, z);
-    if (biome == World::kUnknownBiome) return true;
-    const std::string_view b = World::biomeNameView(biome);
-    return !(b.find("desert") != b.npos || b.find("savanna") != b.npos || b.find("badlands") != b.npos ||
-             b.find("snowy") != b.npos || b.find("frozen") != b.npos || b.find("ice") != b.npos || b.find("grove") != b.npos ||
-             b.find("peaks") != b.npos || b.find("nether") != b.npos || b.find("the_end") != b.npos);
+    // Biome.getPrecipitationAt: the biome's has_precipitation, its height-adjusted temperature and the frozen noise
+    return precipitationAt ? precipitationAt(x, y, z) == 1 : true;
 }
 
 bool Gameplay::inWaterOrRain() const {  // Entity.isInWaterOrRain

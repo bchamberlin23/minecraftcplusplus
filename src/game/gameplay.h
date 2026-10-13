@@ -42,6 +42,9 @@ class Riding;
 
 class Gameplay {
 public:
+    // Sky's Biome.getPrecipitationAt (0 none, 1 rain, 2 snow) and MOTION_BLOCKING heightmap, for rainingAt
+    std::function<int(int, int, int)> precipitationAt;
+    std::function<int(int, int)> motionBlocking;
     int entityInteraction(const ent::Entity& e, int hand);  // EntityWorld::interactionResult
     Gameplay(World& world, BlockRegistry& registry, const GameReports& reports);
     ~Gameplay();

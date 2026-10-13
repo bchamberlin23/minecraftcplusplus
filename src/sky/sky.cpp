@@ -573,9 +573,14 @@ void Sky::update(const CameraState& cam, double dt) {
             ++i;
         }
     }
-    // Weather levels follow the server's per-tick values (or the save's state) at the game's ramp speed.
+    // Weather levels: connected, the server's values at once (Level.setRainLevel sets the old value too; the server
+    // ramps them by 0.01 a tick); without a server, the save's state at the game's ramp speed.
     auto approach = [&](float& v, float target) {
-        const float step = float(dt) * (connected_ ? 1.0f : 0.2f);
+        if (connected_) {
+            v = target;
+            return;
+        }
+        const float step = float(dt) * 0.2f;
         v = v < target ? std::min(target, v + step) : std::max(target, v - step);
     };
     approach(rain_, rainTarget_);

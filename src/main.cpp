@@ -949,6 +949,8 @@ int wmain(int argc, wchar_t** argv) {
                                    });
         visuals.setWeatherSources([&](int x, int y, int z) { return sky.precipitationAt(x, y, z); },
                                   [&](int x, int z) { return sky.motionBlocking(x, z); });
+        gameplay.precipitationAt = [&](int x, int y, int z) { return sky.precipitationAt(x, y, z); };
+        gameplay.motionBlocking = [&](int x, int z) { return sky.motionBlocking(x, z); };
         entities.onUntrackedEntityEvent = [&](int id, int event) {  // our own entity events
             if (event == 2 && session && id == session->entityId()) gameplay.kineticHit();  // EntityEvent.KINETIC_HIT
             if (session && id == session->entityId()) visuals.localEntityEvent(event);

@@ -2762,18 +2762,10 @@ void Particles::localSound(const char* id, double x, double y, double z, float v
 bool Particles::rainingAt(int x, int y, int z) {
     const float rain = rainOverride_ >= 0 ? rainOverride_ : rain_;
     if (rain <= 0.2f) return false;
-    const u8 biome = world_.biomeAt(x, z);
-    if (biome != World::kUnknownBiome) {
-        const std::string_view b = World::biomeNameView(biome);
-        if (b.find("desert") != b.npos || b.find("savanna") != b.npos || b.find("badlands") != b.npos || b.find("snowy") != b.npos ||
-            b.find("frozen") != b.npos || b.find("ice") != b.npos || b.find("grove") != b.npos || b.find("peaks") != b.npos)
-            return false;
-    }
-    for (int yy = y; yy < y + 64; ++yy) {
-        const u16 id = blockAt(x, yy, z);
-        if (id && (registry_.infos()[id].collisionCount || registry_.infos()[id].fluid)) return false;
-    }
-    return true;
+    // the MOTION_BLOCKING heightmap above, then Biome.getPrecipitationAt (the biome's data, its height-adjusted
+    // temperature and the frozen noise) is rain
+    if (motionBlocking && motionBlocking(x, z) > y) return false;
+    return precipitationAt ? precipitationAt(x, y, z) == 1 : true;
 }
 
 int Particles::surfaceY(int x, int z, bool motionBlocking) {  // Heightmap WORLD_SURFACE / MOTION_BLOCKING_NO_LEAVES
@@ -3568,8 +3560,8 @@ void Particles::tick() {
     tickExplosions();
     // Weather from the server (ClientPacketListener.handleGameEvent).
     for (auto [type, value] : weatherQueue_) {
-        if (type == 1) rainTarget_ = 1.0f, rain_ = 0.0f;  // start raining: the level ramps up via event 7
-        else if (type == 2) rainTarget_ = 0.0f;
+        if (type == 1) rainTarget_ = rain_ = 0.0f;  // START_RAINING: setRainLevel(0) (event 7 raises it)
+        else if (type == 2) rainTarget_ = rain_ = 1.0f;  // STOP_RAINING: setRainLevel(1) (event 7 lowers it)
         else if (type == 7) rain_ = rainTarget_ = std::clamp(value, 0.0f, 1.0f);
         else if (type == 8) thunder_ = std::clamp(value, 0.0f, 1.0f);  // THUNDER_LEVEL_CHANGE
     }
