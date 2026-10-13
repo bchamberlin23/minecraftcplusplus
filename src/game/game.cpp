@@ -283,6 +283,7 @@ void Game::retarget() {
     const double origin[3] = {cam.x, cam.y, cam.z};
     const double cp = std::cos(cam.pitch);
     const double dir[3] = {-std::sin(cam.yaw) * cp, -std::sin(cam.pitch), std::cos(cam.yaw) * cp};
+    physics_.holdingScaffolding = hotbar_[selected_] && registry_.name(hotbar_[selected_]).starts_with("minecraft:scaffolding");
     target_ = physics_.raycast(origin, dir, std::max(blockReach, entityReach));
     blockDistance_ = target_.hit ? target_.distance : -1.0;
     if (target_.hit && !(target_.distance < blockReach)) target_.hit = false;  // filterHitResult: a miss
@@ -424,7 +425,13 @@ int Game::useItemOn(int hand) {
         for (int a = 0; a < 3; ++a) t[a] += kDir[target_.face][a];
     const u16 existing = world_.block(t[0], t[1], t[2]);
     if (!replaceClicked && !place::canBeReplaced(pc, held, existing, false, t)) return send(kUseFail);  // !context.canPlace()
-    const place::Result placed = place::placementState(pc, held, t, replaceClicked);  // getPlacementState
+    place::Context at = pc;
+    if (registry_.name(held).starts_with("minecraft:scaffolding")) {  // updatePlacementContext
+        if (!place::scaffoldingTarget(pc, t, at.face)) return send(kUseFail);
+        if (t[0] != target_.x || t[1] != target_.y || t[2] != target_.z)  // BlockPlaceContext.at: the face's centre
+            for (int a = 0; a < 3; ++a) at.hit[a] = t[a] + 0.5 + kDir[at.face][a] * 0.5;
+    }
+    const place::Result placed = place::placementState(at, held, t, replaceClicked);  // getPlacementState
     if (!placed.state) return send(kUseFail);
     const u16 id = placed.state;
     const BlockInfo& b = infos[id];
@@ -680,6 +687,7 @@ place::Context Game::placeContext() {
     std::copy(target_.point, target_.point + 3, c.hit);
     c.yaw = player_.yaw, c.pitch = player_.pitch;
     c.sneaking = player_.lastInput.sneak;
+    c.inside = target_.inside;
     c.maxY = world_.maxSectionY() * 16 + 15;
     return c;
 }
@@ -729,14 +737,17 @@ void Game::buildOverlay() {
     // contrast draws a 7 px black pass, then the aqua outline (0xFF57FFE1); otherwise ARGB.black(102). The width is
     // Window.appropriateLineWidth: max(2.5, width / 1920 * 2.5).
     if (target_.hit && crosshairEntity < 0 && border.blockWithinBounds(target_.x, target_.z)) {
-        const BlockInfo& b = registry_.infos()[world_.block(target_.x, target_.y, target_.z)];
+        const u16 targetId = world_.block(target_.x, target_.y, target_.z);
+        const BlockInfo& b = registry_.infos()[targetId];
+        std::vector<Box> shape;  // getShape: scaffolding is a full block while holding scaffolding
+        if (physics_.holdingScaffolding && registry_.name(targetId).starts_with("minecraft:scaffolding")) shape.push_back({{0, 0, 0}, {1, 1, 1}});
+        else
+            for (u32 i = 0; i < b.selectionCount; ++i) shape.push_back(registry_.box(b.selectionFirst + i));
         // VoxelShape.forAllEdges: the edges of the joined shape (DiscreteVoxelShape over the boxes' coordinates), each
         // run along an axis merged into one line.
         std::vector<float> coords[3];
-        for (u32 i = 0; i < b.selectionCount; ++i) {
-            const Box& s = registry_.box(b.selectionFirst + i);
+        for (const Box& s : shape)
             for (int a = 0; a < 3; ++a) coords[a].push_back(s.min[a]), coords[a].push_back(s.max[a]);
-        }
         for (auto& c : coords) {
             std::sort(c.begin(), c.end());
             c.erase(std::unique(c.begin(), c.end()), c.end());
@@ -748,11 +759,9 @@ void Game::buildOverlay() {
                 if (c[a] < 0 || c[a] >= size[a]) return false;
             const float mid[3] = {(coords[0][c[0]] + coords[0][c[0] + 1]) * 0.5f, (coords[1][c[1]] + coords[1][c[1] + 1]) * 0.5f,
                                   (coords[2][c[2]] + coords[2][c[2] + 1]) * 0.5f};
-            for (u32 i = 0; i < b.selectionCount; ++i) {
-                const Box& s = registry_.box(b.selectionFirst + i);
+            for (const Box& s : shape)
                 if (mid[0] > s.min[0] && mid[0] < s.max[0] && mid[1] > s.min[1] && mid[1] < s.max[1] && mid[2] > s.min[2] && mid[2] < s.max[2])
                     return true;
-            }
             return false;
         };
         std::vector<std::array<float, 6>> edges;

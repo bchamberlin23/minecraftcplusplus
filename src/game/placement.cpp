@@ -400,6 +400,7 @@ bool canBeReplaced(const Context& c, u16 held, u16 state, bool replacingClicked,
         for (std::string_view key : {"candles", "pickles", "eggs", "flower_amount", "segment_amount"})
             if (!c.reg.property(state, key).empty()) return intProp(c, state, key) < 4;
     }
+    if (same && name == "minecraft:scaffolding") return true;  // ScaffoldingBlock.canBeReplaced: by scaffolding
     if (same && name == "minecraft:vine") {  // VineBlock.canBeReplaced: fewer than all five faces
         int faces = 0;
         for (int d = 1; d < 6; ++d) faces += hasFace(c, state, d);
@@ -411,6 +412,40 @@ bool canBeReplaced(const Context& c, u16 held, u16 state, bool replacingClicked,
         return false;
     }
     return c.reg.infos()[state].replaceable && !same;
+}
+
+// ScaffoldingBlock.getDistance: 0 on a sturdy top, else the scaffolding below's distance, or one more than beside
+int scaffoldingDistance(const Context& c, const int p[3]) {
+    const u16 below = at(c, p, kDown);
+    int distance = 7;
+    if (nameOf(c, below) == "minecraft:scaffolding") distance = intProp(c, below, "distance");
+    else if (sturdy(c.reg, below, kUp)) return 0;
+    for (int d = 2; d < 6; ++d) {
+        const u16 side = at(c, p, d);
+        if (nameOf(c, side) != "minecraft:scaffolding") continue;
+        distance = std::min(distance, intProp(c, side, "distance") + 1);
+        if (distance == 1) break;
+    }
+    return distance;
+}
+
+bool scaffoldingTarget(const Context& c, int pos[3], int& face) {
+    const u16 replaced = c.block(pos[0], pos[1], pos[2]);
+    if (nameOf(c, replaced) != "minecraft:scaffolding") return scaffoldingDistance(c, pos) != 7;
+    const int dir = c.sneaking ? (c.inside ? opposite(c.face) : c.face) : c.face == kUp ? horizontalDirection(c) : kUp;
+    int p[3] = {pos[0] + kStep[dir][0], pos[1] + kStep[dir][1], pos[2] + kStep[dir][2]};
+    for (int sideways = 0; sideways < 7;) {
+        const u16 s = c.block(p[0], p[1], p[2]);
+        if (nameOf(c, s) != "minecraft:scaffolding") {
+            if (!c.reg.infos()[s].replaceable) return false;
+            std::copy(p, p + 3, pos);
+            face = dir;
+            return true;
+        }
+        for (int a = 0; a < 3; ++a) p[a] += kStep[dir][a];
+        if (horizontal(dir)) ++sideways;
+    }
+    return false;
 }
 
 Result placementState(const Context& c, u16 held, const int pos[3], bool replaceClicked) {
@@ -440,6 +475,13 @@ Result placementState(const Context& c, u16 held, const int pos[3], bool replace
             }
     }
 
+    if (n == "minecraft:scaffolding") {  // ScaffoldingBlock.getStateForPlacement
+        const int distance = scaffoldingDistance(c, pos);
+        s = with(c, with(c, held, "distance", std::to_string(distance)), "bottom",
+                 distance > 0 && nameOf(c, at(c, pos, kDown)) != n ? "true" : "false");
+        r.state = with(c, s, "waterlogged", water ? "true" : "false");
+        return r;
+    }
     if (n == "minecraft:vine") {  // VineBlock.getStateForPlacement: a new face towards the nearest supported direction
         const bool oldVine = nameOf(c, existing) == n;
         u16 st = existing;

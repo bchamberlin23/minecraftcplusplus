@@ -75,6 +75,8 @@ public:
         int pistonNoClip = -1;  // PistonMovingBlockEntity.NOCLIP: a moving block pushing along this direction
     };
     mutable EntityContext context;
+    // EntityCollisionContext.isHoldingItem(scaffolding): the outline of scaffolding is a full block (ScaffoldingBlock.getShape).
+    bool holdingScaffolding = false;
     // The level's world border: with an entity context, Entity.collectColliders adds its collision shape (everything
     // outside the border's block-aligned box) when the entity is close to it (WorldBorder.isInsideCloseToBorder).
     const WorldBorder* border = nullptr;

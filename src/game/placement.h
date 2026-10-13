@@ -23,6 +23,7 @@ struct Context {
     double hit[3] = {};    // the hit point
     float yaw = 0, pitch = 0;  // the player's view (radians; yaw 0 = south, pitch > 0 = down)
     bool sneaking = false;     // isSecondaryUseActive
+    bool inside = false;       // BlockHitResult.isInside (the ray started inside the clicked block)
     int maxY = 319;            // the level's top block
 };
 
@@ -34,6 +35,10 @@ struct Result {
     u16 state = 0;                         // 0: cannot be placed
     std::vector<std::array<int, 4>> extra;  // x, y, z, state: cells setPlacedBy adds
 };
+// ScaffoldingBlockItem.updatePlacementContext for held scaffolding: placing into scaffolding climbs its column (or
+// runs along the clicked side while sneaking, up to 7 sideways) to the first replaceable cell; pos and face change
+// (the face: the direction walked). False: nowhere to place.
+bool scaffoldingTarget(const Context& c, int pos[3], int& face);
 // The state the held block takes at `pos` (replaceClicked: placing into the clicked cell).
 Result placementState(const Context& c, u16 held, const int pos[3], bool replaceClicked);
 
