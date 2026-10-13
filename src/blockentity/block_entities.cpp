@@ -4,6 +4,7 @@
 
 #include "assets/assets.h"
 #include "assets/game_reports.h"
+#include "audio/audio.h"
 #include "entity/entity_render.h"
 #include "game/item_rules.h"
 #include "net/client.h"
@@ -642,8 +643,27 @@ void BlockEntityRenderer::decode(const std::string& nbt, const BlockDef& d, Data
                     const u8* start = r.p;
                     out.items[0] = std::string(stripNs(readId(r, t2)));
                     if (t2 == TagCompound) out.itemNbt[0].assign(reinterpret_cast<const char*>(start), size_t(r.p - start));
+                } else if (n2 == "connected_players" && t2 == TagList) {  // UUIDs as int arrays
+                    const u8 et = r.u8v();
+                    const i32 count = r.i32v();
+                    for (i32 i = 0; i < count && r.ok; ++i) {
+                        if (et != TagIntArray) {
+                            r.skip(et);
+                            continue;
+                        }
+                        const i32 len = r.i32v();
+                        std::string uuid;
+                        for (i32 k = 0; k < len && r.ok; ++k) {
+                            const u32 v = u32(r.i32v());
+                            for (int b = 3; b >= 0; --b) uuid.push_back(char((v >> (b * 8)) & 0xFF));
+                        }
+                        if (uuid.size() == 16) out.connected.push_back(std::move(uuid));
+                    }
+                } else if (n2 == "connected_particles_range" && t2 == TagDouble) {
+                    out.connectedRange = r.f64v();
+                } else {
+                    r.skip(t2);
                 }
-                else r.skip(t2);
             }
         } else if (d.kind == Kind::Brushable && n == "item") {
             const u8* start = r.p;
@@ -903,6 +923,18 @@ void BlockEntityRenderer::applyNetwork() {
 
 void BlockEntityRenderer::handleEvent(int x, int y, int z, int type, int param) {
     const BlockDef& d = def(world_.block(x, y, z));
+    if (const std::string& n = registry_.name(world_.block(x, y, z)); n.starts_with("minecraft:note_block[")) {
+        // NoteBlock.triggerEvent: a tunable instrument shows its note (the sound comes from the server).
+        static constexpr std::string_view kUntuned[] = {"instrument=zombie", "instrument=skeleton", "instrument=creeper",
+                                                        "instrument=dragon", "instrument=wither_skeleton", "instrument=piglin",
+                                                        "instrument=custom_head"};
+        bool tunable = true;
+        for (std::string_view u : kUntuned) tunable &= n.find(u) == std::string::npos;
+        const size_t at = n.find("note=");
+        if (tunable && at != std::string::npos && particle)
+            particle("note", x + 0.5, y + 1.2, z + 0.5, std::atoi(n.c_str() + at + 5) / 24.0, 0, 0);
+        return;
+    }
     if (type != 1) return;
     Anim* a = nullptr;
     switch (d.kind) {
@@ -963,6 +995,7 @@ void BlockEntityRenderer::tick() {
         random_ ^= random_ << 13, random_ ^= random_ >> 17, random_ ^= random_ << 5;
         return int(random_ % u32(n));
     };
+    auto rndf = [&] { return double(rnd(1 << 24)) / double(1 << 24); };
     for (auto it = anims_.begin(); it != anims_.end();) {
         int x, y, z;
         posOf(it->first, x, y, z);
@@ -1060,20 +1093,84 @@ void BlockEntityRenderer::tick() {
                 a.oSpin = a.spin;
                 const double dx = cam_[0] - (x + 0.5), dy = cam_[1] - 1.62 - (y + 0.5), dz = cam_[2] - (z + 0.5);
                 if (dx * dx + dy * dy + dz * dz < 16.0 * 16.0) {
+                    if (const Data* data = dataAt(x, y, z); data && data->entity >= 0 && particle) {  // with a display entity
+                        const double px = x + rndf(), py = y + rndf(), pz = z + rndf();
+                        particle("smoke", px, py, pz, 0, 0, 0);
+                        particle("flame", px, py, pz, 0, 0, 0);
+                    }
                     if (a.delay > 0) --a.delay;
                     a.spin = std::fmod(a.spin + 1000.0f / (float(std::max(a.delay, 0)) + 200.0f), 360.0f);
                 }
                 break;
             }
-            case Kind::TrialSpawner:  // TrialSpawner.tickClient (the spawn delay is not known here: 0)
+            case Kind::TrialSpawner: {  // TrialSpawner.tickClient (the spawn delay is not known here: 0)
                 ++a.tickCount;
                 a.oSpin = a.spin;
                 if (d.variant) a.spin = std::fmod(a.spin + (d.variant == 2 ? 1000.0f : 200.0f) / 200.0f, 360.0f);
+                // TrialSpawnerState.emitParticles by trial_spawner_state, and the ambient sound while it can spawn.
+                const std::string& n = registry_.name(block);
+                const bool ominous = n.find("ominous=true") != std::string::npos;
+                auto has = [&](const char* s) { return n.find(s) != std::string::npos; };
+                auto around = [&](double r, double out[3]) {  // Vec3.atCenterOf(pos).offsetRandom(random, r)
+                    out[0] = x + 0.5 + (rndf() - 0.5) * r, out[1] = y + 0.5 + (rndf() - 0.5) * r, out[2] = z + 0.5 + (rndf() - 0.5) * r;
+                };
+                double p[3];
+                if (particle) {
+                    if (has("state=waiting_for_players") || has("state=waiting_for_reward_ejection") || has("state=ejecting_reward")) {
+                        if (rnd(2) == 0) around(0.9, p), particle(ominous ? "soul_fire_flame" : "small_flame", p[0], p[1], p[2], 0, 0, 0);
+                    } else if (has("state=active")) {
+                        around(1.0, p);
+                        particle("smoke", p[0], p[1], p[2], 0, 0, 0);
+                        particle(ominous ? "soul_fire_flame" : "flame", p[0], p[1], p[2], 0, 0, 0);
+                    } else if (has("state=cooldown")) {
+                        if (around(0.9, p), rnd(3) == 0) particle("smoke", p[0], p[1], p[2], 0, 0, 0);
+                        if (gameTicks_ % 20 == 0)
+                            for (int i = 20 + rnd(4); i > 0; --i) particle("smoke", x + 0.5, y + 1.0, z + 0.5, 0, 0, 0);
+                    }
+                }
+                if ((has("state=waiting_for_players") || has("state=active")) && rndf() <= 0.02)
+                    if (audio::AudioSystem* au = audio::instance())
+                        au->play(ominous ? "minecraft:block.trial_spawner.ambient_ominous" : "minecraft:block.trial_spawner.ambient",
+                                 audio::Category::Block, x + 0.5, y + 0.5, z + 0.5, float(rndf()) * 0.25f + 0.75f, float(rndf()) + 0.5f);
                 break;
-            case Kind::Vault:  // VaultClientData.updateDisplayItemSpin
-                a.oSpin = a.spin;
+            }
+            case Kind::Vault: {  // VaultBlockEntity.Client.tick
+                a.oSpin = a.spin;  // VaultClientData.updateDisplayItemSpin
                 a.spin = std::remainder(a.spin + 10.0f, 360.0f);
+                const Data* data = dataAt(x, y, z);
+                const bool active = data && !data->items[0].empty();  // shouldDisplayActiveEffects: a display item
+                const std::string& n = registry_.name(block);
+                const bool ominous = n.find("ominous=true") != std::string::npos;
+                if (particle && data && gameTicks_ % 20 == 0 && !data->connected.empty() && playerPosition) {
+                    // emitConnectionParticlesForNearbyPlayers: from the keyhole towards each connected player in range
+                    int fx = 0, fz = 0;
+                    if (n.find("facing=north") != std::string::npos) fz = -1;
+                    else if (n.find("facing=south") != std::string::npos) fz = 1;
+                    else if (n.find("facing=west") != std::string::npos) fx = -1;
+                    else fx = 1;
+                    const double kx = x + 0.5 + fx * 0.5, ky = y + 1.75, kz = z + 0.5 + fz * 0.5;
+                    for (const std::string& uuid : data->connected) {
+                        double pp[3];
+                        float height;
+                        if (!playerPosition(uuid, pp, height)) continue;
+                        const double bx = std::floor(pp[0]) - x, by = std::floor(pp[1]) - y, bz = std::floor(pp[2]) - z;
+                        if (bx * bx + by * by + bz * bz > data->connectedRange * data->connectedRange) continue;
+                        const double dir[3] = {pp[0] - kx, pp[1] + height / 2.0 - ky, pp[2] - kz};
+                        for (int i = 2 + rnd(4); i > 0; --i)  // Mth.nextInt(2, 5); Vec3.offsetRandom(random, 1)
+                            particle("vault_connection", kx, ky, kz, dir[0] + rndf() - 0.5, dir[1] + rndf() - 0.5, dir[2] + rndf() - 0.5);
+                    }
+                }
+                if (particle && rndf() <= 0.5) {  // emitIdleParticles: inside the cage
+                    const double px = x + 0.1 + rndf() * 0.8, py = y + 0.25 + rndf() * 0.5, pz = z + 0.1 + rndf() * 0.8;
+                    particle("smoke", px, py, pz, 0, 0, 0);
+                    if (active) particle(ominous ? "soul_fire_flame" : "small_flame", px, py, pz, 0, 0, 0);
+                }
+                if (active && rndf() <= 0.02)  // playIdleSounds
+                    if (audio::AudioSystem* au = audio::instance())
+                        au->play("minecraft:block.vault.ambient", audio::Category::Block, x + 0.5, y + 0.5, z + 0.5, float(rndf()) * 0.25f + 0.75f,
+                                 float(rndf()) + 0.5f);
                 break;
+            }
             default: keep = false; break;
         }
         // Static <-> per-frame transitions rebuild the section batch.

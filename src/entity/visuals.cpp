@@ -134,6 +134,7 @@ struct Lists {
     u64 next() { return key ? (key << 8) | (++seq & 255) : 0; }
 };
 
+void entityBox(const Entity& e, float& w, float& h);  // below: the entity's width and height
 }  // namespace
 
 struct StagePass : RenderPass {
@@ -1737,6 +1738,27 @@ void Visuals::Impl::update() {
     updateItemOwner(partial);
     animClock += dt;
     models.tick(u64(animClock * 20.0));  // animated textures in the item atlas (block items, vibration particles)
+    if (be::BlockEntityRenderer* ber = const_cast<be::BlockEntityRenderer*>(be::BlockEntityRenderer::instance()); ber && particles && !ber->particle) {
+        Impl& m = *this;
+        // Block entity tick effects (called with the world lock held): straight into the particle system.
+        ber->particle = [p = m.particles.get()](std::string_view type, double x, double y, double z, double vx, double vy, double vz) {
+            p->spawn(type, x, y, z, vx, vy, vz);
+        };
+        ber->playerPosition = [&m](const std::string& uuid, double pos[3], float& height) {
+            if (m.client && uuid == m.client->playerUuid() && m.game) {  // ourselves
+                std::copy(m.game->player().pos, m.game->player().pos + 3, pos), height = 1.8f;
+                return true;
+            }
+            for (const auto& [id, e] : m.world.entities())
+                if (e.category == Category::Player && std::memcmp(e.uuid, uuid.data(), 16) == 0) {
+                    std::copy(e.pos, e.pos + 3, pos);
+                    float w;
+                    entityBox(e, w, height);
+                    return true;
+                }
+            return false;
+        };
+    }
     // FireworkRocketEntity.tick on the client: a spark behind the rocket every tick.
     for (; particles && rocketTicks < u64(animClock * 20.0); ++rocketTicks) {
         static std::normal_distribution<double> gauss;

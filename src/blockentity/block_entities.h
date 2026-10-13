@@ -127,7 +127,13 @@ public:
         i8 hitDir = -1;                             // brushable block hit_direction (3D data value)
         i64 age = -1;                               // end gateway Age (-1: unknown)
         u32 beam = 0;                               // test instance block: its beam colour (0xRRGGBB | 1 << 24), 0 none
+        std::vector<std::string> connected;         // vault shared_data connected_players (16-byte UUIDs)
+        double connectedRange = 4.5;                // vault shared_data connected_particles_range
     };
+    // Client-side effects of the block entities' ticks (spawner / trial spawner / vault particles), called while
+    // the world lock is held: a particle by type name, and a player's position (feet) and height by UUID.
+    std::function<void(std::string_view type, double x, double y, double z, double vx, double vy, double vz)> particle;
+    std::function<bool(const std::string& uuid, double pos[3], float& height)> playerPosition;
     // The UI (sign editor): the last renderer created, and the data of the block entity at a position (main thread;
     // nullptr when none is known).
     static const BlockEntityRenderer* instance();
