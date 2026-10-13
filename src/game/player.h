@@ -173,6 +173,7 @@ public:
         double movementEfficiency = 0;  // movement_efficiency (Soul Speed): the block speed factor towards 1
         double frictionModifier = 1, airDragModifier = 1;  // friction_modifier / air_drag_modifier
         double bounciness = 0;  // the bounciness attribute (LivingEntity.getEntityBounciness): bounces off anything
+        double safeFallDistance = 3, fallDamageMultiplier = 1;  // safe_fall_distance / fall_damage_multiplier
         int jumpBoost = -1, slowFalling = -1, levitation = -1, dolphinsGrace = -1;  // effect amplifiers, -1 none
         bool blind = false;             // Blindness (LivingEntity.isMobilityRestricted: no sprinting)
         bool weaving = false;           // Weaving (WebBlock.entityInside: cobwebs slow less)
@@ -180,6 +181,10 @@ public:
         bool powderSnowWalker = false;  // leather boots
         bool rocketBoost = false;       // a firework rocket is attached (FireworkRocketEntity pushing a glider)
     } attr;
+    // Entity.checkFallDamage on landing: the fall distance the ground took (for the fall sounds), counted per landing.
+    double landedFall = 0;
+    bool slidingOnHoney = false;  // HoneyBlock.isSlidingDown this tick
+    int landings = 0;
     std::function<void()> onStartFallFlying;  // LocalPlayer.aiStep: ServerboundPlayerCommandPacket START_FALL_FLYING
     // Entities touching the player while it spins (LivingEntity.checkAutoSpinAttack: the spin hits the first living
     // one and bounces back): true when a living entity's box intersects the swept box.

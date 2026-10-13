@@ -609,6 +609,7 @@ void Player::move(const Physics& physics, double dx, double dy, double dz, bool 
     onPos(physics, 0.2, effect);  // getOnPosLegacy
     // Entity.checkFallDamage: the fall distance (out of water), reset on landing.
     if (!inWater && out[1] < 0) fallDistance -= out[1];
+    if (onGround && fallDistance > 0) landedFall = fallDistance, ++landings;  // fallOn(... fallDistance)
     if (onGround) fallDistance = 0;
     // Entity.restituteMovementAfterCollisions: blocked axes stop (players do not bounce off walls); landing on a
     // bouncy block (not while sneaking, not off a honey block) bounces back up minus the gravity of the part of the
@@ -878,6 +879,7 @@ void Player::applyEffectsFromBlocks(const Physics& physics) {
     }
     isInPowderSnow_ = false;
     bool bubbled = false, honeyed = false;
+    slidingOnHoney = false;
     for (int y = int(std::floor(b.min[1])); y <= int(std::floor(b.max[1])); ++y)
         for (int z = int(std::floor(b.min[2])); z <= int(std::floor(b.max[2])); ++z)
             for (int x = int(std::floor(b.min[0])); x <= int(std::floor(b.max[0])); ++x) {
@@ -900,7 +902,7 @@ void Player::applyEffectsFromBlocks(const Physics& physics) {
                     const double dx = std::abs(x + 0.5 - pos[0]), dz = std::abs(z + 0.5 - pos[2]);
                     const double overlap = 0.4375 + width() / 2.0;
                     if (!onGround && pos[1] <= y + 0.9375 - 1e-7 && old < -0.08 && (dx + 1e-7 > overlap || dz + 1e-7 > overlap)) {
-                        honeyed = true;
+                        honeyed = true, slidingOnHoney = true;
                         if (old < -0.13) {
                             const double reduce = -0.05 / old;
                             vel[0] *= reduce, vel[2] *= reduce;

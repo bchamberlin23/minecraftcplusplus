@@ -678,6 +678,8 @@ void Gameplay::frame() {
     a.movementEfficiency = attribute("movement_efficiency", 0.0);
     a.frictionModifier = attribute("friction_modifier", 1.0), a.airDragModifier = attribute("air_drag_modifier", 1.0);
     a.bounciness = attribute("bounciness", 0.0);
+    a.safeFallDistance = attribute("safe_fall_distance", 3.0);
+    a.fallDamageMultiplier = attribute("fall_damage_multiplier", 1.0);
     game_->player().scale = std::clamp(attribute("scale", 1.0), 0.0625, 16.0);  // LivingEntity.getScale
     {  // Camera.setup's third-person distance: camera_distance x getScale, the player's or its mount's if larger
         double dist = attribute("camera_distance", 4.0) * attribute("scale", 1.0);

@@ -391,8 +391,9 @@ void AudioSystem::onPlayerTick() {
     const bool inWater = p.inWater;
 
     // Entity.updateFluidInteraction: splash when entering water.
-    if (inWater && !wasInWater_ && !firstTick_ && info_.gameMode != 3) {
-        const float speed = std::min(1.0f, float(std::sqrt(d[0] * d[0] * 0.2f + d[1] * d[1] + d[2] * d[2] * 0.2f)) * 0.2f);
+    if (inWater && !wasInWater_ && !firstTick_ && info_.gameMode != 3) {  // the speed from getDeltaMovement
+        const double* v = p.vel;
+        const float speed = std::min(1.0f, float(std::sqrt(v[0] * v[0] * 0.2f + v[1] * v[1] + v[2] * v[2] * 0.2f)) * 0.2f);
         const float f1 = rng_.nextFloat(), f2 = rng_.nextFloat();
         playerSound(bank_.eventId(speed < 0.25f ? "minecraft:entity.player.splash" : "minecraft:entity.player.splash.high_speed"),
                     speed, 1.0f + (f1 - f2) * 0.4f);
@@ -415,35 +416,46 @@ void AudioSystem::onPlayerTick() {
         }
     }
 
-    // Fall distance and fall sounds (Entity.checkFallDamage, LivingEntity.causeFallDamage).
-    if (inWater || p.flying)
-        fallDistance_ = 0;
-    else if (d[1] < 0)
-        fallDistance_ -= d[1];
-    if (p.onGround) {
-        if (fallDistance_ > 0 && !creative) {
-            const int damage = int(std::floor(fallDistance_ + 1.0E-6 - 3.0));
+    // Fall sounds (Entity.checkFallDamage -> Block.fallOn -> LivingEntity.causeFallDamage) with the physics' fall
+    // distance (reset by water, climbing, slow falling, honey) and the landing block's damage modifier.
+    if (p.landings != landings_) {
+        landings_ = p.landings;
+        u16 underId = 0;
+        const BlockSound under = blockAt(fx, int(std::floor(p.pos[1] - 0.2f)), fz, &underId);
+        double fall = p.landedFall, modifier = 1.0;
+        const std::string& full = registry_->name(underId);
+        const std::string block = full.substr(0, full.find('['));
+        if (block == "minecraft:hay_block" || block == "minecraft:honey_block") modifier = 0.2;
+        else if (block == "minecraft:slime_block" && !p.sneaking) modifier = 0.0;  // unless isSuppressingBounce
+        else if (block.ends_with("_bed")) fall *= 0.5;                            // BedBlock: half the distance
+        if (block == "minecraft:honey_block")                                    // HoneyBlock.fallOn
+            playerSound(bank_.eventId("minecraft:block.honey_block.slide"), 1.0f, 1.0f);
+        if (!creative) {
+            // calculateFallDamage: floor((fall + 1e-6 - safe_fall_distance) * modifier * fall_damage_multiplier)
+            const int damage = int(std::floor((fall + 1.0E-6 - p.attr.safeFallDistance) * modifier * p.attr.fallDamageMultiplier));
             if (damage > 0) {
                 playerSound(bank_.eventId(damage > 4 ? "minecraft:entity.player.big_fall" : "minecraft:entity.player.small_fall"),
                             1.0f, 1.0f);
-                const BlockSound under = blockAt(fx, int(std::floor(p.pos[1] - 0.2f)), fz);  // playBlockFallSound
-                if (!under.air) {
+                if (!under.air) {  // playBlockFallSound
                     const BlockSoundType& t = game_.type(under.type);
                     playerSound(t.fall, t.volume * 0.5f, t.pitch * 0.75f);
                 }
             }
         }
-        fallDistance_ = 0;
     }
+    // HoneyBlock.entityInside: sliding down its side plays the slide sound one tick in five
+    if (p.slidingOnHoney && rng_.nextInt(5) == 0) playerSound(bank_.eventId("minecraft:block.honey_block.slide"), 1.0f, 1.0f);
 
-    // Entity.applyMovementEmissionAndPlaySound
-    if (info_.gameMode == 3) return;  // spectators emit nothing
-    const bool climbing = (on.tags & TagClimbable) != 0;
+    // Entity.applyMovementEmissionAndPlaySound; Player.getMovementEmission: nothing while flying or sneaking on the
+    // ground, nor as a passenger
+    if (info_.gameMode == 3 || p.flying || (p.onGround && p.sneaking) || gameRef_->vehicleId >= 0) return;
+    const bool climbing = (on.tags & TagClimbable) != 0 ||  // isStateClimbable: #climbable or powder snow
+                          registry_->name(world_->block(sx, by, sz)) == "minecraft:powder_snow";
     const float moved = float(std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) * 0.6f);
     const float horizontal = float(std::sqrt(d[0] * d[0] + d[2] * d[2]) * 0.6f);
     moveDist_ += climbing ? moved : horizontal;
     if (moveDist_ > nextStep_ && !on.air) {
-        const bool swimming = false;  // sprint-swimming is not simulated
+        const bool swimming = p.swimming;
         if ((p.onGround || climbing || (p.sneaking && d[1] == 0.0)) && !swimming) {
             stepSound(sx, by, sz, on);
             nextStep_ = float(int(moveDist_) + 1);

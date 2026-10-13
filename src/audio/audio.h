@@ -192,7 +192,7 @@ private:
 
     // Player movement sounds (Entity.applyMovementEmissionAndPlaySound and friends).
     float moveDist_ = 0, nextStep_ = 1;
-    double fallDistance_ = 0;
+    int landings_ = 0;  // the player landings already heard
     bool wasInWater_ = false, firstTick_ = true;
     int playerTicks_ = 0, lastCrystalTick_ = -1000;
     float crystalIntensity_ = 0;
