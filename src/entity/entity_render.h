@@ -69,6 +69,12 @@ public:
         bool shadowOnly;    // posed only as a shadow caster (outside the view, or the first-person local player)
     };
     const std::vector<Attachment>& attachments() const { return attachments_; }
+    // The glowing outline (LevelRenderer's entity outline target and post_effect/entity_outline): glowing entities'
+    // silhouettes in their outline colour, edge-detected, blurred and blended over the frame. A Hud-stage pass,
+    // registered before the UI. outlineColor: an entity's outline colour (0xRRGGBB) when it glows
+    // (Minecraft.shouldEntityAppearGlowing, Entity.getTeamColor), -1 otherwise.
+    RenderPass& outlinePass() { return outlinePass_; }
+    std::function<int(const Entity&)> outlineColor;
 
     enum class Kind : u8 { None, Mob, Item, Block, Sprite, Box };
     struct LayerDef {
@@ -102,6 +108,25 @@ public:
     int displayLayers(int type, Layer* out, int max, Anim& anim, float& scale) const;
 
 private:
+    struct OutlinePass : RenderPass {
+        EntityRenderer* owner = nullptr;
+        bool create(Renderer&) override { return true; }
+        void draw(const PassContext& ctx) override { owner->drawOutline(ctx); }
+    } outlinePass_;
+    bool createOutline(Renderer& r);
+    void drawOutline(const PassContext& ctx);
+    struct Glow {  // one glowing entity's ranges (like Caster) and colour
+        u32 ref, refN, tr, trN, free, freeN, color;
+    };
+    std::vector<Glow> glowing_;
+    ComPtr<ID3D12RootSignature> postSig_;
+    ComPtr<ID3D12PipelineState> psoOutline_, psoOutlineFree_, psoSobel_, psoBlur_, psoBlit_;
+    ComPtr<ID3D12DescriptorHeap> outlineRtvs_;
+    ComPtr<ID3D12Resource> outlineTex_[2];  // silhouettes / edges, ping-ponged by the blur
+    D3D12_RESOURCE_STATES outlineState_[2] = {};
+    u32 outlineSrv_ = UINT32_MAX, outlineW_ = 0, outlineH_ = 0;
+    std::vector<std::pair<u64, ComPtr<ID3D12Resource>>> outlineRetired_;  // replaced targets, freed frames later
+    u64 outlineFrame_ = 0;
     float viewScale_ = 2.5f;
     struct Mat34 {
         float m[12];  // row-major 3x4

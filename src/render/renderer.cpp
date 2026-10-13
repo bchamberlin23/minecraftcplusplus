@@ -1107,6 +1107,7 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     PassContext pc{list_.Get(), fi, width_, height_, fc.viewProj, cam.x, cam.y, cam.z, {}, fc.fogParams[0],
                    fc.fogParams[1], fc.fogParams[3], srvHeap_->GetGPUDescriptorHandleForHeapStart()};
     std::memcpy(pc.fogColor, fogColor_, sizeof(fogColor_));
+    pc.viewProjNoJitter = vpNoJitter.m;
     pc.shading = shaded;
     pc.textureRemap = remapVa;
     std::memcpy(pc.lightmap, fc.lightmap, sizeof(pc.lightmap));
@@ -1227,6 +1228,7 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
              put(screenLines_.data(), screenLines_.size() * sizeof(LineVertex)), u32(screenLines_.size()), 1);
     }
     pc.uiLayer = (shaded || packUi) && !upscalers_->uiComposedBySwapChain();  // we composite it, then AfterUi on top
+    if (!shaded && !packUi) pc.colorRtv = rtv, pc.dsv = dsv;  // Hud passes that draw elsewhere rebind these
     runPasses(PassStage::Hud, pc);
     if (!shaded && !packUi) runPasses(PassStage::AfterUi, pc);
     if (shaded || packUi) {

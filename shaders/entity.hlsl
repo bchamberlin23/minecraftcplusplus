@@ -246,3 +246,12 @@ float4 EntityGlintPS(VSOut i) : SV_Target {
     float3 glint = gAtlas.SampleLevel(gPoint, gGlintRect.xy + frac(g) * gGlintRect.zw, 0).rgb * gGlint.z;
     return float4(glint * (1.0 - i.fog), 1);
 }
+
+// RenderTypes.outline (core/rendertype_outline): the entity's silhouette in its team colour (gCascade: 0xRRGGBB) for
+// the glowing outline, texels without alpha left out; drawn into the outline target without depth.
+float4 EntityOutlinePS(VSOut i) : SV_Target {
+    float a = i.layer == 0xFFFFFFFF ? gAtlas.SampleLevel(gPoint, atlasUv(i), 0).a
+                                    : gBlocks.Sample(gBlockSampler, float3(i.uv, float(i.layer & 0xFFFF))).a;
+    clip(a - 0.5 / 255.0);
+    return float4(float((gCascade >> 16) & 255) / 255.0, float((gCascade >> 8) & 255) / 255.0, float(gCascade & 255) / 255.0, 1);
+}

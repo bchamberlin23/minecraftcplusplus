@@ -1189,6 +1189,7 @@ void Renderer::Shading::record(ID3D12GraphicsCommandList* list, const FrameInput
         list->ClearRenderTargetView(rtv(5), clear, 0, nullptr);
         const D3D12_CPU_DESCRIPTOR_HANDLE t = rtv(5);
         list->OMSetRenderTargets(1, &t, FALSE, &overlayDsv);
+        pc.colorRtv = t, pc.motionRtv = {}, pc.dsv = overlayDsv;  // the Hud stage's targets (the UI layer)
     }
     pc.width = outW_, pc.height = outH_;
     histSlot_ = cur;

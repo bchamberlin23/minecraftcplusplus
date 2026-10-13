@@ -84,6 +84,7 @@ struct PassContext {
     // shadows keep geometry for casters inside them (see RenderPass::drawShadow).
     u32 shadowCascades = 0, shadowMask = 0;
     const float (*shadowMats)[16] = nullptr;
+    const float* viewProjNoJitter = nullptr;  // viewProj without the temporal jitter (passes drawn after TAA / upscaling)
 };
 // One shadow cascade being drawn: depth only (D32, LESS_EQUAL, no depth clip), viewport / DSV bound.
 struct ShadowContext {

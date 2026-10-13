@@ -17,6 +17,8 @@ bool bossPlayMusic();
 // The collision rule of a player's scoreboard team (Team.CollisionRule: 0 always, 1 never, 2 push other teams, 3 push
 // own team); 0 without a team.
 int teamCollisionRule(const std::string& member);
+// The colour (TeamColor id 0..15) of a member's team (a player's name or an entity's UUID string), -1 none.
+int teamColor(const std::string& member);
 
 // The player info list (ClientPacketListener.playerInfoMap) and the scoreboard's teams, main thread.
 struct PlayerInfoView {

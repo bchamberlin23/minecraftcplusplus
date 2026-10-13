@@ -105,6 +105,13 @@ int teamCollisionRule(const std::string& member) {
     return t == g.teams.end() ? 0 : t->second.collision;
 }
 
+int teamColor(const std::string& member) {
+    auto it = g.playerTeam.find(member);
+    if (it == g.playerTeam.end()) return -1;
+    auto t = g.teams.find(it->second);
+    return t == g.teams.end() ? -1 : t->second.color;
+}
+
 namespace {
 
 const Team* teamOf(const std::string& member) {

@@ -606,6 +606,7 @@ int wmain(int argc, wchar_t** argv) {
         renderer.setShaderSettings(s);
     }
     if (haveEntities && !renderer.addPass(&entityRenderer, PassStage::World)) LOG("warning: entity rendering unavailable");
+    if (haveEntities) renderer.addPass(&entityRenderer.outlinePass(), PassStage::Hud);  // before the UI's Hud pass
     if (haveEntities && !renderer.addPass(&blockEntityRenderer, PassStage::World))
         LOG("warning: block entity rendering unavailable");
     if (haveEntities && !visuals.addPasses(renderer)) LOG("warning: hands / items / particles unavailable");
@@ -941,6 +942,25 @@ int wmain(int argc, wchar_t** argv) {
                                           });
         }
         return entities.click(eye, dir, attack, use, blockDistance, game.entityReach, game.player().sneaking);
+    };
+    // Minecraft.shouldEntityAppearGlowing (the glowing flag, or players while a spectator holds Spectator Outlines) and
+    // Entity.getTeamColor (the team's colour, white without one).
+    entityRenderer.outlineColor = [&](const ent::Entity& e) {
+        const bool player = e.category == ent::Category::Player;
+        const int outlinesKey = ui.settings().key(ui::Key::SpectatorOutlines);
+        const bool spectatorOutlines = player && game.gameMode == 3 && outlinesKey && window.keyDown(outlinesKey);
+        if (!(e.sharedFlags & 0x40) && !spectatorOutlines) return -1;
+        std::string member = e.name;
+        if (!player) {
+            static const char* kHex = "0123456789abcdef";
+            member.clear();
+            for (int i = 0; i < 16; ++i) {
+                if (i == 4 || i == 6 || i == 8 || i == 10) member += '-';
+                member += kHex[e.uuid[i] >> 4], member += kHex[e.uuid[i] & 15];
+            }
+        }
+        const int team = ui::teamColor(member);
+        return team >= 0 && team < 16 ? int(ui::kLegacyColors[team]) : 0xFFFFFF;
     };
     game.onSpectatorAttack = [&](double blockDistance) {
         if (!session || !haveEntities) return;

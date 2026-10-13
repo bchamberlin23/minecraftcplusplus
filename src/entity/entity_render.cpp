@@ -20,6 +20,11 @@
 #include "EntityShadowPS.h"
 #include "EntityShadowVS.h"
 #include "EntityTranslucentPS.h"
+#include "EntityOutlinePS.h"
+#include "BlitPS.h"
+#include "BlurPS.h"
+#include "OutlineVS.h"
+#include "SobelPS.h"
 
 namespace ent {
 namespace {
@@ -29,7 +34,8 @@ constexpr float kDeg = kPi / 180.0f;
 
 // Per-frame upload capacities.
 constexpr u32 kMaxMatrices = 1 << 15, kMaxInstances = 1 << 14, kMaxRefs = 1 << 18, kMaxFree = 1 << 13;
-constexpr u64 kConstBytes = 1024;
+constexpr u64 kConstBytes = 2048;
+constexpr u64 kOutlineConstOffset = 1024;  // the frame constants again with the unjittered view (the glowing outline)
 constexpr u64 kMatOffset = kConstBytes;
 constexpr u64 kPrevMatOffset = kMatOffset + u64(kMaxMatrices) * 48;  // last frame's part matrices (motion vectors)
 constexpr u64 kInstOffset = kPrevMatOffset + u64(kMaxMatrices) * 48;
@@ -164,6 +170,7 @@ bool check(HRESULT hr, const char* what) {
 }  // namespace
 
 EntityRenderer::EntityRenderer(EntityWorld& world) : world_(world), assets_(world.assets()) {
+    outlinePass_.owner = this;
     buildDefs();
     mats_.reserve(256);
     poses_.reserve(256);
@@ -816,7 +823,195 @@ bool EntityRenderer::create(Renderer& r) {
     sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     sd.Texture2D.MipLevels = 1;
     device->CreateShaderResourceView(atlas_.Get(), &sd, r.cpuDescriptor(atlasDescriptor_));
+    if (!createOutline(r)) LOG("warning: glowing entity outlines unavailable");
     return true;
+}
+
+bool EntityRenderer::createOutline(Renderer& r) {
+    ID3D12Device* device = r.device();
+    // Silhouettes: the entity root signature and vertex shaders, no depth (RenderType outline: seen through walls).
+    auto silhouette = [&](const void* vs, size_t vsSize, D3D12_CULL_MODE cull, ComPtr<ID3D12PipelineState>& out) {
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC d{};
+        d.pRootSignature = rootSig_.Get();
+        d.VS = {vs, vsSize};
+        d.PS = {g_EntityOutlinePS, sizeof(g_EntityOutlinePS)};
+        d.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+        d.SampleMask = UINT_MAX;
+        d.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+        d.RasterizerState.CullMode = cull;
+        d.RasterizerState.FrontCounterClockwise = TRUE;
+        d.RasterizerState.DepthClipEnable = TRUE;
+        d.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        d.NumRenderTargets = 1;
+        d.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+        d.SampleDesc.Count = 1;
+        return check(device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&out)), "CreateGraphicsPipelineState");
+    };
+    if (!silhouette(g_EntityModelVS, sizeof(g_EntityModelVS), D3D12_CULL_MODE_BACK, psoOutline_) ||
+        !silhouette(g_EntityFreeVS, sizeof(g_EntityFreeVS), D3D12_CULL_MODE_NONE, psoOutlineFree_))
+        return false;
+    // The post passes: 8 constants (b0), the input (t0), point and linear clamp samplers.
+    D3D12_DESCRIPTOR_RANGE range{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, 0};
+    D3D12_ROOT_PARAMETER params[2]{};
+    params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    params[0].Constants.Num32BitValues = 8;
+    params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[1].DescriptorTable.NumDescriptorRanges = 1;
+    params[1].DescriptorTable.pDescriptorRanges = &range;
+    params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    D3D12_STATIC_SAMPLER_DESC samp[2]{};
+    for (int i = 0; i < 2; ++i) {
+        samp[i].Filter = i ? D3D12_FILTER_MIN_MAG_MIP_LINEAR : D3D12_FILTER_MIN_MAG_MIP_POINT;
+        samp[i].AddressU = samp[i].AddressV = samp[i].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        samp[i].MaxLOD = D3D12_FLOAT32_MAX;
+        samp[i].ShaderRegister = UINT(i);
+        samp[i].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    }
+    D3D12_ROOT_SIGNATURE_DESC rd{2, params, 2, samp, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+    ComPtr<ID3DBlob> blob, err;
+    if (FAILED(D3D12SerializeRootSignature(&rd, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &err)) ||
+        !check(device->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(), IID_PPV_ARGS(&postSig_)), "CreateRootSignature"))
+        return false;
+    auto post = [&](const void* ps, size_t psSize, bool blend, ComPtr<ID3D12PipelineState>& out) {
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC d{};
+        d.pRootSignature = postSig_.Get();
+        d.VS = {g_OutlineVS, sizeof(g_OutlineVS)};
+        d.PS = {ps, psSize};
+        auto& rt = d.BlendState.RenderTarget[0];
+        rt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+        if (blend) {  // ENTITY_OUTLINE_BLIT: src alpha, 1 - src alpha (alpha: one, 1 - src alpha for the premultiplied UI layer)
+            rt.BlendEnable = TRUE;
+            rt.SrcBlend = D3D12_BLEND_SRC_ALPHA, rt.DestBlend = D3D12_BLEND_INV_SRC_ALPHA, rt.BlendOp = D3D12_BLEND_OP_ADD;
+            rt.SrcBlendAlpha = D3D12_BLEND_ONE, rt.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA, rt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+        }
+        d.SampleMask = UINT_MAX;
+        d.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+        d.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+        d.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        d.NumRenderTargets = 1;
+        d.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+        d.SampleDesc.Count = 1;
+        return check(device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&out)), "CreateGraphicsPipelineState");
+    };
+    if (!post(g_SobelPS, sizeof(g_SobelPS), false, psoSobel_) || !post(g_BlurPS, sizeof(g_BlurPS), false, psoBlur_) ||
+        !post(g_BlitPS, sizeof(g_BlitPS), true, psoBlit_))
+        return false;
+    D3D12_DESCRIPTOR_HEAP_DESC hd{D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 2, D3D12_DESCRIPTOR_HEAP_FLAG_NONE, 0};
+    return check(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&outlineRtvs_)), "CreateDescriptorHeap");
+}
+
+void EntityRenderer::drawOutline(const PassContext& ctx) {
+    ++outlineFrame_;
+    std::erase_if(outlineRetired_, [&](const auto& r) { return outlineFrame_ > r.first + Renderer::kFrames + 1; });
+    if (glowing_.empty() || !built_ || !postSig_ || !ctx.colorRtv.ptr || !ctx.width || !ctx.height) return;
+    ID3D12Device* device = renderer_->device();
+    ID3D12GraphicsCommandList* list = ctx.list;
+    const u32 w = ctx.width, h = ctx.height;
+    if (w > outlineW_ || h > outlineH_) {  // the targets only grow (the old ones live until the GPU is past them)
+        const u32 nw = std::max(w, outlineW_), nh = std::max(h, outlineH_);
+        const u32 srv = renderer_->allocDescriptors(2);
+        if (srv == UINT32_MAX) return;
+        for (int i = 0; i < 2; ++i) {
+            if (outlineTex_[i]) outlineRetired_.push_back({outlineFrame_, outlineTex_[i]});
+            D3D12_HEAP_PROPERTIES hp{D3D12_HEAP_TYPE_DEFAULT};
+            D3D12_RESOURCE_DESC td{};
+            td.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+            td.Width = nw, td.Height = nh, td.DepthOrArraySize = 1, td.MipLevels = 1;
+            td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            td.SampleDesc.Count = 1;
+            td.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+            D3D12_CLEAR_VALUE cv{DXGI_FORMAT_R8G8B8A8_UNORM, {0, 0, 0, 0}};
+            outlineTex_[i].Reset();
+            if (!check(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &td, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &cv,
+                                                       IID_PPV_ARGS(&outlineTex_[i])),
+                       "CreateCommittedResource")) {
+                outlineW_ = outlineH_ = 0;
+                return;
+            }
+            outlineState_[i] = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
+            sd.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            sd.Texture2D.MipLevels = 1;
+            device->CreateShaderResourceView(outlineTex_[i].Get(), &sd, renderer_->cpuDescriptor(srv + u32(i)));
+            D3D12_CPU_DESCRIPTOR_HANDLE rtv = outlineRtvs_->GetCPUDescriptorHandleForHeapStart();
+            rtv.ptr += size_t(i) * device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+            device->CreateRenderTargetView(outlineTex_[i].Get(), nullptr, rtv);
+        }
+        outlineSrv_ = srv, outlineW_ = nw, outlineH_ = nh;
+    }
+    auto rtvOf = [&](int i) {
+        D3D12_CPU_DESCRIPTOR_HANDLE rtv = outlineRtvs_->GetCPUDescriptorHandleForHeapStart();
+        rtv.ptr += size_t(i) * device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+        return rtv;
+    };
+    auto toState = [&](int i, D3D12_RESOURCE_STATES s) {
+        if (outlineState_[i] == s) return;
+        D3D12_RESOURCE_BARRIER b{};
+        b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        b.Transition.pResource = outlineTex_[i].Get();
+        b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        b.Transition.StateBefore = outlineState_[i], b.Transition.StateAfter = s;
+        list->ResourceBarrier(1, &b);
+        outlineState_[i] = s;
+    };
+    const D3D12_VIEWPORT vp{0, 0, float(w), float(h), 0, 1};
+    const D3D12_RECT scissor{0, 0, LONG(w), LONG(h)};
+    list->RSSetViewports(1, &vp);
+    list->RSSetScissorRects(1, &scissor);
+    ID3D12DescriptorHeap* heaps[] = {renderer_->descriptorHeap()};
+    list->SetDescriptorHeaps(1, heaps);
+
+    // The silhouettes (LevelRenderer: the entity outline target, cleared to transparent, no depth).
+    toState(0, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    const float clear[4] = {0, 0, 0, 0};
+    const D3D12_CPU_DESCRIPTOR_HANDLE t0 = rtvOf(0);
+    list->ClearRenderTargetView(t0, clear, 0, nullptr);
+    list->OMSetRenderTargets(1, &t0, FALSE, nullptr);
+    const D3D12_GPU_VIRTUAL_ADDRESS va = upload_->GetGPUVirtualAddress() + u64(ctx.frame) * kFrameBytes;
+    list->SetGraphicsRootSignature(rootSig_.Get());
+    list->SetGraphicsRootConstantBufferView(0, va + kOutlineConstOffset);
+    list->SetGraphicsRootShaderResourceView(2, quads_->GetGPUVirtualAddress());
+    list->SetGraphicsRootShaderResourceView(3, va + kMatOffset);
+    list->SetGraphicsRootShaderResourceView(4, va + kInstOffset);
+    list->SetGraphicsRootShaderResourceView(5, va + kRefOffset);
+    list->SetGraphicsRootShaderResourceView(6, va + kFreeOffset);
+    list->SetGraphicsRootDescriptorTable(7, renderer_->gpuDescriptor(atlasDescriptor_));
+    list->SetGraphicsRootDescriptorTable(8, ctx.blockTextures);
+    list->SetGraphicsRootShaderResourceView(9, va + kPrevMatOffset);
+    list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    for (int kind = 0; kind < 3; ++kind) {  // model cutout, model translucent, free quads
+        list->SetPipelineState((kind == 2 ? psoOutlineFree_ : psoOutline_).Get());
+        for (const Glow& g : glowing_) {
+            const u32 first = kind == 0 ? g.ref : kind == 1 ? cutoutRefs_ + g.tr : g.free;
+            const u32 count = kind == 0 ? g.refN : kind == 1 ? g.trN : g.freeN;
+            if (!count) continue;
+            const u32 consts[2] = {first, g.color};
+            list->SetGraphicsRoot32BitConstants(1, 2, consts, 0);
+            list->DrawInstanced(count * 6, 1, 0, 0);
+        }
+    }
+
+    // post_effect/entity_outline: entity_sobel, the horizontal and vertical box blur, then the blit over the frame.
+    list->SetGraphicsRootSignature(postSig_.Get());
+    auto pass = [&](ID3D12PipelineState* pso, int in, int out, float dx, float dy) {
+        toState(in, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        D3D12_CPU_DESCRIPTOR_HANDLE target = ctx.colorRtv;
+        if (out >= 0) toState(out, D3D12_RESOURCE_STATE_RENDER_TARGET), target = rtvOf(out);
+        list->OMSetRenderTargets(1, &target, FALSE, nullptr);
+        const float k[8] = {float(w), float(h), float(w) / float(outlineW_), float(h) / float(outlineH_), dx, dy, 0, 0};
+        list->SetGraphicsRoot32BitConstants(0, 8, k, 0);
+        list->SetGraphicsRootDescriptorTable(1, renderer_->gpuDescriptor(outlineSrv_ + u32(in)));
+        list->SetPipelineState(pso);
+        list->DrawInstanced(3, 1, 0, 0);
+    };
+    pass(psoSobel_.Get(), 0, 1, 0, 0);
+    pass(psoBlur_.Get(), 1, 0, 1, 0);
+    pass(psoBlur_.Get(), 0, 1, 0, 1);
+    pass(psoBlit_.Get(), 1, -1, 0, 0);
+    list->OMSetRenderTargets(1, &ctx.colorRtv, FALSE, ctx.dsv.ptr ? &ctx.dsv : nullptr);
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -2382,6 +2577,7 @@ void EntityRenderer::build(const PassContext& ctx) {
         if (en.vehicle >= 0) ridden_.push_back(en.vehicle);
     if (world_.localControl() >= 0) ridden_.push_back(world_.localControl());
     casters_.clear();
+    glowing_.clear();
     built_ = false;
     if ((entities.empty() && !localPlayer_ && !localShadow_) || !mapped_) return;
     frameBase_ = mapped_ + u64(ctx.frame) * kFrameBytes;
@@ -2558,6 +2754,8 @@ void EntityRenderer::build(const PassContext& ctx) {
         k.trN = u32(translucent_.size() / 2) - k.tr;
         k.freeN = freeCount_ - k.free;
         if (shadowMask && (k.refN || k.trN || k.freeN)) casters_.push_back(k);
+        if (!shadowOnly_ && outlineColor && (k.refN || k.trN || k.freeN))
+            if (const int color = outlineColor(e); color >= 0) glowing_.push_back({k.ref, k.refN, k.tr, k.trN, k.free, k.freeN, u32(color)});
     };
     // Entities in view first, then those that only cast a shadow into it (their ranges follow the view's).
     static thread_local std::vector<std::pair<const Entity*, std::array<float, 4>>> shadowOnly;
@@ -2630,7 +2828,7 @@ void EntityRenderer::build(const PassContext& ctx) {
         float motion[4];
         float shadowMat[4][16];
     } k{};
-    static_assert(sizeof(Constants) <= kConstBytes);
+    static_assert(sizeof(Constants) <= kOutlineConstOffset);
     std::memcpy(k.lightmap, ctx.lightmap, sizeof(k.lightmap));
     std::memcpy(k.viewProj, ctx.viewProj, sizeof(k.viewProj));
     std::memcpy(k.fogColor, ctx.fogColor, sizeof(k.fogColor));
@@ -2651,6 +2849,10 @@ void EntityRenderer::build(const PassContext& ctx) {
     std::memcpy(k.motion, ctx.motionScale, sizeof(k.motion));
     if (ctx.shadowMats) std::memcpy(k.shadowMat, ctx.shadowMats, sizeof(k.shadowMat));
     std::memcpy(frameBase_, &k, sizeof(k));
+    if (!glowing_.empty()) {  // the outline pass draws after TAA / upscaling: without the jitter
+        if (ctx.viewProjNoJitter) std::memcpy(k.viewProj, ctx.viewProjNoJitter, sizeof(k.viewProj));
+        std::memcpy(frameBase_ + kOutlineConstOffset, &k, sizeof(k));
+    }
 
     stats_.instances = instCount_;
     stats_.quads = refCount_;
