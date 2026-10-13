@@ -20,6 +20,7 @@ void drawItemTooltip(UiState& s, Canvas& c, const ItemStack& st, const std::vect
 // --- recipe_book.cpp: the recipe book of the inventory, crafting table and furnaces ---
 int recipeBookLeft(UiState& s, const Menu& m, int imageWidth);  // the menu's left edge (the open book moves it right)
 bool recipeBookCovers(const Menu& m, float x, float y, float left, float top, int imageHeight);  // a click on the book
+bool recipeBookHidesMenu(const Menu& m);  // the book open over a window too narrow (widthTooNarrow)
 void recipeBookDrawBackground(UiState& s, Canvas& c, Menu& m, float left);  // the toggle button
 void recipeBookDrawGhosts(UiState& s, Canvas& c, Menu& m, const Layout& l, float left, float top);  // after the slots
 void recipeBookDraw(UiState& s, Canvas& c, Menu& m);                        // the book, over the menu

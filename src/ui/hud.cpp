@@ -202,7 +202,7 @@ void Ui::State::tickHud() {
 // --- items --------------------------------------------------------------------------------------------------
 
 void Ui::State::drawItem(Canvas& c, const ItemStack& s, float x, float y, bool decorations, const char* countOverride,
-                         int playerSlot, float pop) {
+                         int playerSlot, float pop, bool icon) {
     if (s.empty()) return;
     // The item model context: GUI, the local player as the owner and what its state says about this stack (the game
     // compares stack identity: the player inventory slot it is).
@@ -230,7 +230,7 @@ void Ui::State::drawItem(Canvas& c, const ItemStack& s, float x, float y, bool d
         c.scaleBy(1.0f / squeeze, (squeeze + 1.0f) / 2.0f);
         c.translate(-(x + 8), -(y + 12));
     }
-    if (icons.icon(s, uv, &ctx)) {
+    if (icon && icons.icon(s, uv, &ctx)) {
         c.quad(x, y, x + 16, y + 16, uv[0], uv[1], uv[2], uv[3], kWhite, ModeIcon);
         if (items.foil(s)) {  // enchantment glint (the Glint Strength)
             c.setBlend(2);

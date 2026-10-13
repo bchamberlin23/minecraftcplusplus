@@ -330,6 +330,14 @@ int showTutorialToast(const std::string& icon, const Text& title, const Text& me
     return t.handle;
 }
 
+bool customToastActive(const char* kind) {
+    for (const Toast& t : g_queue)
+        if (t.kind == Kind::Custom && t.custom == kind) return true;
+    for (const Toast& t : g_visible)
+        if (t.kind == Kind::Custom && t.custom == kind && !t.hiding) return true;
+    return false;
+}
+
 void showCustomToast(const char* kind, int width, std::function<void(Canvas& c, float x, float y, double shownFor)> draw) {
     for (Toast& t : g_queue)
         if (t.kind == Kind::Custom && t.custom == kind) {

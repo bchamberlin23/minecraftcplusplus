@@ -845,63 +845,68 @@ void Ui::State::drawScreen(Canvas& c) {
             drawEntityFollowsMouse(*this, c, pe, int(left) + 26, int(top) + 8, int(left) + 75, int(top) + 78, 30, 0.0625f, mouseX, mouseY);
     }
     if (station && station->drawBg) station->drawBg(*this, c, m, l, left, top);
-    recipeBookDrawBackground(*this, c, m, left);  // item_ui.h: the recipe book button
-    // Slots.
+    // AbstractRecipeBookScreen: a book over a window too narrow for both shows the background alone (no widgets, slots,
+    // labels or hovering)
     hoveredSlot = -1;
-    for (size_t i = 0; i < l.slots.size(); ++i) {
-        const float sx = left + float(l.slots[i].x), sy = top + float(l.slots[i].y);
-        if (mouseX >= sx - 1 && mouseX < sx + 17 && mouseY >= sy - 1 && mouseY < sy + 17) hoveredSlot = int(i);
-    }
-    // Dragging with a carried stack (mouseDragged): collect slots for quick crafting.
-    if (isQuickCrafting && hoveredSlot >= 0 && !carried.empty() && size_t(hoveredSlot) < m.slots.size() &&
-        std::find(quickCraftSlots.begin(), quickCraftSlots.end(), hoveredSlot) == quickCraftSlots.end() &&
-        (carried.count > int(quickCraftSlots.size()) || quickCraftType == 2)) {
-        // AbstractContainerScreen.shouldAddSlotToQuickCraft: canItemQuickReplace, Slot.mayPlace (menu.canDragTo: always)
-        Sim sim = makeSim(*this, m, carried, creative());
-        if (sim.canQuickReplace(hoveredSlot, carried) && sim.mayPlace(hoveredSlot, carried)) quickCraftSlots.push_back(hoveredSlot);
-    }
-    if (hoveredSlot >= 0)
-        blitSprite(c, sprites.sprite("container/slot_highlight_back"), left + float(l.slots[size_t(hoveredSlot)].x) - 4,
-                   top + float(l.slots[size_t(hoveredSlot)].y) - 4, 24, 24);
-    // Armor slot placeholders and the offhand shield (InventoryMenu empty slot icons).
-    static const char* kEmpty[4] = {"container/slot/helmet", "container/slot/chestplate", "container/slot/leggings", "container/slot/boots"};
-    for (size_t i = 0; i < l.slots.size() && i < m.slots.size(); ++i) {
-        const float sx = left + float(l.slots[i].x), sy = top + float(l.slots[i].y);
-        if (m.type < 0 && m.slots[i].empty()) {
-            if (i >= 5 && i <= 8) blitSprite(c, sprites.sprite(kEmpty[i - 5]), sx, sy, 16, 16);
-            if (i == 45) blitSprite(c, sprites.sprite("container/slot/shield"), sx, sy, 16, 16);
+    if (!recipeBookHidesMenu(m)) {
+        recipeBookDrawBackground(*this, c, m, left);  // item_ui.h: the recipe book button
+        // Slots.
+        hoveredSlot = -1;
+        for (size_t i = 0; i < l.slots.size(); ++i) {
+            const float sx = left + float(l.slots[i].x), sy = top + float(l.slots[i].y);
+            if (mouseX >= sx - 1 && mouseX < sx + 17 && mouseY >= sy - 1 && mouseY < sy + 17) hoveredSlot = int(i);
         }
-        ItemStack shown = m.slots[i];
-        const char* countOverride = nullptr;
-        std::string cnt;
-        // Quick-craft (drag) preview: what each dragged slot will hold.
-        if (isQuickCrafting && !carried.empty() && std::find(quickCraftSlots.begin(), quickCraftSlots.end(), int(i)) != quickCraftSlots.end() &&
-            quickCraftSlots.size() > 1) {
-            const int carry = shown.empty() ? 0 : shown.count;
-            const int per = quickCraftType == 0 ? carried.count / int(quickCraftSlots.size()) : quickCraftType == 1 ? 1 : items.maxStack(carried);
-            const int mx = makeSim(*this, m, carried, creative()).slotMax(int(i), carried);  // min(item max, Slot.getMaxStackSize)
-            const int nc = std::min(per + carry, mx);
-            shown = carried.withCount(nc);
-            if (per + carry > mx) cnt = "\xC2\xA7" "e" + std::to_string(nc), countOverride = cnt.c_str();  // clamped
-            c.fill(sx, sy, sx + 16, sy + 16, 0x80FFFFFF);  // extractSlot: the quick-craft slot's white wash
+        // Dragging with a carried stack (mouseDragged): collect slots for quick crafting.
+        if (isQuickCrafting && hoveredSlot >= 0 && !carried.empty() && size_t(hoveredSlot) < m.slots.size() &&
+            std::find(quickCraftSlots.begin(), quickCraftSlots.end(), hoveredSlot) == quickCraftSlots.end() &&
+            (carried.count > int(quickCraftSlots.size()) || quickCraftType == 2)) {
+            // AbstractContainerScreen.shouldAddSlotToQuickCraft: canItemQuickReplace, Slot.mayPlace (menu.canDragTo: always)
+            Sim sim = makeSim(*this, m, carried, creative());
+            if (sim.canQuickReplace(hoveredSlot, carried) && sim.mayPlace(hoveredSlot, carried)) quickCraftSlots.push_back(hoveredSlot);
         }
-        // The player inventory slot this is: the inventory menu itself, else a container's last 36 slots (27 + hotbar).
-        int playerSlot = -1;
-        const int n = int(m.slots.size());
-        if (m.type < 0) playerSlot = int(i);
-        else if (int(i) >= n - 36) playerSlot = int(i) - (n - 36) < 27 ? 9 + int(i) - (n - 36) : 36 + int(i) - (n - 36) - 27;
-        drawItem(c, shown, sx, sy, true, countOverride, shown.sameItemSameComponents(m.slots[i]) ? playerSlot : -1);
+        if (hoveredSlot >= 0)
+            blitSprite(c, sprites.sprite("container/slot_highlight_back"), left + float(l.slots[size_t(hoveredSlot)].x) - 4,
+                       top + float(l.slots[size_t(hoveredSlot)].y) - 4, 24, 24);
+        // Armor slot placeholders and the offhand shield (InventoryMenu empty slot icons).
+        static const char* kEmpty[4] = {"container/slot/helmet", "container/slot/chestplate", "container/slot/leggings", "container/slot/boots"};
+        for (size_t i = 0; i < l.slots.size() && i < m.slots.size(); ++i) {
+            const float sx = left + float(l.slots[i].x), sy = top + float(l.slots[i].y);
+            if (m.type < 0 && m.slots[i].empty()) {
+                if (i >= 5 && i <= 8) blitSprite(c, sprites.sprite(kEmpty[i - 5]), sx, sy, 16, 16);
+                if (i == 45) blitSprite(c, sprites.sprite("container/slot/shield"), sx, sy, 16, 16);
+            }
+            ItemStack shown = m.slots[i];
+            const char* countOverride = nullptr;
+            std::string cnt;
+            // Quick-craft (drag) preview: what each dragged slot will hold.
+            if (isQuickCrafting && !carried.empty() && std::find(quickCraftSlots.begin(), quickCraftSlots.end(), int(i)) != quickCraftSlots.end() &&
+                quickCraftSlots.size() > 1) {
+                const int carry = shown.empty() ? 0 : shown.count;
+                const int per = quickCraftType == 0 ? carried.count / int(quickCraftSlots.size()) : quickCraftType == 1 ? 1 : items.maxStack(carried);
+                const int mx = makeSim(*this, m, carried, creative()).slotMax(int(i), carried);  // min(item max, Slot.getMaxStackSize)
+                const int nc = std::min(per + carry, mx);
+                shown = carried.withCount(nc);
+                if (per + carry > mx) cnt = "\xC2\xA7" "e" + std::to_string(nc), countOverride = cnt.c_str();  // clamped
+                c.fill(sx, sy, sx + 16, sy + 16, 0x80FFFFFF);  // extractSlot: the quick-craft slot's white wash
+            }
+            // The player inventory slot this is: the inventory menu itself, else a container's last 36 slots (27 + hotbar).
+            int playerSlot = -1;
+            const int n = int(m.slots.size());
+            if (m.type < 0) playerSlot = int(i);
+            else if (int(i) >= n - 36) playerSlot = int(i) - (n - 36) < 27 ? 9 + int(i) - (n - 36) : 36 + int(i) - (n - 36) - 27;
+            drawItem(c, shown, sx, sy, true, countOverride, shown.sameItemSameComponents(m.slots[i]) ? playerSlot : -1);
+        }
+        recipeBookDrawGhosts(*this, c, m, l, left, top);  // item_ui.h
+        if (hoveredSlot >= 0)
+            blitSprite(c, sprites.sprite("container/slot_highlight_front"), left + float(l.slots[size_t(hoveredSlot)].x) - 4,
+                       top + float(l.slots[size_t(hoveredSlot)].y) - 4, 24, 24);
+        // Labels.
+        const Text title = m.type < 0 ? Text(res.translate("container.crafting")) : m.title;
+        const float tx = l.titleX >= 0 ? float(l.titleX) : float((l.width - font.width(title)) / 2);
+        if (l.titleY > -1000) drawText(c, title, left + tx, top + float(l.titleY), kLabel, false);
+        if (l.invLabelY > -1000) drawText(c, Text(res.translate("container.inventory")), left + float(l.invLabelX), top + float(l.invLabelY), kLabel, false);
+        if (station && station->drawFg) station->drawFg(*this, c, m, l, left, top);
     }
-    recipeBookDrawGhosts(*this, c, m, l, left, top);  // item_ui.h
-    if (hoveredSlot >= 0)
-        blitSprite(c, sprites.sprite("container/slot_highlight_front"), left + float(l.slots[size_t(hoveredSlot)].x) - 4,
-                   top + float(l.slots[size_t(hoveredSlot)].y) - 4, 24, 24);
-    // Labels.
-    const Text title = m.type < 0 ? Text(res.translate("container.crafting")) : m.title;
-    const float tx = l.titleX >= 0 ? float(l.titleX) : float((l.width - font.width(title)) / 2);
-    if (l.titleY > -1000) drawText(c, title, left + tx, top + float(l.titleY), kLabel, false);
-    if (l.invLabelY > -1000) drawText(c, Text(res.translate("container.inventory")), left + float(l.invLabelX), top + float(l.invLabelY), kLabel, false);
-    if (station && station->drawFg) station->drawFg(*this, c, m, l, left, top);
     recipeBookDraw(*this, c, m);  // item_ui.h: over the menu
     // Carried item, then the tooltip.
     if (!carried.empty()) {
@@ -1021,7 +1026,9 @@ void Ui::State::screenInput(const Window::InputEvent& e) {
         }
         return -1;
     };
-    const int slot = slotAt(mouseX, mouseY);
+    const bool hidden = recipeBookHidesMenu(m);  // the book over a narrow window: nothing of the menu under the mouse
+    if (hidden && e.type == E::Button && e.down) return;  // mouseClicked: consumed
+    const int slot = hidden ? -1 : slotAt(mouseX, mouseY);
     const bool outside = (mouseX < left || mouseY < top || mouseX >= left + l.width || mouseY >= top + l.height) &&
                          !recipeBookCovers(m, mouseX, mouseY, left, top, l.height);
     enum { Pickup, QuickMove, Swap, Clone, Throw, QuickCraft, PickupAll };

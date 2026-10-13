@@ -5,6 +5,7 @@
 #include "audio/audio.h"
 #include "ui/item_props.h"
 #include "ui/item_ui.h"
+#include "ui/options_list.h"
 #include "ui/toasts.h"
 
 #include <cmath>
@@ -245,6 +246,7 @@ void rebuildCollections() {
 std::vector<std::pair<ItemStack, ItemStack>> g_toastItems;
 
 void recipeToast(UiState& s, const RecipeDisplay& d) {
+    if (!customToastActive("recipe")) g_toastItems.clear();  // RecipeToast.addOrUpdate: a new toast starts its own list
     std::vector<ItemStack> station = resolve(s, d.station), result = resolve(s, d.result);
     g_toastItems.push_back({station.empty() ? ItemStack{} : station[0], result.empty() ? ItemStack{} : result[0]});
     UiState* sp = &s;
@@ -281,7 +283,6 @@ void registerHandlers(UiState& s, net::Client& client) {
         if (!r.ok) LOG("ui: recipe_book_add: malformed after %zu entries", entries.size());
         sp->post([sp, entries = std::move(entries), replace]() mutable {
             if (replace) g_book.known.clear(), g_book.highlight.clear();
-            g_toastItems.clear();
             for (auto& [e, flags] : entries) {
                 if (flags & 2) g_book.highlight.insert(e.id);
                 if (flags & 1) recipeToast(*sp, e.display);
@@ -385,6 +386,7 @@ struct Component {  // RecipeBookComponent
     int xOffset = 86;
     double time = 0;  // ticks (SlotSelectTime: floor(time / 30))
     int selectedTab = 0;
+    int screenOpens = -1;  // UiState.screenOpens when this component was built
     UiState::TextField search;
     bool searchFocused = false, ignoreText = false;
     std::string lastSearch;
@@ -549,11 +551,27 @@ void updateCollections(UiState& s, bool resetPage) {  // RecipeBookComponent.upd
         const Collection& col = g_book.collections[size_t(ci)];
         if (!col.hasAnySelected()) continue;
         if (filtering && !col.hasCraftable()) continue;
-        if (!query.empty()) {
+        if (!query.empty()) {  // FullTextSearchTree: tooltip text, or namespace:path (the path also in the text)
+            const size_t colon = query.find(':');
+            auto trim = [](const std::string& v) {
+                const size_t a = v.find_first_not_of(' '), b = v.find_last_not_of(' ');
+                return a == std::string::npos ? std::string() : v.substr(a, b - a + 1);
+            };
+            const std::string nsq = colon == std::string::npos ? std::string() : trim(query.substr(0, colon));
+            const std::string pathq = colon == std::string::npos ? query : trim(query.substr(colon + 1));
             bool match = false;
             for (int id : col.entries) {
-                for (const ItemStack& st : resolve(s, g_book.known[id].display.result))
-                    if (searchText(s, st).find(query) != std::string::npos) match = true;
+                for (const ItemStack& st : resolve(s, g_book.known[id].display.result)) {
+                    const std::string text = searchText(s, st);
+                    if (colon == std::string::npos) {
+                        match |= text.find(query) != std::string::npos;
+                    } else {
+                        const std::string item = s.items.name(st.item);
+                        const size_t c = item.find(':');
+                        match |= item.substr(0, c).find(nsq) != std::string::npos &&
+                                 (item.substr(c + 1).find(pathq) != std::string::npos || text.find(pathq) != std::string::npos);
+                    }
+                }
                 if (match) break;
             }
             if (!match) continue;
@@ -597,7 +615,15 @@ std::vector<std::pair<int, int>> contentsKey(const Menu& m) {
 // Keeps the component in step with the menu, the book data and the contents (init, tick, recipesUpdated).
 void refresh(UiState& s, const Menu& m) {
     const int type = bookTypeOf(m);
-    const bool newMenu = g.containerId != m.containerId || g.menuType != m.typeName;
+    // a new screen builds a new RecipeBookComponent: the search tab, no search text, the first page
+    const bool newScreen = g.screenOpens != s.screenOpens;
+    const bool newMenu = newScreen || g.containerId != m.containerId || g.menuType != m.typeName;
+    if (newScreen) {
+        g.screenOpens = s.screenOpens;
+        g.selectedTab = 0, g.currentPage = 0;
+        g.search = UiState::TextField{};
+        g.search.maxLength = 50;  // RecipeBookComponent: setMaxLength(50)
+    }
     if (newMenu) {  // init
         g.containerId = m.containerId, g.menuType = m.typeName;
         g.bookType = type;
@@ -625,7 +651,7 @@ void refresh(UiState& s, const Menu& m) {
         selectRecipes(s, m);
         if (!tabVisible(g.selectedTab)) g.selectedTab = 0;
         if (rebuilt)  // startAnimation: a tab with a highlighted recipe
-            for (size_t t = 0; t < tabsFor(g.bookType).size(); ++t)
+            for (size_t t = 1; t < tabsFor(g.bookType).size(); ++t)  // the category tabs (not the search tab)
                 for (int ci : tabCollections(int(t)))
                     for (int id : selectedEntries(g_book.collections[size_t(ci)], g_book.filtering[g.bookType]))
                         if (g_book.highlight.count(id)) g.tabAnimation[t] = 15.0f;
@@ -785,6 +811,8 @@ bool recipeBookCovers(const Menu& m, float x, float y, float left, float top, in
     return left - 147 < x && x < left && top < y && y < top + float(imageHeight);
 }
 
+bool recipeBookHidesMenu(const Menu& m) { return bookTypeOf(m) >= 0 && g.visible && g.narrow; }
+
 void recipeBookDrawBackground(UiState& s, Canvas& c, Menu& m, float left) {  // the toggle button (a screen widget)
     if (bookTypeOf(m) < 0) return;
     const ButtonPos b = toggleButton(s, m, left);
@@ -803,7 +831,8 @@ void recipeBookDrawGhosts(UiState& s, Canvas& c, Menu& m, const Layout& l, float
         const ItemStack& st = ghost.items[size_t(slotSelectTime()) % ghost.items.size()];
         s.drawItem(c, st, x, y, false);
         c.fill(x, y, x + 16, y + 16, 0x30FFFFFF);
-        if (ghost.result) s.drawItem(c, st, x, y, true, st.count == 1 ? nullptr : std::to_string(st.count).c_str());
+        if (ghost.result)  // GhostSlots: fakeItem, the tint, then itemDecorations alone
+            s.drawItem(c, st, x, y, true, st.count == 1 ? nullptr : std::to_string(st.count).c_str(), -1, 0, false);
     }
 }
 
@@ -931,7 +960,7 @@ void recipeBookTooltip(UiState& s, Canvas& c, Menu& m, int hoveredSlot) {
             return;
         }
     if (hoveredSlot >= 0)  // GhostSlots.extractTooltip
-        if (auto it = g.ghosts.find(hoveredSlot); it != g.ghosts.end() && size_t(hoveredSlot) < m.slots.size() && m.slots[size_t(hoveredSlot)].empty()) {
+        if (auto it = g.ghosts.find(hoveredSlot); it != g.ghosts.end() && size_t(hoveredSlot) < m.slots.size()) {
             const ItemStack& st = it->second.items[size_t(slotSelectTime()) % it->second.items.size()];
             s.drawTooltip(c, s.items.tooltip(st, s.settings.advancedItemTooltips), mx, my, nullptr, true, tooltipStyle(s.items, st));
             return;
@@ -970,7 +999,7 @@ bool recipeBookInput(UiState& s, const InputEvent& e, Menu& m, float left) {
         s.textFieldKey(g.search, e);
     } else if (e.type == InputEvent::Key && e.down) {
         g.ignoreText = false;
-        if (e.code == VK_ESCAPE && !g.searchFocused && g.narrow) {
+        if (e.code == VK_ESCAPE && g.narrow) {  // keyPressed: Esc closes a book over the screen first
             setVisible(s, false);
             return true;
         }
@@ -999,15 +1028,16 @@ bool recipeBookInput(UiState& s, const InputEvent& e, Menu& m, float left) {
             if (left)
                 for (const Overlay::Button& b : o.buttons)
                     if (inRect(mx, my, b.x, b.y, 24, 24)) clicked = b.recipe;
-            if (clicked >= 0) {
-                audio::playUiClick();
-                const int col = o.collection;
-                if (tryPlace(s, m, col, clicked, s.window->keyDown(VK_SHIFT))) {
-                    g.lastCollection = col, g.lastRecipe = clicked;
-                    if (g.narrow) setVisible(s, false);
-                }
+            if (clicked < 0) {  // OverlayRecipeComponent.mouseClicked missed: it closes
+                o.visible = false;
+                return true;
             }
-            o.visible = false;
+            // a recipe of the overlay (which stays up): placed, or the click goes on when it cannot be
+            audio::playUiClick();
+            const int col = o.collection;
+            if (!tryPlace(s, m, col, clicked, s.window->keyDown(VK_SHIFT))) return false;
+            g.lastCollection = col, g.lastRecipe = clicked;
+            if (g.narrow) setVisible(s, false);  // !isOffsetNextToMainGUI
             return true;
         }
         if (left && g.totalPages > 1 && g.currentPage < g.totalPages - 1 && inRect(mx, my, xo + 93, yo + 137, 12, 17)) {
@@ -1031,10 +1061,9 @@ bool recipeBookInput(UiState& s, const InputEvent& e, Menu& m, float left) {
             const ButtonView v = viewOf(s, ci);
             audio::playUiClick();
             if (left && v.current >= 0) {
-                if (tryPlace(s, m, ci, v.current, s.window->keyDown(VK_SHIFT))) {
-                    g.lastCollection = ci, g.lastRecipe = v.current;
-                    if (g.narrow) setVisible(s, false);
-                }
+                if (!tryPlace(s, m, ci, v.current, s.window->keyDown(VK_SHIFT))) return false;  // tryPlaceRecipe refused
+                g.lastCollection = ci, g.lastRecipe = v.current;
+                if (g.narrow) setVisible(s, false);
             } else if (right && v.ids.size() > 1) {
                 openOverlay(s, ci, bx, by);
             }
@@ -1078,6 +1107,11 @@ bool recipeBookInput(UiState& s, const InputEvent& e, Menu& m, float left) {
     if (q != g.lastSearch) {
         g.lastSearch = q;
         updateCollections(s, false);
+        // pirateSpeechForThePeople: "excitedze" switches to Pirate Speak (en_pt) when it is there and not already on
+        if (q == "excitedze" && s.settings.lang != "en_pt" && s.res.languages().count("en_pt")) {
+            setLanguage(s, "en_pt");
+            s.settings.save();
+        }
     }
     return true;
 }

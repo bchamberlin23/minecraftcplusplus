@@ -403,9 +403,11 @@ struct Ui::State {
     // playerSlot: the player inventory menu slot the stack is (item model properties compare stack identity: the
     // selected stack, the stack in use); -1 none.
     // pop: ItemStack.popTime - partialTick (> 0: the item squeezed like Hud.extractSlot, its decorations not).
+    // icon false: the decorations alone (GuiGraphics.itemDecorations).
     void drawItem(Canvas& c, const ItemStack& s, float x, float y, bool decorations = true, const char* countOverride = nullptr,
-                  int playerSlot = -1, float pop = 0);
+                  int playerSlot = -1, float pop = 0, bool icon = true);
     int popTime[46] = {};  // ItemStack.popTime of the player inventory menu's slots (hotbar stacks that grew)
+    int screenOpens = 0;   // counts screens opened (a screen built anew: its components start over)
     // GuiGraphicsExtractor tooltips: item tooltips (extraSpaceAfterFirstLine) leave 2 px under the first line; style:
     // TOOLTIP_STYLE ("" the default tooltip/background and frame sprites).
     // widget (x, y, w, h): a widget's own tooltip, placed by MenuTooltipPositioner beside the mouse and below or above

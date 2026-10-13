@@ -287,6 +287,7 @@ int Ui::State::guiScale() const {
 
 void Ui::State::openScreen(Screen s) {
     const bool wasNone = screen == Screen::None;
+    if (screen != s) ++screenOpens;
     dragField = nullptr;
     if (screen == Screen::Video && s != Screen::Video) window->changeFullscreenVideoMode();  // VideoSettingsScreen.onClose
     if (screen == Screen::Chat && s != Screen::Chat) leaveChat();
