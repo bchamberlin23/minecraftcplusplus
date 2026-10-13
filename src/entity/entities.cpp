@@ -3,6 +3,7 @@
 
 #include "assets/assets.h"
 #include "assets/game_reports.h"
+#include "audio/audio.h"
 #include "net/client.h"
 #include "net/protocol.h"
 #include "ui/items.h"
@@ -995,8 +996,17 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
     }
     auto it = entities_.find(ev.id);
     if (ev.type == EventType::TakeItem) {
-        // ClientPacketListener.handleTakeItemEntity: a fully collected item flies to the collector (ItemPickupParticle)
-        // and goes after 3 ticks; a partly collected stack shrinks.
+        // ClientPacketListener.handleTakeItemEntity: the pickup sound (experience orbs their own), then a fully collected
+        // item flies to the collector (ItemPickupParticle) and goes after 3 ticks; a partly collected stack shrinks.
+        if (it != entities_.end() && !it->second.silent)
+            if (audio::AudioSystem* a = audio::instance()) {
+                static std::mt19937 rng(0x7A4E);
+                std::uniform_real_distribution<float> u(0.0f, 1.0f);
+                const bool orb = it->second.info && it->second.info->name == "minecraft:experience_orb";
+                const float pitch = orb ? (u(rng) - u(rng)) * 0.35f + 0.9f : (u(rng) - u(rng)) * 1.4f + 2.0f;
+                a->play(orb ? "minecraft:entity.experience_orb.pickup" : "minecraft:entity.item.pickup", audio::Category::Player,
+                        it->second.pos[0], it->second.pos[1], it->second.pos[2], orb ? 0.1f : 0.2f, pitch);
+            }
         if (it != entities_.end() && it->second.category == Category::Item && it->second.pickupBy == INT_MIN) {
             Entity& item = it->second;
             if (ev.b > 0 && item.itemCount > ev.b) item.itemCount -= ev.b;

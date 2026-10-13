@@ -1,5 +1,7 @@
 #include "entity/visuals.h"
 
+#include "audio/audio.h"
+
 #include "assets/asset_source.h"
 #include "assets/assets.h"
 #include "blockentity/block_entities.h"
@@ -2278,7 +2280,10 @@ void Visuals::Impl::entityEffect(const Entity& e, int event, bool animate) {
         }
         return;
     }
-    if (event == 35) {  // totem of undying
+    if (event == 35) {  // totem of undying: the emitter and TOTEM_USE in the entity's sound source
+        if (audio::AudioSystem* a = audio::instance())
+            a->play("minecraft:item.totem.use", e.category == ent::Category::Player ? audio::Category::Player : audio::Category::Hostile,
+                    e.pos[0], e.pos[1], e.pos[2], 1.0f, 1.0f);
         emitters.push_back({e.id, "totem_of_undying", 0, 30});
         if (!emit(emitters.back())) emitters.pop_back();
         return;

@@ -212,6 +212,16 @@ void Gameplay::attach(net::Client& client) {
         const float param = r.f32();
         if (r.ok && (type == 1 || type == 2 || type == 7))
             post([this, type, param] { rainLevel_ = type == 1 ? 0.0f : type == 2 ? 1.0f : std::clamp(param, 0.0f, 1.0f); });
+        // PLAY_ARROW_HIT_SOUND (6), PUFFER_FISH_STING (9), GUARDIAN_ELDER_EFFECT (10, param 1: the curse sound)
+        if (r.ok && (type == 6 || type == 9 || (type == 10 && param == 1.0f)))
+            post([this, type] {
+                audio::AudioSystem* a = audio::instance();
+                if (!a || !game_) return;
+                const Player& p = game_->player();
+                if (type == 6) a->play("minecraft:entity.arrow.hit_player", audio::Category::Player, p.pos[0], p.pos[1] + 1.62, p.pos[2], 0.18f, 0.45f);
+                else if (type == 9) a->play("minecraft:entity.puffer_fish.sting", audio::Category::Neutral, p.pos[0], p.pos[1], p.pos[2], 1.0f, 1.0f);
+                else a->play("minecraft:entity.elder_guardian.curse", audio::Category::Hostile, p.pos[0], p.pos[1], p.pos[2], 1.0f, 1.0f);
+            });
     });
     // ClientboundSetCameraPacket: the entity the view follows (handleSetCamera: only an entity we know).
     client.onPlayPeek("set_camera", [this](net::Reader& r) {
