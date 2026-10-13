@@ -198,6 +198,7 @@ struct Ui::State {
     int waterVisionTime = 0;                          // LocalPlayer.waterVisionTime
     bool eyeInWater = false;                          // this tick
     float portalIntensity = 0, portalIntensityO = 0;  // LocalPlayer.portalEffectIntensity (nether portal)
+    int lastBubblePopSound = 0;  // Hud.lastBubblePopSoundPlayed
     float spinTime = 0, spinSpeed = 0;                // LocalPlayer.spinningEffectTime / spinningEffectSpeed
     bool onFire = false;                              // our shared flag 0 (Entity.isOnFire on the client)
     std::vector<std::string> postEffects;             // ClientboundPostEffectsPacket: the player's active post effects

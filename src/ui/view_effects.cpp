@@ -5,6 +5,7 @@
 //  - ScreenEffectRenderer's 3D screen effects, drawn first (in-wall block, underwater texture, on fire) and the camera
 //    overlays of Hud.extractCameraOverlays that are not elsewhere (carved pumpkin, nether portal).
 #include "assets/assets.h"
+#include "audio/audio.h"
 #include "render/renderer.h"
 #include "ui/gameplay_hud.h"
 #include "ui/ui_state.h"
@@ -83,6 +84,12 @@ void Ui::State::tickViewEffects(bool eyeWater) {
                 for (int z = int(std::floor(b.min[2] + 1e-5)); z <= int(std::floor(b.max[2] - 1e-5)) && !inPortal; ++z)
                     inPortal = registry->name(world->block(x, y, z)).starts_with("minecraft:nether_portal");
     }
+    if (inPortal && portalIntensity == 0.0f)  // SimpleSoundInstance.forLocalAmbience(PORTAL_TRIGGER, 0.8 .. 1.2, 0.25)
+        if (audio::AudioSystem* a = audio::instance()) {
+            const CameraState c = game->camera();
+            a->play("minecraft:block.portal.trigger", audio::Category::Ambient, c.x, c.y, c.z, 0.25f,
+                    float(std::rand() % 1000) / 1000.0f * 0.4f + 0.8f);
+        }
     const float step = inPortal ? 0.0125f : portalIntensity > 0.0f ? -0.05f : 0.0f;
     portalIntensity = std::clamp(portalIntensity + step, 0.0f, 1.0f);
     // tickSpinningEffect.

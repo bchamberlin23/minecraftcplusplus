@@ -365,10 +365,21 @@ void Ui::State::drawHud(Canvas& c) {
             auto bubble = [&](int ticks, int offset) { return int(std::ceil(float((ticks + offset) * 10) / float(maxA))); };
             const int full = bubble(cur, -2), popping = bubble(cur, 0);
             const int empty = 10 - bubble(cur, cur != 0 && underWater ? 1 : 0);
+            if (!underWater) lastBubblePopSound = 0;
             for (int b = 1; b <= 10; ++b) {
                 const float bx = float(xRight - (b - 1) * 8 - 9);
                 if (b <= full) blitSprite(c, sprites.sprite("hud/air"), bx, float(yAir), 9, 9);
-                else if (full != popping && b == popping && underWater) blitSprite(c, sprites.sprite("hud/air_bursting"), bx, float(yAir), 9, 9);
+                else if (full != popping && b == popping && underWater) {
+                    blitSprite(c, sprites.sprite("hud/air_bursting"), bx, float(yAir), 9, 9);
+                    if (lastBubblePopSound != b) {  // Hud.playAirBubblePoppedSound: louder / higher as the air runs out
+                        lastBubblePopSound = b;
+                        if (audio::AudioSystem* a = audio::instance()) {
+                            const Player& pl = game->player();
+                            a->play("minecraft:ui.hud.bubble_pop", audio::Category::Player, pl.pos[0], pl.pos[1], pl.pos[2],
+                                    0.5f + 0.1f * float(std::max(0, empty - 3 + 1)), 1.0f + 0.1f * float(std::max(0, empty - 5 + 1)));
+                        }
+                    }
+                }
                 else if (b > 10 - empty) blitSprite(c, sprites.sprite("hud/air_empty"), bx, float(yAir), 9, 9);
             }
         }
