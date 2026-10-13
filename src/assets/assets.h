@@ -126,6 +126,9 @@ public:
     const Box& box(u32 i) const { return boxes_[i]; }
     // The model variant of state `id` at block (x, y, z), seeded like ModelBlockRenderer (null: a single model).
     const BlockVariant* variantAt(u16 id, i32 x, i32 y, i32 z) const;
+    // The variant collectParts picks from a random seeded with `seed` (BlockModelResolver: 42 for block displays,
+    // carried and minecart blocks).
+    const BlockVariant* variantSeeded(u16 id, i64 seed) const;
     // BlockState.getOffset at block (x, z): the model / shape offset in blocks.
     static void offset(const BlockInfo& b, i32 x, i32 z, float out[3]);
     u16 waterId() const { return waterId_; }

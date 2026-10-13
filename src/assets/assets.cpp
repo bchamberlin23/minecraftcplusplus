@@ -600,9 +600,12 @@ BlockRegistry::~BlockRegistry() = default;
 u32 BlockRegistry::textureCount() const { return impl_->texCount; }
 
 const BlockVariant* BlockRegistry::variantAt(u16 id, i32 x, i32 y, i32 z) const {
+    return variantSeeded(id, wg::positionSeed(x, y, z));  // ModelBlockRenderer.tesselateBlock: state.getSeed(pos)
+}
+const BlockVariant* BlockRegistry::variantSeeded(u16 id, i64 seed) const {
     const BlockInfo& b = blocks_[id];
     if (b.variantCount < 2) return nullptr;
-    wg::LegacyRandom random(wg::positionSeed(x, y, z));  // ModelBlockRenderer.tesselateBlock: state.getSeed(pos)
+    wg::LegacyRandom random(seed);
     u32 index = 0;
     if (b.variantMultipart) {  // MultiPartModel.collectParts: one seed for every part
         random.setSeed(random.nextLong());

@@ -1411,7 +1411,7 @@ void EntityRenderer::blockDecorations(const Entity& e, const TypeDef& d, const M
         return it->second;
     };
     auto emit = [&](u16 block, const M34& mm, u32 ov) {
-        if (block) emitBlock(block, *reinterpret_cast<const Mat34*>(&mm), light, ov);
+        if (block) emitBlock(block, *reinterpret_cast<const Mat34*>(&mm), light, ov, reg.variantSeeded(block, 42));  // BlockModelResolver
     };
     auto part = [&](std::string_view name, M34& out) {
         const int i = m.part(name);
@@ -2773,7 +2773,7 @@ void EntityRenderer::minecartContents(const Entity& e, float pt, const Mat34& ro
         layers[layerCount++] = {chestModel_, chestTex_, kWhite, u16(DisplayBlock | NoOverlay)};
         return;
     }
-    emitBlock(block, *reinterpret_cast<const Mat34*>(&m), light, overlay);
+    emitBlock(block, *reinterpret_cast<const Mat34*>(&m), light, overlay, reg.variantSeeded(block, 42));  // BlockModelResolver
 }
 
 void EntityRenderer::freeEntity(const Entity& e, const TypeDef& d, float pt, const double cam[3], u32 light,
@@ -2786,7 +2786,8 @@ void EntityRenderer::freeEntity(const Entity& e, const TypeDef& d, float pt, con
         M34 m;
         if (!block || !displayMatrix(e, pt, camYaw_, camPitch_, m.m)) return;
         m.m[3] += float(p[0]), m.m[7] += float(p[1]), m.m[11] += float(p[2]);
-        emitBlock(block, *reinterpret_cast<const Mat34*>(&m), displayLight(e, light), 0);
+        emitBlock(block, *reinterpret_cast<const Mat34*>(&m), displayLight(e, light), 0,
+                  world_.registry().variantSeeded(block, 42));  // BlockModelResolver
         return;
     }
     if (d.kind == Kind::Block) {
@@ -3245,8 +3246,11 @@ void EntityRenderer::build(const PassContext& ctx) {
             u32 light = 0xF0;
             if (t.y >= world.minSectionY() * 16 && t.y < (world.maxSectionY() + 1) * 16)
                 light = world.light(t.x >> 4, t.y >> 4, t.z >> 4).at(t.x & 15, t.y & 15, t.z & 15);
-            M34 m = translate(float(t.x - cam[0]), float(t.y - cam[1]), float(t.z - cam[2]));
-            emitBlock(block, *reinterpret_cast<const Mat34*>(&m), light, 0);
+            // MovingBlockFeatureRenderer: the variant seeded by the position, the block's offset there
+            float off[3];
+            BlockRegistry::offset(world_.registry().infos()[block], t.x, t.z, off);
+            M34 m = translate(float(t.x - cam[0]) + off[0], float(t.y - cam[1]) + off[1], float(t.z - cam[2]) + off[2]);
+            emitBlock(block, *reinterpret_cast<const Mat34*>(&m), light, 0, world_.registry().variantAt(block, t.x, t.y, t.z));
         }
     }
     // ElderGuardianParticleGroup: the elder guardian in front of the camera, tilting down and fading in and out over 30

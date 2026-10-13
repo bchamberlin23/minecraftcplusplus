@@ -1634,7 +1634,8 @@ int partIndex(const ent::Model& m, std::string_view name) {
 }
 
 // Block faces / model quads of a block state in block-local [0,1] space (items shown as blocks).
-void emitBlockGeometry(const BlockRegistry& reg, u16 block, const M34& m, u32 light, std::vector<BeQuad>& out) {
+void emitBlockGeometry(const BlockRegistry& reg, u16 block, const M34& m, u32 light, std::vector<BeQuad>& out,
+                       const BlockVariant* variant = nullptr) {
     const BlockInfo& b = reg.infos()[block];
     static const float kNormals[6][3] = {{0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}};
     // Double-sided (both windings): the block's own face winding does not matter here.
@@ -1657,7 +1658,7 @@ void emitBlockGeometry(const BlockRegistry& reg, u16 block, const M34& m, u32 li
     };
     if (b.kind == KindCube) {
         for (int f = 0; f < 6; ++f) {
-            const CubeFace& face = b.faces[f];
+            const CubeFace& face = variant ? variant->faces[f] : b.faces[f];
             const float* nrm = kNormals[f];
             const float axisA[3] = {f < 4 ? 1.0f : 0.0f, 0, f < 4 ? 0.0f : 1.0f};
             const float axisB[3] = {0, f < 2 ? 0.0f : 1.0f, f < 2 ? 1.0f : 0.0f};
@@ -1684,8 +1685,9 @@ void emitBlockGeometry(const BlockRegistry& reg, u16 block, const M34& m, u32 li
             push(pos, uv, nrm, face.tex, face.tint);
         }
     } else if (b.kind == KindModel) {
-        for (u32 i = 0; i < b.quadCount; ++i) {
-            const ModelQuad& q = reg.modelQuad(b.quadFirst + i);
+        const u32 first = variant ? variant->quadFirst : b.quadFirst, count = variant ? variant->quadCount : b.quadCount;
+        for (u32 i = 0; i < count; ++i) {
+            const ModelQuad& q = reg.modelQuad(first + i);
             float pos[4][3], uv[4][2];
             static const int kOrder[4] = {0, 1, 3, 2};  // Z order -> perimeter
             for (int c = 0; c < 4; ++c) {
@@ -1756,14 +1758,21 @@ void BlockEntityRenderer::emitMoving(Emit& e, const Moving& m, double now) const
         faceLight[d] = u8(std::max(l & 0xF0, center & 0xF0) | std::max(l & 15, center & 15));
     }
     const float o[3] = {float(m.x - e.origin[0]), float(m.y - e.origin[1]), float(m.z - e.origin[2])};
+    // PistonHeadRenderer.createMovingBlock: seeded and offset at the cell the block moves from (the base: the piston's)
+    const int back = m.extending ? -1 : 1;
+    const i32 from[3] = {m.x + stepX(m.dir) * back, m.y + stepY(m.dir) * back, m.z + stepZ(m.dir) * back};
     thread_local std::vector<BeQuad> quads;
     for (int k = 0; k < 2; ++k) {
         const u16 b = k ? base : block;
         if (!b) continue;
         quads.clear();
-        const M34 t = k ? translate(o[0], o[1], o[2])
-                        : translate(o[0] + stepX(m.dir) * ext, o[1] + stepY(m.dir) * ext, o[2] + stepZ(m.dir) * ext);
-        emitBlockGeometry(registry_, b, t, center, quads);
+        float off[3];
+        BlockRegistry::offset(registry_.infos()[b], k ? m.x : from[0], k ? m.z : from[2], off);
+        const M34 t = k ? translate(o[0] + off[0], o[1] + off[1], o[2] + off[2])
+                        : translate(o[0] + stepX(m.dir) * ext + off[0], o[1] + stepY(m.dir) * ext + off[1],
+                                    o[2] + stepZ(m.dir) * ext + off[2]);
+        emitBlockGeometry(registry_, b, t, center, quads,
+                          k ? registry_.variantAt(b, m.x, m.y, m.z) : registry_.variantAt(b, from[0], from[1], from[2]));
         for (BeQuad& q : quads) {
             const int n[3] = {i8(q.normal & 255), i8((q.normal >> 8) & 255), i8((q.normal >> 16) & 255)};
             const int axis = std::abs(n[0]) >= std::abs(n[1]) && std::abs(n[0]) >= std::abs(n[2]) ? 0 : std::abs(n[1]) >= std::abs(n[2]) ? 1 : 2;
