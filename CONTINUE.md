@@ -83,6 +83,13 @@ the Restrictions screen from chat; smooth lighting's second ring and fluid face 
 click rules; riding input and camel / horse rules; the world border depth state. The Oct 11 backlog in
 docs/audit-26.3 was re-checked: most of it is done, its remaining items are folded into the sections below.
 
+Then (2026-10-13, last): the advancements screen's init / tab / hover rules; toasts as ToastManager (slot heights,
+sound caps, SystemToast wrapping, TutorialToast lines, 10 s toasts, the unsecure-server toast, hidden with the HUD);
+the server list as ServerSelectionList / ServerStatusPinger (address validation, hidden direct-join entries, lazy
+pings on five threads, the legacy ping fallback, the pinging / unreachable / incompatible / old / unknown states,
+LAN entries, Shift+arrow moves, F5) and ConnectScreen while joining. Tested against local mock status servers
+(a Python script: modern, no-version, legacy-only, silent and closing servers).
+
 ## Protocol / networking
 
 
@@ -116,6 +123,11 @@ docs/audit-26.3 was re-checked: most of it is done, its remaining items are fold
 - Video options of the engine's own: Max Framerate steps follow display refresh rates (30 .. 360, Unlimited) instead
   of 10 .. 260; Render Distance reaches the detail distance (beyond 32); Graphics API is a fixed Direct3D 12 label;
   Simulation Distance has a tooltip about applying on the next world load (the server is a separate process).
+- Server list residuals: Java pings each list entry (two entries of one address ping twice; here one ping per
+  address), and a ping shows "Pinging..." from the start rather than an empty MOTD until the socket connects. A legacy-only
+  server shows its incompatible icon at once (Java keeps the last pinging frame until the list is rebuilt). The
+  disconnect screen's "Open Report Directory" / "Report to Server" buttons come with client packet-error reports;
+  this client logs malformed packets and goes on instead of disconnecting.
 - SystemToasts without a trigger here: PACK_LOAD_FAILURE, FILE_DROP_FAILURE, CHUNK_LOAD/SAVE_FAILURE (the server
   runs out of process), the demo overlay and the regional PeriodicNotificationManager.
 
