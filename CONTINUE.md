@@ -33,7 +33,8 @@ bubbles, arrow hits, pufferfish, elder guardian curse with its appearance, armor
 ticks (blazes, endermen with the stare sound, guardians, ravagers, slimes, spellcasters, wardens, sniffers with the dig
 sound, breezes, pandas sneezing and eating, the ender dragon's phases and death explosions, feeding baby horses /
 llamas / camels), the dragon's death dissolve and rays, the player layers (stuck arrows and bee stingers, shoulder
-parrots, deadmau5's ears) and the totem activation animation. ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
+parrots, deadmau5's ears), the totem activation animation, break cracks on block entities, the End's sky flashes
+with their sound, hover tooltips in books, and the dolphin / composter / elder guardian particles. ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
 switch (automated runs never change the display mode) and the LAN publish from World Options (it would open a
 listening socket).
 
@@ -50,6 +51,10 @@ listening socket).
   the error markers and game test highlights are drawn in the UI layer (no depth test).
 
 ## Screens
+
+- The friends feature is this port's own; Java's FriendToast (Mojang's friend service) needs the Microsoft login.
+- SystemToasts without a trigger here: PACK_LOAD_FAILURE, FILE_DROP_FAILURE, CHUNK_LOAD/SAVE_FAILURE (the server
+  runs out of process), the demo overlay and the regional PeriodicNotificationManager.
 
 
 ## Debug
