@@ -6,6 +6,7 @@
 #include "audio/audio.h"
 #include "assets/game_reports.h"
 #include "assets/asset_source.h"
+#include "game/player.h"
 #include "game/world_border.h"
 #include "net/client.h"
 #include "render/packs/pack_api.h"
@@ -616,16 +617,33 @@ void Sky::update(const CameraState& cam, double dt) {
     in.flash = flashTime_ > 0 && !options_.hideFlashes;  // Hide Sky Flashes
     env_.evaluate(in, a);
 
-    // FogRenderer: the fluid at the camera picks the fog type (Camera.getFluidInCamera).
-    const u16 eye = world_->block(int(std::floor(cam.x)), int(std::floor(cam.y)), int(std::floor(cam.z)));
-    const std::string& eyeName = registry_->name(eye);
-    const bool eyeWater = registry_->infos()[eye].waterlogged || eyeName.rfind("minecraft:water", 0) == 0 ||
-                          eyeName.rfind("minecraft:bubble_column", 0) == 0;
+    // FogRenderer: the fluid at the camera picks the fog type (Camera.getFluidInCamera): water at the camera's block
+    // below its surface, else lava below its surface or powder snow at one of the near plane's five points.
     enum class FogType { Atmospheric, Water, Lava, PowderSnow };
-    const FogType fogType = eyeWater                                         ? FogType::Water
-                            : eyeName.rfind("minecraft:lava", 0) == 0        ? FogType::Lava
-                            : eyeName.rfind("minecraft:powder_snow", 0) == 0 ? FogType::PowderSnow
-                                                                             : FogType::Atmospheric;
+    const FogType fogType = [&] {
+        const Physics ph(*world_, *registry_);
+        const int bx = int(std::floor(cam.x)), by = int(std::floor(cam.y)), bz = int(std::floor(cam.z));
+        if (const Physics::Fluid f = ph.fluid(bx, by, bz); f.type == 1 && cam.y < by + ph.fluidHeightForCamera(bx, by, bz, f))
+            return FogType::Water;
+        // getNearPlane: forward x zNear (0.05), up x tan(fov / 2) x zNear, left x that x the aspect ratio
+        const double cyw = std::cos(cam.yaw), syw = std::sin(cam.yaw), cpt = std::cos(cam.pitch), spt = std::sin(cam.pitch);
+        const double fwd[3] = {-syw * cpt, -spt, cyw * cpt}, left[3] = {cyw, 0, syw};
+        const double up[3] = {left[1] * fwd[2] - left[2] * fwd[1], left[2] * fwd[0] - left[0] * fwd[2], left[0] * fwd[1] - left[1] * fwd[0]};
+        const double h = std::tan(double(cam.fovY) / 2.0) * 0.05;
+        const double w = h * (renderer_ && renderer_->height() ? double(renderer_->width()) / double(renderer_->height()) : 16.0 / 9.0);
+        const double corners[5][2] = {{0, 0}, {1, 1}, {-1, 1}, {1, -1}, {-1, -1}};  // forward, top left / right, bottom left / right
+        for (const auto& [l, u] : corners) {
+            double p[3];
+            for (int k = 0; k < 3; ++k) p[k] = (k == 0 ? cam.x : k == 1 ? cam.y : cam.z) + fwd[k] * 0.05 + left[k] * w * l + up[k] * h * u;
+            const int x = int(std::floor(p[0])), y = int(std::floor(p[1])), z = int(std::floor(p[2]));
+            if (const Physics::Fluid f = ph.fluid(x, y, z); f.type == 2) {
+                if (p[1] <= ph.fluidHeightForCamera(x, y, z, f) + y) return FogType::Lava;
+            } else if (registry_->name(world_->block(x, y, z)).rfind("minecraft:powder_snow", 0) == 0) {
+                return FogType::PowderSnow;
+            }
+        }
+        return FogType::Atmospheric;
+    }();
     // computeFogColor: the first environment providing a colour (lava, powder snow, water, the atmosphere).
     const float cy = std::cos(cam.yaw), sy = std::sin(cam.yaw), cp = std::cos(cam.pitch), sp = std::sin(cam.pitch);
     const float forward[3] = {-sy * cp, -sp, cy * cp};
