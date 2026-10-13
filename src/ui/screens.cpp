@@ -1,6 +1,8 @@
 // Screens: player inventory and server containers (AbstractContainerScreen + AbstractContainerMenu click
 // logic), the creative item list, pause and options menus, chat input.
 #include "audio/audio.h"
+#include "entity/entities.h"
+#include "entity/species.h"
 #include "render/renderer.h"
 #include "ui/entity_preview.h"
 #include "ui/frontend.h"
@@ -311,6 +313,8 @@ struct Sim {
 
 static int qcStatus = 0, qcType = 0;
 static int deathScreenTick = 0;  // DeathScreen.delayTicker start (guiTicks)
+static bool deathConfirm = false;  // DeathScreen.TitleConfirmScreen up (the title button outside hardcore)
+static int deathConfirmTick = 0;   // its ConfirmScreen.setDelay(20) start
 void openAdvancementsFromPause(UiState& s);  // advancements.cpp
 void openStatsFromPause(UiState& s);          // stats.cpp
 static std::vector<int> qcSlots;
@@ -597,6 +601,32 @@ void Ui::State::buildButtons() {
             fe->titleRequested = true;
             quit = true;
         });
+    } else if (screen == Screen::Death && deathConfirm) {
+        // TitleConfirmScreen: ConfirmScreen's column (title, an empty message, the buttons 16 lower), the death gradient
+        const int top = (H - (9 + 8 + 0 + 8 + 16 + 20)) / 2;
+        const float x = float((W - 304) / 2), y = float(top + 9 + 8 + 0 + 8 + 16);
+        auto respawnNow = [this] {  // player.respawn(), then no screen
+            if (online()) {
+                net::Writer w;
+                w.varInt(0);  // ServerboundClientCommandPacket.Action.PERFORM_RESPAWN
+                client->sendPlay("client_command", w);
+            }
+            deathConfirm = false;
+            deathMessage = Text();
+            closeScreen();
+        };
+        Button yes;
+        yes.x = x, yes.y = y, yes.w = 150, yes.label = tr("deathScreen.titleScreen"), yes.active = false;
+        yes.onPress = [this] {
+            deathConfirm = false;
+            fe->titleRequested = true;
+            quit = true;
+        };
+        buttons.push_back(std::move(yes));
+        Button no;
+        no.x = x + 154, no.y = y, no.w = 150, no.label = tr("deathScreen.respawn"), no.active = false;
+        no.onPress = respawnNow;
+        buttons.push_back(std::move(no));
     } else if (screen == Screen::Death) {  // DeathScreen: the buttons wake up after 20 ticks (init resets the delay)
         deathScreenTick = guiTicks;
         Button respawn;
@@ -619,9 +649,14 @@ void Ui::State::buildButtons() {
         Button title;
         title.x = float(W / 2 - 100), title.y = float(H / 4 + 96), title.label = tr("deathScreen.titleScreen");
         title.active = false;
-        title.onPress = [this] {
-            fe->titleRequested = true;
-            quit = true;
+        title.onPress = [this] {  // handleExitToTitleScreen: hardcore leaves, otherwise TitleConfirmScreen (delay 20)
+            if (hardcore) {
+                fe->titleRequested = true;
+                quit = true;
+                return;
+            }
+            deathConfirm = true, deathConfirmTick = guiTicks;
+            buildButtons();
         };
         buttons.push_back(std::move(title));
     }
@@ -712,6 +747,13 @@ void Ui::State::drawScreen(Canvas& c) {
         case Screen::PackOptions: drawPackScreen(c); return;  // render/packs/pack_screen.cpp
         case Screen::Death: {
             c.gradient(0, 0, float(W), float(H), 0x60500000, 0xA0803030);
+            if (deathConfirm) {
+                if (guiTicks - deathConfirmTick >= 20)
+                    for (Button& b : buttons) b.active = true;
+                drawCentered(c, Text(res.translate("deathScreen.quit.confirm")), float(W / 2), float((H - 61) / 2), 0xFFFFFFFF);
+                drawButtons(c);
+                return;
+            }
             if (guiTicks - deathScreenTick >= 20 && deathScreenTick != INT32_MAX)
                 for (Button& b : buttons) b.active = true;
             else if (deathScreenTick == INT32_MAX && buttons.size() > 1)
@@ -721,7 +763,9 @@ void Ui::State::drawScreen(Canvas& c) {
             drawCentered(c, Text(res.translate(hardcore ? "deathScreen.title.hardcore" : "deathScreen.title")), float(W / 2 / 2), 30, 0xFFFFFFFF);
             c.pop();
             if (!deathMessage.plain().empty()) drawCentered(c, deathMessage, float(W / 2), 85, 0xFFFFFFFF);
-            drawCentered(c, translatable("deathScreen.score.value", {Text(std::to_string(xpTotal), colorStyle(0xFFFF55))}, lang()),
+            // Player.getScore: DATA_SCORE_ID (the experience gained, not what is left)
+            const i64 score = entities ? ent::dataInt(entities->self, "DATA_SCORE_ID", xpTotal) : xpTotal;
+            drawCentered(c, translatable("deathScreen.score.value", {Text(std::to_string(score), colorStyle(0xFFFF55))}, lang()),
                          float(W / 2), 100, 0xFFFFFFFF);
             drawButtons(c);
             return;
@@ -917,6 +961,12 @@ void Ui::State::screenInput(const Window::InputEvent& e) {
         return;
     }
     if (screen == Screen::Death) {
+        // TitleConfirmScreen: Esc answers no (respawn) once the delay is over; the death screen ignores Esc
+        if (deathConfirm && e.type == Window::InputEvent::Key && e.down && e.code == VK_ESCAPE && guiTicks - deathConfirmTick >= 20 &&
+            buttons.size() > 1) {
+            if (auto fn = buttons[1].onPress) fn();
+            return;
+        }
         buttonsInput(e);
         return;
     }
