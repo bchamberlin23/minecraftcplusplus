@@ -555,7 +555,7 @@ void soundsBuild(UiState& s) {
 
 // --- Controls / Mouse Settings ------------------------------------------------------------------------------------
 
-Button holdToggleButton(UiState& s, const char* keyName, bool* toggle) {  // Options.toggleCrouch / toggleSprint
+Button holdToggleButton(UiState& s, const char* keyName, bool* toggle) {  // Options.toggleCrouch / Sprint / Attack / Use
     UiState* p = &s;
     return cycleButton(
         [p, keyName, toggle] { return optionLabel(*p, keyName, Text(p->res.translate(*toggle ? "options.key.toggle" : "options.key.hold"))); },
@@ -581,7 +581,10 @@ void controlsBuild(UiState& s) {
     OptionsList l(s, Text(s.res.translate("controls.title")), Screen::Options);
     l.half(screenButton(s, "options.mouse_settings", Screen::MouseSettings), screenButton(s, "controls.keybinds", Screen::KeyBinds));
     l.halves({holdToggleButton(s, "key.sneak", &s.settings.toggleCrouch), holdToggleButton(s, "key.sprint", &s.settings.toggleSprint),
-              onOffButton(s, "options.autoJump", &s.settings.autoJump), sprintWindowSlider(s)});
+              holdToggleButton(s, "key.attack", &s.settings.toggleAttack), holdToggleButton(s, "key.use", &s.settings.toggleUse),
+              onOffButton(s, "options.autoJump", &s.settings.autoJump), sprintWindowSlider(s),
+              onOffButton(s, "options.quitShortcuts", &s.settings.quitShortcuts, {}, "options.quitShortcuts.tooltip"),
+              onOffButton(s, "options.operatorItemsTab", &s.settings.operatorItemsTab)});
     l.footer();
 }
 

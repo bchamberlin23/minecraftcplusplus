@@ -211,6 +211,9 @@ struct Ui::State {
     // HUD
     bool hudHidden = false, debug = false;
     int guiTicks = 0;
+    // Hud.tickAutosaveIndicator: the local server saving (MinecraftServer.isCurrentlySaving), eased in and out.
+    bool serverSaving = false;
+    float autosaveIndicator = 0, lastAutosaveIndicator = 0;
     double tickClock = 0;
     float partialTick = 0;
     Text title, subtitle, actionbar;
@@ -338,6 +341,7 @@ struct Ui::State {
     // --- hud.cpp ---
     void tickHud();
     void drawHud(Canvas& c);
+    void drawSavingIndicator(Canvas& c);  // Hud.extractSavingIndicator
     void drawChat(Canvas& c, bool focused);
     void drawDebug(Canvas& c);
     // playerSlot: the player inventory menu slot the stack is (item model properties compare stack identity: the

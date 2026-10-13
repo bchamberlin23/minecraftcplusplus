@@ -24,10 +24,13 @@ public:
     bool pump();  // processes messages; false once the window is closed
     bool keyDown(int vk) const;  // VK_SHIFT / VK_CONTROL / VK_MENU also match their left / right keys and back
     bool focused() const { return GetForegroundWindow() == hwnd_; }
+    bool iconified() const { return IsIconic(hwnd_) != 0; }
+    u64 lastInputMs() const { return lastInputMs_; }  // GetTickCount64 of the last key / mouse input (onInputReceived)
     // Borderless fullscreen on the monitor the window is on (Window.setFullscreen); off restores the window.
     void setFullscreen(bool on);
     bool fullscreen() const { return fullscreen_; }
     void setMouseCaptured(bool captured);
+    void setQuitShortcuts(bool on) { quitShortcuts_ = on; }  // Window.setQuitShortcuts: off, Alt+F4 does not close
     bool mouseCaptured() const { return captured_; }
     void takeMouseDelta(float& dx, float& dy) {
         dx = dx_, dy = dy_;
@@ -85,8 +88,9 @@ private:
 
     HWND hwnd_ = nullptr;
     u32 width_ = 0, height_ = 0;
-    bool resized_ = false, closed_ = false, captured_ = false, headless_ = false;
+    bool resized_ = false, closed_ = false, captured_ = false, headless_ = false, quitShortcuts_ = true;
     float dx_ = 0, dy_ = 0;
+    u64 lastInputMs_ = GetTickCount64();
     MouseEvents events_;
     std::vector<InputEvent> input_;
     bool clickCaptures_ = true;

@@ -121,6 +121,9 @@ public:
     u32 jitterPhases(u32 renderW, u32 outputW) const;
     float mipBias() const { return mipBias_; }
     bool frameGenActive() const { return fg_ != nullptr; }
+    // FramerateLimitTracker throttling (minimized / AFK / out-of-level menu): replaces the limit while > 0, and the
+    // frames are paced here even when Reflex / XeLL would pace them.
+    void setThrottle(u32 fps) { throttle_ = fps; }
     void setMenuActive(bool menu);  // full-screen menus: frame generation off meanwhile (resources kept)
     bool uiComposedBySwapChain() const;  // FSR FG: the swap chain blends the UI layer over real + generated frames
     // Before the UI composite: copies the hudless back buffer (frame generation only). Back buffer in RENDER_TARGET.
@@ -163,6 +166,7 @@ private:
     u32 frameId_ = 1;
     bool frameBegun_ = false, menuPaused_ = false;
     double nextFrameTime_ = 0;
+    u32 throttle_ = 0;
     ComPtr<ID3D12Resource> hudless_;
     u32 hudlessW_ = 0, hudlessH_ = 0;
     u32 framesPresented_ = 1;

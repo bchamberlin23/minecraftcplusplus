@@ -33,6 +33,7 @@ struct CameraState {
 struct LineVertex {
     float x, y, z;  // camera-relative world position, or NDC xy for screen lines
     u32 color;      // 0xAABBGGRR
+    float wx = 0, wy = 0;  // world lines: line width / screen width and height (rendertype_lines LineWidth / ScreenSize)
 };
 struct SpriteVertex {
     float x, y, u, v;  // NDC position, texture coordinates
@@ -370,7 +371,7 @@ private:
 
     ComPtr<ID3D12RootSignature> rootSig_;
     ComPtr<ID3D12PipelineState> psoOpaque_, psoCutout_, psoTranslucent_, psoModel_, psoCull_;
-    ComPtr<ID3D12PipelineState> psoWorldLines_, psoScreenLines_, psoSprites_;
+    ComPtr<ID3D12PipelineState> psoWorldLines_, psoScreenLines_, psoSprites_;  // world lines: wide (6 vertices a line)
     static constexpr u64 kOverlayBytes = u64(1) << 20;  // per frame
     ComPtr<ID3D12Resource> overlay_;
     u8* overlayMapped_ = nullptr;

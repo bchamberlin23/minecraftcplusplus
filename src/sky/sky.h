@@ -104,6 +104,7 @@ private:
     BlockRegistry* registry_ = nullptr;
     DebugOptions debug_;
     BiomeLookup biomeLookup_;
+    bool flat_ = false;  // the level is flat (superflat): the horizon is the bottom of the world
     std::unique_ptr<NetState> net_;
     std::unique_ptr<Frame> frame_;
     std::unique_ptr<SkyGpu> gpu_;

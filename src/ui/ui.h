@@ -76,7 +76,8 @@ struct Settings {
     std::array<int, kKeyCount> keys = defaultKeys();  // key_<name>
     bool fullscreen = false;
     // Controls / Mouse Settings
-    bool toggleCrouch = false, toggleSprint = false, autoJump = false;
+    bool toggleCrouch = false, toggleSprint = false, toggleAttack = false, toggleUse = false, autoJump = false;
+    bool quitShortcuts = true, operatorItemsTab = false;
     int sprintWindow = 7;  // ticks a double-tapped forward key starts sprinting within (0: off)
     bool invertMouseX = false, invertMouseY = false, discreteMouseScroll = false;
     double mouseWheelSensitivity = 1.0;  // 10^(-2..1) like Options.logMouse
@@ -227,6 +228,7 @@ public:
     // and quitRequested() turns true once it shows its window.
     void showSaving();
     void startTitle();
+    void setServerSaving(bool saving);  // the local server is saving (the autosave indicator)
     bool menuOpen() const;  // a full-screen menu / inventory is open (frame generation pauses, vendor guidance)
     const fs::path* screenshotRequest();  // scripted screenshots: pass to Renderer::render
     bool loadScript(const fs::path& file);

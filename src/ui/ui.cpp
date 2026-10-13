@@ -214,6 +214,7 @@ void Ui::State::applyControls() {  // the key bindings and control options the g
     k.pickItem = settings.key(Key::PickItem), k.perspective = settings.key(Key::TogglePerspective);
     for (int i = 0; i < 9; ++i) k.hotbar[i] = settings.key(Key(int(Key::Hotbar1) + i));
     game->toggleCrouch = settings.toggleCrouch, game->toggleSprint = settings.toggleSprint;
+    game->toggleAttack = settings.toggleAttack, game->toggleUse = settings.toggleUse;
     game->invertMouseX = settings.invertMouseX, game->invertMouseY = settings.invertMouseY;
     game->discreteScroll = settings.discreteMouseScroll, game->wheelSensitivity = settings.mouseWheelSensitivity;
     game->player().autoJump = settings.autoJump;
@@ -404,6 +405,8 @@ Ui::~Ui() = default;
 
 Settings& Ui::settings() { return s_->settings; }
 bool Ui::quitRequested() const { return s_->quit; }
+void Ui::setServerSaving(bool saving) { s_->serverSaving = saving; }
+
 bool Ui::menuOpen() const { return s_->screen != Screen::None && s_->screen != Screen::Chat; }
 
 float Ui::fovRadians() const {  // Camera.getFov: the option scaled by the dynamic FOV modifier
@@ -1092,6 +1095,8 @@ void Ui::beginFrame(double dt) {
     for (const UiModule& m : uiModules())  // modules.h
         if (m.frame) m.frame(s);
     if (s.game) s.game->bobView = s.settings.bobView;  // the View Bobbing option
+    if (s.game) s.game->damageTilt = float(s.settings.damageTiltStrength), s.game->highContrastOutline = s.settings.highContrastBlockOutline;
+    if (s.window) s.window->setQuitShortcuts(s.settings.quitShortcuts);
     // The server's data-driven registries (enchantment / painting / instrument names, creative contents).
     if (s.client && s.client->inPlay() && !s.items.registriesSet()) s.items.setRegistries(*s.client);
     if (s.session && !s.session->connected() && !s.quit) {
@@ -1225,6 +1230,7 @@ void Ui::endFrame() {
     if (hud) s.drawModHud(c);  // native mods
     if (s.debug) s.drawDebug(c);
     if (s.screen != Screen::None) s.drawScreen(c);
+    if (!s.fe->cfg.menu) s.drawSavingIndicator(c);
     narrator::frame(s);  // the widget under the mouse, when the narrator narrates the system
     for (const UiModule& m : uiModules())  // modules.h: toasts
         if (m.drawTop) m.drawTop(s, c);

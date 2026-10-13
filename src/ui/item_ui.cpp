@@ -11,15 +11,14 @@ bool mapInfo(int id, int& scale, bool& locked);           // stations_a2.cpp
 
 namespace {
 int g_permission = 0;
+int g_permissionEntity = -1, g_permissionEvent = 0;  // the last permission event (it can come before attachSession)
 std::unordered_map<std::string, std::vector<int>> g_propertySets;  // RecipePropertySet key -> item ids (sorted)
 
 void registerHandlers(UiState& s, net::Client& client) {
     UiState* sp = &s;
     client.onPlayPeek("entity_event", [sp](net::Reader& r) {  // EntityEvent.PERMISSION_LEVEL_ALL (24) .. OWNERS (28)
         const int id = r.i32v(), event = r.u8v();
-        if (r.ok && event >= 24 && event <= 28) sp->post([sp, id, event] {
-            if (sp->session && id == sp->session->entityId()) g_permission = event - 24;
-        });
+        if (r.ok && event >= 24 && event <= 28) sp->post([id, event] { g_permissionEntity = id, g_permissionEvent = event; });
     });
     client.onPlay("update_tags", [sp](net::Reader& r) {  // /reload: the tags again
         auto tags = std::make_shared<std::unordered_map<std::string, net::Client::TagMap>>();
@@ -28,11 +27,12 @@ void registerHandlers(UiState& s, net::Client& client) {
 }
 
 void attached(UiState&) {
-    g_permission = 0;
+    g_permission = 0, g_permissionEntity = -1;
     g_propertySets.clear();
 }
 
 void tick(UiState& s) {
+    if (s.session && g_permissionEntity >= 0 && g_permissionEntity == s.session->entityId()) g_permission = g_permissionEvent - 24;
     Items::TooltipEnv& env = s.items.tooltipEnv;
     env.player = true;
     env.permissionLevel = g_permission;

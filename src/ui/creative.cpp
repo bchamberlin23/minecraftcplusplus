@@ -49,7 +49,10 @@ struct Creative {
 };
 Creative g;
 
-bool tabVisible(int i) { return std::string(kTabDefs[i].title) != "itemGroup.op"; }  // operator items: option off
+// CreativeModeTab.shouldDisplay: the operator tab has items only with the Operator Items Tab option on and
+// Player.canUseGameMasterBlocks (creative and permission level 2).
+bool g_opTab = false;
+bool tabVisible(int i) { return g_opTab || std::string(kTabDefs[i].title) != "itemGroup.op"; }
 
 void buildTabs(UiState& s) {
     if (g.built) return;
@@ -184,6 +187,19 @@ void buildTabs(UiState& s) {
                     component(st, "fireworks", std::string{char(d), char(0)});
                     out.push_back(st);
                 }
+            } else if (e == "@test_blocks" || e == "@lights") {
+                // TestBlock.setModeOnStack (TestBlockMode values) / LightBlock.setLightOnStack (15 down to 0): block_state
+                auto blockState = [&](const char* item, const char* key, const std::string& value) {
+                    ItemStack st = stack(item);
+                    net::Writer w;
+                    w.varInt(1), w.str(key), w.str(value);
+                    component(st, "block_state", bytes(w));
+                    if (st.item >= 0) out.push_back(st);
+                };
+                if (e == "@test_blocks")
+                    for (const char* mode : {"start", "log", "fail", "accept"}) blockState("test_block", "mode", mode);
+                else
+                    for (int level = 15; level >= 0; --level) blockState("light", "level", std::to_string(level));
             } else if (e == "@ominous_bottles") {
                 for (int a = 0; a <= 4; ++a) {
                     ItemStack st = stack("ominous_bottle");
@@ -383,6 +399,16 @@ std::vector<Text> tooltipFor(UiState& s, const ItemStack& st, bool creativeSlot)
 // --- ScreenDef ------------------------------------------------------------------------------------------------
 
 void build(UiState& s) {
+    // CreativeModeTabs.tryRebuildTabContents: the contents follow hasPermissions (the operator tab).
+    const bool opTab = s.settings.operatorItemsTab && s.creative() && permissionLevel() >= 2;
+    if (opTab != g_opTab) {
+        g_opTab = opTab;
+        g.built = false;
+        for (int t = 0; t < kTabCount; ++t) g.tabItems[t].clear(), g.searchItems[t].clear();
+        g.tabsOfItem.clear();
+        buildTabs(s);
+        if (g.opened) selectTab(s, tabVisible(g.selected) ? g.selected : 0);  // refreshCurrentTabContents
+    }
     buildTabs(s);
     if (!g.opened) {  // init(): re-select the remembered tab
         g.opened = true;

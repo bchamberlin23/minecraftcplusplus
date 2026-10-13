@@ -108,7 +108,7 @@ public:
         int attack = 1, use = 2, pickItem = 4, perspective = 0x74;                                           // mouse, F5
         int hotbar[9] = {'1', '2', '3', '4', '5', '6', '7', '8', '9'};
     } keys;
-    bool toggleCrouch = false, toggleSprint = false;  // ToggleKeyMapping: a press switches the key on / off
+    bool toggleCrouch = false, toggleSprint = false, toggleAttack = false, toggleUse = false;  // ToggleKeyMapping: a press switches the key on / off
     bool invertMouseX = false, invertMouseY = false, discreteScroll = false;
     double wheelSensitivity = 1.0;  // mouseWheelSensitivity (ScrollWheelHandler)
     // Singleplayer pause (Minecraft.isPaused): the client does not tick (no movement, no input, no digging).
@@ -206,6 +206,8 @@ public:
     // --- Camera feedback: view bobbing (ClientAvatarState walk distance / bob, GameRenderer.bobView), the hurt tilt
     // and death roll (bobHurt), and the attack strength (Player.attackStrengthTicker) for the attack indicator. ---
     bool bobView = true;  // the "View Bobbing" option (default on)
+    bool highContrastOutline = false;  // the "High Contrast Block Outline" option
+    float damageTilt = 1.0f;  // the "Damage Tilt" option (damageTiltStrength) scales the bobHurt roll
     float walkDist = 0, walkDistO = 0, bob = 0, bobO = 0;
     int hurtTime = 0, hurtDuration = 10, deathTime = 0;
     float hurtDir = 0;   // degrees (ClientboundHurtAnimationPacket yaw)
@@ -290,7 +292,7 @@ private:
     bool placedLast_ = false;   // the last useItemOn placed a block
     u16 offhandBlock_ = 0;
     bool usingItem_ = false;    // onUseItem sent, the use key not yet released
-    bool crouchToggled_ = false, sprintToggled_ = false;
+    bool crouchToggled_ = false, sprintToggled_ = false, attackToggled_ = false, useToggled_ = false;
     double scrollAccum_ = 0;  // ScrollWheelHandler.accumulatedScrollY
     std::array<u16, 256> presses_{};  // this frame's key / button presses (Window::takePresses)
     int presses(int vk) const { return vk > 0 && vk < 256 ? presses_[size_t(vk)] : 0; }

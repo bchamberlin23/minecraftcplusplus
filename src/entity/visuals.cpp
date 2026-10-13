@@ -2304,7 +2304,7 @@ void Visuals::Impl::buildHand(const PassContext& ctx, float viewProj[16], bool j
             float hurt = (float(game->hurtTime) - gpt) / float(game->hurtDuration);
             hurt = std::sin(hurt * hurt * hurt * hurt * kPi);
             pose = xfMul(pose, xfRotY(-game->hurtDir * kDeg));
-            pose = xfMul(pose, xfRotZ(-hurt * 14.0f * kDeg));
+            pose = xfMul(pose, xfRotZ(-hurt * 14.0f * game->damageTilt * kDeg));
             pose = xfMul(pose, xfRotY(game->hurtDir * kDeg));
         }
         if (game->bobView) {

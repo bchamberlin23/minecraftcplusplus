@@ -140,6 +140,7 @@ void Window::push(InputEvent::Type type, int code, bool down, bool repeat) {
     InputEvent e;
     e.type = type, e.code = code, e.down = down, e.repeat = repeat;
     cursorPos(e.x, e.y);
+    lastInputMs_ = GetTickCount64();
     input_.push_back(e);
 }
 
@@ -277,7 +278,7 @@ LRESULT Window::handle(UINT msg, WPARAM wp, LPARAM lp) {
             const bool repeat = (lp >> 30) & 1;
             push(InputEvent::Key, vk, true, repeat);
             if (!repeat) press(vk);
-            if (msg == WM_SYSKEYDOWN && wp != VK_F4) return 0;  // F10 / Alt would open the window menu
+            if (msg == WM_SYSKEYDOWN && (wp != VK_F4 || !quitShortcuts_)) return 0;  // F10 / Alt would open the window menu
             break;
         }
         case WM_KEYUP:
@@ -303,6 +304,7 @@ LRESULT Window::handle(UINT msg, WPARAM wp, LPARAM lp) {
                 raw.header.dwType == RIM_TYPEMOUSE && captured_ && !(raw.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE)) {
                 dx_ += float(raw.data.mouse.lLastX);
                 dy_ += float(raw.data.mouse.lLastY);
+                if (raw.data.mouse.lLastX || raw.data.mouse.lLastY) lastInputMs_ = GetTickCount64();
             }
             break;
         }

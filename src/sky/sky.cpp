@@ -182,6 +182,7 @@ struct Sky::NetState {
     std::vector<std::pair<int, float>> events;  // game_event type, parameter
     std::string level;                          // dimension of the last login / respawn
     bool joined = false;
+    bool flat = false;                          // CommonPlayerSpawnInfo.isFlat (ClientLevelData.isFlat)
     int bolts = 0;  // lightning bolts added since the last frame
     bool frozen = false;  // ClientboundTickingStatePacket: the server's ticking is frozen (/tick freeze, pause)
 };
@@ -388,9 +389,12 @@ void Sky::attach(net::Client& client, const GameReports* reports) {
         }
         r.varInt();  // dimension type
         const std::string name(r.str());
+        r.i64v(), r.varInt(), r.u8v(), r.boolean();  // hashed seed, game mode, previous game mode, debug
+        const bool flat = r.boolean();
         if (!r.ok) return;
         std::lock_guard lock(n->mutex);
         n->level = name;
+        n->flat = flat;
         n->joined = true;
     };
     client.onPlayPeek("login", [level](net::Reader& r) { level(r, true); });
@@ -410,6 +414,7 @@ void Sky::applyNet() {
         connected_ = true;
         if (debug_.dimension.empty())
             if (const DimensionInfo* d = env_.dimension(n.level)) dimension_ = d;
+        flat_ = n.flat;
         LOG("sky: dimension %s", dimension_->name.c_str());
         rain_ = rainTarget_ = thunder_ = thunderTarget_ = 0;  // the server resends the weather
     }
@@ -629,8 +634,10 @@ void Sky::update(const CameraState& cam, double dt) {
         const float mix = 1.0f - std::pow(0.25f + 0.75f * std::clamp(skyFogEnd / 32.0f, 0.0f, 1.0f), 0.25f);
         for (int k = 0; k < 3; ++k) fog[k] += (skyDark[k] - fog[k]) * mix;
     }
-    // The void darkness, raised by the first mob effect environment that modifies it (blindness, then darkness).
-    float voidDark = std::clamp((32.0f + float(dimension_->minY) - float(cam.y)) / 32.0f, 0.0f, 1.0f);
+    // The void darkness (ClientLevelData.voidDarknessOnsetRange: 1 block in a flat world, else 32), raised by the
+    // first mob effect environment that modifies it (blindness, then darkness).
+    const float onset = flat_ ? 1.0f : 32.0f;
+    float voidDark = std::clamp((onset + float(dimension_->minY) - float(cam.y)) / onset, 0.0f, 1.0f);
     if (fx_.blindFog >= 0.0f) voidDark = std::max(fx_.blindDarkness, voidDark);
     else if (fx_.darkness) voidDark = std::max(fx_.darknessBlend, voidDark);
     if (voidDark > 0.0f && fogType != FogType::Lava && fogType != FogType::PowderSnow)
@@ -685,8 +692,8 @@ void Sky::update(const CameraState& cam, double dt) {
     cloudFogLimit_ = skyEnd;  // FogData.cloudEnd follows the sky end in every environment but the plain atmosphere
     f.renderSky = !hideSky;
     renderer_->setFogLimit(envStart, envEnd);
-    // getHorizonHeight: 63 unless the world is flat (not tracked here); not drawn underwater.
-    f.darkDisc = cam.y - 63.0 < 0.0;
+    // ClientLevelData.getHorizonHeight: the bottom of the world when it is flat, else 63; not drawn underwater.
+    f.darkDisc = cam.y - (flat_ ? double(dimension_->minY) : 63.0) < 0.0;
     renderer_->setAtmosphere(f.fogColor, a[int(Attr::SkyLightFactor)][0]);
     skyDarken_ = int(15.0f - a[int(Attr::SkyLightLevel)][0]);
     {  // the game's lightmap inputs (LightmapRenderStateExtractor)

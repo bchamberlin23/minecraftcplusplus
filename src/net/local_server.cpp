@@ -449,6 +449,30 @@ bool LocalServer::start(const Config& config) {
         work = runDir_ / "worlds" / (name.substr(0, 32) + "-" + hash);
         fs::create_directories(work, abs);
     }
+    {  // The server's own logging (console + logs/latest.log), plus MinecraftServer's debug lines: "Autosave started" /
+       // "Autosave finished" tell when it saves (MinecraftServer.isCurrentlySaving, the HUD's autosave indicator).
+        std::ofstream log(work / "mcpp-log4j2.xml", std::ios::trunc);
+        log << R"(<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="WARN">
+  <Appenders>
+    <Console name="SysOut" target="SYSTEM_OUT"><PatternLayout pattern="[%d{HH:mm:ss}] [%t/%level]: %msg{nolookups}%n"/></Console>
+    <RollingRandomAccessFile name="File" fileName="logs/latest.log" filePattern="logs/%d{yyyy-MM-dd}-%i.log.gz">
+      <PatternLayout pattern="[%d{HH:mm:ss}] [%t/%level]: %msg{nolookups}%n"/>
+      <Policies><TimeBasedTriggeringPolicy/><OnStartupTriggeringPolicy/></Policies>
+      <DefaultRolloverStrategy max="1000"/>
+    </RollingRandomAccessFile>
+  </Appenders>
+  <Loggers>
+    <Logger name="net.minecraft.server.MinecraftServer" level="debug"/>
+    <Root level="info">
+      <filters><MarkerFilter marker="NETWORK_PACKETS" onMatch="DENY" onMismatch="NEUTRAL"/></filters>
+      <AppenderRef ref="SysOut"/><AppenderRef ref="File"/>
+    </Root>
+  </Loggers>
+</Configuration>
+)";
+        jvmExtra += L" -Dlog4j.configurationFile=\"" + (work / "mcpp-log4j2.xml").wstring() + L"\"";
+    }
     // Fabric mods in the mods folder: Fabric's server runs them on top of this server.jar (mods/fabric_server.h).
     if (const auto fabric = mods::Manager::get().fabricMods(); !fabric.empty()) {
         if (!mods::prepareFabricServer(runDir_.parent_path(), config.minecraftDir, config.version, jar, fabric, runDir_, jar))
@@ -586,6 +610,11 @@ void LocalServer::readOutput() {
             std::string line = pending.substr(0, nl);
             pending.erase(0, nl + 1);
             if (!line.empty() && line.back() == '\r') line.pop_back();
+            // MinecraftServer.saveEverything: autosaves (debug lines) and save-all.
+            if (line.find("]: Autosave started") != std::string::npos || line.find("]: Saving the game") != std::string::npos)
+                saving_ = true;
+            else if (line.find("]: Autosave finished") != std::string::npos || line.find("]: Saved the game") != std::string::npos)
+                saving_ = false;
             if (line.find("Done (") != std::string::npos) {
                 if (creating_)  // Create World's game rules, before anyone joins (the console runs them next tick)
                     for (const auto& [rule, value] : config_.create->gameRules) command("gamerule " + rule + " " + value);

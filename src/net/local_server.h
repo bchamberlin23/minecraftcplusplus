@@ -57,6 +57,7 @@ public:
     std::string upgradeStatus() const;
     int upgradePercent() const { return upgradePercent_; }
     bool running() const;
+    bool saving() const { return saving_; }  // MinecraftServer.isCurrentlySaving (autosave / save-all)
     u16 port() const { return port_; }
     // Fabric server: the block table its helper mod wrote (Client::Config::serverRegistries), else empty.
     fs::path stateTable() const {
@@ -83,7 +84,7 @@ private:
     std::string offlineUuid_, hostUuid_;
     HANDLE process_ = nullptr, job_ = nullptr, stdinWrite_ = nullptr, stdoutRead_ = nullptr;
     std::thread reader_;
-    std::atomic<bool> ready_{false}, failed_{false}, opJoiners_{false};
+    std::atomic<bool> ready_{false}, failed_{false}, opJoiners_{false}, saving_{false};
     std::atomic<int> upgradePercent_{-1};
     mutable std::mutex statusMutex_;
     std::string upgradeStatus_;

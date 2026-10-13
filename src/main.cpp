@@ -875,7 +875,6 @@ int wmain(int argc, wchar_t** argv) {
             LOG("warning: unknown --low-latency %s", opt.lowLatency.c_str());
         if (opt.sharpness >= 0) v.sharpness = opt.sharpness;
         if (opt.fpsLimit >= 0) v.fpsLimit = u32(opt.fpsLimit);
-        if (menu && (v.fpsLimit == 0 || v.fpsLimit > 60)) v.fpsLimit = 60;  // menus need no more
         if (opt.vsync) v.vsync = true;
         if (opt.renderScale != 1.0f) v.renderScaleOverride = opt.renderScale;
         renderer.upscalers().apply(v);
@@ -1056,7 +1055,7 @@ int wmain(int argc, wchar_t** argv) {
             selfTest(game, world, registry, frame - base);
             cam = game.camera();
         } else if (menu) {
-            cam.yaw += dt * 0.035f;  // the title panorama turns slowly
+            cam.yaw += dt * 0.035f * float(ui.settings().panoramaSpeed);  // the title panorama turns slowly (Panorama Scroll Speed)
         } else {
             game.frame(window, dt);
             cam = game.viewCamera();  // F5: the detached camera
@@ -1195,6 +1194,10 @@ int wmain(int argc, wchar_t** argv) {
         if (opt.seconds > 0) shot = timeUp && !opt.screenshot.empty();
         sky.setBossOverlay(ui::bossDarkenScreen(), ui::bossWorldFog());  // boss bar flags (mp_hud.h)
         sky.setRenderDistance(ui.settings().renderDistance);
+        {  // Video / Accessibility Settings the sky reads (Clouds, Cloud Distance, Weather Radius, Brightness, Hide Lightning Flashes)
+            const ui::Settings& vs = ui.settings();
+            sky.setOptions({vs.cloudStatus, vs.cloudRange, vs.weatherRadius, float(vs.gamma), vs.hideLightningFlash});
+        }
         if (haveEntities)
             entityRenderer.setShadows(ui.settings().entityShadows, sky.skyDarken(), session ? session->dimension().ambientLight : 0.0f);
         if (haveEntities)
@@ -1221,6 +1224,19 @@ int wmain(int argc, wchar_t** argv) {
         ui.endFrame();
         if (haveReports) packs::updatePlayer(renderer, ui, game.selectedSlot(), reports, registry);  // held light
         renderer.upscalers().setMenuActive(ui.menuOpen());  // frame generation pauses in menus
+        ui.setServerSaving(localServer && localServer->saving());
+        {  // FramerateLimitTracker.getThrottleReason: minimized 10, AFK (the Inactivity FPS Limit option) 30 after a
+           // minute and 10 after ten, menus without a level 60
+            const u64 afkMs = GetTickCount64() - window.lastInputMs();
+            const u32 limit = renderer.upscalers().settings().fpsLimit;
+            u32 throttle = 0;
+            if (window.iconified()) throttle = 10;
+            else if (ui.settings().inactivityFpsLimit == 1 && afkMs > 600000) throttle = 10;
+            else if (ui.settings().inactivityFpsLimit == 1 && afkMs > 60000) throttle = limit ? std::min(limit, 30u) : 30;
+            else if (menu && !session) throttle = 60;
+            if (opt.bench || !opt.script.empty()) throttle = 0;  // automated runs keep their pace
+            renderer.upscalers().setThrottle(throttle);
+        }
         if (!opt.bench) cam.fovY = ui.fovRadians();
         if (!opt.bench && !menu) ui.warpCamera(cam);  // nausea / nether portal
         const fs::path* uiShot = ui.screenshotRequest();

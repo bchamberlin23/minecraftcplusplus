@@ -22,6 +22,7 @@
 #include "DetailVS.h"
 #include "LinePS.h"
 #include "LineVS.h"
+#include "WideLineVS.h"
 #include "SpritePS.h"
 #include "SpriteVS.h"
 #include "TerrainPSCutout.h"
@@ -507,8 +508,8 @@ bool Renderer::createPipelines() {
                        false, D3D12_CULL_MODE_NONE, psoTranslucent_) &&
               graphics(g_DetailVS, sizeof(g_DetailVS), g_DetailPS, sizeof(g_DetailPS), false, true,
                        D3D12_CULL_MODE_BACK, psoModel_) &&
-              graphics(g_LineVS, sizeof(g_LineVS), g_LinePS, sizeof(g_LinePS), true, false, D3D12_CULL_MODE_NONE,
-                       psoWorldLines_, D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE) &&
+              graphics(g_WideLineVS, sizeof(g_WideLineVS), g_LinePS, sizeof(g_LinePS), true, false, D3D12_CULL_MODE_NONE,
+                       psoWorldLines_) &&
               graphics(g_LineVS, sizeof(g_LineVS), g_LinePS, sizeof(g_LinePS), true, false, D3D12_CULL_MODE_NONE,
                        psoScreenLines_, D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE, false) &&
               graphics(g_SpriteVS, sizeof(g_SpriteVS), g_SpritePS, sizeof(g_SpritePS), true, false,
@@ -1218,8 +1219,8 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
             list_->SetGraphicsRoot32BitConstants(0, 2, consts, 0);
             list_->DrawInstanced(count, 1, 0, 0);
         };
-        draw(psoWorldLines_.Get(), D3D_PRIMITIVE_TOPOLOGY_LINELIST,
-             put(worldLines_.data(), worldLines_.size() * sizeof(LineVertex)), u32(worldLines_.size()), 0);
+        draw(psoWorldLines_.Get(), D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
+             put(worldLines_.data(), worldLines_.size() * sizeof(LineVertex)), u32(worldLines_.size() / 2 * 6), 0);
         draw(psoSprites_.Get(), D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
              put(sprites_.data(), sprites_.size() * sizeof(SpriteVertex)), u32(sprites_.size()), 1);
         draw(psoScreenLines_.Get(), D3D_PRIMITIVE_TOPOLOGY_LINELIST,

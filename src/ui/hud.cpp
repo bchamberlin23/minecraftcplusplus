@@ -63,6 +63,8 @@ const char* kTowards[4] = {"Towards positive Z", "Towards negative X", "Towards 
 
 void Ui::State::tickHud() {
     ++guiTicks;
+    lastAutosaveIndicator = autosaveIndicator;
+    autosaveIndicator += 0.2f * ((serverSaving ? 1.0f : 0.0f) - autosaveIndicator);
     tickChat();
     for (auto& [id, e] : effects)
         if (e.duration > 0) --e.duration;
@@ -200,6 +202,19 @@ void Ui::State::drawTooltip(Canvas& c, const std::vector<Text>& lines, float mx,
 }
 
 // --- HUD ----------------------------------------------------------------------------------------------------
+
+// Hud.extractSavingIndicator: "Saving world" bottom right while the local server saves (Autosave Indicator option).
+void Ui::State::drawSavingIndicator(Canvas& c) {
+    if (!settings.showAutosaveIndicator || (autosaveIndicator <= 0 && lastAutosaveIndicator <= 0)) return;
+    const float v = lastAutosaveIndicator + (autosaveIndicator - lastAutosaveIndicator) * partialTick;
+    const int alpha = int(std::floor(255.0f * std::clamp(v, 0.0f, 1.0f)));
+    if (alpha <= 0) return;
+    const Text text(res.translate("menu.savingLevel"));
+    const int w = font.width(text);
+    const float x = float(c.guiWidth() - w - 5), y = float(c.guiHeight() - 9 - 5);
+    backdrop(*this, c, x, y, w, u32(alpha) << 24 | 0xFFFFFF);
+    font.draw(c, text, x, y, u32(alpha) << 24 | 0xFFFFFF, true);
+}
 
 void Ui::State::drawHud(Canvas& c) {
     const float W = float(c.guiWidth()), H = float(c.guiHeight());

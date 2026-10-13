@@ -6,6 +6,7 @@
 #include "world/world.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <mutex>
 #include <unordered_set>
@@ -84,7 +85,7 @@ static CameraState applyBob(const Game& g, CameraState c) {
         float hurt = (float(g.hurtTime) - pt) / float(g.hurtDuration);
         hurt = std::sin(hurt * hurt * hurt * hurt * kPi);
         rot = mul(rot, rotY(-g.hurtDir * kDeg));
-        rot = mul(rot, rotZ(-hurt * 14.0f * kDeg));
+        rot = mul(rot, rotZ(-hurt * 14.0f * g.damageTilt * kDeg));
         rot = mul(rot, rotY(g.hurtDir * kDeg));
         any = true;
     }
@@ -190,7 +191,12 @@ void Game::frame(Window& w, double dt) {
     const Window::MouseEvents ev = w.takeMouseEvents();
     if (inputSuspended) pendingAttacks_ = 0;
     else pendingAttacks_ = std::min(pendingAttacks_ + presses(keys.attack), 4);
-    const bool attackDown = !inputSuspended && held(w, keys.attack);
+    // ToggleKeyMapping (Toggle Attack / Toggle Use): a press flips the key; releasing to a screen resets it (mouse keys
+    // are not restored).
+    if (inputSuspended || !w.mouseCaptured()) attackToggled_ = useToggled_ = false;
+    if (toggleAttack && presses(keys.attack) % 2) attackToggled_ = !attackToggled_;
+    if (toggleUse && presses(keys.use) % 2) useToggled_ = !useToggled_;
+    const bool attackDown = !inputSuspended && (toggleAttack ? attackToggled_ : held(w, keys.attack));
     tickAccumulator_ += std::min(dt, 0.25);
     const double tick = tickRate.tickSeconds();  // 20 ticks per second, or the server's slower rate
     while (tickAccumulator_ >= tick) {
@@ -288,7 +294,7 @@ void Game::handleClicks(Window& w, double dt, int rightPresses, int middlePresse
         scrollAccum_ -= steps;
         selected_ = ((selected_ - steps) % 9 + 9) % 9;
     }
-    const bool rightHeld = held(w, keys.use);
+    const bool rightHeld = toggleUse ? useToggled_ : held(w, keys.use);
     repeatTimer_ -= dt;
     // Breaking runs in tickAttack; Minecraft.startUseItem does nothing while a block is being destroyed or the hands
     // are busy (paddling).
@@ -697,27 +703,79 @@ void Game::buildOverlay() {
     std::vector<LineVertex> world, screen;
     std::vector<SpriteVertex> sprites;
 
-    // Outline of the targeted block's selection shape (none outside the world border).
+    // LevelRenderer.submitBlockOutline: the targeted block's selection shape (none outside the world border). High
+    // contrast draws a 7 px black pass, then the aqua outline (0xFF57FFE1); otherwise ARGB.black(102). The width is
+    // Window.appropriateLineWidth: max(2.5, width / 1920 * 2.5).
     if (target_.hit && border.blockWithinBounds(target_.x, target_.z)) {
         const BlockInfo& b = registry_.infos()[world_.block(target_.x, target_.y, target_.z)];
+        // VoxelShape.forAllEdges: the edges of the joined shape (DiscreteVoxelShape over the boxes' coordinates), each
+        // run along an axis merged into one line.
+        std::vector<float> coords[3];
         for (u32 i = 0; i < b.selectionCount; ++i) {
             const Box& s = registry_.box(b.selectionFirst + i);
-            float lo[3], hi[3];
-            const double base[3] = {target_.x - cam.x, target_.y - cam.y, target_.z - cam.z};
-            for (int a = 0; a < 3; ++a) {
-                lo[a] = float(base[a] + s.min[a] - 0.002);
-                hi[a] = float(base[a] + s.max[a] + 0.002);
-            }
-            for (int e = 0; e < 12; ++e) {  // 4 edges along each axis
-                const int axis = e / 4, a1 = (axis + 1) % 3, a2 = (axis + 2) % 3;
-                float p[3], q[3];
-                p[a1] = q[a1] = (e & 1) ? hi[a1] : lo[a1];
-                p[a2] = q[a2] = (e & 2) ? hi[a2] : lo[a2];
-                p[axis] = lo[axis], q[axis] = hi[axis];
-                world.push_back({p[0], p[1], p[2], 0x99000000});
-                world.push_back({q[0], q[1], q[2], 0x99000000});
-            }
+            for (int a = 0; a < 3; ++a) coords[a].push_back(s.min[a]), coords[a].push_back(s.max[a]);
         }
+        for (auto& c : coords) {
+            std::sort(c.begin(), c.end());
+            c.erase(std::unique(c.begin(), c.end()), c.end());
+        }
+        const int size[3] = {std::max(0, int(coords[0].size()) - 1), std::max(0, int(coords[1].size()) - 1),
+                             std::max(0, int(coords[2].size()) - 1)};
+        auto full = [&](const int c[3]) {
+            for (int a = 0; a < 3; ++a)
+                if (c[a] < 0 || c[a] >= size[a]) return false;
+            const float mid[3] = {(coords[0][c[0]] + coords[0][c[0] + 1]) * 0.5f, (coords[1][c[1]] + coords[1][c[1] + 1]) * 0.5f,
+                                  (coords[2][c[2]] + coords[2][c[2] + 1]) * 0.5f};
+            for (u32 i = 0; i < b.selectionCount; ++i) {
+                const Box& s = registry_.box(b.selectionFirst + i);
+                if (mid[0] > s.min[0] && mid[0] < s.max[0] && mid[1] > s.min[1] && mid[1] < s.max[1] && mid[2] > s.min[2] && mid[2] < s.max[2])
+                    return true;
+            }
+            return false;
+        };
+        std::vector<std::array<float, 6>> edges;
+        const double base[3] = {target_.x - cam.x, target_.y - cam.y, target_.z - cam.z};
+        auto emit = [&](int axis, int a, int bb, int c0, int c1) {
+            const int a1 = (axis + 1) % 3, a2 = (axis + 2) % 3;
+            std::array<float, 6> e{};
+            e[a1] = e[3 + a1] = float(base[a1] + coords[a1][a]);
+            e[a2] = e[3 + a2] = float(base[a2] + coords[a2][bb]);
+            e[axis] = float(base[axis] + coords[axis][c0]), e[3 + axis] = float(base[axis] + coords[axis][c1]);
+            edges.push_back(e);
+        };
+        for (int axis = 0; axis < 3; ++axis) {  // forAllAxisEdges: lines along `axis`
+            const int a1 = (axis + 1) % 3, a2 = (axis + 2) % 3;
+            for (int a = 0; a <= size[a1]; ++a)
+                for (int bb = 0; bb <= size[a2]; ++bb) {
+                    int lastStart = -1;
+                    for (int c = 0; c <= size[axis]; ++c) {
+                        int fullSectors = 0, oddSectors = 0;
+                        for (int da = 0; da <= 1; ++da)
+                            for (int db = 0; db <= 1; ++db) {
+                                int cell[3];
+                                cell[a1] = a + da - 1, cell[a2] = bb + db - 1, cell[axis] = c;
+                                if (full(cell)) ++fullSectors, oddSectors ^= da ^ db;
+                            }
+                        if (fullSectors == 1 || fullSectors == 3 || (fullSectors == 2 && (oddSectors & 1) == 0)) {
+                            if (lastStart == -1) lastStart = c;
+                        } else if (lastStart != -1) {
+                            emit(axis, a, bb, lastStart, c);
+                            lastStart = -1;
+                        }
+                    }
+                }
+        }
+        const float W = float(std::max(1u, renderer_.width())), H = float(std::max(1u, renderer_.height()));
+        auto pass = [&](u32 color, float width) {
+            constexpr float kLayer = 1.0f - 1.0f / 4096.0f;  // VIEW_OFFSET_Z_LAYERING (ProjectionType.PERSPECTIVE)
+            for (auto e : edges) {
+                for (float& v : e) v *= kLayer;
+                world.push_back({e[0], e[1], e[2], color, width / W, width / H});
+                world.push_back({e[3], e[4], e[5], color, width / W, width / H});
+            }
+        };
+        if (highContrastOutline) pass(0xFF000000, 7.0f);
+        pass(highContrastOutline ? 0xFFE1FF57 : 0x66000000, std::max(2.5f, W / 1920.0f * 2.5f));
     }
 
     if (!drawHud) {  // the UI draws the crosshair and hotbar

@@ -366,11 +366,13 @@ void Upscalers::logStats() const {
 // ---- per frame ---------------------------------------------------------------------------------------------
 
 void Upscalers::limitFrameRate() {
-    if (!settings_.fpsLimit) return;
-    for (Backend* b : {dlss_.get(), fsr_.get(), xess_.get()})
-        if (b->limitsFrameRate()) return;  // Reflex / XeLL pace the frames themselves
+    const u32 limit = throttle_ ? throttle_ : settings_.fpsLimit;
+    if (!limit) return;
+    if (!throttle_)
+        for (Backend* b : {dlss_.get(), fsr_.get(), xess_.get()})
+            if (b->limitsFrameRate()) return;  // Reflex / XeLL pace the frames themselves
     // Rendered frames per second = limit / frames presented per rendered frame.
-    const double interval = double(fg_ ? settings_.frameGenMultiplier : 1) / double(settings_.fpsLimit);
+    const double interval = double(fg_ ? settings_.frameGenMultiplier : 1) / double(limit);
     double now = nowSeconds();
     if (nextFrameTime_ == 0 || now - nextFrameTime_ > 0.25) nextFrameTime_ = now;
     if (!timer_) timer_ = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
