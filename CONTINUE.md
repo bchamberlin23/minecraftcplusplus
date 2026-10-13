@@ -15,7 +15,8 @@ leash ropes and fishing lines, hurting projectile motion (`projectile_power`), t
 in-world game rules (NET-13) and Restrictions, waypoints and the locator bar (NET-07), `server_data`,
 `add_transient_block`, camera overlays from the equippable component (ITEM-03), the operator block editors
 (ITEM-09) with structure / test boxes (VIS-13), area effect cloud particles (VIS-04), all level events and
-jukebox songs (FX-06). ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
+jukebox songs (FX-06), the tickable sounds (FX-10: minecarts, riding, elytra, bees, guardian, sniffer, underwater,
+bubble columns), terrain textures with shaders off (a min-LOD clamp bug). ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
 switch (automated runs never change the display mode) and the LAN publish from World Options (it would open a
 listening socket).
 
@@ -34,7 +35,6 @@ listening socket).
 - **VIS-07 / VIS-14**: profile skins and custom player heads.
 - **FX-05**: trail particle params, sulfur/gas particles.
 - **FX-07**: post-effect chains (creeper/spider/enderman spectator views etc.).
-- **FX-10**: minecart rolling, elytra wind and underwater ambient sounds.
 
 ## Screens
 
