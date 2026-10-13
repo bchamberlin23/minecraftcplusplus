@@ -29,7 +29,11 @@ beam and error markers, files dropped on the window (packs into the mods folder)
 (texture dump), the multiplayer safety warning, the experimental features confirmation, cobwebs with Weaving, every
 block's animateTick with its sounds (ClientLevel.animateTick, biome ambient particles, the creative markers), rain
 sounds, the menu and dragon music, the client-played sounds (pickups, totem, lightning, dragon, portal trigger, air
-bubbles, arrow hits, pufferfish, elder guardian curse with its appearance, armor stand hits). ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
+bubbles, arrow hits, pufferfish, elder guardian curse with its appearance, armor stand hits), the client side of mob
+ticks (blazes, endermen with the stare sound, guardians, ravagers, slimes, spellcasters, wardens, sniffers with the dig
+sound, breezes, pandas sneezing and eating, the ender dragon's phases and death explosions, feeding baby horses /
+llamas / camels), the dragon's death dissolve and rays, the player layers (stuck arrows and bee stingers, shoulder
+parrots, deadmau5's ears) and the totem activation animation. ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
 switch (automated runs never change the display mode) and the LAN publish from World Options (it would open a
 listening socket).
 
@@ -53,12 +57,6 @@ listening socket).
 - **DEBUG-01 residual**: the profiler pie (F3 + 1) and F3 + L profiling (no profiler of the game's kind), the sky
   light sections renderer, the chunk culling / octree renderers (the game's section graph), labels of the projected
   renderers not scaled with distance.
-
-## Entities
-
-- Client-side mob effects not yet ported: the breeze (jump trail, ground particles, whirl / ambient sounds), pandas
-  (sneezing, eating particles), horses / llamas / camels eating, the ender dragon's phase particles, the sniffer's
-  digging hit sound, the enderman stare sound.
 
 ## Gameplay / world
 

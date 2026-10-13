@@ -241,6 +241,8 @@ struct Visuals::Impl {
     void waterAndSprint(const double pos[3], const double vel[3], float width, bool inWater, bool& wasIn, bool sprinting);
     std::unordered_map<int, int> stunnedTicks;  // Ravager.stunnedTick (event 39)
     std::unordered_map<int, std::pair<u8, int>> pandaState;  // was sneezing, the last EAT_COUNTER seen
+    std::unordered_map<int, std::pair<int, int>> dragonPhase;  // the client's DragonPhaseInstance and its tick counter
+    void dragonTick(const Entity& e);
     struct StareState { i64 creepy = -1, staredAt = 0, lastSound = INT64_MIN / 2; };
     std::unordered_map<int, StareState> stareState;  // Enderman DATA_CREEPY / DATA_STARED_AT as last seen, lastStareSound
     std::unordered_map<int, std::pair<int, u64>> stateStart;  // pose / sniffer state and the age it began (animation times)
@@ -2622,7 +2624,71 @@ void Visuals::Impl::waterAndSprint(const double pos[3], const double vel[3], flo
     if (sprinting && !inWater) particles->sprintDust(pos[0], pos[1], pos[2], width, vel);
 }
 
+// EnderDragon.aiStep (client): the explosions while dying, else the phase's doClientTick.
+void Visuals::Impl::dragonTick(const Entity& e) {
+    std::uniform_real_distribution<double> uni(0.0, 1.0);
+    std::normal_distribution<double> gau(0.0, 1.0);
+    auto R = [&] { return uni(fxRandom); };
+    if (e.health <= 0) {
+        particles->spawn("explosion", e.pos[0] + (R() - 0.5) * 8.0, e.pos[1] + 2.0 + (R() - 0.5) * 4.0, e.pos[2] + (R() - 0.5) * 8.0, 0, 0, 0);
+        return;
+    }
+    if (e.mobFlags & 1) return;  // NoAI: no flight history, no phase ticks
+    // EnderDragonPhaseManager.setPhase on DATA_PHASE: a new phase begins with its counters at 0.
+    auto& [phase, ticks] = dragonPhase[e.id];
+    const int now = int(dataInt(e, "DATA_PHASE"));
+    if (now != phase) phase = now, ticks = 0;
+    const bool sitting = phase >= 5 && phase <= 7;
+    auto hist = [&](int delay) { return e.sp.history[(std::max(e.sp.historyPos, 0) - delay) & 63]; };  // DragonFlightHistory.get
+    auto head = [&](double out[3]) {  // tickPart(head): y at its middle (getY(0.5)); yRotA stays 0 on the client
+        const float tilt = (hist(5)[0] - hist(10)[0]) * 10.0f * kDeg, yr = e.yaw * kDeg;
+        const float yOffset = sitting ? -1.0f : hist(5)[0] - hist(0)[0];
+        out[0] = e.pos[0] + std::sin(yr) * 6.5f * std::cos(tilt);
+        out[1] = e.pos[1] + yOffset + std::sin(tilt) * 6.5f + 0.5;
+        out[2] = e.pos[2] - std::cos(yr) * 6.5f * std::cos(tilt);
+    };
+    auto look = [&](double out[3]) {  // getHeadLookVector(1)
+        float xRot = e.pitch;
+        if (phase == 3 || phase == 4) {  // LANDING / TAKEOFF: towards the podium (the fight origin is 0, 0 here)
+            int top = 319;
+            while (top > -64 && world.registry().name(world.world().block(0, top, 0)).ends_with("air")) --top;
+            const double dx = 0.5 - e.pos[0], dy = top + 1.5 - e.pos[1], dz = 0.5 - e.pos[2];
+            const float dist = std::max(float(std::sqrt(dx * dx + dy * dy + dz * dz)) / 4.0f, 1.0f);
+            xRot = -(6.0f / dist) * 1.5f * 5.0f;
+        } else if (sitting) {
+            xRot = -45.0f;
+        }
+        const float f = xRot * kDeg, g = -e.yaw * kDeg;  // Entity.calculateViewVector
+        out[0] = std::sin(g) * std::cos(f), out[1] = -std::sin(f), out[2] = std::cos(g) * std::cos(f);
+    };
+    // The phases turn their look vector with look.yRot(..) and drop the result, so every particle uses the same one.
+    if (phase == 9) {  // DragonDeathPhase
+        if (ticks++ % 10 == 0)
+            particles->spawn("explosion_emitter", e.pos[0] + (R() - 0.5) * 8.0, e.pos[1] + 2.0 + (R() - 0.5) * 4.0, e.pos[2] + (R() - 0.5) * 8.0, 0, 0, 0);
+    } else if (phase == 3) {  // DragonLandingPhase
+        double h[3], l[3];
+        head(h), look(l);
+        for (int i = 0; i < 8; ++i)
+            particles->spawnPower("dragon_breath", h[0] + gau(fxRandom) / 2.0, h[1] + gau(fxRandom) / 2.0, h[2] + gau(fxRandom) / 2.0,
+                                  -l[0] * 0.08f + e.vel[0], -l[1] * 0.3f + e.vel[1], -l[2] * 0.08f + e.vel[2], 1.0f);
+    } else if (phase == 5) {  // DragonSittingFlamingPhase
+        if (++ticks % 2 == 0 && ticks < 10) {
+            double h[3], l[3];
+            head(h), look(l);
+            for (int i = 0; i < 8; ++i) {
+                const double px = h[0] + gau(fxRandom) / 2.0, py = h[1] + gau(fxRandom) / 2.0, pz = h[2] + gau(fxRandom) / 2.0;
+                for (int j = 0; j < 6; ++j)
+                    particles->spawnPower("dragon_breath", px, py, pz, -l[0] * 0.08f * j, -l[1] * 0.6f, -l[2] * 0.08f * j, 1.0f);
+            }
+        }
+    } else if (phase == 7 && !e.silent) {  // DragonSittingAttackingPhase: a growl every tick
+        if (audio::AudioSystem* a = audio::instance())
+            a->play("minecraft:entity.ender_dragon.growl", audio::Category::Hostile, e.pos[0], e.pos[1], e.pos[2], 2.5f, 0.8f + float(R()) * 0.3f);
+    }
+}
+
 void Visuals::Impl::mobTick(const Entity& e) {
+    if (e.info && e.info->name == "minecraft:ender_dragon") return dragonTick(e);
     if (!e.info || e.dying) return;
     {
         u8& was = wasInWater[e.id];
