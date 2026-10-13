@@ -405,10 +405,15 @@ void readEntityData(net::Reader& r, EventQueue& q, int entityEffect,
                 if (r.boolean()) r.str(), r.i64v();
                 keep = false;
                 break;
-            case 34: {  // painting variant: registry id + 1, or 0 + inline definition
+            case 34: {  // painting variant: registry id + 1, or 0 + inline definition (PaintingVariant.DIRECT_STREAM_CODEC)
                 const i32 h = r.varInt();
-                if (h == 0) stop = true;
                 v.i = h - 1;
+                if (h == 0) {
+                    v.f[0] = float(r.varInt()), v.f[1] = float(r.varInt());
+                    q.strings.emplace_back(r.str()), v.str = i32(q.strings.size() - 1);
+                    for (int c = 0; c < 2; ++c)  // optional title and author
+                        if (r.boolean()) r.nbt();
+                }
                 break;
             }
             case 35: case 36: case 37: case 38: case 42: case 43: v.i = r.varInt(); break;  // enums
@@ -1299,6 +1304,15 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
         else if (idx == d.rotation && v.serializer == 1) e.rotation = int(v.i);
         else if (idx == d.painting && v.serializer == 34) {
             e.painting = int(v.i);
+            if (v.i < 0 && v.str >= 0) {  // inline: interned
+                InlinePainting p{std::clamp(int(v.f[0]), 1, 16), std::clamp(int(v.f[1]), 1, 16), q.strings[size_t(v.str)]};
+                size_t k = 0;
+                while (k < inlinePaintings.size() &&
+                       (inlinePaintings[k].w != p.w || inlinePaintings[k].h != p.h || inlinePaintings[k].asset != p.asset))
+                    ++k;
+                if (k == inlinePaintings.size()) inlinePaintings.push_back(std::move(p));
+                e.painting = kInlinePainting + int(k);
+            }
             if (attachedKind(e) == 2) recalcAttached(*this, e, 2);  // Painting.onSyncedDataUpdated
         }
         else if (idx == d.nameVisible && v.serializer == 8) e.nameVisible = v.i != 0;

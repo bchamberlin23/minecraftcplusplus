@@ -192,7 +192,7 @@ struct Entity {
     int rotation = 0;           // item frame rotation (0..7)
     int direction = 0;          // add_entity data: facing of hanging entities (Direction 3D value)
     int attachBlock[3] = {};    // BlockAttachedEntity.pos: the block of item frames, paintings and leash knots
-    int painting = -1;          // painting_variant network id
+    int painting = 0;           // painting_variant network id (unsent: the registry's first, VariantUtils.getAny)
     bool nameVisible = false;   // DATA_CUSTOM_NAME_VISIBLE
 
     // Animation timers (ticks).
@@ -446,6 +446,13 @@ public:
     bool piglinsZombify = true;
     // A painting variant's size in blocks (the renderer's registry): false when unknown.
     std::function<bool(int variant, int& w, int& h)> paintingSize;
+    // Painting variants sent inline (a direct holder): variant kInlinePainting + index.
+    static constexpr int kInlinePainting = 0x10000;
+    struct InlinePainting {
+        int w = 1, h = 1;
+        std::string asset;
+    };
+    std::vector<InlinePainting> inlinePaintings;
     std::function<u64()> meshSerial;
     std::function<u64(int, int, int)> sectionMeshSerial;
 

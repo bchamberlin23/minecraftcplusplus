@@ -326,7 +326,7 @@ struct Visuals::Impl {
         bool known = false;
         const ItemMesh* mesh = nullptr;
     };
-    std::vector<PaintingInfo> paintings;
+    std::vector<PaintingInfo> paintings, inlinePaintings;
 
     // Timing history (exit report): CPU per frame over all stages, particles alive.
     static constexpr u32 kHistory = 512;
@@ -1484,6 +1484,17 @@ void Visuals::Impl::updateItemOwner(float pt) {
 }
 
 const Visuals::Impl::PaintingInfo* Visuals::Impl::painting(int id) {
+    if (id >= EntityWorld::kInlinePainting) {  // a definition sent with the entity
+        const size_t k = size_t(id - EntityWorld::kInlinePainting);
+        if (k >= world.inlinePaintings.size()) return nullptr;
+        if (inlinePaintings.size() <= k) inlinePaintings.resize(k + 1);
+        PaintingInfo& p = inlinePaintings[k];
+        if (!p.known) {
+            const EntityWorld::InlinePainting& d = world.inlinePaintings[k];
+            p.known = true, p.asset = d.asset, p.w = d.w, p.h = d.h;
+        }
+        return &p;
+    }
     if (id < 0 || id > 4096) return nullptr;
     if (paintings.size() <= size_t(id)) paintings.resize(size_t(id) + 1);
     PaintingInfo& p = paintings[size_t(id)];
