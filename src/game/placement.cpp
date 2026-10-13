@@ -507,6 +507,14 @@ Result placementState(const Context& c, u16 held, const int pos[3], bool replace
         r.state = with(c, with(c, held, "shape", eastWest ? "east_west" : "north_south"), "waterlogged", water ? "true" : "false");
         return r;
     }
+    if (n == "minecraft:big_dripleaf") {  // BigDripleafBlock.getStateForPlacement: on a dripleaf part, its facing
+        const u16 below = at(c, pos, kDown);
+        const std::string bn = nameOf(c, below);
+        const bool onPart = bn == n || bn == "minecraft:big_dripleaf_stem";
+        s = with(c, held, "facing", onPart ? reg.property(below, "facing") : std::string_view(kName[opposite(horiz)]));
+        r.state = with(c, s, "waterlogged", water ? "true" : "false");
+        return r;
+    }
     if (isSpeleothem(n)) {  // SpeleothemBlock.getStateForPlacement: tip against the look, or the other way if supported
         const int fallback = c.pitch < 0 ? kDown : kUp;  // getNearestLookingVerticalDirection().getOpposite()
         const int tip = speleothemValid(c, n, pos, fallback) ? fallback : speleothemValid(c, n, pos, opposite(fallback)) ? opposite(fallback) : -1;
@@ -796,6 +804,11 @@ void neighbourShapes(const Context& c, int x, int y, int z, u16 old, std::vector
             const int toUs = opposite(d);
             const bool connect = selfName == nn || selfName == "minecraft:chorus_flower" || (toUs == kDown && selfName == "minecraft:end_stone");
             updated = with(c, nb, kName[toUs], connect ? "true" : "false");
+        } else if (nn == "minecraft:big_dripleaf" && d == kDown && selfName == nn) {
+            // BigDripleafBlock.updateShape: another dripleaf on top turns it into a stem (withPropertiesOf)
+            const u16 stem = reg.defaultState("minecraft:big_dripleaf_stem");
+            if (stem)
+                updated = with(c, with(c, stem, "facing", reg.property(nb, "facing")), "waterlogged", reg.property(nb, "waterlogged"));
         } else if (isSpeleothem(nn) && !horizontal(d)) {  // SpeleothemBlock.updateShape from above / below
             const int tip = faceByName(reg.property(nb, "vertical_direction"));
             const bool supportGone = opposite(d) == opposite(tip) && !speleothemValid(c, nn, q, tip);  // the server breaks it
