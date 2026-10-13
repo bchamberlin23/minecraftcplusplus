@@ -838,7 +838,40 @@ bool Ui::State::textFieldKey(TextField& f, const Window::InputEvent& e) {
     return false;
 }
 
+namespace {
+int fieldPosAt(Ui::State& s, const Ui::State::TextField& f, float mouseX) {  // EditBox.findClickedPositionInText
+    const int rel = std::min(int(std::floor(mouseX)) - int(f.textX), int(f.textW));
+    const std::string_view visible = std::string_view(f.value).substr(size_t(std::min<int>(f.scroll, int(f.value.size()))));
+    const std::string head = s.font.headByWidth(visible, std::max(0, rel));
+    return std::min(int(f.value.size()), f.scroll + int(head.size()));
+}
+}  // namespace
+
+bool Ui::State::textFieldHit(const TextField& f) const {
+    return mouseX >= f.textX - 4 && mouseX < f.textX + f.textW + 4 && mouseY >= f.textY - 4 && mouseY < f.textY + 12;
+}
+
+void Ui::State::textFieldMouseDown(TextField& f) {
+    const int pos = fieldPosAt(*this, f, mouseX);
+    const bool dbl = f.lastClick >= 0 && clock - f.lastClick < 0.25;  // MouseHandler: the same button within 250 ms
+    f.lastClick = dbl ? -1 : clock;
+    if (dbl) {  // selectWord
+        f.selection = int(wordPos(f.value, size_t(pos), -1));
+        f.cursor = int(wordPos(f.value, size_t(pos), 1));
+    } else {
+        f.cursor = pos;
+        if (!window || !window->keyDown(VK_SHIFT)) f.selection = pos;
+    }
+    f.blinkStart = clock;
+    dragField = &f;
+}
+
 void Ui::State::drawTextField(Canvas& c, TextField& f, float x, float y, float w, u32 color, bool focused, bool shadow) {
+    f.textX = x, f.textY = y, f.textW = w;
+    if (dragField == &f) {  // EditBox.onDrag: the cursor follows the mouse while the left button is down
+        if (leftDown) f.cursor = fieldPosAt(*this, f, mouseX);
+        else dragField = nullptr;
+    }
     // Keep the cursor visible (EditBox.scrollTo).
     const int width = int(w);
     f.scroll = std::min(f.scroll, int(f.value.size()));

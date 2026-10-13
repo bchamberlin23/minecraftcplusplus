@@ -277,7 +277,14 @@ struct Ui::State {
         int maxLength = 256;
         double blinkStart = 0;
         int scroll = 0;  // first visible byte
+        float textX = 0, textY = 0, textW = 0;  // where drawTextField last put the text (GUI): mouse clicks
+        double lastClick = -1;                  // the last click's clock (a second within 250 ms selects a word)
     };
+    // EditBox.onClick at the mouse: the cursor at the clicked character (Shift: extending the selection; a double click:
+    // the word), and onDrag while the left button stays down. textFieldHit: the mouse is over the field's text line.
+    void textFieldMouseDown(TextField& f);
+    bool textFieldHit(const TextField& f) const;
+    TextField* dragField = nullptr;
     TextField chatInput, search;
     // EditBox.setFormatter for the chat input (chat_ext.cpp: command colouring): the visible text from `offset`;
     // false keeps the plain text.

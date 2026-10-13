@@ -1327,11 +1327,7 @@ void dialogInput(UiState& s, const Window::InputEvent& e) {
                     return;
                 case Widget::Edit: {
                     inst->focus = w.input;
-                    auto& f = inst->inputs[size_t(w.input)].field;
-                    const std::string_view visible = std::string_view(f.value).substr(size_t(std::min<int>(f.scroll, int(f.value.size()))));
-                    const std::string head = s.font.headByWidth(visible, int(std::max(0.0f, mx - (x + 4))));
-                    f.cursor = f.selection = std::min(int(f.value.size()), f.scroll + int(head.size()));
-                    f.blinkStart = s.clock;
+                    s.textFieldMouseDown(inst->inputs[size_t(w.input)].field);  // EditBox.onClick
                     return;
                 }
                 case Widget::MultiEdit: inst->focus = w.input; return;

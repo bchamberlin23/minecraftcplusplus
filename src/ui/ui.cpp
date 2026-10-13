@@ -247,6 +247,7 @@ int Ui::State::guiScale() const {
 
 void Ui::State::openScreen(Screen s) {
     const bool wasNone = screen == Screen::None;
+    dragField = nullptr;
     if (screen == Screen::Video && s != Screen::Video) window->changeFullscreenVideoMode();  // VideoSettingsScreen.onClose
     if (screen == Screen::Chat && s != Screen::Chat) leaveChat();
     if (screen != s)
@@ -295,6 +296,7 @@ void Ui::State::openChat(bool command) {
 
 void Ui::State::closeScreen(bool sendClose) {
     const Screen old = screen;
+    dragField = nullptr;
     if (old == Screen::Chat) leaveChat();
     if (const ScreenDef* d = screenDef(old); d && d->closed) d->closed(*this);
     if ((old == Screen::Inventory || old == Screen::Container) && online()) {

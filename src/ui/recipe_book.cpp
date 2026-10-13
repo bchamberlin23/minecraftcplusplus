@@ -1042,6 +1042,7 @@ bool recipeBookInput(UiState& s, const InputEvent& e, Menu& m, float left) {
         // The search box (and the magnifier left of it).
         if (inRect(mx, my, xo + 8, yo + 13, 98, 14)) {
             g.searchFocused = true;
+            if (s.textFieldHit(g.search)) s.textFieldMouseDown(g.search);
             return true;
         }
         g.searchFocused = false;

@@ -122,6 +122,10 @@ void anvilDrawFg(UiState& s, Canvas& c, Menu& m, const Layout& l, float left, fl
 
 bool anvilInput(UiState& s, const InputEvent& e, Menu& m, const Layout&, float, float) {
     if (m.slots[0].empty()) return false;  // not editable: keys go to the screen (E closes)
+    if (e.type == InputEvent::Button && e.down && e.code == 0 && s.textFieldHit(anvil.name)) {  // EditBox.onClick
+        s.textFieldMouseDown(anvil.name);
+        return true;
+    }
     if (e.type == InputEvent::Key && e.down && e.code == VK_ESCAPE) return false;
     if (e.type == InputEvent::Char || (e.type == InputEvent::Key && e.down)) {
         const std::string before = anvil.name.value;

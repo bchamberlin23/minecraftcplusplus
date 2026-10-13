@@ -537,6 +537,7 @@ bool chatExtInput(UiState& s, const InputEvent& e) {
         if (chatSpecialClick(s, s.mouseX, s.mouseY)) return true;
         Style st;
         if (chatStyleAt(s, s.mouseX, s.mouseY, st)) return clickStyle(s, st, s.window->keyDown(VK_SHIFT));
+        if (s.screen == Screen::Chat && s.textFieldHit(s.chatInput)) return s.textFieldMouseDown(s.chatInput), true;  // EditBox.onClick
     }
     return false;
 }

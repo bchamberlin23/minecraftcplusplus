@@ -254,12 +254,7 @@ bool fieldsInput(State& s, const Window::InputEvent& e) {
             Field& fl = *f.fields[i];
             if (s.mouseX < fl.x || s.mouseY < fl.y || s.mouseX >= fl.x + fl.w || s.mouseY >= fl.y + fl.h) continue;
             f.focus = int(i);
-            // Cursor at the click (EditBox.onClick).
-            const float rel = s.mouseX - (fl.x + 4);
-            const std::string_view visible = std::string_view(fl.text.value).substr(size_t(std::min<int>(fl.text.scroll, int(fl.text.value.size()))));
-            const std::string head = s.font.headByWidth(visible, int(std::max(0.0f, rel)));
-            fl.text.cursor = fl.text.selection = std::min(int(fl.text.value.size()), fl.text.scroll + int(head.size()));
-            fl.text.blinkStart = s.clock;
+            s.textFieldMouseDown(fl.text);  // EditBox.onClick
             return true;
         }
         f.focus = -1;

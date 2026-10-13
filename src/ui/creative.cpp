@@ -722,6 +722,7 @@ void input(UiState& s, const InputEvent& e) {
         return;
     }
     const int button = e.code;
+    if (button == 0 && tab().kind == TabKind::Search && s.textFieldHit(s.search)) return s.textFieldMouseDown(s.search);  // EditBox.onClick
     if (button == 0) {
         for (int t = 0; t < kTabCount; ++t)
             if (tabVisible(t) && overTab(t, rx, ry)) return;  // selected on release

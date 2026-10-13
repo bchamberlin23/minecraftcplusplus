@@ -155,7 +155,7 @@ void input(UiState& s, const Window::InputEvent& e) {
         const float bx = float(s.guiW() / 2 - 100), by = float((kHeaderH - 28) / 2 + 13);
         if (s.mouseX >= bx && s.mouseX < bx + 200 && s.mouseY >= by && s.mouseY < by + 15) {
             g.searchFocused = true, g.listFocused = false;
-            g.search.blinkStart = s.clock;
+            s.textFieldMouseDown(g.search);
             return;
         }
         const float left = float(s.guiW() / 2 - kRowW / 2);
