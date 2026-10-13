@@ -111,7 +111,10 @@ Container clicks (drag on mouse moves, remainder count, highlightable slots), bl
 client, invisible blocks without particles), view bobbing, entity use (the hand loop) and picking, and the camera
 audited and fixed. Camera residuals while spectating an entity: its eye height is the type's constant (no pose /
 scale / easing), its hurt tilt and walk bob are not applied, and the FOV modifiers stay 1 (the game uses a spectated
-player's flying / speed / bow); the minecart camera branch is not implemented. Toasts follow ToastInstance now (the
+player's flying / speed / bow); the minecart camera branch is not implemented. Also audited and fixed: music (fades, underwater), tooltips, key
+binds, the spectator menu (residual: teams listed alphabetically, Java's hash order), the title screen (the first
+one fades in; deliberate: the live world panorama without the overlay, Mods & Packs in the Realms slot, the port in
+the version line) and command suggestions. Toasts follow ToastInstance now (the
 server pack download toast shows its progress). Toast residuals: no toasts
 for world access / chunk load or save /
 file drop / pack load failures or periodic notifications; friend toasts have no face (this port's friends have no
