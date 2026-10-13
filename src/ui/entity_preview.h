@@ -26,7 +26,16 @@ struct PreviewEntity {
     float modelScale = 1.0f;           // the renderer's own scale (players 0.9375)
     ItemStack held[2];                 // ItemInHandLayer: right arm, left arm (drawn as flat cards)
     std::vector<std::string> hiddenParts;  // parts not drawn (chests of unchested animals, reins when not ridden)
+    // GuiGraphicsExtractor.entity with a fixed view instead of following the mouse: translation y, rotation
+    // rotationXYZ(viewRotX, 0, viewRotZ) and the body's rotation (degrees).
+    bool fixedView = false;
+    float viewY = 0, viewRotX = 0, viewRotZ = 0, bodyRot = 0;
 };
+
+// HumanoidArmorLayer pieces of a stack worn on `model` (equipment asset layers, then its trim).
+void addArmorLayers(UiState& s, PreviewEntity& out, int model, const ItemStack& stack, const std::string& asset, const char* layerType);
+// SmithingScreen's armour stand preview: the result in its equipment slot (else in the left hand).
+bool previewSmithingArmorStand(UiState& s, const ItemStack& result, PreviewEntity& out);
 
 // The local player (skin from the player list, default skin otherwise). false: no entity models.
 bool previewLocalPlayer(UiState& s, PreviewEntity& out);

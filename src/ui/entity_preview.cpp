@@ -93,6 +93,49 @@ void addEquipment(UiState& s, PreviewEntity& out, int model, const std::string& 
 }
 }  // namespace
 
+void addArmorLayers(UiState& s, PreviewEntity& out, int model, const ItemStack& stack, const std::string& asset, const char* layerType) {
+    addEquipment(s, out, model, asset, layerType, stack.dyedColor);
+    // EquipmentLayerRenderer: the trim over the pieces (its palette-mapped texture, kept by the trim and asset)
+    const std::string* data = findComponent(s.items, stack, "trim");
+    if (!data || model < 0) return;
+    static std::unordered_map<std::string, std::string> made;  // trim + asset + layer -> sprite key ("" none)
+    const std::string key = *data + '|' + asset + '|' + layerType;
+    auto it = made.find(key);
+    if (it == made.end()) {
+        Image img;
+        std::string id;
+        std::string sprite;
+        if (armorTrimImage(s.items, s.res, stack, asset, layerType, img, id) && s.sprites.addImage("trim:" + id, img)) sprite = "trim:" + id;
+        it = made.emplace(key, sprite).first;
+    }
+    if (!it->second.empty()) out.layers.push_back({model, it->second});
+}
+
+bool previewSmithingArmorStand(UiState& s, const ItemStack& result, PreviewEntity& out) {
+    if (!s.entities) return false;
+    const ent::EntityAssets& a = s.entities->assets();
+    const int model = a.model("armor_stand#main");
+    if (model < 0) return false;
+    out = PreviewEntity{};
+    out.layers.push_back({model, "entity/armorstand/armorstand"});
+    out.anim = ent::Anim::ArmorStand;
+    out.height = 1.975f;
+    out.state.standFlags = 4 | 8;  // showArms, no base plate
+    static const float kPose[6][3] = {{0, 0, 0}, {0, 0, 0}, {-10, 0, -10}, {-15, 0, 10}, {-1, 0, -1}, {1, 0, 1}};
+    out.state.standPose = kPose;
+    out.fixedView = true;  // SmithingScreen: translation (0, 1, 0), rotationXYZ(0.43633232, 0, pi), body 210
+    out.viewY = 1.0f, out.viewRotX = 0.43633232f, out.viewRotZ = 3.14159265f, out.bodyRot = 210.0f;
+    if (result.empty() || !s.itemModels) return true;
+    const ent::ItemModels::Equippable& eq = s.itemModels->equippable(result.item);
+    static const char* kPieces[4] = {"#helmet", "#chestplate", "#leggings", "#boots"};
+    if (eq.slot >= 2 && eq.slot <= 5 && !eq.asset.empty())  // FEET .. HEAD with an equipment asset
+        addArmorLayers(s, out, a.model(std::string("armor_stand") + kPieces[5 - eq.slot]), result, eq.asset,
+                       eq.slot == 3 ? "humanoid_leggings" : "humanoid");
+    else if (eq.slot < 2 || eq.slot > 5)
+        out.held[1] = result;  // the left hand (THIRD_PERSON_LEFT_HAND)
+    return true;
+}
+
 bool previewLocalPlayer(UiState& s, PreviewEntity& out) {
     if (!s.entities) return false;
     const ent::EntityAssets& a = s.entities->assets();
@@ -123,8 +166,7 @@ bool previewLocalPlayer(UiState& s, PreviewEntity& out) {
             if (!st) continue;
             const ent::ItemModels::Equippable& eq = s.itemModels->equippable(st->item);
             if (eq.slot != slot || eq.asset.empty()) continue;
-            addEquipment(s, out, a.model(set + kPieces[5 - slot]), eq.asset, slot == 3 ? "humanoid_leggings" : "humanoid",
-                         st->dyedColor);
+            addArmorLayers(s, out, a.model(set + kPieces[5 - slot]), *st, eq.asset, slot == 3 ? "humanoid_leggings" : "humanoid");
         }
         if (const ItemStack* chest = stack(6)) {
             const ent::ItemModels::Equippable& eq = s.itemModels->equippable(chest->item);
@@ -209,12 +251,14 @@ void drawEntityFollowsMouse(UiState& s, Canvas& c, const PreviewEntity& pe, int 
     const float xAngle = std::atan((cx - mouseX) / 40.0f), yAngle = std::atan((cy - mouseY) / 40.0f);
     // LivingEntityRenderState from the mouse: bodyRot 180 + x * 20, head yaw x * 20 (relative), pitch -y * 20.
     ent::AnimState st = pe.state;
-    st.headYaw = xAngle * 20.0f;
-    st.pitch = -yAngle * 20.0f;
-    const float bodyRot = 180.0f + xAngle * 20.0f;
+    st.headYaw = pe.fixedView ? 0.0f : xAngle * 20.0f;
+    st.pitch = pe.fixedView ? 0.0f : -yAngle * 20.0f;
+    const float bodyRot = pe.fixedView ? pe.bodyRot : 180.0f + xAngle * 20.0f;
     // GuiEntityRenderer: translate(0, height / 2 + offsetY), rotate Z(pi) * X(yAngle * 20 deg); the picture is
-    // centred on the box and scaled by size (z flipped: larger z is nearer).
-    const M34 view = mul(mul(translate(0, pe.height / 2.0f + offsetY, 0), rotZ(kPi)), rotX(yAngle * 20.0f * kDeg));
+    // centred on the box and scaled by size (z flipped: larger z is nearer). Fixed: the given translation and
+    // rotationXYZ.
+    const M34 view = pe.fixedView ? mul(mul(translate(0, pe.viewY, 0), rotX(pe.viewRotX)), rotZ(pe.viewRotZ))
+                                  : mul(mul(translate(0, pe.height / 2.0f + offsetY, 0), rotZ(kPi)), rotX(yAngle * 20.0f * kDeg));
     // LivingEntityRenderer: rotY(180 - bodyRot), scale(-1, -1, 1), the renderer's scale, translate(0, -1.501, 0).
     M34 root = mul(view, rotY((180.0f - bodyRot) * kDeg));
     root = mul(root, scale(-pe.modelScale, -pe.modelScale, pe.modelScale));

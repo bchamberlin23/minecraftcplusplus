@@ -2,6 +2,7 @@
 // enchanting table (EnchantmentScreen with its book and the galactic enchantment names), registered as StationDefs
 // (modules.h) on the generic container screen.
 #include "entity/entities.h"
+#include "ui/entity_preview.h"
 #include "ui/item_ui.h"
 
 #include <cmath>
@@ -235,6 +236,11 @@ void smithingTick(UiState& s, Menu& m) {  // SmithingScreen.containerTick: Cycli
 void smithingDrawBg(UiState& s, Canvas& c, Menu& m, const Layout& l, float left, float top) {
     for (int guard = 0; smithing.lastTick < s.guiTicks && guard < 40; ++guard) ++smithing.lastTick, smithingTick(s, m);
     smithing.lastTick = s.guiTicks;
+    {  // the armour stand preview of the result, 25 px per block in (121, 20) - (161, 80)
+        PreviewEntity pe;
+        if (m.slots.size() > 3 && previewSmithingArmorStand(s, m.slots[3], pe))
+            drawEntityFollowsMouse(s, c, pe, int(left) + 121, int(top) + 20, int(left) + 161, int(top) + 80, 25.0f, 0, s.mouseX, s.mouseY);
+    }
     if (m.data[0] != 0) blitSprite(c, sp(s, "container/smithing/error"), left + 65, top + 46, 28, 21);
     for (int i = 0; i < 3; ++i) {  // CyclingSlotBackground.extractRenderState
         const auto& cy = smithing.cycles[i];
