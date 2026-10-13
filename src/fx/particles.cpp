@@ -1282,6 +1282,9 @@ void Particles::levelEvent(int type, int bx, int by, int bz, int data) {
     auto sound = [&](const char* name, Category cat, float volume, float pitch) {  // level.playLocalSound(pos, ...)
         if (audio::AudioSystem* a = audio::instance()) a->playNetwork(-1, name, cat, center, volume, pitch);
     };
+    auto delayedSound = [&](const char* name, Category cat, float volume, float pitch) {  // ... with distanceDelay
+        distanceDelayedSound(name, int(cat), center, volume, pitch);
+    };
     auto rnd = [&] { return double(randf()); };
     auto variedPitch = [&] { return (randf() - randf()) * 0.2f + 1.0f; };
     auto smallPitch = [&] { return randf() * 0.1f + 0.9f; };
@@ -1635,18 +1638,18 @@ void Particles::levelEvent(int type, int bx, int by, int bz, int data) {
                 addNamed("smoke", x, y, z, 0, 0, 0);
                 addNamed(data == 0 ? "small_flame" : "soul_fire_flame", x, y, z, 0, 0, 0);
             }
-            sound("minecraft:block.vault.activate", Category::Block, 1.0f, variedPitch());
+            delayedSound("minecraft:block.vault.activate", Category::Block, 1.0f, variedPitch());
             break;
         case 3016:  // emitDeactivationParticles
             for (int i = 0; i < 20; ++i)
                 addNamed(data == 0 ? "small_flame" : "soul_fire_flame", bx + 0.4 + rnd() * 0.2, by + 0.4 + rnd() * 0.2, bz + 0.4 + rnd() * 0.2, gauss() * 0.02,
                          gauss() * 0.02, gauss() * 0.02);
-            sound("minecraft:block.vault.deactivate", Category::Block, 1.0f, variedPitch());
+            delayedSound("minecraft:block.vault.deactivate", Category::Block, 1.0f, variedPitch());
             break;
         case 3017: ejectItem(); break;
         case 3018:
             for (int i = 0; i < 10; ++i) addNamed("poof", bx + rnd(), by + rnd(), bz + rnd(), gauss() * 0.02, gauss() * 0.02, gauss() * 0.02);
-            sound("minecraft:block.cobweb.place", Category::Block, 1.0f, variedPitch());
+            delayedSound("minecraft:block.cobweb.place", Category::Block, 1.0f, variedPitch());
             break;
         case 3019:
             sound("minecraft:block.trial_spawner.detect_player", Category::Block, 1.0f, variedPitch());
@@ -1765,8 +1768,8 @@ void Particles::tickStarter(Starter& s) {
     if (spark == -2) spark = typeId("firework"), flash = typeId("flash");
     const double dx = s.pos[0] - cam_[0], dy = s.pos[1] - cam_[1], dz = s.pos[2] - cam_[2];
     const bool distant = dx * dx + dy * dy + dz * dz >= 256.0;
-    auto play = [&](const char* name, float pitch) {
-        if (audio::AudioSystem* a = audio::instance()) a->playNetwork(-1, name, audio::Category::Ambient, s.pos, 20.0f, pitch);
+    auto play = [&](const char* name, float pitch) {  // FireworkParticles.Starter: playLocalSound(..., true)
+        distanceDelayedSound(name, int(audio::Category::Ambient), s.pos, 20.0f, pitch);
     };
     if (s.life == 0 && s.sound) {
         bool large = s.explosions.size() >= 3;
@@ -2691,6 +2694,16 @@ bool Particles::tagged(std::string_view tag, u16 id) const {
     return blockTag(tag, std::string_view(n).substr(0, n.find('[')));
 }
 
+void Particles::distanceDelayedSound(std::string_view name, int category, const double pos[3], float volume, float pitch) {
+    const double dx = pos[0] - cam_[0], dy = pos[1] - cam_[1], dz = pos[2] - cam_[2], d2 = dx * dx + dy * dy + dz * dz;
+    if (d2 > 100.0) {  // playDelayed(instance, (int)(seconds * 20)) ticks
+        const int ticks = int(std::sqrt(d2) / 40.0 * 20.0);
+        delayedSounds_.push_back({nowSeconds() + ticks / 20.0, std::string(name), category, {pos[0], pos[1], pos[2]}, volume, pitch});
+        return;
+    }
+    if (audio::AudioSystem* a = audio::instance()) a->playNetwork(-1, name, audio::Category(category), pos, volume, pitch);
+}
+
 void Particles::localSound(const char* id, double x, double y, double z, float volume, float pitch, bool ambientCategory) {
     if (audio::AudioSystem* a = audio::instance()) {
         const double pos[3] = {x, y, z};
@@ -3597,6 +3610,18 @@ void Particles::frame(double dt, const double cam[3]) {
                         gauss() * s.sy, gauss() * s.sz, &s.opt);
                 }
             }
+        }
+    }
+    if (!delayedSounds_.empty()) {  // SoundManager.playDelayed: the due ones
+        const double now = nowSeconds();
+        for (size_t i = 0; i < delayedSounds_.size();) {
+            const DelayedSound& d = delayedSounds_[i];
+            if (d.at > now) {
+                ++i;
+                continue;
+            }
+            if (audio::AudioSystem* a = audio::instance()) a->playNetwork(-1, d.name, audio::Category(d.category), d.pos, d.volume, d.pitch);
+            delayedSounds_.erase(delayedSounds_.begin() + std::ptrdiff_t(i));
         }
     }
     tickClock_ += std::min(dt, 0.25);

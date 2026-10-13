@@ -205,6 +205,16 @@ private:
     std::mt19937 rng_{0x51A7E5u};
     double tickClock_ = 0, cam_[3] = {};
     int status_ = 0, weatherRadius_ = 10;
+    // ClientLevel.playLocalSound(..., distanceDelay): beyond 10 blocks the sound waits distance / 40 s (sound speed).
+    struct DelayedSound {
+        double at;
+        std::string name;
+        int category;
+        double pos[3];
+        float volume, pitch;
+    };
+    std::vector<DelayedSound> delayedSounds_;
+    void distanceDelayedSound(std::string_view name, int category, const double pos[3], float volume, float pitch);
     // ClientLevel.doAddParticle: a type or packet that overrides the limiter always shows; others only within 32
     // blocks of the camera and not at the (randomly lowered) MINIMAL level (calculateParticleLevel).
     bool levelAllows(int typeIndex, bool overrideLimiter, bool alwaysShow, double x, double y, double z);
