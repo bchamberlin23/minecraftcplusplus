@@ -567,9 +567,13 @@ void Ui::State::buildButtons() {
             Button& friends = icon(x0 + 48, "friends/friends", "gui.friends.open", [this] { openFriendsScreen(*this); });  // friends_screen.cpp
             friends.tooltip = [this] { return Text(res.translate("gui.friends.open.tooltip")); };
             friends.badge = [] { return friendsPendingRequests(); };
-            Button& report = icon(x0 + 72, "pause_menu/player_reporting", "menu.playerReporting", nullptr);
-            report.active = false;  // player reporting needs a Microsoft account; no players to report offline
-            if (fe->cfg.singleplayer) report.tooltip = [this] { return Text(res.translate("menu.playerReporting.no_players")); };
+            Button& report = icon(x0 + 72, "pause_menu/player_reporting", "menu.playerReporting", [this] { openSocialInteractions(*this, Screen::Pause); });
+            if (fe->cfg.singleplayer) {  // the integrated server: only with other players seen this session
+                bool others = false;
+                for (const PlayerInfoView& p : seenPlayers()) others |= !(client && p.uuid == client->playerUuid());
+                report.active = others;
+                if (!others) report.tooltip = [this] { return Text(res.translate("menu.playerReporting.no_players")); };
+            }
         }
         y += 24;
         if (dialogButton) {

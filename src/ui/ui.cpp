@@ -1101,7 +1101,7 @@ void Ui::State::runScript(double) {
             static const std::pair<const char*, Screen> kScreens[] = {
                 {"pause", Screen::Pause},         {"options", Screen::Options},     {"online", Screen::Online},
                 {"skin", Screen::SkinCustomization}, {"sounds", Screen::Sounds},    {"video", Screen::Video},
-                {"videoextra", Screen::VideoExtra}, {"controls", Screen::Controls}, {"mouse", Screen::MouseSettings},
+                {"videoextra", Screen::VideoExtra}, {"social", Screen::SocialInteractions}, {"controls", Screen::Controls}, {"mouse", Screen::MouseSettings},
                 {"keybinds", Screen::KeyBinds},   {"accessibility", Screen::Accessibility}, {"none", Screen::None},
                 {"chatoptions", Screen::ChatOptions}, {"language", Screen::Language}, {"font", Screen::FontOptions},
                 {"onboarding", Screen::AccessibilityOnboarding}, {"chat", Screen::Chat}, {"credits", Screen::CreditsAttribution},

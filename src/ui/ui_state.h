@@ -130,6 +130,7 @@ enum class Screen {
     Win, CreditsAttribution,  // credits.cpp
     WorldOptions, InWorldGameRules, Restrictions,  // world_options.cpp
     CommandBlockEdit, MinecartCommandEdit, JigsawEdit, StructureEdit, TestBlockEdit, TestInstanceEdit,  // block_editors.cpp
+    SocialInteractions,  // social_screen.cpp
     // Front end (frontend.h)
     Title, Worlds, CreateWorld, EditWorld, Confirm, Servers, EditServer, DirectConnect, Loading, Message
 };

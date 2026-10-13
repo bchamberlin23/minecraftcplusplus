@@ -24,7 +24,7 @@ enum class Kind : u8 {
     LargeSmoke, WhiteSmoke, Flame, SmallFlame, Crit, DamageIndicator, EnchantedHit, Heart, AngryVillager, Bubble,
     BubblePop, CherryLeaves, PaleLeaves, TintedLeaves, Portal, Enchant, CampfireCosy, CampfireSignal, Spell, Witch,
     Suspended, HappyVillager, Lava, Dust, DustTransition, Note, Cloud, Snowflake, Item, Vibration, Drip, Spark, Flash,
-    Totem, EndRod, Gust, GustSeed, Rising, SculkCharge, SculkChargePop, Shriek, Firefly, Glow
+    Totem, EndRod, Gust, GustSeed, Rising, SculkCharge, SculkChargePop, Shriek, Firefly, Glow, Trail
 };
 enum class Opt : u8 { None, Block, Dust, DustTransition, Spell, Color, Float, VarInt, Int, IntFloat, Trail, Item, Vibration };
 enum SizeMode : u8 { SizeConst, SizeGrow, SizeFlame, SizePortal, SizeLava };
@@ -54,7 +54,7 @@ const std::pair<const char*, Kind> kKinds[] = {
     {"gust_emitter_small", Kind::GustSeed}, {"sonic_boom", Kind::Explosion}, {"soul", Kind::Rising},
     {"sculk_soul", Kind::Rising}, {"sculk_charge", Kind::SculkCharge}, {"sculk_charge_pop", Kind::SculkChargePop},
     {"shriek", Kind::Shriek}, {"firefly", Kind::Firefly}, {"glow", Kind::Glow}, {"wax_on", Kind::Glow},
-    {"wax_off", Kind::Glow}, {"electric_spark", Kind::Glow}, {"scrape", Kind::Glow}};
+    {"wax_off", Kind::Glow}, {"electric_spark", Kind::Glow}, {"scrape", Kind::Glow}, {"trail", Kind::Trail}};
 
 // DripParticle and its providers: the hanging drop falls into the next type, which lands as another one.
 enum DripStage : u8 { DripHang, DripCoolingHang, DripFall, DripFallLand, DripDripstoneFallLand, DripHoneyFallLand, DripLand };
@@ -294,7 +294,11 @@ bool Particles::readOptions(void* reader, int type, Options& o) const {
         case Opt::VarInt: o.delay = r.varInt(); break;  // shriek: the delay
         case Opt::Int: r.i32v(); break;
         case Opt::IntFloat: r.i32v(), r.f32(); break;
-        case Opt::Trail: r.f64(), r.f64(), r.f64(), r.i32v(), r.varInt(); break;
+        case Opt::Trail:  // TrailParticleOption: target, colour, duration
+            o.target[0] = r.f64(), o.target[1] = r.f64(), o.target[2] = r.f64();
+            o.color = 0xFF000000u | u32(r.i32v()), o.hasColor = true;
+            o.arrival = r.varInt();
+            break;
         case Opt::Item:
             if (!readItem || !readItem(r, o.item)) return false;
             break;
@@ -742,6 +746,20 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
             if (t.name == "sneeze") p.r = 0.22f, p.g = 1.0f, p.b = 0.53f, p.a = 0.4f, p.flags |= Translucent;  // SneezeProvider
             ageSprite();
             break;
+        case Kind::Trail: {  // TrailParticle: flies to its target over the duration, its colour varied a little, full bright
+            if (!opt) return nullptr;
+            base(x, y, z);
+            p.flags &= u8(~Physics);
+            p.quadSize = 0.26f;
+            p.lifetime = opt->arrival;
+            p.sx = opt->target[0], p.sy = opt->target[1], p.sz = opt->target[2];
+            auto scaled = [&](int shift) {  // ARGB.scaleRGB by 0.875..1.125
+                return float(std::clamp(int(float((opt->color >> shift) & 255) * (0.875f + randf() * 0.25f)), 0, 255)) / 255.0f;
+            };
+            p.r = scaled(16), p.g = scaled(8), p.b = scaled(0);
+            p.emissive = 15;
+            break;
+        }
         case Kind::Vibration: {  // VibrationSignalParticle: flies to its destination, arriving after `arrival` ticks
             if (!opt) return nullptr;
             base(x, y, z);
@@ -1818,6 +1836,12 @@ void Particles::tickOne(Particle& p) {
             defaultTick();
             p.g *= 0.96f, p.b *= 0.9f;
             break;
+        case Kind::Trail: {
+            if (p.age++ >= p.lifetime) return remove();
+            const double alpha = 1.0 / double(p.lifetime - p.age);  // Mth.lerp(1 / ticksRemaining, pos, target)
+            p.x += (p.sx - p.x) * alpha, p.y += (p.sy - p.y) * alpha, p.z += (p.sz - p.z) * alpha;
+            break;
+        }
         case Kind::Vibration: {
             if (p.age++ >= p.lifetime) return remove();
             double dest[3];

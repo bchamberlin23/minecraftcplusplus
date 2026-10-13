@@ -29,6 +29,10 @@ struct PlayerInfoView {
 };
 bool findPlayerInfo(const std::string& uuid, PlayerInfoView& out);
 std::vector<PlayerInfoView> playerInfos();
+std::vector<PlayerInfoView> seenPlayers();  // ClientPacketListener.getSeenPlayers: every player seen this session
+// Social Interactions (social_screen.cpp): players whose chat is hidden this session (PlayerSocialManager), by UUID.
+bool socialHidden(const std::string& uuid);
+void openSocialInteractions(UiState& s, Screen back);
 struct TeamView {
     std::string name;
     Text displayName;

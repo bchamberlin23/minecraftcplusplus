@@ -245,7 +245,10 @@ void handlePlayerChat(UiState& s, PlayerChat& m) {
     // ACCEPT_UNSIGNED (the signature is dropped). Senders with a session keep theirs (not verified here).
     const bool rejected = known && !sender.chatSession && g.enforcesSecureChat;
     std::optional<Sig> signature = known && sender.chatSession ? m.signature : std::nullopt;
+    // Minecraft.isBlocked: players hidden in Social Interactions (never ourselves or unknown senders).
+    const bool hidden = known && !(s.client && m.sender == s.client->playerUuid()) && socialHidden(m.sender);
     if (!known || rejected) {  // ChatListener.handleChatMessageError
+        if (hidden) return;
         if (!known) LOG("ui: received player chat packet for unknown player");
         if (m.signature) markProcessed(s, *m.signature, false);
         Style st = colorStyle(0xFF5555);
@@ -261,7 +264,7 @@ void handlePlayerChat(UiState& s, PlayerChat& m) {
     // Only Show Secure Chat: the signed body without the server's unsigned decoration, and nothing unsigned (our own
     // messages are secure).
     const bool secureOnly = s.settings.onlyShowSecureChat;
-    if (m.filter != 1 && !(secureOnly && !signature && !local)) {
+    if (m.filter != 1 && !hidden && !(secureOnly && !signature && !local)) {
         const Text content = m.filter == 2                       ? applyMask(m.content, m.mask, lang)
                              : m.unsignedContent && !secureOnly ? *m.unsignedContent
                                                                  : Text(m.content);

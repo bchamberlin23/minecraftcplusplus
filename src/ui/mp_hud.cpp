@@ -84,6 +84,7 @@ struct Boss {
 
 struct MpState {
     std::map<std::string, PlayerEntry> players;  // by UUID bytes
+    std::map<std::string, PlayerEntry> seen;     // every player added this session (getSeenPlayers)
     bool hasHeader = false, hasFooter = false;
     Text header, footer;
     bool onlineMode = false;
@@ -244,6 +245,7 @@ void registerHandlers(UiState& s, net::Client& client) {
             for (const PlayerEntry& e : entries) {
                 const std::string key = uuidKey(e.uuid);
                 if (actions & 1) {
+                    g.seen[key] = e;
                     PlayerEntry& p = g.players[key];
                     std::copy(e.uuid, e.uuid + 16, p.uuid);
                     p.name = e.name, p.skin = e.skin, p.textures = e.textures, p.skinState = e.skinState;
@@ -699,6 +701,16 @@ bool findPlayerInfo(const std::string& uuid, PlayerInfoView& out) {
     const PlayerEntry& p = it->second;
     out = PlayerInfoView{uuidKey(p.uuid), p.name, p.skin, p.gameMode, p.listed, p.chatSession, p.showHat};
     return true;
+}
+
+std::vector<PlayerInfoView> seenPlayers() {
+    std::vector<PlayerInfoView> v;
+    for (const auto& [key, s] : g.seen) {
+        const auto it = g.players.find(key);
+        const PlayerEntry& p = it != g.players.end() ? it->second : s;  // online: the current entry
+        v.push_back(PlayerInfoView{uuidKey(p.uuid), p.name, p.skin, p.gameMode, p.listed, p.chatSession, p.showHat});
+    }
+    return v;
 }
 
 std::vector<PlayerInfoView> playerInfos() {
