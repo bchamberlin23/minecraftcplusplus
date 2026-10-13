@@ -642,6 +642,15 @@ void buildFlat(State& s) {
     addButton(s, float(W / 2 + 4), float(H - 30), 150, tr(s, "gui.cancel"), [p] { openPage(*p, Page::Tabs); });
     s.fe->onBack = [p] { openPage(*p, Page::Tabs); };
     s.fe->onEnter = done;
+    s.onFilesDrop = [p](const std::vector<fs::path>& files) {  // the new packs join the list (off)
+        dropIntoModsFolder(*p, files, Screen::CreateWorld, [] {
+            for (const mods::Entry& e : mods::Manager::get().entries()) {
+                if (!e.isDataPack() || e.source != "mods folder") continue;
+                if (std::none_of(g.packsEdit.begin(), g.packsEdit.end(), [&](const PackChoice& c) { return c.id == e.id; }))
+                    g.packsEdit.push_back({e.id, e.name, e.description, e.path, false, e.enabled});
+            }
+        });
+    };
 }
 
 void drawFlat(State& s, Canvas& c) {

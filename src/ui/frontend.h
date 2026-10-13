@@ -150,6 +150,8 @@ Text trf(State& s, const char* key, const std::vector<Text>& args);
 void startChild(State& s, std::vector<std::wstring> args, Text title, Screen back, bool cancellable);
 void showMessage(State& s, Text title, Text text, std::string button, std::function<void()> action);
 void showConfirm(State& s, Text title, Text text, std::string yes, std::function<void()> action, Screen back);
+// mods_screen.cpp: PackSelectionScreen.onFilesDrop into the mods folder (confirm, copy, rescan, then `after`).
+void dropIntoModsFolder(State& s, const std::vector<fs::path>& files, Screen back, std::function<void()> after);
 void requestTitle(State& s, const std::string& menu);  // leave this world ("" title, "servers", "worlds")
 std::wstring widen(const std::string& utf8);
 std::string utf8(const fs::path& p);  // paths for display / keys (fs::path::string throws on some names)

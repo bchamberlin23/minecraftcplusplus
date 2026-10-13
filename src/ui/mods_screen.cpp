@@ -91,7 +91,52 @@ void Ui::State::drawModHud(Canvas& c) {
     nativeMods.drawHud(hud);
 }
 
+// PackSelectionScreen.onFilesDrop: after a confirmation the packs (and here mods: .jar / .dll) are copied into the
+// mods folder; anything else is named in an alert. back: the screen to return to; after: once copied.
+void dropIntoModsFolder(UiState& s, const std::vector<fs::path>& files, Screen back, std::function<void()> after) {
+    std::string names;
+    for (const fs::path& f : files) names += (names.empty() ? "" : ", ") + utf8(f.filename());
+    UiState* p = &s;
+    showConfirm(s, tr(s, "pack.dropConfirm"), Text(names), s.res.translate("gui.yes"), [p, files, back, after] {
+        UiState& st = *p;
+        const fs::path dir = mods::Manager::get().modsDir();
+        std::string rejected;
+        bool failed = false, copied = false;
+        for (const fs::path& f : files) {
+            std::error_code ec;
+            std::string ext = utf8(f.extension());
+            for (char& ch : ext) ch = char(std::tolower(u8(ch)));
+            const bool pack = fs::is_directory(f, ec) ? fs::exists(f / "pack.mcmeta", ec)
+                                                      : fs::is_regular_file(f, ec) && (ext == ".zip" || ext == ".jar" || ext == ".dll");
+            if (!pack) {  // PackDetector found no pack
+                rejected += (rejected.empty() ? "" : ", ") + utf8(f.filename());
+                continue;
+            }
+            fs::create_directories(dir, ec);
+            fs::copy(f, dir / f.filename(), fs::copy_options::recursive, ec);  // Util.copyBetweenDirs: no overwriting
+            if (ec) {
+                LOG("ui: could not copy %s into the mods folder: %s", utf8(f).c_str(), ec.message().c_str());
+                failed = true;
+            } else {
+                copied = true;
+            }
+        }
+        if (failed) showToast(tr(st, "pack.copyFailure"), Text(utf8(dir)));  // SystemToast.onPackCopyFailure
+        if (copied) {
+            mods::Manager::get().rescan();
+            if (after) after();
+        }
+        if (!rejected.empty()) {
+            showMessage(st, tr(st, "pack.dropRejected.title"), trf(st, "pack.dropRejected.message", {Text(rejected)}),
+                        st.res.translate("gui.back"), [p, back] { p->openScreen(back); });
+            return;
+        }
+        st.openScreen(back);
+    }, back);
+}
+
 void Ui::State::buildModsButtons() {
+    onFilesDrop = [this](const std::vector<fs::path>& files) { dropIntoModsFolder(*this, files, Screen::Mods, nullptr); };
     mods::Manager& mm = mods::Manager::get();
     mm.detectPending();
     const int W = canvas ? guiW() : int(window->width()) / std::max(1, guiScale());

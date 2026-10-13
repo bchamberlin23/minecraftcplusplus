@@ -256,6 +256,7 @@ void Ui::State::openScreen(Screen s) {
     isQuickCrafting = false;
     quickCraftSlots.clear();
     hoveredSlot = -1;
+    onFilesDrop = nullptr;
     if (s == Screen::Chat) {
         chatInput.blinkStart = clock;
         historyPos = -1;
@@ -1102,6 +1103,8 @@ void Ui::State::runScript(double) {
                         m.slots[i].enchantments);
             if (!carried.empty()) LOG("script: carried = %d x %s", carried.count, items.name(carried.item).c_str());
             LOG("script: xp level %d, menu %s data %d %d %d %d", xpLevel, m.typeName.c_str(), m.data[0], m.data[1], m.data[2], m.data[3]);
+        } else if (st.verb == "drop") {  // drop <path>...: files dropped on the window
+            for (const auto& w : a) window->injectDrop(std::filesystem::path(w).wstring());
         } else if (st.verb == "screen") {  // screen <name>: opens a menu screen directly
             static const std::pair<const char*, Screen> kScreens[] = {
                 {"pause", Screen::Pause},         {"options", Screen::Options},     {"online", Screen::Online},
@@ -1110,7 +1113,7 @@ void Ui::State::runScript(double) {
                 {"keybinds", Screen::KeyBinds},   {"accessibility", Screen::Accessibility}, {"none", Screen::None},
                 {"chatoptions", Screen::ChatOptions}, {"language", Screen::Language}, {"font", Screen::FontOptions},
                 {"onboarding", Screen::AccessibilityOnboarding}, {"chat", Screen::Chat}, {"credits", Screen::CreditsAttribution},
-                {"worldoptions", Screen::WorldOptions}, {"gamerules", Screen::InWorldGameRules}, {"restrictions", Screen::Restrictions}};
+                {"worldoptions", Screen::WorldOptions}, {"gamerules", Screen::InWorldGameRules}, {"restrictions", Screen::Restrictions}, {"mods", Screen::Mods}};
             for (auto [n, sc] : kScreens)
                 if (arg(0) == n) sc == Screen::None ? closeScreen() : openScreen(sc);
         } else if (st.verb == "option") {  // option <options.txt key> <value>: sets it as the options screens would
@@ -1179,6 +1182,11 @@ void Ui::beginFrame(double dt) {
     s.window->cursorPos(cx, cy);
     s.mouseX = float(cx) / float(scale), s.mouseY = float(cy) / float(scale);
     bool skipChar = false;
+    // MouseHandler.onDrop: files dropped on the window go to the open screen (Screen.onFilesDrop).
+    if (std::vector<std::wstring> dropped = s.window->takeDroppedFiles(); !dropped.empty() && s.screen != Screen::None && s.onFilesDrop) {
+        std::vector<std::filesystem::path> files(dropped.begin(), dropped.end());
+        s.onFilesDrop(files);
+    }
     for (const Window::InputEvent& e : s.window->takeInput()) {
         if (e.type == Window::InputEvent::Button || e.type == Window::InputEvent::Wheel)
             s.mouseX = float(e.x) / float(scale), s.mouseY = float(e.y) / float(scale);

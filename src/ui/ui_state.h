@@ -409,6 +409,8 @@ struct Ui::State {
 
     // --- mods_screen.cpp: Mods & Packs screen (mods/mod_manager.h), native mods' HUD ---
     int modsScroll = 0;  // first list row shown
+    // Screen.onFilesDrop: files dropped on the window while this screen is open (set by its build, reset on a change).
+    std::function<void(const std::vector<std::filesystem::path>&)> onFilesDrop;
     Screen modsReturn = Screen::None;  // opened from Options (Resource Packs...): back there, else pause / title
     void buildModsButtons();
     void drawModsScreen(Canvas& c);

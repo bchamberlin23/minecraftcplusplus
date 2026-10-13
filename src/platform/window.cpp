@@ -1,6 +1,7 @@
 #include "platform/window.h"
 
 #include <dwmapi.h>
+#include <shellapi.h>
 
 #include <algorithm>
 
@@ -26,6 +27,7 @@ bool Window::create(const wchar_t* title, int width, int height, const Placement
     hwnd_ = CreateWindowExW(headless_ ? WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW : 0, wc.lpszClassName, title, WS_OVERLAPPEDWINDOW,
                             x, y, r.right - r.left, r.bottom - r.top, nullptr, nullptr, wc.hInstance, this);
     if (!hwnd_) return false;
+    DragAcceptFiles(hwnd_, TRUE);  // GLFW's drop callback (MouseHandler.onDrop)
     if (cloaked) {  // rendered to while invisible (the instance showing its loading screen stays in front)
         const BOOL on = TRUE;
         DwmSetWindowAttribute(hwnd_, DWMWA_CLOAK, &on, sizeof(on));
@@ -386,6 +388,17 @@ LRESULT Window::handle(UINT msg, WPARAM wp, LPARAM lp) {
         }
         case WM_KEYUP:
         case WM_SYSKEYUP: push(InputEvent::Key, sidedKey(wp, lp), false); break;
+        case WM_DROPFILES: {
+            const HDROP drop = reinterpret_cast<HDROP>(wp);
+            const UINT n = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+            for (UINT i = 0; i < n; ++i) {
+                std::wstring path(DragQueryFileW(drop, i, nullptr, 0), L'\0');
+                DragQueryFileW(drop, i, path.data(), UINT(path.size() + 1));
+                dropped_.push_back(std::move(path));
+            }
+            DragFinish(drop);
+            return 0;
+        }
         case WM_CHAR: {
             const wchar_t c = wchar_t(wp);
             if (c >= 0xD800 && c < 0xDC00) {

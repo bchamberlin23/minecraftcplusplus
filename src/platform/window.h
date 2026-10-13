@@ -83,6 +83,8 @@ public:
         int x = 0, y = 0;  // cursor in client pixels (Button / Wheel)
     };
     std::vector<InputEvent> takeInput() { return std::move(input_); }
+    std::vector<std::wstring> takeDroppedFiles() { return std::move(dropped_); }  // files dropped on the window
+    void injectDrop(std::wstring path) { dropped_.push_back(std::move(path)); }  // test scripts
     void cursorPos(int& x, int& y) const;
     void centerCursor();
     void setClickCaptures(bool on) { clickCaptures_ = on; }  // false while a UI screen is open
@@ -106,6 +108,7 @@ private:
     u64 lastInputMs_ = GetTickCount64();
     MouseEvents events_;
     std::vector<InputEvent> input_;
+    std::vector<std::wstring> dropped_;
     bool clickCaptures_ = true;
     bool injectedDown_[256] = {};
     bool scriptCursor_ = false;
