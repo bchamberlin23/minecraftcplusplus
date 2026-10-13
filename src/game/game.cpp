@@ -59,6 +59,9 @@ CameraState Game::camera() const {
 // GameRenderer.renderLevel: bobHurt then bobView multiply the projection (P * Hurt * Bob * View). As a view basis:
 // rows R * (right, up, back) and the camera moved by the view-space translation.
 static CameraState applyBob(const Game& g, CameraState c) {
+    // GameRenderer.bobHurt / bobView follow the camera entity: our own hurt, death and walk bob not while spectating
+    // another entity through its eyes
+    if (g.cameraEntity >= 0) return c;
     const float pt = g.partialTick();
     constexpr float kPi = 3.14159265f, kDeg = kPi / 180.0f;
     struct M3 {
