@@ -7,6 +7,7 @@
 #include "ui/dialogs.h"
 #include "ui/item_ui.h"
 #include "ui/mp_hud.h"
+#include "ui/subtitles.h"
 #include "ui/toasts.h"
 #include "ui/ui_state.h"
 #include "world/terrain.h"
@@ -690,6 +691,7 @@ void Ui::State::drawScreen(Canvas& c) {
             drawCentered(c, Text(res.translate("menu.game")), float(W / 2), 40.f, 0xFFFFFFFF);
             drawButtons(c);
             if (rendersNowPlayingToast()) drawNowPlaying(*this, c, 0, 0);  // PauseScreen: the song playing, top left
+            drawSubtitles(*this, c);
             for (const Button& b : buttons)  // the custom options button's tooltip
                 if (b.tooltip && mouseX >= b.x && mouseY >= b.y && mouseX < b.x + b.w && mouseY < b.y + b.h)
                     drawTooltip(c, font.split(b.tooltip(), 170), mouseX, mouseY);
