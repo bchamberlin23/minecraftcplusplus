@@ -403,6 +403,8 @@ BlockEntityRenderer::BlockDef BlockEntityRenderer::classify(u16 block) const {
         d.kind = Kind::TrialSpawner, d.variant = st == "waiting_for_players" ? 1 : st == "active" ? 2 : 0;
     } else if (n == "vault") {
         d.kind = Kind::Vault, d.facing = facing();
+    } else if (n == "test_instance_block") {
+        d.kind = Kind::TestInstance;
     } else if (n == "suspicious_sand" || n == "suspicious_gravel") {
         const std::string_view dusted = prop("dusted");
         d.kind = Kind::Brushable, d.variant = u8(dusted.empty() ? 0 : std::clamp(dusted[0] - '0', 0, 3));
@@ -635,6 +637,19 @@ void BlockEntityRenderer::decode(const std::string& nbt, const BlockDef& d, Data
             out.hitDir = i8(std::clamp(t == TagByte ? int(i8(r.u8v())) : r.i32v(), -1, 5));
         } else if (d.kind == Kind::EndGateway && n == "Age" && t == TagLong) {
             out.age = r.i64v();
+        } else if (d.kind == Kind::TestInstance && n == "data" && t == TagCompound) {
+            // TestInstanceBlockEntity.getBeamSections: running grey, finished green, or red on an error (orange for an
+            // optional test, which the client cannot tell: the test registry is not sent)
+            std::string status;
+            bool error = false;
+            u8 t2;
+            std::string_view n2;
+            while (r.field(t2, n2)) {
+                if (n2 == "status" && t2 == TagString) status = std::string(r.str());
+                else if (n2 == "error_message") error = true, r.skip(t2);
+                else r.skip(t2);
+            }
+            out.beam = status == "running" ? 0x1808080u : status == "finished" ? (error ? 0x1FF0000u : 0x100FF00u) : 0u;
         } else {
             r.skip(t);
         }
@@ -691,7 +706,7 @@ void BlockEntityRenderer::scanColumn(int cx, int cz) {
                                    (d.kind == Kind::Skull && d.variant == 6) || d.kind == Kind::Pot ||
                                    d.kind == Kind::Campfire || d.kind == Kind::Shelf || d.kind == Kind::Spawner ||
                                    d.kind == Kind::TrialSpawner || d.kind == Kind::Vault || d.kind == Kind::Brushable ||
-                                   d.kind == Kind::EndGateway;
+                                   d.kind == Kind::EndGateway || d.kind == Kind::TestInstance;
             if (wantsData) {
                 Data data;
                 if (auto it = nbt.find(posKey(in.x, in.y, in.z)); it != nbt.end()) decode(*it->second, d, data);
@@ -704,7 +719,7 @@ void BlockEntityRenderer::scanColumn(int cx, int cz) {
                 if (d.kind == Kind::EndGateway && a.age < 0 && in.data >= 0) a.age = sec.data[size_t(in.data)].age;
                 if (d.kind == Kind::Spawner && a.delay < 0 && in.data >= 0) a.delay = sec.data[size_t(in.data)].delay;
             }
-            sec.beams |= d.kind == Kind::Beacon || d.kind == Kind::EndGateway;
+            sec.beams |= d.kind == Kind::Beacon || d.kind == Kind::EndGateway || d.kind == Kind::TestInstance;
             sec.list.push_back(std::move(in));
         }
         if (sec.list.empty()) continue;
@@ -907,7 +922,7 @@ void BlockEntityRenderer::handleEvent(int x, int y, int z, int type, int param) 
 // Animation (20 ticks per second, like the game's client block entity tickers)
 
 bool BlockEntityRenderer::isDynamic(const Instance& in, const BlockDef& d) const {
-    if (d.kind == Kind::Enchanting) return true;
+    if (d.kind == Kind::Enchanting || d.kind == Kind::TestInstance) return true;
     auto it = anims_.find(posKey(in.x, in.y, in.z));
     const Anim* a = it == anims_.end() ? nullptr : &it->second;
     switch (d.kind) {
@@ -2088,6 +2103,14 @@ void BlockEntityRenderer::emitInstance(Emit& e, const Instance& in, const Data* 
                 if (shownOut_ && d.kind == Kind::Shelf && !shownOut_->empty()) shownOut_->back().shelfBottom = data->alignBottom;
                 shownNbt_ = nullptr;
             }
+            break;
+        }
+        case Kind::TestInstance: {  // TestInstanceRenderer: BeaconRenderer with the status's one section
+            if (!data || !data->beam) return;
+            const float animTime = float(gameTicks_ % 40) + pt;
+            const double dx = cam_[0] - (in.x + 0.5), dz = cam_[2] - (in.z + 0.5);
+            const float radius = std::max(1.0f, float(std::sqrt(dx * dx + dz * dz)) / 96.0f);
+            emitBeam(e, base, t_.beaconBeam, 1.0f, animTime, 0, 2048, data->beam & 0xFFFFFF, 0.2f * radius, 0.25f * radius);
             break;
         }
         case Kind::Beacon: {  // BeaconRenderer: the beam sections, the last one 2048 high

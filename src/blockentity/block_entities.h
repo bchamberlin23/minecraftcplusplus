@@ -68,7 +68,7 @@ constexpr u32 kTexAtlasRepeat = 0xFFFFFFFC, kTexEndPortal = 0xFFFFFFFB, kTexEndG
 
 enum class Kind : u8 {
     None, Chest, Sign, HangingSign, Banner, Skull, Shulker, Bell, Pot, Conduit, Enchanting, Lectern, Campfire, Shelf,
-    Statue, Beacon, EndPortal, EndGateway, Spawner, TrialSpawner, Vault, Brushable
+    Statue, Beacon, EndPortal, EndGateway, Spawner, TrialSpawner, Vault, Brushable, TestInstance
 };
 
 class BlockEntityRenderer : public RenderPass {
@@ -126,6 +126,7 @@ public:
         int delay = 20;                             // spawner Delay
         i8 hitDir = -1;                             // brushable block hit_direction (3D data value)
         i64 age = -1;                               // end gateway Age (-1: unknown)
+        u32 beam = 0;                               // test instance block: its beam colour (0xRRGGBB | 1 << 24), 0 none
     };
     // The UI (sign editor): the last renderer created, and the data of the block entity at a position (main thread;
     // nullptr when none is known).
