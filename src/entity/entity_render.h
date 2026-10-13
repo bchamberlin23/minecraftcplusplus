@@ -9,6 +9,8 @@
 #include "render/pack_sink.h"
 #include "render/renderer.h"
 
+struct BlockVariant;
+
 namespace ent {
 
 class EntityRenderer : public RenderPass {
@@ -158,7 +160,8 @@ private:
     int tex(const char* path) const;    // entity texture by path ("creeper/creeper_armor"), cached by literal
     int model(const char* layer) const;  // model layer ("creeper#armor"), cached by literal
     void freeEntity(const Entity& e, const TypeDef& d, float pt, const double cam[3], u32 light, const float* camRight);
-    void emitBlock(u16 block, const Mat34& m, u32 light, u32 overlay);
+    // variant: the model variant picked for a position (BlockRegistry::variantAt; null: the state's first).
+    void emitBlock(u16 block, const Mat34& m, u32 light, u32 overlay, const BlockVariant* variant = nullptr);
     void minecartContents(const Entity& e, float pt, const Mat34& root, u32 light, Layer* layers, int& layerCount);
     static float tntSwell(float fuse);
     static bool tntLit(float fuse);

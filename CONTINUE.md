@@ -89,8 +89,8 @@ listening socket).
 
 - **Block rendering audit, still open**: cube faces use this port's own
   smooth lighting (equivalent to BlockModelLighter for full faces, without its light-permeability lookups two cells
-  out); model smooth lighting clamps its lookups to the section's one-cell border. Fluids skip self-occlusion of waterlogged partial blocks (faces hidden inside them). Falling blocks / moving pistons
-  draw a block's first variant without its offset.
+  out); model smooth lighting clamps its lookups to the section's one-cell border. Fluids skip self-occlusion of waterlogged partial blocks (faces hidden inside them). Moving pistons and other block
+  displays draw a block's first variant without its offset (falling blocks pick theirs from the start position).
 - **VIS-06 residual**: glowing outlines under a shader pack (entities go through the pack's gbuffers there).
 - Test instance blocks: optional tests' failure beam is red, not orange (the test registry is not sent to clients);
   the error markers and game test highlights are drawn in the UI layer (no depth test).

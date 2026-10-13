@@ -2639,14 +2639,14 @@ void EntityRenderer::emitBlobShadows(const double cam[3]) {
 }
 
 // One block model in block-local [0,1] space transformed by m (cubes: the 6 faces with the terrain's UV rules).
-void EntityRenderer::emitBlock(u16 block, const Mat34& mm, u32 light, u32 overlay) {
+void EntityRenderer::emitBlock(u16 block, const Mat34& mm, u32 light, u32 overlay, const BlockVariant* variant) {
     const M34& m = *reinterpret_cast<const M34*>(&mm);
     BlockRegistry& reg = world_.registry();
     const BlockInfo& b = reg.infos()[block];
     static const float kNormals[6][3] = {{0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}};
     if (b.kind == KindCube) {
         for (int f = 0; f < 6; ++f) {
-            const CubeFace& face = b.faces[f];
+            const CubeFace& face = variant ? variant->faces[f] : b.faces[f];
             const float* nrm = kNormals[f];
             const float axisA[3] = {f < 4 ? 1.0f : 0.0f, 0, f < 4 ? 0.0f : 1.0f};
             const float axisB[3] = {0, f < 2 ? 0.0f : 1.0f, f < 2 ? 1.0f : 0.0f};
@@ -2677,8 +2677,9 @@ void EntityRenderer::emitBlock(u16 block, const Mat34& mm, u32 light, u32 overla
             emitFree(pos, uv, n, face.tex, abgr(fixedTintRgb(face.tint)), light, overlay);
         }
     } else if (b.kind == KindModel) {
-        for (u32 i = 0; i < b.quadCount; ++i) {
-            const ModelQuad& q = reg.modelQuad(b.quadFirst + i);
+        const u32 first = variant ? variant->quadFirst : b.quadFirst, count = variant ? variant->quadCount : b.quadCount;
+        for (u32 i = 0; i < count; ++i) {
+            const ModelQuad& q = reg.modelQuad(first + i);
             float pos[4][3], uv[4][2];
             static const int kOrder[4] = {0, 1, 3, 2};
             for (int c = 0; c < 4; ++c) {
@@ -2776,12 +2777,20 @@ void EntityRenderer::freeEntity(const Entity& e, const TypeDef& d, float pt, con
         }
         M34 m = translate(float(p[0]) - 0.5f, float(p[1]), float(p[2]) - 0.5f);
         u32 overlay = 0;
+        const BlockVariant* variant = nullptr;
         if (!d.block.empty()) {  // TntRenderer: swells over its last 10 ticks, flashes white every 5
             const float fuse = float(e.fuse) - pt + 1.0f, s = 1.0f + tntSwell(fuse);
             m = mul(mul(translate(float(p[0]), float(p[1]) + 0.5f, float(p[2])), scale(s, s, s)), translate(-0.5f, -0.5f, -0.5f));
             if (tntLit(fuse)) overlay = 191u << 8;  // OverlayTexture.u(1): 75% white
+        } else {
+            // FallingBlockRenderer: the model variant seeded by the start position, offset at the block it is in
+            const i64 start = dataInt(e, "DATA_START_POS");
+            variant = reg.variantAt(block, i32(start >> 38), i32((start << 52) >> 52), i32((start << 26) >> 38));
+            float off[3];
+            BlockRegistry::offset(reg.infos()[block], i32(std::floor(e.pos[0])), i32(std::floor(e.pos[2])), off);
+            m = mul(translate(off[0], off[1], off[2]), m);
         }
-        emitBlock(block, *reinterpret_cast<const Mat34*>(&m), light, overlay);
+        emitBlock(block, *reinterpret_cast<const Mat34*>(&m), light, overlay, variant);
         return;
     }
     if (d.special == SpXpOrb) {
