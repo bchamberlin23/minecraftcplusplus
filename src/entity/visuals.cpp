@@ -234,6 +234,8 @@ struct Visuals::Impl {
     void mobTick(const Entity& e);  // the client-side particles / sounds of entity ticks (aiStep's isClientSide parts)
     std::unordered_map<int, u8> wasOnGround;  // AbstractCubeMob.wasOnGround (landing particles)
     std::unordered_map<int, u8> wasInWater;   // Entity.wasTouchingWater (the splash on entering)
+    int activationTicks = 0, activationItem = -1;  // LocalPlayer.itemActivation (the totem popping): ticks left, item
+    float activationOff[2] = {};
     bool localWasInWater = false;
     // Entity.doWaterSplashEffect's particles and spawnSprintParticle (world lock held).
     void waterAndSprint(const double pos[3], const double vel[3], float width, bool inWater, bool& wasIn, bool sprinting);
@@ -1735,6 +1737,7 @@ void Visuals::Impl::update() {
                                  gauss(rng) * 0.05);
             mobTick(e);
         }
+        if (activationTicks > 0) --activationTicks;
         if (game && !(gameMode && gameMode() == 3)) {  // the local player (not a spectator)
             const Player& p = game->player();
             waterAndSprint(p.pos, p.vel, 0.6f, p.inWater, localWasInWater, p.sprinting && !p.sneaking && !p.inLava);
@@ -2528,6 +2531,30 @@ void Visuals::localEntityEvent(int event) {  // our own entity's events (LocalPl
     Impl& m = *impl_;
     if (!m.game || !m.particles) return;
     const Player& p = m.game->player();
+    if (event == 35) {  // displayItemActivation(findTotem): the totem in a hand, else a totem of undying
+        static int totem = -2;
+        if (totem == -2) {
+            totem = -1;
+            for (int i = 0; i < 8192 && totem < 0; ++i)
+                if (m.models.itemName(i) == "totem_of_undying") totem = i;
+        }
+        int item = -1;
+        i32 dye;
+        bool foil;
+        for (int slot : {36 + m.game->selectedSlot(), 45}) {
+            int it;
+            m.heldStack(slot, it, dye, foil);
+            if (it >= 0 && m.models.itemName(it) == "totem_of_undying") {
+                item = it;
+                break;
+            }
+        }
+        std::uniform_real_distribution<float> u(0.0f, 1.0f);
+        m.activationItem = item >= 0 ? item : totem;
+        m.activationTicks = 40;
+        m.activationOff[0] = u(m.fxRandom) * 2.0f - 1.0f, m.activationOff[1] = u(m.fxRandom) * 2.0f - 1.0f;
+        return;
+    }
     static const int kSlots[22] = {-2, 45, 5, 6, 7, 8, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};  // 47..
     if (event >= 47 && event <= 52) {
         const int slot = kSlots[event - 47] == -2 ? 36 + m.game->selectedSlot() : kSlots[event - 47];
@@ -2800,9 +2827,12 @@ void Visuals::Impl::tickEmitters() {
 // First-person hands (HUD stage)
 
 void Visuals::Impl::buildHand(const PassContext& ctx, float viewProj[16], bool jittered, float* noJitter) {
-    if (!game || !ui || game->cameraMode != 0 || !avatarReady) return;
-    if (gameMode && gameMode() == 3) return;  // spectators have no hands
-    if (ui->hudHidden() || ui->inBed()) return;  // GameRenderer.renderItemInHand: F1 and sleeping hide them too
+    if (!game || !ui || !avatarReady) return;
+    // ScreenEffectRenderer.renderItemActivationAnimation (unless F1) in any view; the hands only in first person,
+    // not as a spectator (no hands), with F1 or asleep (GameRenderer.renderItemInHand).
+    const bool activation = activationTicks > 0 && activationItem >= 0 && !ui->hudHidden();
+    const bool hands = game->cameraMode == 0 && !(gameMode && gameMode() == 3) && !ui->hudHidden() && !ui->inBed();
+    if (!activation && !hands) return;
     const CameraState cam = game->handCamera();  // the hand bobs by itself (bobView below), not with the world
     // Projection like the renderer's, without jitter.
     const float cy = std::cos(cam.yaw), sy = std::sin(cam.yaw), cp = std::cos(cam.pitch), sp = std::sin(cam.pitch);
@@ -2827,6 +2857,22 @@ void Visuals::Impl::buildHand(const PassContext& ctx, float viewProj[16], bool j
     std::shared_lock lock(world.world().mutex());
     const u32 light = lightAt(cam.x, cam.y, cam.z);
     lock.unlock();
+    if (activation) {  // the item zooming in, spinning, out again over 40 ticks (full bright)
+        const float scale = (float(40 - activationTicks) + pt) / 40.0f, ts = scale * scale, tc = scale * ts;
+        const float smooth = 10.25f * tc * ts - 24.95f * ts * ts + 25.5f * tc - 13.8f * ts + 4.0f * scale;
+        const float pis = smooth * kPi;
+        const float aspect = float(ctx.width) / float(std::max(ctx.height, 1u));
+        const float offX = activationOff[0] * 0.3f * aspect, offY = activationOff[1] * 0.3f;
+        Xf m = xfMul(view, xfTranslate(offX * std::abs(std::sin(pis * 2.0f)), offY * std::abs(std::sin(pis * 2.0f)), -10.0f + 9.0f * std::sin(pis)));
+        m = xfMul(m, xfScale(0.8f, 0.8f, 0.8f));
+        m = xfMul(m, xfRotY(900.0f * std::abs(std::sin(pis)) * kDeg));
+        m = xfMul(m, xfRotX(6.0f * std::cos(scale * 8.0f) * kDeg));
+        m = xfMul(m, xfRotZ(6.0f * std::cos(scale * 8.0f) * kDeg));
+        hudLists.begin((u64(1) << 40) | 0xA000);
+        pushItem(hudLists, models.mesh(stackOf(nullptr, activationItem, -1), contextOf(avatar, ui::ItemDisplay::Fixed, pt)), Display::Fixed, m,
+                 0xFF, false);
+    }
+    if (!hands) return;
 
     // GameRenderer.renderItemInHand: bobHurt, then bobView (the game's walk distance and bob).
     Xf pose = view;
