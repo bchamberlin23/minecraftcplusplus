@@ -1,6 +1,7 @@
 // Item state the tooltips and stations read from the server: the player's permission level (entity events), tags
 // updated in play (update_tags), recipe property sets (update_recipes; stations_a2.cpp decodes the packet), and the
 // container screens' item tooltip with its image.
+#include "ui/item_props.h"
 #include "ui/item_ui.h"
 
 #include <unordered_map>
@@ -67,7 +68,7 @@ bool inPropertySet(std::string_view set, int item) {
 void drawItemTooltip(UiState& s, Canvas& c, const ItemStack& st, const std::vector<Text>& lines, float x, float y) {
     TooltipImage image;
     const bool hasImage = !lines.empty() && bundleTooltipImage(s, st, image);
-    s.drawTooltip(c, lines, x, y, hasImage ? &image : nullptr);
+    s.drawTooltip(c, lines, x, y, hasImage ? &image : nullptr, true, tooltipStyle(s.items, st));
 }
 
 }  // namespace ui

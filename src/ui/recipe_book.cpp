@@ -3,6 +3,7 @@
 // filter, pages, the alternatives overlay, ghost recipes (place_ghost_recipe), placing recipes (place_recipe) and the
 // settings / seen-recipe packets; the "New Recipes Unlocked!" toast (RecipeToast).
 #include "audio/audio.h"
+#include "ui/item_props.h"
 #include "ui/item_ui.h"
 #include "ui/toasts.h"
 
@@ -931,7 +932,7 @@ void recipeBookTooltip(UiState& s, Canvas& c, Menu& m, int hoveredSlot) {
     if (hoveredSlot >= 0)  // GhostSlots.extractTooltip
         if (auto it = g.ghosts.find(hoveredSlot); it != g.ghosts.end() && size_t(hoveredSlot) < m.slots.size() && m.slots[size_t(hoveredSlot)].empty()) {
             const ItemStack& st = it->second.items[size_t(slotSelectTime()) % it->second.items.size()];
-            s.drawTooltip(c, s.items.tooltip(st, s.settings.advancedItemTooltips), mx, my);
+            s.drawTooltip(c, s.items.tooltip(st, s.settings.advancedItemTooltips), mx, my, nullptr, true, tooltipStyle(s.items, st));
             return;
         }
     // The filter's and the page arrows' tooltips.

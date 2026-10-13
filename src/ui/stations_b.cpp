@@ -4,6 +4,7 @@
 #include "assets/game_reports.h"
 #include "audio/audio.h"
 #include "entity/entities.h"
+#include "ui/item_props.h"
 #include "ui/entity_preview.h"
 #include "ui/item_ui.h"
 
@@ -184,7 +185,7 @@ void merchantDrawTop(State& s, Canvas& c, Menu&, const Layout&, float left, floa
         if (s.mouseX < bx + 20) st = &o.costA;
         else if (s.mouseX < bx + 50 && s.mouseX > bx + 30) st = o.costB.empty() ? nullptr : &o.costB;
         else if (s.mouseX > bx + 65) st = &o.result;
-        if (st) s.drawTooltip(c, s.items.tooltip(*st, s.settings.advancedItemTooltips), s.mouseX, s.mouseY);
+        if (st) s.drawTooltip(c, s.items.tooltip(*st, s.settings.advancedItemTooltips), s.mouseX, s.mouseY, nullptr, true, tooltipStyle(s.items, *st));
         return;
     }
     if (g.shopItem >= 0 && g.shopItem < n && g.offers[size_t(g.shopItem)].outOfStock && inRect(s, left + 186, top + 35, 22, 21) &&

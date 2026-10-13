@@ -244,7 +244,10 @@ void Ui::State::drawItem(Canvas& c, const ItemStack& s, float x, float y, bool d
     const int md = items.maxDamage(s);
     int barWidth = 0;
     u32 barColor = 0;
-    if (s.damage > 0 && md > 0) {
+    // ItemStack.isDamaged: damageable (a max damage, not unbreakable) and damaged
+    static const int unbreakableType = items.componentType("unbreakable");
+    const bool unbreakable = std::any_of(s.added.begin(), s.added.end(), [](const ItemStack::Component& c) { return c.type == unbreakableType; });
+    if (s.damage > 0 && md > 0 && !unbreakable) {
         const float f = std::max(0.0f, float(md - s.damage) / float(md));
         const int width = int(std::lround(13.0f - float(s.damage) * 13.0f / float(md)));
         c.fill(x + 2, y + 13, x + 15, y + 15, 0xFF000000);
@@ -266,22 +269,33 @@ void Ui::State::drawItem(Canvas& c, const ItemStack& s, float x, float y, bool d
     }
 }
 
-void Ui::State::drawTooltip(Canvas& c, const std::vector<Text>& lines, float mx, float my, const TooltipImage* image) {
+void Ui::State::drawTooltip(Canvas& c, const std::vector<Text>& lines, float mx, float my, const TooltipImage* image,
+                            bool itemTooltip, const std::string& style) {
     if (lines.empty()) return;
     const size_t count = lines.size() + (image ? 1 : 0);
-    int w = 0, h = count == 1 ? -2 : 0;
+    int w = 0, h = itemTooltip && count != 1 ? 0 : -2;
     for (const Text& l : lines) w = std::max(w, font.width(l)), h += 10;
     if (image) w = std::max(w, image->width), h += image->height;
     float x = mx + 12, y = my - 12;
     if (x + float(w) > float(c.guiWidth())) x = std::max(x - 24 - float(w), 4.0f);
     if (y + float(h) + 3 > float(c.guiHeight())) y = float(c.guiHeight() - h - 3);
     const float x0 = x - 12, y0 = y - 12, pw = float(w + 24), ph = float(h + 24);
-    blitSprite(c, sprites.sprite("tooltip/background"), x0, y0, pw, ph);
-    blitSprite(c, sprites.sprite("tooltip/frame"), x0, y0, pw, ph);
+    // TooltipRenderUtil: tooltip/<style>_background / _frame (the style's namespace kept), else tooltip/background / frame
+    std::string prefix = "tooltip/";
+    if (!style.empty()) {
+        const size_t colon = style.find(':');
+        const std::string ns = colon == std::string::npos ? "minecraft" : style.substr(0, colon);
+        const std::string path = colon == std::string::npos ? style : style.substr(colon + 1);
+        prefix = (ns == "minecraft" ? std::string() : ns + ":") + "tooltip/" + path + "_";
+    }
+    const Sprite* bg = sprites.sprite(prefix + "background");
+    const Sprite* frame = sprites.sprite(prefix + "frame");
+    blitSprite(c, bg ? bg : sprites.sprite("tooltip/background"), x0, y0, pw, ph);
+    blitSprite(c, frame ? frame : sprites.sprite("tooltip/frame"), x0, y0, pw, ph);
     float ly = y;
     for (size_t i = 0; i < lines.size(); ++i) {
         font.draw(c, lines[i], x, ly, kWhite, true);
-        ly += 10 + (i == 0 ? 2 : 0);
+        ly += 10 + (itemTooltip && i == 0 ? 2 : 0);
         if (i == 0 && image) {  // the image follows the first line
             image->draw(c, x, ly, w);
             ly += float(image->height);

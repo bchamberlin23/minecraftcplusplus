@@ -402,7 +402,10 @@ struct Ui::State {
     void drawItem(Canvas& c, const ItemStack& s, float x, float y, bool decorations = true, const char* countOverride = nullptr,
                   int playerSlot = -1, float pop = 0);
     int popTime[46] = {};  // ItemStack.popTime of the player inventory menu's slots (hotbar stacks that grew)
-    void drawTooltip(Canvas& c, const std::vector<Text>& lines, float x, float y, const TooltipImage* image = nullptr);
+    // GuiGraphicsExtractor tooltips: item tooltips (extraSpaceAfterFirstLine) leave 2 px under the first line; style:
+    // TOOLTIP_STYLE ("" the default tooltip/background and frame sprites).
+    void drawTooltip(Canvas& c, const std::vector<Text>& lines, float x, float y, const TooltipImage* image = nullptr,
+                     bool itemTooltip = false, const std::string& style = {});
     void drawText(Canvas& c, const Text& t, float x, float y, u32 color, bool shadow) { font.draw(c, t, x, y, color, shadow); }
     void drawCentered(Canvas& c, const Text& t, float cx, float y, u32 color, bool shadow = true) {
         font.draw(c, t, cx - float(font.width(t) / 2), y, color, shadow);

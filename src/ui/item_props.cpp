@@ -706,6 +706,18 @@ bool hasComponent(const Items& items, const ItemStack& s, std::string_view rawNa
     return defaults(items, s.item).contains("minecraft:" + name);
 }
 
+std::string tooltipStyle(const Items& items, const ItemStack& s) {
+    if (const std::string* d = findComponent(items, s, "tooltip_style")) {
+        net::Reader r = readerOf(*d);
+        const std::string id(r.str());
+        if (r.ok) return normId(id);
+    }
+    if (removed(items, s, "tooltip_style")) return "";
+    const json& def = defaults(items, s.item);
+    if (auto it = def.find("minecraft:tooltip_style"); it != def.end() && it->is_string()) return normId(it->get<std::string>());
+    return "";
+}
+
 std::string itemModelId(const Items& items, const ItemStack& s) {
     if (const std::string* d = findComponent(items, s, "item_model")) {
         net::Reader r = readerOf(*d);

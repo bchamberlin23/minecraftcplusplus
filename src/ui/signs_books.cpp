@@ -771,7 +771,8 @@ void viewDraw(UiState& s, Canvas& c) {
     Style st;
     if (bookStyleAt(s, c, st) && st.events && !st.events->click.empty()) s.requestCursor(UiState::CursorPointingHand);
     if (bookStyleAt(s, c, st) && st.events)
-        if (const std::vector<Text> lines = hoverLines(s, *st.events); !lines.empty()) s.drawTooltip(c, lines, s.mouseX, s.mouseY);
+        if (const std::vector<Text> lines = hoverLines(s, *st.events); !lines.empty())
+            s.drawTooltip(c, lines, s.mouseX, s.mouseY, nullptr, st.events->hover == "show_item");
 }
 
 void viewInput(UiState& s, const InputEvent& e) {

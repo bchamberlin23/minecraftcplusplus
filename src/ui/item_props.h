@@ -91,6 +91,8 @@ struct ItemContext {
 // --- data components ----------------------------------------------------------------------------------------
 // The patch's encoded value of a component ("map_id"), nullptr when the patch does not set it.
 const std::string* findComponent(const Items& items, const ItemStack& s, std::string_view name);
+// DataComponents.TOOLTIP_STYLE: the stack's tooltip sprite style ("" for the default background and frame).
+std::string tooltipStyle(const Items& items, const ItemStack& s);
 // DataComponentHolder.has: patched, or a default component of the item (and not removed). ignoreDefault: hasNonDefault.
 bool hasComponent(const Items& items, const ItemStack& s, std::string_view name, bool ignoreDefault = false);
 // The item definition id (item_model component, else the item's default model id): "minecraft:compass".

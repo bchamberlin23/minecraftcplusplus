@@ -7,6 +7,7 @@
 // response: WaitingForResponseScreen), the warning screen behind the dialog's warning button, the command
 // confirmation of ClientPacketListener.sendUnattendedCommand and ConfirmLinkScreen. Also the pause menu's custom
 // options / server links button and the quick actions key.
+#include "ui/item_props.h"
 #include "ui/dialogs.h"
 
 #include "audio/audio.h"
@@ -1156,7 +1157,7 @@ void drawDialog(UiState& s, Canvas& c, Instance& inst) {
             if (hover && b.hasTooltip) tooltip = s.font.split(b.tooltip, 170);
         }
     }
-    if (tooltipItem) s.drawTooltip(c, s.items.tooltip(*tooltipItem, s.settings.advancedItemTooltips), mx, my);
+    if (tooltipItem) s.drawTooltip(c, s.items.tooltip(*tooltipItem, s.settings.advancedItemTooltips), mx, my, nullptr, true, tooltipStyle(s.items, *tooltipItem));
     else if (!tooltip.empty()) s.drawTooltip(c, tooltip, mx, my);
 }
 
