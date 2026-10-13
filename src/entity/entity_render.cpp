@@ -2150,9 +2150,16 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
             entMats_.insert(entMats_.end(), mats_.begin(), mats_.begin() + ptrdiff_t(parts));
             entHash_ = entHash_ * 31 + u32(L.model) * 7 + u32(parts);
         }
+        // LivingEntityRenderer: an invisible entity's body shows only to those who see it (spectators, teammates seeing
+        // friendly invisibles: translucent, 0x26 alpha); its skin layers do not; equipment, eyes and swirls stay.
+        float alpha = appearanceAlpha_;
+        if (living && (e.sharedFlags & 0x20)) {
+            if (li == 0 && seeInvisible && seeInvisible(e)) alpha = 38.0f / 255.0f;
+            else if (li == 0 || !(L.flags & (Armor | Emissive | Elytra | Glint | Scroll))) continue;
+        }
         const TexRect& tr = assets_.rect(L.tex);
-        const u32 layerColor = appearanceAlpha_ >= 0 ? u32(appearanceAlpha_ * 255.0f) << 24 | (L.color & 0xFFFFFF) : L.color;
-        GpuInstance inst{base, layerColor, (L.flags & Emissive) ? (light | 256u) : light, (L.flags & NoOverlay) || appearanceAlpha_ >= 0 ? 0u : overlay,
+        const u32 layerColor = alpha >= 0 ? u32(alpha * 255.0f) << 24 | (L.color & 0xFFFFFF) : L.color;
+        GpuInstance inst{base, layerColor, (L.flags & Emissive) ? (light | 256u) : light, (L.flags & NoOverlay) || alpha >= 0 ? 0u : overlay,
                          {tr.u0, tr.v0, tr.du, tr.dv}};
         if (L.flags & Dissolve) {  // the mask's atlas offset, as two signed 16-bit fractions
             auto q = [](float v) { return u32(u16(i16(std::clamp(v, -1.0f, 1.0f) * 32767.0f))); };
@@ -2166,7 +2173,7 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         }
         const u32 instId = instCount_++;
         std::memcpy(frameBase_ + kInstOffset + u64(instId) * 32, &inst, 32);
-        const bool translucent = (L.flags & (Translucent | Additive)) != 0 || appearanceAlpha_ >= 0;
+        const bool translucent = (L.flags & (Translucent | Additive)) != 0 || alpha >= 0;
         if (pack_) {  // shader pack: the posed quads as vertices (entity atlas coordinates)
             const auto& quads = assets_.quads();
             // Armour glint (TextureTransform.setupGlintTexturing, scale 0.16, the Glint Speed) as gbuffers_armor_glint
@@ -2898,7 +2905,7 @@ void EntityRenderer::build(const PassContext& ctx) {
         const TypeDef& d = defs_[size_t(e.type)];
         if (d.kind == Kind::None || !e.info) return 0;
         if (d.kind == Kind::Item && externalItems_) return 0;  // 3D item models: the visuals pass
-        if (e.category == Category::Living && (e.sharedFlags & 0x20)) return 0;  // invisible
+        // invisible: still drawn (equipment, eyes; the body for spectators / teammates), see modelEntity
         float w = e.info->width, h = e.info->height;
         if (d.special == SpSlime || d.special == SpSulfurCube) w *= float(e.size), h *= float(e.size);
         sphere[3] = std::max(w, h) * 0.75f * d.scale + 0.5f;

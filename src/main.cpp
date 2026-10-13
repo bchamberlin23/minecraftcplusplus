@@ -971,6 +971,15 @@ int wmain(int argc, wchar_t** argv) {
         }
         return entities.click(eye, dir, attack, use, blockDistance, game.entityReach, game.player().sneaking);
     };
+    entityRenderer.seeInvisible = [&](const ent::Entity& e) {
+        if (game.gameMode == 3) return true;
+        if (!session) return false;
+        char uuid[37];
+        std::snprintf(uuid, sizeof(uuid), "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x", e.uuid[0], e.uuid[1], e.uuid[2],
+                      e.uuid[3], e.uuid[4], e.uuid[5], e.uuid[6], e.uuid[7], e.uuid[8], e.uuid[9], e.uuid[10], e.uuid[11], e.uuid[12], e.uuid[13],
+                      e.uuid[14], e.uuid[15]);
+        return ui::seesInvisible(opt.name, e.category == ent::Category::Player ? e.name : std::string(uuid));
+    };
     game.onPickEntity = [&](double blockDistance) {
         if (!session || !haveEntities) return false;
         const CameraState c = game.camera();

@@ -66,6 +66,7 @@ struct Team {
     Text prefix, suffix;
     int color = -1;      // TeamColor id (0..15), -1 none
     int collision = 0;   // Team.CollisionRule: 0 always, 1 never, 2 push other teams, 3 push own team
+    u8 options = 0;      // 1 friendly fire, 2 see friendly invisibles
 };
 
 // --- boss bars --------------------------------------------------------------------------------------------------
@@ -376,7 +377,7 @@ void registerHandlers(UiState& s, net::Client& client) {
             r.varInt();  // name tag visibility
             t.collision = r.varInt();
             if (r.boolean()) t.color = r.varInt();
-            r.u8v();  // options
+            t.options = r.u8v();
         }
         std::vector<std::string> players;
         if (method == 0 || method == 3 || method == 4) {
@@ -762,6 +763,13 @@ bool belowNameText(const std::string& owner, Text& out) {
     out = Text();
     out.append(formatScore(sc->second, *obj, noStyle)).append(" ").append(obj->display);
     return true;
+}
+
+bool seesInvisible(const std::string& us, const std::string& them) {  // Entity.isInvisibleTo: canSeeFriendlyInvisibles
+    auto a = g.playerTeam.find(us), b = g.playerTeam.find(them);
+    if (a == g.playerTeam.end() || b == g.playerTeam.end() || a->second != b->second) return false;
+    auto t = g.teams.find(a->second);
+    return t != g.teams.end() && (t->second.options & 2);
 }
 
 }  // namespace ui

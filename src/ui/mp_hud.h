@@ -37,6 +37,7 @@ bool socialHidden(const std::string& uuid);
 // Entity.belowNameDisplay (the BELOW_NAME objective's score: "<value> <objective name>"); false without one.
 Text teamFormattedName(const std::string& member, const Text& name);
 bool belowNameText(const std::string& owner, Text& out);
+bool seesInvisible(const std::string& us, const std::string& them);  // the same team, seeing friendly invisibles
 void openSocialInteractions(UiState& s, Screen back);
 struct TeamView {
     std::string name;

@@ -69,6 +69,9 @@ public:
         bool shadowOnly;    // posed only as a shadow caster (outside the view, or the first-person local player)
     };
     const std::vector<Attachment>& attachments() const { return attachments_; }
+    // Entity.isInvisibleTo turned around: the local player sees this invisible entity (spectator, a teammate seeing
+    // friendly invisibles)
+    std::function<bool(const Entity&)> seeInvisible;
     // The glowing outline (LevelRenderer's entity outline target and post_effect/entity_outline): glowing entities'
     // silhouettes in their outline colour, edge-detected, blurred and blended over the frame. A Hud-stage pass,
     // registered before the UI. outlineColor: an entity's outline colour (0xRRGGBB) when it glows
