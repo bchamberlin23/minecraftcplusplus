@@ -1867,6 +1867,10 @@ void Visuals::Impl::update() {
         particles->setAmbientEnv(ambientNight, ambientNether, skyDarken, std::move(marker));
         const CameraState c = game ? game->viewCamera() : CameraState{};
         const double cam[3] = {c.x, c.y, c.z};
+        double eye[3] = {};
+        const bool scoping = game && game->cameraMode == 0 && game->scoping();
+        if (scoping) eye[0] = game->player().pos[0], eye[1] = game->player().pos[1] + game->player().eyeHeight(), eye[2] = game->player().pos[2];
+        particles->setView(c.yaw, c.pitch, scoping ? eye : nullptr);
         particles->frame(dt, cam);
         frameParticleMs += particles->stats().tickMs;
     }

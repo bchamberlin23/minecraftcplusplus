@@ -106,6 +106,12 @@ public:
     void setVideo(int particleStatus, int weatherRadius) { status_ = particleStatus, weatherRadius_ = weatherRadius; }
     // A level event the client plays for itself (level.levelEvent(player, ...)): world lock held, main thread.
     void localLevelEvent(int type, int x, int y, int z, int data) { levelEvent(type, x, y, z, data); }
+    // The camera's look (radians, CameraState convention) for FacingCameraMode.LOOKAT_Y quads, and the local player's
+    // eyes while it scopes in first person (null otherwise: SpellParticle.isCloseToScopingPlayer).
+    void setView(float yaw, float pitch, const double* scopingEye) {
+        viewYaw_ = yaw, viewPitch_ = pitch, scoping_ = scopingEye != nullptr;
+        if (scopingEye) std::copy(scopingEye, scopingEye + 3, scopeEye_);
+    }
     void setAmbientEnv(bool night, bool nether, int skyDarken, std::string markerBlock) {
         ambientNight_ = night, ambientNether_ = nether, skyDarken_ = skyDarken, markerBlock_ = std::move(markerBlock);
     }
@@ -209,6 +215,10 @@ private:
     std::vector<Particle> spawnQueue_;         // spawned while ticking
     std::mt19937 rng_{0x51A7E5u};
     double tickClock_ = 0, cam_[3] = {};
+    float viewYaw_ = 0, viewPitch_ = 0;
+    bool scoping_ = false;
+    double scopeEye_[3] = {};
+    bool nearScopingPlayer(const Particle& p) const;  // within 3 blocks of the scoping player's eyes
     int status_ = 0, weatherRadius_ = 10;
     // ClientLevel.playLocalSound(..., distanceDelay): beyond 10 blocks the sound waits distance / 40 s (sound speed).
     struct DelayedSound {

@@ -801,6 +801,7 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
                 if (t.opt == Opt::Spell) p.xd *= opt->power, p.yd = (p.yd - 0.1f) * opt->power + 0.1f, p.zd *= opt->power;
             }
             p.e0 = p.a;  // original alpha
+            if (nearScopingPlayer(p)) p.a = 0;  // SpellParticle: hidden right in front of a scope
             ageSprite();
             break;
         }
@@ -916,13 +917,15 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
             p.flags |= SpeedUp;
             p.xd *= 0.1f, p.yd *= 0.1f, p.zd *= 0.1f;
             const float scale = opt ? std::clamp(opt->scale, 0.01f, 4.0f) : 1.0f;
+            // DustParticle / DustColorTransitionParticle: a base factor, each channel (rand * 0.2 + 0.8) * colour * it
             const float br = randf() * 0.4f + 0.6f;
+            auto jitter = [&](float v) { return (randf() * 0.2f + 0.8f) * v * br; };
             if (opt && opt->hasColor) color(opt->color);
-            p.r *= br, p.g *= br, p.b *= br;
-            if (t.kind == Kind::DustTransition) {  // DustColorTransitionParticle: from (r, g, b) to (e1, e2, e3)
+            p.r = jitter(p.r), p.g = jitter(p.g), p.b = jitter(p.b);
+            if (t.kind == Kind::DustTransition) {  // from (r, g, b) to (e1, e2, e3)
                 const u32 to = opt ? opt->color2 : 0xFFFFFFFF;
-                p.e1 = float((to >> 16) & 255) / 255.0f * br, p.e2 = float((to >> 8) & 255) / 255.0f * br;
-                p.e3 = float(to & 255) / 255.0f * br;
+                p.e1 = jitter(float((to >> 16) & 255) / 255.0f), p.e2 = jitter(float((to >> 8) & 255) / 255.0f);
+                p.e3 = jitter(float(to & 255) / 255.0f);
                 p.sx = p.r, p.sy = p.g, p.sz = p.b;
             }
             p.quadSize *= 0.75f * scale;
@@ -953,10 +956,11 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
             p.xd = p.xd * 0.1f + xa, p.yd = p.yd * 0.1f + ya, p.zd = p.zd * 0.1f + za;
             p.r = p.g = p.b = 1.0f - randf() * 0.3f;
             p.quadSize *= 1.875f;
-            p.lifetime = std::max(int(8.0 / (randf() * 0.8 + 0.3) * 2.5), 1);
+            p.lifetime = int(std::max(float(int(8.0 / (randf() * 0.8 + 0.3))) * 2.5f, 1.0f));
             p.sizeMode = SizeGrow;
             p.flags &= u8(~Physics);
-            if (t.name == "sneeze") p.r = 0.22f, p.g = 1.0f, p.b = 0.53f, p.a = 0.4f, p.flags |= Translucent;  // SneezeProvider
+            p.flags |= Translucent;  // PlayerCloudParticle.getLayer
+            if (t.name == "sneeze") p.r = 0.22f, p.g = 1.0f, p.b = 0.53f, p.a = 0.4f;  // SneezeProvider
             ageSprite();
             break;
         case Kind::SulfurBubble: {  // SulfurBubbleParticle (the provider passes y speed as z speed)
@@ -1221,6 +1225,7 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
             p.zd = za + (randf() * 2.0f - 1.0f) * 0.05f;
             p.quadSize = 0.1f * (randf() * randf() + 1.0f);
             p.lifetime = int(16.0 / (randf() * 0.8 + 0.2)) + 2;
+            p.r = 0.923f, p.g = 0.964f, p.b = 0.999f;  // SnowflakeParticle.Provider
             ageSprite();
             break;
         default:  // Generic: the base particle with the type's sprites
@@ -2232,6 +2237,7 @@ void Particles::tickOne(Particle& p) {
             break;
         case Kind::FallingDust:
             if (p.age++ >= p.lifetime) return remove();
+            ageSprite();
             p.oRoll = p.roll;
             p.roll += kPi * p.e0 * 2.0f;
             if (p.flags & OnGround) p.oRoll = p.roll = 0;
@@ -2382,7 +2388,7 @@ void Particles::tickOne(Particle& p) {
         case Kind::Witch:
             defaultTick();
             ageSprite();
-            p.a += (p.e0 - p.a) * 0.05f;
+            p.a = nearScopingPlayer(p) ? 0.0f : p.a + (p.e0 - p.a) * 0.05f;
             break;
         case Kind::Crit:
         case Kind::DamageIndicator:
@@ -3663,6 +3669,11 @@ void Particles::frame(double dt, const double cam[3]) {
     stats_.tickMs = t.ms();
 }
 
+bool Particles::nearScopingPlayer(const Particle& p) const {
+    const double dx = p.x - scopeEye_[0], dy = p.y - scopeEye_[1], dz = p.z - scopeEye_[2];
+    return scoping_ && dx * dx + dy * dy + dz * dz <= 9.0;
+}
+
 u32 Particles::build(GpuParticle* out, u32 max, const double cam[3], u32& opaque) {
     Timer t;
     const float pt = partial_;
@@ -3719,7 +3730,7 @@ u32 Particles::build(GpuParticle* out, u32 max, const double cam[3], u32& opaque
             light = (light & 0xF0) | std::min<u32>(15, (light & 15) + add);
         } else if (p.emissive == 255) light = 256;
         else if (p.emissive) light = (light & 0xF0) | std::max<u32>(light & 15, p.emissive);
-        else if (types_[p.type].kind == Kind::Portal || types_[p.type].kind == Kind::Enchant) {
+        else if (kind == Kind::Portal || kind == Kind::ReversePortal || kind == Kind::Enchant) {
             float b = s * s;  // addSmoothBlockEmission(light, (age / lifetime)^4)
             b *= b;
             light = (light & 0xF0) | std::min<u32>(15, (light & 15) + u32(b * 15.0f));
@@ -3730,6 +3741,12 @@ u32 Particles::build(GpuParticle* out, u32 max, const double cam[3], u32& opaque
         // Moved since the last frame: the tick velocity over the frame's length (motion vectors).
         g.motion[0] = float(p.x - p.xo) * frameTicks_, g.motion[1] = float(p.y - p.yo) * frameTicks_;
         g.motion[2] = float(p.z - p.zo) * frameTicks_, g.orient = 0;
+        if (kind == Kind::TrialDetection) {
+            // FacingCameraMode.LOOKAT_Y: (0, rotation.y, 0, rotation.w) of the camera's rotationYXZ(pi - yaw, -pitch, 0):
+            // turned about Y only, and scaled by its squared length cos^2(pitch / 2)
+            g.orient = orientedQuad(kPi - viewYaw_, 0, 0);
+            g.size *= (1.0f + std::cos(viewPitch_)) * 0.5f;
+        }
         if (kind == Kind::Shriek) {  // rotationX(-1.0472) and rotationYXZ(-pi, 1.0472, 0)
             g.roll = 0;
             g.orient = orientedQuad(0, -1.0472f, 0);
