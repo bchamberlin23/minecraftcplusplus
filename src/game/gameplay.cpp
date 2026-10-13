@@ -634,6 +634,7 @@ void Gameplay::frame() {
     a.jumpBoost = effect("jump_boost"), a.slowFalling = effect("slow_falling"), a.levitation = effect("levitation");
     a.dolphinsGrace = effect("dolphins_grace");
     a.blind = effect("blindness") >= 0;
+    a.weaving = effect("weaving") >= 0;
     const ui::ItemStack* chest = ui_ ? ui_->playerSlot(6) : nullptr;
     a.canGlide = chest && rules_.glider(itemName(chest->item)) && (chest->maxDamage <= 0 || chest->damage < chest->maxDamage - 1);
     const ui::ItemStack* feet = ui_ ? ui_->playerSlot(8) : nullptr;

@@ -48,7 +48,7 @@ public:
     // Level.findSupportingBlock: the colliding cell in the area closest to pos (by its centre).
     bool supportingBlock(const AABB& area, const double pos[3], int out[3]) const;
     // Block.entityInside slowdowns (cobweb, sweet berry bush): the stuck multiplier of a box, 0 when none.
-    bool stuckMultiplier(const AABB& box, double out[3]) const;
+    bool stuckMultiplier(const AABB& box, double out[3], bool weaving = false) const;  // weaving: the Weaving effect
 
     // FluidState of a cell (Level.getFluidState): water or lava, amount 1..8 (8: sources and falling fluid).
     struct Fluid {
@@ -165,6 +165,7 @@ public:
         double bounciness = 0;  // the bounciness attribute (LivingEntity.getEntityBounciness): bounces off anything
         int jumpBoost = -1, slowFalling = -1, levitation = -1, dolphinsGrace = -1;  // effect amplifiers, -1 none
         bool blind = false;             // Blindness (LivingEntity.isMobilityRestricted: no sprinting)
+        bool weaving = false;           // Weaving (WebBlock.entityInside: cobwebs slow less)
         bool canGlide = false;          // a usable glider (elytra) worn
         bool powderSnowWalker = false;  // leather boots
         bool rocketBoost = false;       // a firework rocket is attached (FireworkRocketEntity pushing a glider)

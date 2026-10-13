@@ -312,13 +312,15 @@ bool Physics::isSuffocating(int x, int y, int z) const {
     return s.min[0] <= 0 && s.min[1] <= 0 && s.min[2] <= 0 && s.max[0] >= 1 && s.max[1] >= 1 && s.max[2] >= 1;
 }
 
-bool Physics::stuckMultiplier(const AABB& b, double out[3]) const {
+bool Physics::stuckMultiplier(const AABB& b, double out[3], bool weaving) const {
     bool any = false;
     for (int y = int(std::floor(b.min[1] + 1e-5)); y <= int(std::floor(b.max[1] - 1e-5)); ++y)
         for (int z = int(std::floor(b.min[2] + 1e-5)); z <= int(std::floor(b.max[2] - 1e-5)); ++z)
             for (int x = int(std::floor(b.min[0] + 1e-5)); x <= int(std::floor(b.max[0] - 1e-5)); ++x) {
                 const std::string_view n = shortBlock(registry_.name(world_.block(x, y, z)));
-                if (n == "cobweb") out[0] = 0.25, out[1] = 0.05, out[2] = 0.25, any = true;
+                if (n == "cobweb") {  // WebBlock.entityInside
+                    out[0] = weaving ? 0.5 : 0.25, out[1] = weaving ? 0.25 : 0.05, out[2] = out[0], any = true;
+                }
                 else if (n == "sweet_berry_bush" && !any) out[0] = 0.8, out[1] = 0.75, out[2] = 0.8, any = true;
                 else if (n == "powder_snow" && !any && y == int(std::floor(b.min[1] + 1e-5)))  // the block at the feet
                     out[0] = 0.9, out[1] = 1.5, out[2] = 0.9, any = true;
@@ -828,7 +830,7 @@ void Player::applyEffectsFromBlocks(const Physics& physics) {
     AABB b = box();
     for (int a = 0; a < 3; ++a) b.min[a] += 1e-5, b.max[a] -= 1e-5;
     double stuck[3];
-    if (physics.stuckMultiplier(b, stuck)) {  // Entity.makeStuckInBlock
+    if (physics.stuckMultiplier(b, stuck, attr.weaving)) {  // Entity.makeStuckInBlock
         std::copy(stuck, stuck + 3, stuck_);
         fallDistance = 0;
     }
