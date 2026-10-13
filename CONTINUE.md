@@ -132,7 +132,9 @@ docs/audit-26.3 was re-checked: most of it is done, its remaining items are fold
   `{Name:...}` compound is silently ignored (an air display).
 - **Placement prediction (game/placement.cpp) residual**: not predicted client-side (the server's block updates
   fix them a moment later; rails are straight along the look as the Java client places them): note block
-  instruments, repeater / comparator neighbours' power. The face sturdiness tests use collision boxes (Java: the
+  instruments, repeater / comparator neighbours' power, and BlockItem.canPlace's canSurvive for most blocks (plants on
+  the wrong ground, crops off farmland... the survives() checks cover torches, signs, banners, lanterns, attached
+  blocks, ladders, vines, dripstone and wire). The face sturdiness tests use collision boxes (Java: the
   support shape), which differ for leaves, scaffolding and a few others.
 - **WORLD-04**: Blender port (blending old pre-1.18 chunks with new generation). Low priority: it only affects
   upgraded old worlds.
