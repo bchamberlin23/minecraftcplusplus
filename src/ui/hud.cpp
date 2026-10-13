@@ -7,6 +7,7 @@
 #include "ui/options_list.h"
 #include "ui/item_props.h"
 #include "ui/item_ui.h"
+#include "ui/locator_bar.h"
 #include "ui/toasts.h"
 #include "ui/ui_state.h"
 #include "world/terrain.h"
@@ -352,19 +353,32 @@ void Ui::State::drawHud(Canvas& c) {
                 else if (b > 10 - empty) blitSprite(c, sprites.sprite("hud/air_empty"), bx, float(yAir), 9, 9);
             }
         }
-        // Experience bar and level.
+    }
+    if (!spectator() || hasWaypoints()) {
+        // Hud.nextContextualInfoState: with waypoints the locator bar (but the jump bar while it charges and the
+        // experience bar for 5 seconds after it changed), else a jumping mount's bar, else the experience bar.
         const int left = (gw - 182) / 2, top = gh - 24 - 5;
-        if (!drawJumpBar(*this, c, left, top)) {  // a jumping mount's charge bar (gameplay_hud.cpp)
+        const Game::VehicleHud& v = game->vehicleHud;
+        const bool experience = hurtable, jumpFirst = v.jumpScale > 0 || v.jumpCooldown > 0;
+        enum { Empty, Experience, Locator, Jump } bar;
+        if (hasWaypoints()) bar = v.jumpable && jumpFirst ? Jump : experience && xpDisplayStart + 100 > guiTicks ? Experience : Locator;
+        else bar = v.jumpable ? Jump : experience ? Experience : Empty;
+        if (bar == Jump) {
+            drawJumpBar(*this, c, left, top);  // gameplay_hud.cpp
+        } else if (bar == Locator) {
+            drawLocatorBarBackground(*this, c, left, top);  // locator_bar.cpp
+        } else if (bar == Experience) {
             blitSprite(c, sprites.sprite("hud/experience_bar_background"), float(left), float(top), 182, 5);
             const int progress = int(xpProgress * 183.0f);
             if (progress > 0) blitSpriteRegion(c, sprites.sprite("hud/experience_bar_progress"), 182, 5, 0, 0, float(left), float(top), float(progress), 5);
         }
-        if (xpLevel > 0) {
+        if (experience && xpLevel > 0) {  // ContextualBar.extractExperienceLevel
             const Text lv = translatable("gui.experience.level", {Text(std::to_string(xpLevel))}, lang());
             const float x = float((gw - font.width(lv)) / 2), y = float(gh - 24 - 9 - 2);
             for (auto [dx, dy] : {std::pair{1, 0}, {-1, 0}, {0, 1}, {0, -1}}) font.draw(c, lv, x + float(dx), y + float(dy), 0xFF000000, false);
             font.draw(c, lv, x, y, 0xFF80FF20, false);
         }
+        if (bar == Locator) drawLocatorBarDots(*this, c, top);
     }
     // Selected item name.
     if (toolHighlightTimer > 0 && !lastToolHighlight.empty() && !spectator()) {

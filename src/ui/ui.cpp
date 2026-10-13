@@ -636,7 +636,11 @@ void Ui::registerHandlers(net::Client& client) {
     client.onPlay("set_experience", [s](net::Reader& r) {
         const float progress = r.f32();
         const int level = r.varInt(), total = r.varInt();
-        s->post([s, progress, level, total] { s->xpProgress = progress, s->xpLevel = level, s->xpTotal = total; });
+        s->post([s, progress, level, total] {
+            if (progress != s->xpProgress)  // setExperienceDisplayStartTickToTickCount (not for the first values)
+                s->xpDisplayStart = s->xpDisplayStart == INT_MIN ? INT_MIN + 1 : s->guiTicks;
+            s->xpProgress = progress, s->xpLevel = level, s->xpTotal = total;
+        });
     });
     client.onPlayPeek("set_entity_data", [s](net::Reader& r) {  // our shared flags (0), air supply (1), ticks frozen (7)
         const int entity = r.varInt();

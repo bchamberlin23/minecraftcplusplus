@@ -221,6 +221,7 @@ struct Ui::State {
     Screen optionsParent = Screen::Options;
     // Hud.tickAutosaveIndicator: the local server saving (MinecraftServer.isCurrentlySaving), eased in and out.
     bool serverSaving = false;
+    int xpDisplayStart = INT_MIN;  // LocalPlayer.experienceDisplayStartTick (gui ticks): the progress last changed
     float autosaveIndicator = 0, lastAutosaveIndicator = 0;
     double tickClock = 0;
     float partialTick = 0;
