@@ -742,6 +742,41 @@ void debugLines(UiState& s, std::vector<LineVertex>& out, const CameraState& cam
             line(cx + 16, y, cz + 16, cx, y, cz + 16, major, 4.0f), line(cx, y, cz + 16, cx, y, cz, major, 4.0f);
         }
     }
+    if (debugEntryEnabled(s, "3d_crosshair") && s.game->cameraMode == 0 && !s.hudHidden) {  // DebugCrosshairRenderer
+        // A block in front of the eye, the world's axes 0.01 x the GUI scale long: black under red / green / blue.
+        const float cp = std::cos(cam.pitch);
+        const double fx = -std::sin(cam.yaw) * cp, fy = -std::sin(cam.pitch), fz = std::cos(cam.yaw) * cp;
+        const double ox = cam.x + fx, oy = cam.y + fy, oz = cam.z + fz, len = 0.01 * s.guiScale();
+        line(ox, oy, oz, ox + len, oy, oz, 0xFF000000, 4.0f), line(ox, oy, oz, ox, oy + len, oz, 0xFF000000, 4.0f);
+        line(ox, oy, oz, ox, oy, oz + len, 0xFF000000, 4.0f);
+        line(ox, oy, oz, ox + len, oy, oz, 0xFFFF0000, 2.0f), line(ox, oy, oz, ox, oy + len, oz, 0xFF00FF00, 2.0f);
+        line(ox, oy, oz, ox, oy, oz + len, 0xFF7F7FFF, 2.0f);
+    }
+    if (debugEntryEnabled(s, "visualize_collision_boxes")) {  // CollisionBoxRenderer: within 6 blocks of the player
+        const AABB b = player(s).box();
+        std::vector<AABB> boxes;
+        {
+            std::shared_lock lock(s.world->mutex());
+            s.game->physics().collisionBoxes({{b.min[0] - 6, b.min[1] - 6, b.min[2] - 6}, {b.max[0] + 6, b.max[1] + 6, b.max[2] + 6}}, boxes);
+        }
+        for (const AABB& c : boxes) box(c.min[0], c.min[1], c.min[2], c.max[0], c.max[1], c.max[2], 0xFFFFFFFF, 2.5f);
+    }
+    if (debugEntryEnabled(s, "visualize_entity_supporting_blocks")) {  // SupportBlockRenderer: the player's supporting block
+        const AABB b = player(s).box();
+        int at[3];
+        bool found;
+        std::vector<AABB> shape;
+        {
+            std::shared_lock lock(s.world->mutex());
+            found = s.game->physics().supportingBlock({{b.min[0], b.min[1] - 1.0e-6, b.min[2]}, {b.max[0], b.min[1], b.max[2]}}, player(s).pos, at);
+            if (found) s.game->physics().collisionBoxes({{double(at[0]), double(at[1]), double(at[2])}, {at[0] + 1.0, at[1] + 1.0, at[2] + 1.0}}, shape);
+        }
+        if (found) {
+            const double o = 0.02;
+            box(at[0] - o, at[1] - o, at[2] - o, at[0] + 1 + o, at[1] + 1 + o, at[2] + 1 + o, 0x66FF0000, 2.5f);
+            for (const AABB& c : shape) box(c.min[0], c.min[1], c.min[2], c.max[0], c.max[1], c.max[2], 0xFFFF0000, 2.5f);
+        }
+    }
     if (debugEntryEnabled(s, "entity_hitboxes") && s.entities) {  // EntityHitboxDebugRenderer
         const float pt = s.entities->partialTick();
         for (const auto& [id, e] : s.entities->entities()) {
@@ -764,6 +799,123 @@ void debugLines(UiState& s, std::vector<LineVertex>& out, const CameraState& cam
         }
     }
 }
+
+// --- the debug renderers drawn over the view (projected): water levels, light levels, solid faces, heightmaps --------
+
+namespace {
+
+void drawWorldDebug(UiState& s, Canvas& c) {
+    const bool water = debugEntryEnabled(s, "visualize_water_levels"), blockLight = debugEntryEnabled(s, "visualize_block_light_levels"),
+               skyLight = debugEntryEnabled(s, "visualize_sky_light_levels"), solid = debugEntryEnabled(s, "visualize_solid_faces"),
+               heights = debugEntryEnabled(s, "visualize_heightmap");
+    if (!(water || blockLight || skyLight || solid || heights) || !s.game || !s.world) return;
+    const CameraState cam = s.game->viewCamera();
+    const float cp = std::cos(cam.pitch), sp = std::sin(cam.pitch), cy = std::cos(cam.yaw), sy = std::sin(cam.yaw);
+    float fwd[3] = {-sy * cp, -sp, cy * cp}, right[3] = {-cy, 0, -sy}, up[3] = {-sy * sp, cp, cy * sp};
+    if (cam.basisSet)
+        for (int a = 0; a < 3; ++a) fwd[a] = cam.fwd[a], right[a] = cam.right[a], up[a] = cam.up[a];
+    const float W = float(c.guiWidth()), H = float(c.guiHeight());
+    const float t = std::tan(s.settings.fov * (s.oldFovModifier + (s.fovModifier - s.oldFovModifier) * s.partialTick) * 3.14159265f / 360.0f);
+    auto project = [&](double x, double y, double z, float out[2]) {
+        const float d[3] = {float(x - cam.x), float(y - cam.y), float(z - cam.z)};
+        const float f = d[0] * fwd[0] + d[1] * fwd[1] + d[2] * fwd[2];
+        if (f < 0.05f) return false;
+        out[0] = W * 0.5f * (1.0f + (d[0] * right[0] + d[1] * right[1] + d[2] * right[2]) / (f * t * W / H));
+        out[1] = H * 0.5f * (1.0f - (d[0] * up[0] + d[1] * up[1] + d[2] * up[2]) / (f * t));
+        return true;
+    };
+    const float uv[4][2] = {};
+    auto face = [&](const double p[4][3], u32 argb) {
+        float xy[4][2];
+        for (int k = 0; k < 4; ++k)
+            if (!project(p[k][0], p[k][1], p[k][2], xy[k])) return;
+        c.quad4(xy, uv, argb, ModeSolid);
+    };
+    auto boxFill = [&](double x0, double y0, double z0, double x1, double y1, double z1, u32 argb) {
+        const double f[6][4][3] = {{{x0, y0, z0}, {x1, y0, z0}, {x1, y0, z1}, {x0, y0, z1}}, {{x0, y1, z0}, {x0, y1, z1}, {x1, y1, z1}, {x1, y1, z0}},
+                                   {{x0, y0, z0}, {x0, y1, z0}, {x1, y1, z0}, {x1, y0, z0}}, {{x0, y0, z1}, {x1, y0, z1}, {x1, y1, z1}, {x0, y1, z1}},
+                                   {{x0, y0, z0}, {x0, y0, z1}, {x0, y1, z1}, {x0, y1, z0}}, {{x1, y0, z0}, {x1, y1, z0}, {x1, y1, z1}, {x1, y0, z1}}};
+        for (const auto& q : f) face(q, argb);
+    };
+    auto label = [&](const std::string& text, double x, double y, double z, u32 argb) {
+        float at[2];
+        if (!project(x, y, z, at)) return;
+        s.font.draw(c, text, at[0] - float(s.font.width(text)) / 2, at[1] - 4, argb, false);
+    };
+    auto lerpColor = [](float f, u32 a, u32 b) {
+        u32 out = 0xFF000000;
+        for (int sh = 0; sh < 24; sh += 8) out |= u32(float((a >> sh) & 255) + (float((b >> sh) & 255) - float((a >> sh) & 255)) * f) << sh;
+        return out;
+    };
+    const int px = int(std::floor(cam.x)), py = int(std::floor(cam.y)), pz = int(std::floor(cam.z));
+    std::shared_lock lock(s.world->mutex());
+    const int minY = s.world->minSectionY() * 16, maxY = (s.world->maxSectionY() + 1) * 16;
+    if (water)  // WaterDebugRenderer: radius 10, the fluid height, the amount
+        for (int x = px - 10; x <= px + 10; ++x)
+            for (int y = std::max(minY, py - 10); y <= std::min(maxY - 1, py + 10); ++y)
+                for (int z = pz - 10; z <= pz + 10; ++z) {
+                    const u16 id = s.world->block(x, y, z);
+                    const BlockInfo& b = s.registry->infos()[id];
+                    const bool fluid = b.waterlogged || s.registry->name(id).starts_with("minecraft:water");
+                    if (!fluid) continue;
+                    const std::string_view lv = s.registry->property(id, "level");
+                    const int level = lv.empty() ? 0 : std::atoi(std::string(lv).c_str());
+                    const int amount = b.waterlogged || level == 0 || level >= 8 ? 8 : 8 - level;
+                    const bool above = s.registry->name(s.world->block(x, y + 1, z)).starts_with("minecraft:water");
+                    const double height = above ? 1.0 : double(amount) / 9.0;
+                    boxFill(x + 0.01, y + 0.01, z + 0.01, x + 0.99, y + height, z + 0.99, 0x2600FF00);
+                    label(std::to_string(amount), x + 0.5, y + height, z + 0.5, 0xFF000000);
+                }
+    if (blockLight || skyLight)  // LightDebugRenderer: radius 10
+        for (int x = px - 10; x <= px + 10; ++x)
+            for (int y = std::max(minY, py - 10); y <= std::min(maxY - 1, py + 10); ++y)
+                for (int z = pz - 10; z <= pz + 10; ++z) {
+                    const BlockInfo& b = s.registry->infos()[s.world->block(x, y, z)];
+                    if (b.collisionCount && b.kind == KindCube) continue;
+                    const u8 l = s.world->light(x >> 4, y >> 4, z >> 4).at(x & 15, y & 15, z & 15);
+                    const int sky = l >> 4, block = l & 15;
+                    if (skyLight && sky != 15) label(std::to_string(sky), x + 0.5, y + 0.25, z + 0.5, lerpColor(float(sky) / 15, 0xFF0000FF, 0xFF00FFFF));
+                    if (blockLight && block) label(std::to_string(block), x + 0.5, y + 0.5, z + 0.5, lerpColor(float(block) / 15, 0xFFAA0000, 0xFFFFFF00));
+                }
+    if (solid)  // SolidFaceRenderer: the sturdy faces within 6 blocks
+        for (int x = px - 6; x <= px + 6; ++x)
+            for (int y = std::max(minY, py - 6); y <= std::min(maxY - 1, py + 6); ++y)
+                for (int z = pz - 6; z <= pz + 6; ++z) {
+                    const BlockInfo& b = s.registry->infos()[s.world->block(x, y, z)];
+                    if (b.kind != KindCube || !b.collisionCount) continue;
+                    const double o = 0.002;
+                    boxFill(x - o, y - o, z - o, x + 1 + o, y + 1 + o, z + 1 + o, 0x80FF0000);
+                }
+    if (heights) {  // HeightMapRenderer: the client's heightmaps, 5 x 5 chunks
+        const int cx0 = (px >> 4) - 2, cz0 = (pz >> 4) - 2;
+        for (int x = cx0 * 16; x < (cx0 + 5) * 16; ++x)
+            for (int z = cz0 * 16; z < (cz0 + 5) * 16; ++z) {
+                int S = INT32_MIN, M = INT32_MIN, ML = INT32_MIN;
+                for (int y = maxY - 1; y >= minY && ML == INT32_MIN; --y) {
+                    const u16 id = s.world->block(x, y, z);
+                    if (!id) continue;
+                    const BlockInfo& b = s.registry->infos()[id];
+                    const bool blocking = b.collisionCount > 0 || b.fluid || b.waterlogged;
+                    if (S == INT32_MIN) S = y + 1;
+                    if (M == INT32_MIN && blocking) M = y + 1;
+                    if (blocking && s.registry->name(id).find("leaves") == std::string::npos) ML = y + 1;
+                }
+                // ordinals 1 (WORLD_SURFACE), 4 (MOTION_BLOCKING), 5 (MOTION_BLOCKING_NO_LEAVES)
+                const int hs[3] = {S, M, ML}, ord[3] = {1, 4, 5};
+                const u32 col[3] = {0xFF00B200, 0xFF004C4C, 0xFF007F7F};
+                for (int k = 0; k < 3; ++k) {
+                    if (hs[k] == INT32_MIN) continue;
+                    const double y1 = hs[k] + ord[k] * 0.09375 + 0.09375;
+                    const double q[4][3] = {{x + 0.25, y1, z + 0.25}, {x + 0.25, y1, z + 0.75}, {x + 0.75, y1, z + 0.75}, {x + 0.75, y1, z + 0.25}};
+                    face(q, col[k]);
+                }
+            }
+    }
+}
+
+const UiModuleRegistrar kWorldDebug({.name = "debug_world", .drawHud = drawWorldDebug});
+
+}  // namespace
 
 // --- the Debug Options screen (DebugOptionsScreen) ------------------------------------------------------------
 

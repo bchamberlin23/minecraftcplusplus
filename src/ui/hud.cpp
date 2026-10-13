@@ -1,6 +1,7 @@
 // HUD (Hud.java), chat (ChatComponent / ChatScreen input), F3 debug overlay, item slots and tooltips.
 #include "assets/assets.h"
 #include "audio/audio.h"
+#include "ui/debug_screen.h"
 #include "ui/gameplay_hud.h"
 #include "render/renderer.h"
 #include "ui/narrator.h"
@@ -248,7 +249,8 @@ void Ui::State::drawHud(Canvas& c) {
             if (n == std::string("minecraft:") + m) return true;
         return n.ends_with("shulker_box") || n.ends_with("anvil") || n.ends_with("copper_chest");
     };
-    if ((!spectator() || spectatorCrosshair()) && screen == Screen::None && game->cameraMode == 0) {
+    if ((!spectator() || spectatorCrosshair()) && screen == Screen::None && game->cameraMode == 0 &&
+        !debugEntryEnabled(*this, "3d_crosshair")) {  // F3: the 3D crosshair instead (debug_screen.cpp)
         c.setInvert(true);
         blitSprite(c, sprites.sprite("hud/crosshair"), float((gw - 15) / 2), float((gh - 15) / 2), 15, 15);
         c.setInvert(false);
