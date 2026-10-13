@@ -2904,6 +2904,21 @@ void Particles::ambient(const double cam[3]) {
         }
 }
 
+// RedStoneOreBlock.spawnParticles: red dust just off each side not hidden by a solid neighbour (world lock held).
+void Particles::redstoneOre(int x, int y, int z) {
+    auto it = ambientTypes_.find("dust");
+    if (it == ambientTypes_.end()) it = ambientTypes_.emplace("dust", typeId("dust")).first;
+    for (int d = 0; d < 6; ++d) {
+        if (registry_.infos()[blockAt(x + kStep[d][0], y + kStep[d][1], z + kStep[d][2])].occludes) continue;
+        const int axis = d < 2 ? 1 : d < 4 ? 2 : 0;
+        double p[3];
+        for (int k = 0; k < 3; ++k) p[k] = k == axis ? 0.5 + 0.5625 * kStep[d][k] : double(randf());
+        Options o;
+        o.hasColor = true, o.color = 0xFFFF0000, o.scale = 1.0f;
+        add(it->second, x + p[0], y + p[1], z + p[2], 0, 0, 0, &o);
+    }
+}
+
 void Particles::animateBlock(u16 id, int x, int y, int z) {
     auto R = [&] { return double(randf()); };
     auto ri = [&](int n) { return int(rng_() % u32(n)); };
@@ -3271,15 +3286,8 @@ void Particles::animateBlock(u16 id, int x, int y, int z) {
             add(type(lava ? "dripping_dripstone_lava" : "dripping_dripstone_water"), x + 0.5 + ox, y + 0.25, z + 0.5 + oz, 0, 0, 0);
             break;
         }
-        case AmbRedstoneOre:  // RedStoneOreBlock.spawnParticles on the open sides
-            if (prop(id, "lit") != "true") break;
-            for (int d = 0; d < 6; ++d) {
-                if (registry_.infos()[blockAt(x + kStep[d][0], y + kStep[d][1], z + kStep[d][2])].occludes) continue;
-                const int axis = d < 2 ? 1 : d < 4 ? 2 : 0;
-                double p[3];
-                for (int k = 0; k < 3; ++k) p[k] = k == axis ? 0.5 + 0.5625 * kStep[d][k] : R();
-                dust(0xFFFF0000, 1.0f, x + p[0], y + p[1], z + p[2]);
-            }
+        case AmbRedstoneOre:  // RedStoneOreBlock.animateTick: lit, its particles
+            if (prop(id, "lit") == "true") redstoneOre(x, y, z);
             break;
         case AmbRedstoneWire: {  // RedstoneWireBlock: along each connection, coloured by the power
             const std::string_view ps = prop(id, "power");

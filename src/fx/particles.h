@@ -73,6 +73,7 @@ public:
     const std::vector<GeyserColumn>& geyserColumns() const { return geyserColumns_; }
     // ClientLevel.addBreakingParticles: one shard on the hit face of the block being broken (world lock held).
     void blockCrack(int x, int y, int z, int face);
+    void redstoneOre(int x, int y, int z);  // RedStoneOreBlock.spawnParticles (world lock held)
     // BreakingItemParticle (ParticleTypes.ITEM): a shard of an item's texture (eating, items breaking).
     void itemShard(int item, double x, double y, double z, double xa, double ya, double za);
     void spawn(std::string_view type, double x, double y, double z, double vx, double vy, double vz);

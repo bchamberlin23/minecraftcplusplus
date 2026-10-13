@@ -554,6 +554,11 @@ void Visuals::setPlayer(Game& game, ui::Ui& ui, const std::string& name, std::fu
         std::shared_lock lock(m.world.world().mutex());
         m.particles->spawnBlock("block", m.world.registry().name(state), pos[0], pos[1], pos[2], vel[0], vel[1], vel[2]);
     };
+    game.onRedstoneOreParticles = [&m](int x, int y, int z) {
+        if (!m.particles) return;
+        std::shared_lock lock(m.world.world().mutex());
+        m.particles->redstoneOre(x, y, z);
+    };
     game.onItemParticle = [&m](int item, const double pos[3], const double vel[3]) {  // eating: item shards
         if (!m.particles) return;
         std::shared_lock lock(m.world.world().mutex());

@@ -242,6 +242,8 @@ void Game::frame(Window& w, double dt) {
             refreshPistons();
             player_.tickPistons(physics_);  // the moving blocks' ticks (ClientLevel block entities)
             player_.tick(physics_, input);
+            if (player_.onGround && !player_.lastInput.sneak)  // Entity.move: stepOn the block below (not stepping carefully)
+                redstoneOreInteract(int(std::floor(player_.pos[0])), int(std::floor(player_.pos[1] - 0.2)), int(std::floor(player_.pos[2])), true);
             if (entityPush) entityPush(player_);  // other entities' pushEntities / boats push the player
             if (blockEntityTick) blockEntityTick(player_);
         }
@@ -418,6 +420,10 @@ int Game::useItemOn(int hand) {
                                  registry_.name(world_.block(target_.x, target_.y, target_.z)).starts_with("minecraft:note_block[");
     if (!placeOnly_ && !suppressUsingBlock && !headOnNoteBlock && onInteract && onInteract(target_.x, target_.y, target_.z))
         return send(kUseConsume);
+    // RedStoneOreBlock.useItemOn on the client: its particles; SUCCESS unless a block item goes on to be placed
+    if (!placeOnly_ && !suppressUsingBlock && redstoneOreInteract(target_.x, target_.y, target_.z, false) &&
+        !(has(hand) && (hand == 0 ? hotbar_[selected_] : offhandBlock_) != 0))
+        return send(kUseConsume);
     const u16 held = hand == 0 ? hotbar_[selected_] : offhandBlock_;
     if (!has(hand) || (handOnCooldown && handOnCooldown(hand))) return send(kUsePass);
     if (!placeOnly_ && held && (registry_.name(held).starts_with("minecraft:lily_pad") || registry_.name(held).starts_with("minecraft:frogspawn")))
@@ -566,6 +572,7 @@ bool Game::startDestroyBlock(int x, int y, int z, int face) {
         if (dig_.active) sendDig(kAbortDestroy, dig_.x, dig_.y, dig_.z, face, false);
         const u16 state = world_.block(x, y, z);
         const bool notAir = state != 0;
+        if (notAir && (!dig_.active || dig_.progress == 0.0f)) redstoneOreInteract(x, y, z, true);  // BlockState.attack
         if (notAir && progressAt(x, y, z, state) >= 1.0f) {
             sendDig(kStartDestroy, x, y, z, face, true);
             destroyBlock(x, y, z);
@@ -669,8 +676,8 @@ void Game::continueAttack(bool down) {
     if (!down) missTime_ = 0;
     if (missTime_ > 0 || use.active || heldPiercing) return;  // piercing weapons do not break blocks
     // Minecraft.continueAttack: only while the hit result is the block (an entity in front stops the breaking)
-    if (down && target_.hit && crosshairEntity < 0 && world_.block(target_.x, target_.y, target_.z) != 0) {
-        if (continueDestroyBlock(target_.x, target_.y, target_.z, target_.face)) {
+    if (down && target_.hit && crosshairEntity < 0) {  // a block hit result (an air block: nothing this tick)
+        if (world_.block(target_.x, target_.y, target_.z) != 0 && continueDestroyBlock(target_.x, target_.y, target_.z, target_.face)) {
             if (onSwing) onSwing(0, swingType);
             if (onPunch) onPunch();
         }
@@ -725,6 +732,15 @@ void Game::updateNeighbourShapes(int x, int y, int z, u16 old) {
             place::neighbourShapes(placeContext(), changes[i][0], changes[i][1], changes[i][2], before[i], more);
             for (const auto& [mx, my, mz, ms] : more) edit(mx, my, mz, u16(ms));
         }
+}
+
+bool Game::redstoneOreInteract(int x, int y, int z, bool light) {
+    const u16 state = world_.block(x, y, z);
+    const std::string& n = registry_.name(state);
+    if (!n.starts_with("minecraft:redstone_ore[") && !n.starts_with("minecraft:deepslate_redstone_ore[")) return false;
+    if (onRedstoneOreParticles) onRedstoneOreParticles(x, y, z);
+    if (light && registry_.property(state, "lit") != "true") edit(x, y, z, registry_.withProperty(state, "lit", "true"));
+    return true;
 }
 
 void Game::edit(int x, int y, int z, u16 id) {

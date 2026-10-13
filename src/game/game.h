@@ -215,6 +215,7 @@ public:
     std::function<void(int type, int x, int y, int z, int data)> onLevelEvent;
     // ParticleTypes.BLOCK of a block state at a position with a velocity (brushing dust).
     std::function<void(u16 state, const double pos[3], const double vel[3])> onBlockParticle;
+    std::function<void(int x, int y, int z)> onRedstoneOreParticles;  // RedStoneOreBlock.spawnParticles
     bool usePressed() const { return usingItem_; }  // the use key is held after a use press
     // AbstractClientPlayer.getFieldOfViewModifier, item part: drawing a bow narrows the view (x 0.85 at full draw);
     // scoping with a spyglass in first person sets it to 0.1.
@@ -316,6 +317,8 @@ private:
     void sendDig(int action, int x, int y, int z, int face, bool predicted);
     float progressAt(int x, int y, int z, u16 state) const;
     void edit(int x, int y, int z, u16 id);
+    // RedStoneOreBlock (attack, stepOn, use on the client): its particles; light: interact, lit (predicted locally)
+    bool redstoneOreInteract(int x, int y, int z, bool light);
     place::Context placeContext();  // game/placement.h: the placement prediction's view of this game
     void updateNeighbourShapes(int x, int y, int z, u16 old);
 
