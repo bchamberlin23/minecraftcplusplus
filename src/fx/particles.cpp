@@ -562,8 +562,8 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
             p.friction = 0.96f, p.gravity = -0.1f;
             p.flags |= SpeedUp;
             p.xd = p.xd * 0.1f + xa, p.yd = p.yd * 0.1f + ya, p.zd = p.zd * 0.1f + za;
-            const float c = t.kind == Kind::WhiteSmoke ? 0.7f + randf() * 0.3f : randf() * 0.3f;
-            p.r = p.g = p.b = c;
+            p.r = p.g = p.b = randf() * 0.3f;
+            if (t.kind == Kind::WhiteSmoke) p.r = 0.7294118f, p.g = 0.69411767f, p.b = 0.7607843f;  // WhiteSmokeParticle
             p.quadSize *= 0.75f * scale;
             p.lifetime = std::max(int(8.0 / (randf() * 0.8 + 0.2) * scale), 1);
             p.sizeMode = SizeGrow;
@@ -721,6 +721,7 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
             p.lifetime = int(0.5f * 12.0f / (randf() * 0.8f + 0.2f));
             p.flags &= u8(~Physics);
             p.flags |= Translucent;
+            p.emissive = 255;  // SimpleAnimatedParticle.getLightCoords: full bright
             p.xd = xa, p.yd = ya, p.zd = za;
             ageSprite();
             break;
