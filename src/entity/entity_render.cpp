@@ -2572,6 +2572,22 @@ void EntityRenderer::build(const PassContext& ctx) {
     for (const auto& [id, e] : entities) visit(e);
     if (localPlayer_) visit(*localPlayer_);
     if (localShadow_ && !pack_) visit(*localShadow_);
+    {  // transient blocks (a falling block landed): until the section's new mesh is in, at most a second
+        auto& list = world_.transientBlocks;
+        const double now = nowSeconds();
+        std::erase_if(list, [&](const EntityWorld::TransientBlock& t) {
+            return now > t.until || (world_.sectionMeshSerial && world_.sectionMeshSerial(t.x >> 4, t.y >> 4, t.z >> 4) > t.serial);
+        });
+        for (const EntityWorld::TransientBlock& t : list) {
+            const u16 block = world_.localBlock(t.state);
+            if (!block) continue;
+            u32 light = 0xF0;
+            if (t.y >= world.minSectionY() * 16 && t.y < (world.maxSectionY() + 1) * 16)
+                light = world.light(t.x >> 4, t.y >> 4, t.z >> 4).at(t.x & 15, t.y & 15, t.z & 15);
+            M34 m = translate(float(t.x - cam[0]), float(t.y - cam[1]), float(t.z - cam[2]));
+            emitBlock(block, *reinterpret_cast<const Mat34*>(&m), light, 0);
+        }
+    }
     if (!shadowOnly_) {  // the projection's y scale (1 / tan(fov / 2)): the fishing line's pixel width
         float l = 0;
         for (int c = 0; c < 3; ++c) l += vp(1, c) * vp(1, c);

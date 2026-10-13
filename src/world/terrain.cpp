@@ -530,6 +530,7 @@ void Terrain::collectResults(double x, double y, double z, bool unlimited) {
                                    : renderer_.addMesh(r.mesh, 0, r.req.cx * 16, r.req.sy * 16, r.req.cz * 16);
             uploaded += r.mesh.cubeQuads.size() * kCubeQuadBytes + r.mesh.modelQuads.size() * 4;
             markCut(r.req.region);
+            sectionSerial_[Lighting::sectionKey(r.req.cx, r.req.sy, r.req.cz)] = ++meshSerial_;
             continue;
         }
         if (distance(0, r.req.cx * 16.0, r.req.sy * 16.0, r.req.cz * 16.0, x, y, z) > evict) {
@@ -662,6 +663,11 @@ void Terrain::collect(const RegionLod& r, int level, int x, int z, double px, do
     }
 }
 
+u64 Terrain::sectionMeshSerial(int cx, int sy, int cz) const {
+    auto it = sectionSerial_.find(Lighting::sectionKey(cx, sy, cz));
+    return it == sectionSerial_.end() ? 0 : it->second;
+}
+
 void Terrain::remesh(const std::vector<u64>& sections, bool byPlayer) {
     thread_local u16 padded[kPadCells];
     thread_local u8 light[kPadCells];
@@ -693,6 +699,7 @@ void Terrain::remesh(const std::vector<u64>& sections, bool byPlayer) {
         SectionMesh mesh;
         meshGrid(padded, light, registry_, true, false, mesh, biomeColors_ ? &colors : nullptr);
         state = mesh.empty() ? Renderer::kNoSlot : renderer_.addMesh(mesh, 0, cx * 16, sy * 16, cz * 16);
+        sectionSerial_[k] = ++meshSerial_;
         markDirty(it->second);
         markCut(it->second);
         if (!resident) resident_.push_back({it->second, cx, sy, cz, 0.0f, 0});
@@ -777,6 +784,7 @@ void Terrain::clearChunks() {
     refreshQueued_.clear();
     resident_.clear();
     stamps_.clear();
+    sectionSerial_.clear();
     dirtyRegions_.clear();
     for (size_t i = 0; i < regions_.size(); ++i) {
         RegionLod& r = regions_[i];

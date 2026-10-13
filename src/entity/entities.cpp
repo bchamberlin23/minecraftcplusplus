@@ -608,6 +608,14 @@ void EntityWorld::attach(net::Client& client) {
         e.d[0] = r.f64();
         if (r.ok) q.events.push_back(e);
     });
+    on("add_transient_block", [](net::Reader& r, EventQueue& q) {
+        Event e;
+        e.type = EventType::TransientBlock;
+        const i64 p = i64(r.u64v());  // BlockPos.asLong: x 26 bits, z 26, y 12
+        e.a = r.varInt();
+        e.d[0] = double(p >> 38), e.d[1] = double((p << 52) >> 52), e.d[2] = double((p << 26) >> 38);
+        if (r.ok) q.events.push_back(e);
+    });
     on("set_entity_link", [](net::Reader& r, EventQueue& q) {  // ClientboundSetEntityLinkPacket: source, holder (ints)
         Event e;
         e.type = EventType::EntityLink;
@@ -781,6 +789,11 @@ void EntityWorld::startInterpolation(Entity& e, const Step* steps, u32 count, fl
 }
 
 void EntityWorld::apply(const Event& ev, const EventQueue& q) {
+    if (ev.type == EventType::TransientBlock) {  // ClientPacketListener.handleAddTransientBlockPacket
+        std::erase_if(transientBlocks, [&](const TransientBlock& t) { return t.x == int(ev.d[0]) && t.y == int(ev.d[1]) && t.z == int(ev.d[2]); });
+        transientBlocks.push_back({int(ev.d[0]), int(ev.d[1]), int(ev.d[2]), ev.a, nowSeconds() + 1.0, meshSerial ? meshSerial() : 0});
+        return;
+    }
     if (ev.type == EventType::PlayerInfo) {
         PlayerInfo& p = players_[uuidKey(ev.uuid)];
         if (ev.a >= 0 && size_t(ev.a) < q.strings.size()) p.name = q.strings[size_t(ev.a)];

@@ -70,6 +70,10 @@ public:
     // near the camera at once). byPlayer: the local player's edit.
     void remesh(const std::vector<u64>& sections, bool byPlayer = true);
     void setChunkUpdates(int mode) { chunkUpdates_ = mode; }
+    // A counter of installed full-detail meshes, and the count when a section's mesh was last installed (transient
+    // blocks wait for their section's new mesh: LevelRenderer.removeTransientBlocks).
+    u64 meshSerial() const { return meshSerial_; }
+    u64 sectionMeshSerial(int cx, int sy, int cz) const;
     // Every mesh again (options the meshes depend on changed: smooth lighting, biome blend, leaves).
     void rebuildAll();
     // A chunk was added to the world at runtime (generated): stream its sections, refresh the
@@ -206,6 +210,8 @@ private:
     double scanX_ = 0, scanY_ = 0, scanZ_ = 0;
     bool scanned_ = false;
     int chunkUpdates_ = 0;
+    u64 meshSerial_ = 0;
+    std::unordered_map<u64, u64> sectionSerial_;
     bool cutDirty_ = true;  // every region (markCut: one region)
     struct CutCache {
         double x = 0, z = 0, slack = -1;  // camera at the last walk; valid while it stays within slack

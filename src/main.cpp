@@ -919,6 +919,10 @@ int wmain(int argc, wchar_t** argv) {
     }
     gameplay.setPlayer(game, ui);
     game.playerName = opt.name;
+    if (haveEntities) {  // transient blocks wait for their section's new mesh
+        entities.meshSerial = [&] { return terrain.meshSerial(); };
+        entities.sectionMeshSerial = [&](int cx, int sy, int cz) { return terrain.sectionMeshSerial(cx, sy, cz); };
+    }
     if (haveEntities) ui.setEntities(&entities);  // inventory / mount previews, player list heads
     game.onEntityClick = [&](bool attack, bool use, double blockDistance) {  // attack / use entities first
         if (!session || !haveEntities) return false;

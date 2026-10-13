@@ -39,7 +39,7 @@ struct MetaValue {
 
 enum class EventType : u8 {
     Add, Remove, Move, PositionSync, Teleport, Motion, HeadRot, Data, Equipment, PlayerInfo, PlayerRemove, Swing,
-    Hurt, Damage, EntityEvent, TakeItem, Passengers, Animate, Jukebox, ProjectilePower, EntityLink
+    Hurt, Damage, EntityEvent, TakeItem, Passengers, Animate, Jukebox, ProjectilePower, EntityLink, TransientBlock
 };
 
 struct Step {
@@ -352,6 +352,21 @@ private:
     EventQueue incoming_, processing_;  // network thread appends to incoming_; swapped each frame
 
     std::unordered_map<int, Entity> entities_;
+
+public:
+    // ClientboundAddTransientBlockPacket (a falling block landed): the block drawn where it landed until its section's
+    // new mesh is in (the terrain's mesh serials), at most a second (TransientBlock.DEFAULT_TIME_TO_LIVE).
+    struct TransientBlock {
+        int x, y, z;
+        int state;  // network block state id
+        double until;
+        u64 serial;  // the terrain's mesh serial when it arrived
+    };
+    std::vector<TransientBlock> transientBlocks;
+    std::function<u64()> meshSerial;
+    std::function<u64(int, int, int)> sectionMeshSerial;
+
+private:
     std::unordered_map<std::string, PlayerInfo> players_;  // by UUID bytes
     std::vector<DataIds> dataIds_;  // by entity type
     std::vector<Category> categories_;

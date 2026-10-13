@@ -1,7 +1,9 @@
 // Front end: the server list (JoinMultiplayerScreen / ServerSelectionList) with live status pings and LAN worlds,
 // Add / Edit Server, Direct Connection. Our list is %LOCALAPPDATA%\minecraftCplusplus\servers.json; the game's
 // servers.dat is imported into it once and never written.
+#include "social/crypto.h"
 #include "ui/frontend.h"
+#include "ui/modules.h"
 #include "world/nbt_dom.h"
 
 #include <algorithm>
@@ -539,5 +541,40 @@ void drawDirectConnect(State& s, Canvas& c) {
     drawFields(s, c);
     s.drawButtons(c);
 }
+
+namespace {
+
+// ClientboundServerDataPacket: the server list entry of this connection takes the server's icon (ServerData.validateIcon:
+// a 64x64 PNG) and is saved (ServerList.saveSingleServer); the motd is not kept in the list.
+void registerServerData(UiState& s, net::Client& client) {
+    UiState* sp = &s;
+    client.onPlay("server_data", [sp](net::Reader& r) {
+        r.nbt();  // motd
+        std::vector<u8> icon;
+        if (r.boolean()) {
+            const int n = r.varInt();
+            for (int i = 0; i < n && r.ok; ++i) icon.push_back(r.u8v());
+        }
+        if (!r.ok || icon.empty()) return;
+        static const u8 kPng[8] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
+        auto be32 = [&](size_t at) { return u32(icon[at]) << 24 | u32(icon[at + 1]) << 16 | u32(icon[at + 2]) << 8 | u32(icon[at + 3]); };
+        if (icon.size() < 24 || !std::equal(kPng, kPng + 8, icon.begin()) || be32(16) != 64 || be32(20) != 64) return;
+        sp->post([sp, icon] {
+            const std::string& address = sp->fe->cfg.serverAddress;
+            if (address.empty()) return;
+            std::vector<ServerEntry> list = loadServers(sp->fe->cfg.serversFile, sp->fe->cfg.serversDat);
+            for (ServerEntry& e : list)
+                if (e.ip == address) {
+                    e.icon = social::base64(icon.data(), icon.size());
+                    saveServers(sp->fe->cfg.serversFile, list);
+                    return;
+                }
+        });
+    });
+}
+
+const UiModuleRegistrar kServerData({.name = "server_data", .registerHandlers = registerServerData});
+
+}  // namespace
 
 }  // namespace ui
