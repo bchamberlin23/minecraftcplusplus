@@ -158,6 +158,18 @@ PackVersion packVersion(const AssetSource& src) {
     return v;
 }
 
+// pack.mcmeta "features": {"enabled": [...]} (FeatureFlagsMetadataSection).
+void readFeatures(const json& meta, Entry& e) {
+    if (!meta.is_object() || !meta.contains("features") || !meta["features"].is_object()) return;
+    const json& en = meta["features"].value("enabled", json::array());
+    if (!en.is_array()) return;
+    for (const json& f : en)
+        if (f.is_string()) {
+            std::string id = f.get<std::string>();
+            e.features.push_back(id.find(':') == std::string::npos ? "minecraft:" + id : id);
+        }
+}
+
 // Fills kind / names / flags of an entry from its file or folder.
 void detect(Entry& e, const PackVersion& pv) {
     std::error_code ec;
@@ -173,6 +185,7 @@ void detect(Entry& e, const PackVersion& pv) {
         const json meta = readFile(e.path / "pack.mcmeta", bytes) ? parseLenient(bytes) : json();
         if (meta.is_object() && meta.contains("pack") && meta["pack"].contains("description"))
             e.description = oneLine(plainText(meta["pack"]["description"]));
+        readFeatures(meta, e);
         e.kind = e.hasAssets && e.hasData ? Kind::ResourceAndDataPack : e.hasData ? Kind::DataPack : Kind::ResourcePack;
         e.compat = compatNote(meta, e.hasAssets ? pv.resource : pv.data);
         return;
@@ -267,6 +280,7 @@ void detect(Entry& e, const PackVersion& pv) {
         const json meta = zip.read(*mcmeta, bytes) ? parseLenient(bytes) : json();
         if (meta.is_object() && meta.contains("pack") && meta["pack"].contains("description"))
             e.description = oneLine(plainText(meta["pack"]["description"]));
+        readFeatures(meta, e);
         if (!e.hasAssets && !e.hasData) {
             e.warnings.push_back("pack.mcmeta but no assets/ or data/ folder");
             return;

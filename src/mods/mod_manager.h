@@ -33,6 +33,7 @@ struct Entry {
     bool clientContent = false;  // registers blocks / items / entities with client assets
     std::vector<std::string> warnings;
     std::string compat;  // pack format note ("made for an older version"), empty when it matches
+    std::vector<std::string> features;  // pack.mcmeta features.enabled: the feature flags the pack requests
     bool detected = true;  // false: a vanilla resource pack not looked into yet (only when shown or enabled)
 
     bool isResourcePack() const { return kind == Kind::ResourcePack || kind == Kind::ResourceAndDataPack; }

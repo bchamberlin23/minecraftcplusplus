@@ -59,7 +59,7 @@ struct Experiment {
     bool on = false;
 };
 
-enum class Page { Tabs, Flat, FlatPresets, Buffet, Experiments, GameRules, DataPacks };
+enum class Page { Tabs, Flat, FlatPresets, Buffet, Experiments, GameRules, DataPacks, ConfirmExperimental, ExperimentalDetails };
 
 struct Create {
     Page page = Page::Tabs;
@@ -1008,6 +1008,86 @@ void drawGameRules(State& s, Canvas& c) {
 
 ListArea packList(State& s) { return {33, float(s.guiH() - kFooter), float(s.guiW() / 2 - 155), 310, 36, int(g.packsEdit.size()) + 1}; }
 
+// The selected packs asking for features beyond the vanilla set (FeatureFlags.printMissingFlags): (title, flags).
+std::vector<std::pair<std::string, std::string>> experimentalPacks() {
+    std::vector<std::pair<std::string, std::string>> out;
+    for (const PackChoice& c : g.packsEdit) {
+        if (!c.on) continue;
+        for (const mods::Entry& e : mods::Manager::get().entries()) {
+            if (e.id != c.id) continue;
+            std::string flags;
+            for (const std::string& f : e.features)
+                if (f != "minecraft:vanilla") flags += (flags.empty() ? "" : ", ") + f;
+            if (!flags.empty()) out.push_back({c.name, flags});
+        }
+    }
+    return out;
+}
+
+// ConfirmExperimentalFeaturesScreen: the title, the message (310 wide), Details, then Proceed / Back; rows 20 apart.
+int confirmTop(State& s, std::vector<Text>* lines) {
+    std::vector<Text> l = s.font.split(tr(s, "selectWorld.experimental.message"), 310);
+    const int h = 9 + 20 + int(l.size()) * 9 + 20 + 20 + 20 + 20;
+    if (lines) *lines = std::move(l);
+    return (s.guiH() - h) / 2;
+}
+
+void buildConfirmExperimental(State& s) {
+    State* p = &s;
+    std::vector<Text> lines;
+    const int top = confirmTop(s, &lines), W = s.guiW();
+    const int detailsY = top + 9 + 20 + int(lines.size()) * 9 + 20, buttonsY = detailsY + 20 + 20;
+    addButton(s, float(W / 2 - 50), float(detailsY), 100, tr(s, "selectWorld.experimental.details"),
+              [p] { openPage(*p, Page::ExperimentalDetails); });
+    addButton(s, float(W / 2 - 155), float(buttonsY), 150, tr(s, "gui.proceed"), [p] {
+        g.packs = g.packsEdit;
+        openPage(*p, Page::Tabs);
+    });
+    auto back = [p] {  // onAbort: the data packs again with the applied selection
+        g.packsEdit = g.packs;
+        openPage(*p, Page::DataPacks);
+    };
+    addButton(s, float(W / 2 + 5), float(buttonsY), 150, tr(s, "gui.back"), back);
+    s.fe->onBack = back;
+    s.fe->onEnter = nullptr;
+}
+
+void drawConfirmExperimental(State& s, Canvas& c) {
+    menuBackground(s, c);
+    std::vector<Text> lines;
+    const int top = confirmTop(s, &lines);
+    const float cx = float(c.guiWidth() / 2);
+    s.drawCentered(c, tr(s, "selectWorld.experimental.title"), cx, float(top), 0xFFFFFFFF);
+    for (size_t i = 0; i < lines.size(); ++i) s.drawCentered(c, lines[i], cx, float(top + 29 + int(i) * 9), 0xFFFFFFFF);
+    s.drawButtons(c);
+}
+
+// ConfirmExperimentalFeaturesScreen.DetailsScreen: each pack (bold) and selectWorld.experimental.details.entry.
+void buildExperimentalDetails(State& s) {
+    State* p = &s;
+    addButton(s, float(s.guiW() / 2 - 75), float(s.guiH() - 27), 150, tr(s, "gui.back"), [p] { openPage(*p, Page::ConfirmExperimental); });
+    s.fe->onBack = [p] { openPage(*p, Page::ConfirmExperimental); };
+    s.fe->onEnter = nullptr;
+}
+
+void drawExperimentalDetails(State& s, Canvas& c) {
+    menuBackground(s, c);
+    const int W = c.guiWidth(), rowW = W * 3 / 4, x = (W - rowW) / 2;
+    s.drawCentered(c, tr(s, "selectWorld.experimental.details.title"), float(W / 2), 12, 0xFFFFFFFF);
+    c.pushScissor(0, 33, float(W), float(c.guiHeight() - 33));
+    int y = 33 + 4;
+    Style bold;
+    bold.bold = 1;
+    for (const auto& [title, flags] : experimentalPacks()) {
+        s.drawText(c, Text(title, bold), float(x), float(y), 0xFFFFFFFF, true);
+        const std::vector<Text> lines = s.font.split(translatable("selectWorld.experimental.details.entry", {Text(flags)}, s.lang()), rowW);
+        for (size_t i = 0; i < lines.size() && i < 2; ++i) s.drawText(c, lines[i], float(x), float(y + 12 + int(i) * 9), 0xFFFFFFFF, true);
+        y += 33;
+    }
+    c.popScissor();
+    s.drawButtons(c);
+}
+
 void buildDataPacks(State& s) {
     const int W = s.guiW(), H = s.guiH();
     State* p = &s;
@@ -1022,7 +1102,10 @@ void buildDataPacks(State& s) {
         if (g.packsEdit[k].locked) b.tooltip = [] { return Text("On for every world (Mods & Packs)"); };
     }
     addButton(s, float(W / 2 - 154), float(H - 27), 150, tr(s, "pack.openFolder"), [] { mods::Manager::get().openModsFolder(); });
-    auto done = [p] {
+    auto done = [p] {  // CreateWorldScreen.tryApplyNewDataPacks: a changed selection asking for experimental features
+        bool changed = g.packs.size() != g.packsEdit.size();
+        for (size_t i = 0; i < g.packs.size() && !changed; ++i) changed = g.packs[i].on != g.packsEdit[i].on;
+        if (changed && !experimentalPacks().empty()) return openPage(*p, Page::ConfirmExperimental);
         g.packs = g.packsEdit;
         openPage(*p, Page::Tabs);
     };
@@ -1137,6 +1220,8 @@ void buildCreateWorld(State& s) {
         case Page::Experiments: return buildExperiments(s);
         case Page::GameRules: return buildGameRules(s);
         case Page::DataPacks: return buildDataPacks(s);
+        case Page::ConfirmExperimental: return buildConfirmExperimental(s);
+        case Page::ExperimentalDetails: return buildExperimentalDetails(s);
     }
 }
 
@@ -1149,6 +1234,8 @@ void drawCreateWorld(State& s, Canvas& c) {
         case Page::Experiments: return drawExperiments(s, c);
         case Page::GameRules: return drawGameRules(s, c);
         case Page::DataPacks: return drawDataPacks(s, c);
+        case Page::ConfirmExperimental: return drawConfirmExperimental(s, c);
+        case Page::ExperimentalDetails: return drawExperimentalDetails(s, c);
     }
 }
 
