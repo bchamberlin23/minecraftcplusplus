@@ -2201,9 +2201,25 @@ void Particles::tickOne(Particle& p) {
                 p.xd *= 0.7f, p.zd *= 0.7f;
             }
             const int bx = int(std::floor(p.x)), by = int(std::floor(p.y)), bz = int(std::floor(p.z));
-            const BlockInfo& b = registry_.infos()[blockAt(bx, by, bz)];
-            double top = (b.fluid || b.waterlogged) ? 0.875 : 0.0;
-            for (u32 i = 0; i < b.collisionCount; ++i) top = std::max(top, double(registry_.box(b.collisionFirst + i).max[1]));
+            // WaterDropParticle: below the collision shape's top at this x / z or the fluid's height (FluidState.getHeight)
+            const u16 id = blockAt(bx, by, bz);
+            const BlockInfo& b = registry_.infos()[id];
+            double top = 0;
+            auto fluidType = [&](u16 f) {  // 1 water (or waterlogged), 2 lava
+                const BlockInfo& i = registry_.infos()[f];
+                return i.waterlogged ? 1 : !i.fluid ? 0 : registry_.name(f).starts_with("minecraft:lava") ? 2 : 1;
+            };
+            if (b.fluid || b.waterlogged) {
+                const bool sameAbove = fluidType(blockAt(bx, by + 1, bz)) == fluidType(id);
+                const std::string_view level = b.fluid ? registry_.property(id, "level") : std::string_view();
+                const int lv = level.empty() ? 0 : std::atoi(std::string(level).c_str());
+                top = sameAbove ? 1.0 : double(lv == 0 || lv >= 8 ? 8 : 8 - lv) / 9.0;
+            }
+            const double fx = p.x - bx, fz = p.z - bz;
+            for (u32 i = 0; i < b.collisionCount; ++i) {
+                const Box& c = registry_.box(b.collisionFirst + i);
+                if (fx >= c.min[0] && fx <= c.max[0] && fz >= c.min[2] && fz <= c.max[2]) top = std::max(top, double(c.max[1]));
+            }
             if (top > 0 && p.y < by + top) remove();
             break;
         }
