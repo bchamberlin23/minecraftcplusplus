@@ -34,7 +34,10 @@ ticks (blazes, endermen with the stare sound, guardians, ravagers, slimes, spell
 sound, breezes, pandas sneezing and eating, the ender dragon's phases and death explosions, feeding baby horses /
 llamas / camels), the dragon's death dissolve and rays, the player layers (stuck arrows and bee stingers, shoulder
 parrots, deadmau5's ears), the totem activation animation, break cracks on block entities, the End's sky flashes
-with their sound, hover tooltips in books, and the dolphin / composter / elder guardian particles. ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
+with their sound, hover tooltips in books, the dolphin / composter / elder guardian particles, the user's own item
+sounds (brushing with its dust, spyglass, goat horns, flint and steel), and the video options that did nothing
+(Particles, Vignette, Distortion Effects with the nausea overlay, Darkness Pulsing, Glint Speed / Strength, Texture
+Filtering / Mipmaps / Anisotropy, Simulation Distance, the rain particles' Weather Radius). ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
 switch (automated runs never change the display mode) and the LAN publish from World Options (it would open a
 listening socket).
 
@@ -45,6 +48,9 @@ listening socket).
 
 
 ## Visuals / effects
+
+- **Improved Transparency** (video option) is stored but not read; this engine's translucency path (OIT under the
+  shader pipeline) is its own. The nausea overlay and vignette draw after the UI layer (they also tint the HUD).
 
 - **VIS-06 residual**: glowing outlines under a shader pack (entities go through the pack's gbuffers there).
 - Test instance blocks: optional tests' failure beam is red, not orange (the test registry is not sent to clients);
