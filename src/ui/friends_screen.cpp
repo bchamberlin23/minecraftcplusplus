@@ -237,7 +237,10 @@ void acceptSelected(UiState& s) {
     s.buildButtons();
 }
 
-void goBack(UiState& s) { s.openScreen(g.back == Screen::Pause && !s.fe->cfg.menu ? Screen::Pause : Screen::Title); }
+void goBack(UiState& s) {
+    if (g.back == Screen::None && !s.fe->cfg.menu) return s.closeScreen();  // opened over the game (the friends key)
+    s.openScreen(g.back == Screen::Pause && !s.fe->cfg.menu ? Screen::Pause : Screen::Title);
+}
 
 // --- Friends screen -----------------------------------------------------------------------------------------------
 
@@ -589,6 +592,20 @@ void openFriendsScreen(UiState& s) {
     g.back = s.fe && !s.fe->cfg.menu ? Screen::Pause : Screen::Title;
     g.scroll = 0;
     s.openScreen(Screen::Friends);
+}
+
+// Minecraft.toggleFriendsScreen: the friends key opens Friends over the game, the title screen or the pause menu
+// and closes it again; true when used.
+bool toggleFriendsScreen(UiState& s) {
+    if (s.screen == Screen::Friends) {
+        goBack(s);
+        return true;
+    }
+    if (s.screen != Screen::None && s.screen != Screen::Title && s.screen != Screen::Pause) return false;
+    g.back = s.fe->cfg.menu ? Screen::Title : s.screen;
+    g.scroll = 0;
+    s.openScreen(Screen::Friends);
+    return true;
 }
 
 int friendsPendingRequests() { return Friends::get().started() ? Friends::get().pendingRequests() : 0; }

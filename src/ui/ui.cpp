@@ -1199,6 +1199,10 @@ void Ui::beginFrame(double dt) {
         }
         // Ctrl+B: the narrator hotkey (not while typing in a text field or binding a key).
         if (!s.keyCaptureActive && s.screen != Screen::Chat && s.screen != Screen::Language && narrator::hotkey(s, e)) continue;
+        // Minecraft.handleGlobalKeyPress: the friends key (not with F3 held or while a text field has focus).
+        if (s.isKey(Key::Friends, e) && !e.repeat && !s.keyCaptureActive && s.fe->focus < 0 && s.screen != Screen::Chat &&
+            !(s.settings.key(Key::DebugModifier) && s.window->keyDown(s.settings.key(Key::DebugModifier))) && toggleFriendsScreen(s))
+            continue;
         if (s.screen != Screen::None) {
             s.screenInput(e);
             continue;

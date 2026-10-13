@@ -193,6 +193,7 @@ std::string gameRuleDescription(State& s, const std::string& id);
 std::string gameRuleCategoryName(State& s, const std::string& category);
 // friends_screen.cpp: the Friends screen, its button label ("Friends (2)" with requests), --menu friend-join:<code>.
 void openFriendsScreen(State& s);
+bool toggleFriendsScreen(State& s);  // the friends key
 Text friendsButtonLabel();
 int friendsPendingRequests();  // incoming friend requests (the pause menu's Friends badge)
 bool friendsMenuCommand(State& s, const std::string& command);
