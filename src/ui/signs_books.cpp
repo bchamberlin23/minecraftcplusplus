@@ -429,6 +429,7 @@ void mlKey(UiState& s, MultiLine& m, const InputEvent& e) {
         case VK_RIGHT: move(ctrl ? wordPos(m.value, m.cursor, 1) : nextCp(m.value, m.cursor)); return;
         case VK_UP:
         case VK_DOWN: {
+            if (ctrl) return;  // MultilineTextField.keyPressed: Ctrl + Up / Down does not move the cursor
             const int to = li + (e.code == VK_UP ? -1 : 1);
             if (to < 0 || to >= int(lines.size())) return;
             float x = 0;
