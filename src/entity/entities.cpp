@@ -237,6 +237,7 @@ EntityWorld::EntityWorld(EntityAssets& assets, World& world, BlockRegistry& regi
         d.color = id({"DATA_COLOR", "DATA_COLOR_ID"});
         d.attachFace = id({"DATA_ATTACH_FACE_ID"});
         d.peek = id({"DATA_PEEK_ID"});
+        if (t.name == "minecraft:interaction") d.dWidth = id({"DATA_WIDTH_ID"}), d.dHeight = id({"DATA_HEIGHT_ID"});
         if (t.name == "minecraft:block_display" || t.name == "minecraft:item_display" || t.name == "minecraft:text_display") {
             d.dStart = id({"DATA_TRANSFORMATION_INTERPOLATION_START_DELTA_TICKS_ID"});
             d.dDuration = id({"DATA_TRANSFORMATION_INTERPOLATION_DURATION_ID"});
@@ -1076,6 +1077,18 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
         e.direction = ev.b;
         if (const int kind = attachedKind(e)) placeAttached(*this, e, kind, ev.d);  // recreateFromPacket: the block position
         e.display.is = size_t(ev.a) < dataIds_.size() && dataIds_[size_t(ev.a)].dTranslation >= 0;
+        // Synched data defaults the server never sends (defineSynchedData) where they differ from the struct's.
+        if (e.info) {
+            const std::string& n = e.info->name;
+            if (n == "minecraft:tnt") e.fuse = 80;  // PrimedTnt DATA_FUSE_ID
+            else if (n == "minecraft:interaction") e.display.width = e.display.height = 1.0f;  // Interaction DATA_WIDTH / HEIGHT
+            else if (n == "minecraft:villager" || n == "minecraft:zombie_villager") {  // VillagerData: plains, none, 1
+                for (size_t i = 0; i < villagerTypes_.size(); ++i)
+                    if (villagerTypes_[i] == "plains") e.villagerType = int(i);
+                for (size_t i = 0; i < professions_.size(); ++i)
+                    if (professions_[i] == "none") e.variant2 = int(i);
+            }
+        }
         if (e.category == Category::Player) {
             auto it = players_.find(uuidKey(ev.uuid));
             const int skin = defaultSkinIndex(ev.uuid);
@@ -1288,6 +1301,10 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
         const MetaValue& v = values[i];
         const int idx = v.index;
         if (e.display.is && applyDisplayData(e, d, v, q)) continue;
+        if (!e.display.is && (idx == d.dWidth || idx == d.dHeight) && idx >= 0) {  // Interaction: its dimensions
+            (idx == d.dWidth ? e.display.width : e.display.height) = v.f[0];
+            continue;
+        }
         if (idx < SpeciesState::kData) e.sp.data[idx] = v.i, e.sp.dataF[idx] = v.f[0], e.sp.seen |= 1u << idx;
         if (idx == d.flags) e.sharedFlags = u8(v.i);
         else if (idx == d.silent && v.serializer == 8) e.silent = v.i != 0;
@@ -1907,6 +1924,10 @@ float ageScale(const Entity& e) {
 void entitySize(const Entity& e, double& w, double& h) {
     w = e.info ? e.info->width : 0.6, h = e.info ? e.info->height : 1.8;
     if (!e.info) return;
+    if (e.info->name == "minecraft:interaction") {  // Interaction.getDimensions: scalable(width, height)
+        w = e.display.width, h = e.display.height;
+        return;
+    }
     const bool living = e.category == Category::Living || e.category == Category::Player;
     if (living && e.pose == 2) {
         w = h = 0.2;
