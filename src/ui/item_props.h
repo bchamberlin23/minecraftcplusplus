@@ -126,7 +126,14 @@ void potDecorations(const Items& items, const ItemStack& s, int out[4]);  // bac
 u32 effectColor(const std::string& effect);  // MobEffect.getColor (RGB), 0 unknown
 u32 potionColor(const Items& items, const ItemStack& s, u32 fallback);    // PotionContents.getColorOr (RGB)
 std::vector<u32> fireworkColors(const Items& items, const ItemStack& s);  // firework_explosion colours (RGB)
-std::string trimMaterial(const Items& items, const ItemStack& s);        // trim material key, "" none / inline
+std::string trimMaterial(const Items& items, const ItemStack& s);
+// PaletteMapping over a texture: the key palette's colours become the target palette's (ids without textures/).
+bool palettedImage(const Resources& res, const std::string& texture, const std::string& paletteKey, const std::string& palette, Image& out);
+// EquipmentLayerRenderer.TrimTextureKey: the armour trim texture of a stack's trim on an equipment asset's layer type
+// ("humanoid", "humanoid_leggings"...): the pattern's base texture with the material's palette (the equipment's
+// trim_overrides first). key identifies the texture; false: no (registry) trim.
+bool armorTrimImage(const Items& items, const Resources& res, const ItemStack& s, const std::string& equipmentAsset,
+                    const std::string& layerType, Image& out, std::string& key);        // trim material key, "" none / inline
 int mapId(const Items& items, const ItemStack& s);                       // map_id, -1 none
 // An item stack compound as block entities keep it ({id, count, components}: the NBT payload without its type byte):
 // the item and the components the item models read, in their network encoding.

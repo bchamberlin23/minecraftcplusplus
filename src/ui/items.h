@@ -132,6 +132,10 @@ public:
     const std::vector<RegistryInfo>& instruments() const { return instruments_; }
     const std::vector<std::string>& bannerPatterns() const { return bannerPatterns_; }
     const std::vector<std::string>& trimMaterials() const { return trimMaterials_; }  // trim_material ids
+    const std::vector<std::string>& trimPatterns() const { return trimPatterns_; }    // trim_pattern ids
+    // The registries' network NBT (trim_material: palette_id; trim_pattern: asset_id, decal), by network id.
+    const std::string& trimMaterialNbt(int id) const { return id >= 0 && size_t(id) < trimMaterialNbt_.size() ? trimMaterialNbt_[size_t(id)] : kNoNbt; }
+    const std::string& trimPatternNbt(int id) const { return id >= 0 && size_t(id) < trimPatternNbt_.size() ? trimPatternNbt_[size_t(id)] : kNoNbt; }
     int potionId(std::string_view name) const {  // -1 if unknown
         const std::string n = name.find(':') == std::string_view::npos ? "minecraft:" + std::string(name) : std::string(name);
         for (size_t i = 0; i < potions_.size(); ++i)
@@ -204,7 +208,8 @@ private:
     mutable std::vector<std::unique_ptr<nlohmann::json>> defaults_;
     std::unordered_map<std::string, std::unordered_map<std::string, std::vector<int>>> tags_;
     std::vector<std::string> enabledFeatures_;
-    std::vector<std::string> bannerPatterns_, trimMaterials_;
+    std::vector<std::string> bannerPatterns_, trimMaterials_, trimPatterns_, trimMaterialNbt_, trimPatternNbt_;
+    static inline const std::string kNoNbt;
     static const std::string& entry(const std::vector<std::string>& v, int id) {
         static const std::string kNone;
         return id >= 0 && size_t(id) < v.size() ? v[size_t(id)] : kNone;

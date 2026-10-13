@@ -998,6 +998,8 @@ bool ItemModels::init(const ui::Resources& res, const EntityAssets& assets, cons
     return true;
 }
 
+const ui::Resources* ItemModels::resources() const { return impl_->res; }
+
 int ItemModels::texture(const std::string& path) {
     Impl::Tex* t = impl_->tex(path);
     return t ? t->rect : -1;

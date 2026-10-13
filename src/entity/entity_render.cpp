@@ -5,6 +5,7 @@
 #include "assets/assets.h"
 #include "assets/game_reports.h"
 #include "world/world.h"
+#include "ui/item_props.h"
 
 #include <algorithm>
 #include <array>
@@ -1043,6 +1044,24 @@ void EntityRenderer::drawOutline(const PassContext& ctx) {
 // ---------------------------------------------------------------------------------------------------------
 // Per-frame building.
 
+int EntityRenderer::trimTexture(const ui::ItemStack& stack, const std::string& asset, const char* layerType) {
+    const ui::Items* items = items_ ? items_->items() : nullptr;
+    const ui::Resources* res = items_ ? items_->resources() : nullptr;
+    if (!items || !res) return -1;
+    const std::string* data = ui::findComponent(*items, stack, "trim");
+    if (!data) return -1;
+    const std::string key = *data + '|' + asset + '|' + layerType;
+    if (auto it = trimTextures_.find(key); it != trimTextures_.end()) return it->second;
+    int& tex = trimTextures_[key];
+    tex = -1;
+    ui::Image img;
+    std::string id;
+    if (!ui::armorTrimImage(*items, *res, stack, asset, layerType, img, id) || img.w <= 0 || img.w > 64 || img.h > 64) return -1;
+    tex = assets_.allocSlot();
+    if (tex >= 0) assets_.writeSlot(tex, img.rgba.data(), img.w, img.h);
+    return tex;
+}
+
 // HumanoidArmorLayer + WingsLayer: armour pieces (equipment assets) and elytra as extra model layers.
 int EntityRenderer::equipmentLayers(const Entity& e, const TypeDef& d, Layer* out, int max) {
     if (!items_ || max <= 0) return 0;
@@ -1058,7 +1077,9 @@ int EntityRenderer::equipmentLayers(const Entity& e, const TypeDef& d, Layer* ou
         const int model = smallModel ? d.armorBaby[piece] : (d.special == SpPlayer && e.slim) ? d.armorSlim[piece] : d.armor[piece];
         if (model < 0) continue;
         const int type = smallModel && d.special != SpArmorStand ? 2 : slot == 3 ? 1 : 0;  // humanoid(_leggings/_baby)
-        bool glint = (e.equipFoil >> slot) & 1;  // EquipmentLayerRenderer: the first drawn layer carries the glint
+        // EquipmentLayerRenderer: a trim (not on the baby layer) is drawn over the pieces and takes the glint
+        const int trim = type != 2 && e.equipStack[slot] ? trimTexture(*e.equipStack[slot], eq.asset, type == 1 ? "humanoid_leggings" : "humanoid") : -1;
+        bool glint = trim < 0 && ((e.equipFoil >> slot) & 1);  // the first drawn layer carries the glint
         for (const EquipmentLayer& l : items_->itemLayers(item, type)) {
             if (l.tex < 0 || n >= max) continue;
             u32 color = kWhite;
@@ -1070,6 +1091,7 @@ int EntityRenderer::equipmentLayers(const Entity& e, const TypeDef& d, Layer* ou
             out[n++] = {model, l.tex, color, u16(Armor | (glint ? Glint : 0))};
             glint = false;
         }
+        if (trim >= 0 && n < max) out[n++] = {model, trim, kWhite, u16(Armor | (((e.equipFoil >> slot) & 1) ? Glint : 0))};
     }
     const int chest = e.equipment[4];
     const int elytra = smallModel ? elytraBabyModel_ : elytraModel_;

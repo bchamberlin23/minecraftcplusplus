@@ -197,6 +197,10 @@ private:
     std::vector<u32> mask_;             // (quad, instance) of water masks, drawn depth only after the cutout pass
     std::vector<u32> additive_;         // (quad, instance) of additive layers (energy swirl), after the translucent ones
     std::vector<i32> itemBlocks_;      // item id -> block id (0: not a block), -1 unresolved
+    // Armour trim textures (EquipmentLayerRenderer's paletted trim textures) in runtime atlas slots, by the trim
+    // component, equipment asset and layer type; -1: none.
+    std::unordered_map<std::string, int> trimTextures_;
+    int trimTexture(const ui::ItemStack& stack, const std::string& asset, const char* layerType);
     struct CachedLayers {
         Layer layers[6];
         u8 count = 0;

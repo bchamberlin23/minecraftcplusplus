@@ -661,9 +661,13 @@ bool atlasTextureImage(const Resources& res, const std::string& id, Image& out) 
     });
     auto it = gPermutations.find(idWithNs(id));
     if (it == gPermutations.end()) return false;
+    return palettedImage(res, it->second.texture, it->second.key, it->second.palette, out);
+}
+
+bool palettedImage(const Resources& res, const std::string& texture, const std::string& paletteKey, const std::string& palette, Image& out) {
     Image base, key, target;
-    if (!res.image(idFile(it->second.texture, "textures"), base) || !res.image(idFile(it->second.key, "textures/palettes"), key) ||
-        !res.image(idFile(it->second.palette, "textures/palettes"), target) || key.rgba.size() != target.rgba.size())
+    if (!res.image(idFile(texture, "textures"), base) || !res.image(idFile(paletteKey, "textures/palettes"), key) ||
+        !res.image(idFile(palette, "textures/palettes"), target) || key.rgba.size() != target.rgba.size())
         return false;
     // PaletteMapping: an opaque base colour found in the key palette becomes the target palette's colour (alpha
     // multiplied); other colours stay.
@@ -935,6 +939,54 @@ std::vector<u32> fireworkColors(const Items& items, const ItemStack& s) {
     for (i32 i = 0; i < n && r.ok; ++i) out.push_back(r.u32v() & 0xFFFFFF);
     if (!r.ok) out.clear();
     return out;
+}
+
+bool armorTrimImage(const Items& items, const Resources& res, const ItemStack& s, const std::string& equipmentAsset,
+                    const std::string& layerType, Image& out, std::string& key) {
+    const std::string* d = findComponent(items, s, "trim");
+    if (!d) return false;
+    net::Reader r = readerOf(*d);
+    const i32 material = r.varInt() - 1;  // holders: registry id + 1 (inline materials / patterns are not drawn)
+    if (material < 0 || !r.ok) return false;
+    const i32 pattern = r.varInt() - 1;
+    if (pattern < 0 || !r.ok) return false;
+    auto nbtOf = [](const std::string& raw, NbtValue& v) {
+        return !raw.empty() && nbtReadNetwork(reinterpret_cast<const u8*>(raw.data()), raw.size(), v);
+    };
+    NbtValue mat, pat;
+    if (!nbtOf(items.trimMaterialNbt(material), mat) || !nbtOf(items.trimPatternNbt(pattern), pat)) return false;
+    const NbtValue* assetId = pat.find("asset_id");
+    const NbtValue* paletteId = mat.find("palette_id");
+    if (!assetId || assetId->type != TagString) return false;
+    std::string textureId = idWithNs(assetId->s);
+    std::string palette = paletteId && paletteId->type == TagString ? idWithNs(paletteId->s) : std::string();
+    // EquipmentClientInfo.trimOverrides: the first override whose material / pattern matches
+    const json eq = res.json("assets/minecraft/equipment/" + stripNs(equipmentAsset) + ".json");
+    if (eq.is_object() && eq.contains("trim_overrides") && eq["trim_overrides"].is_array())
+        for (const json& o : eq["trim_overrides"]) {
+            if (!o.is_object() || !o.contains("when") || !o["when"].is_object()) continue;
+            const json& when = o["when"];
+            auto matches = [&](const char* field, const std::string& id) {
+                return !when.contains(field) || (when[field].is_string() && idWithNs(when[field].get<std::string>()) == id);
+            };
+            if (!matches("material", idWithNs(items.trimMaterials()[size_t(material)])) ||
+                !matches("pattern", idWithNs(items.trimPatterns()[size_t(pattern)])))
+                continue;
+            if (o.contains("texture") && o["texture"].is_string()) textureId = idWithNs(o["texture"].get<std::string>());
+            palette = o.contains("palette") && o["palette"].is_string() ? idWithNs(o["palette"].get<std::string>()) : std::string();
+            break;
+        }
+    // The base texture under trims/entity/<layer type>/ with its palette key from the .mcmeta (palette.base_palette).
+    const size_t colon = textureId.find(':');
+    const std::string base = textureId.substr(0, colon + 1) + "trims/entity/" + layerType + "/" + textureId.substr(colon + 1);
+    key = base + "|" + palette;
+    if (palette.empty()) return res.image(idFile(base, "textures"), out) && out.w > 0;
+    std::string paletteKey = "minecraft:trim_base";
+    const json meta = res.json(idFile(base, "textures") + ".mcmeta");
+    if (meta.is_object() && meta.contains("palette") && meta["palette"].is_object() && meta["palette"].contains("base_palette") &&
+        meta["palette"]["base_palette"].is_string())
+        paletteKey = idWithNs(meta["palette"]["base_palette"].get<std::string>());
+    return palettedImage(res, base, paletteKey, palette, out);
 }
 
 std::string trimMaterial(const Items& items, const ItemStack& s) {

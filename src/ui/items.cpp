@@ -164,8 +164,11 @@ void Items::setRegistries(const net::Client& client) {
     for (const net::Client::RegistryEntry& e : client.registryEntries("minecraft:enchantment")) enchantmentNbt_[e.id] = e.nbt;
     bannerPatterns_.clear();
     for (const net::Client::RegistryEntry& e : client.registryEntries("minecraft:banner_pattern")) bannerPatterns_.push_back(e.id);
-    trimMaterials_.clear();
-    for (const net::Client::RegistryEntry& e : client.registryEntries("minecraft:trim_material")) trimMaterials_.push_back(e.id);
+    trimMaterials_.clear(), trimMaterialNbt_.clear(), trimPatterns_.clear(), trimPatternNbt_.clear();
+    for (const net::Client::RegistryEntry& e : client.registryEntries("minecraft:trim_material"))
+        trimMaterials_.push_back(e.id), trimMaterialNbt_.push_back(e.nbt);
+    for (const net::Client::RegistryEntry& e : client.registryEntries("minecraft:trim_pattern"))
+        trimPatterns_.push_back(e.id), trimPatternNbt_.push_back(e.nbt);
     setTags(client.tags());
     enabledFeatures_ = client.enabledFeatures();
     registriesSet_ = true;
