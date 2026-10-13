@@ -26,7 +26,7 @@ namespace ui {
 namespace {
 constexpr u32 kWhite = 0xFFFFFFFF;
 
-// java.util.Random-compatible enough for HUD jitter (Hud uses its own RandomSource seeded per tick).
+// java.util.Random (LegacyRandomSource) for the HUD jitter (Hud uses its own RandomSource seeded per tick).
 struct Jitter {
     u64 seed;
     explicit Jitter(u64 s) : seed((s ^ 0x5DEECE66DULL) & ((1ULL << 48) - 1)) {}
@@ -34,7 +34,13 @@ struct Jitter {
         seed = (seed * 0x5DEECE66DULL + 0xBULL) & ((1ULL << 48) - 1);
         return int(seed >> (48 - bits));
     }
-    int nextInt(int bound) { return int((u64(next(31)) * u64(bound)) >> 31); }
+    int nextInt(int bound) {  // BitRandomSource.nextInt: powers of two by the high bits, else rejection sampling
+        if ((bound & -bound) == bound) return int((u64(next(31)) * u64(bound)) >> 31);
+        int bits, val;
+        do bits = next(31), val = bits % bound;
+        while (i32(u32(bits) - u32(val) + u32(bound - 1)) < 0);  // Java int overflow
+        return val;
+    }
 };
 
 u32 hsvToRgb(float h, float s, float v) {  // Mth.hsvToRgb
@@ -442,9 +448,7 @@ void Ui::State::drawHud(Canvas& c) {
         }
         // Air bubbles.
         const int maxA = maxAir, cur = std::clamp(air, 0, maxA);
-        const CameraState cam = game->camera();
-        const u16 eye = world->block(int(std::floor(cam.x)), int(std::floor(cam.y)), int(std::floor(cam.z)));
-        const bool underWater = registry->name(eye).starts_with("minecraft:water");
+        const bool underWater = game->player().eyeInWater;  // isEyeInFluid(WATER): the player's eyes, waterlogged too
         if (underWater || cur < maxA) {
             // getAirBubbleYLine: above the food, or above the ridden mount's heart rows
             const int yAir = mountHearts == 0 ? yBase - 10 : yBase - 10 - (int(std::ceil(mountHearts / 10.0)) - 1) * 10;
@@ -472,6 +476,8 @@ void Ui::State::drawHud(Canvas& c) {
                 }
             }
         }
+    } else {
+        drawVehicleHealth(*this, c, center + 91, gh - 39);  // Hud.extractVehicleHealth: also when the player cannot be hurt
     }
     if (!spectator() || hasWaypoints()) {
         // Hud.nextContextualInfoState: with waypoints the locator bar (but the jump bar while it charges and the
