@@ -411,6 +411,7 @@ void Ui::State::drawHud(Canvas& c) {
             font.draw(c, name, float((gw - w) / 2), float(y), u32(alpha) << 24 | 0xFFFFFF, true);
         }
     }
+    drawSleepOverlay(*this, c);
     // Action bar.
     if (actionbarTime > 0) {
         const float t = float(actionbarTime) - partialTick;

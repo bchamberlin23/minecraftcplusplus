@@ -19,6 +19,7 @@ constexpr float kPi = 3.14159265f;
 struct Bed {
     bool sleeping = false;       // LivingEntity.isSleeping: the sleeping position is set
     int pos[3] = {};             // the bed block (SLEEPING_POS_ID)
+    int counter = 0;             // Player.sleepCounter: up to 100 asleep, then on to 110 after waking
     bool hookSet = false;
 };
 Bed bed;
@@ -107,6 +108,7 @@ void handlers(UiState& s, net::Client& client) {
 
 void attached(UiState& s) {
     bed.sleeping = false;
+    bed.counter = 0;
     if (s.game) s.game->sleeping = false;
     sw.lastMode = sw.previousMode = -1;
 }
@@ -136,6 +138,8 @@ void tick(UiState& s) {
         s.game->viewCameraOverride = [sp](CameraState& c) { sleepingCamera(*sp, c); };
         bed.hookSet = true;
     }
+    if (bed.sleeping) bed.counter = std::min(bed.counter + 1, 100);  // Player.tick
+    else if (bed.counter > 0 && ++bed.counter >= 110) bed.counter = 0;
     const int mode = s.gameMode();
     if (mode != sw.lastMode) {
         if (sw.lastMode >= 0) sw.previousMode = sw.lastMode;
@@ -155,6 +159,13 @@ void tick(UiState& s) {
 }
 
 }  // namespace
+
+void drawSleepOverlay(UiState& s, Canvas& c) {
+    if (bed.counter <= 0 || !s.online()) return;
+    float amount = float(bed.counter) / 100.0f;
+    if (amount > 1.0f) amount = 1.0f - float(bed.counter - 100) / 10.0f;
+    c.fill(0, 0, float(c.guiWidth()), float(c.guiHeight()), u32(220.0f * amount) << 24 | 0x101020);
+}
 
 // KeyboardHandler.debugFeedbackTranslated: "[Debug]:" in bold yellow, then the message.
 void debugFeedback(UiState& s, const char* key) {

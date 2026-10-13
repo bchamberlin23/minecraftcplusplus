@@ -21,5 +21,7 @@ bool drawJumpBar(Ui::State& s, Canvas& c, int left, int top);
 void drawAttackIndicator(Ui::State& s, Canvas& c);
 // The attack indicator option on HOTBAR: the attack strength beside the hotbar (Hud.extractItemHotbar).
 void drawHotbarAttackIndicator(Ui::State& s, Canvas& c);
+// bed_gamemode.cpp: Hud.extractSleepOverlay, the dark fade while asleep (drawn with or without the HUD).
+void drawSleepOverlay(Ui::State& s, Canvas& c);
 
 }  // namespace ui

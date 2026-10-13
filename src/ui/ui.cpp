@@ -1276,6 +1276,7 @@ void Ui::endFrame() {
     if (!s.fe->cfg.menu) drawScreenEffects(s, c);  // view_effects.cpp: in the 3D view, with or without the HUD
     const bool hud = !s.hudHidden && !s.fe->cfg.menu;  // the title screen has no HUD
     if (hud) s.drawHud(c);
+    else if (!s.fe->cfg.menu) drawSleepOverlay(s, c);  // Hud.extractSleepOverlay: also with the HUD hidden
     if (hud) s.drawModHud(c);  // native mods
     drawDebugScreen(s, c);  // debug_screen.cpp (always-on entries show without F3)
     if (s.screen != Screen::None) s.drawScreen(c);
