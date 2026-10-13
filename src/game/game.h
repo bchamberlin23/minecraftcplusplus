@@ -1,6 +1,7 @@
 #pragma once
 #include "core/common.h"
 #include "entity/spear_anim.h"
+#include "game/placement.h"
 #include "game/player.h"
 #include "game/tick_rate.h"
 #include "render/renderer.h"
@@ -309,7 +310,8 @@ private:
     void sendDig(int action, int x, int y, int z, int face, bool predicted);
     float progressAt(int x, int y, int z, u16 state) const;
     void edit(int x, int y, int z, u16 id);
-    u16 orientForPlacement(u16 id, const RayHit& hit, const int target[3]);
+    place::Context placeContext();  // game/placement.h: the placement prediction's view of this game
+    void updateNeighbourShapes(int x, int y, int z);
 
     World& world_;
     BlockRegistry& registry_;

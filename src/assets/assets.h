@@ -112,6 +112,9 @@ public:
     // Same block with one property changed (or added); returns `id` if the block has no such state.
     u16 withProperty(u16 id, std::string_view key, std::string_view value);
     u16 withPropertyUncached(u16 id, std::string_view key, std::string_view value);
+    // The block's default state ("minecraft:wall_torch" -> its id with every property at its default); 0 for a block
+    // the game does not have.
+    u16 defaultState(std::string_view name);
     const std::string& name(u16 id) const;  // full state key
     std::string_view property(u16 id, std::string_view key) const;
 

@@ -382,6 +382,7 @@ bool Game::useTarget(bool place) {
         if (onEdit) onEdit(action);
         const u16 old = world_.block(target_.x, target_.y, target_.z);
         edit(target_.x, target_.y, target_.z, 0);
+        updateNeighbourShapes(target_.x, target_.y, target_.z);
         if (onBlockChanged && old) onBlockChanged(false, target_.x, target_.y, target_.z, old);
         if (onSwing) onSwing(0, swingType);
         return true;
@@ -414,40 +415,16 @@ int Game::useItemOn(int hand) {
     if (!held) return send(predictUseOn ? predictUseOn(hand, target_) : kUsePass);  // not a block: Item.useOn
     // BlockItem.place: BlockPlaceContext (the clicked block when it can be replaced, else the cell in front of it).
     const BlockInfo* infos = registry_.infos();
-    auto baseOf = [&](u16 id) {
-        const std::string& n = registry_.name(id);
-        return n.substr(0, n.find('['));
-    };
-    const std::string heldBase = baseOf(held);
-    auto canBeReplaced = [&](u16 state, bool replacingClicked, const int at[3]) {
-        if (baseOf(state) == heldBase && heldBase.ends_with("_slab")) {  // SlabBlock.canBeReplaced
-            const std::string_view type = registry_.property(state, "type");
-            if (type == "double") return false;
-            if (!replacingClicked) return true;
-            const bool above = target_.point[1] - at[1] > 0.5;
-            const int f = target_.face;
-            return type == "bottom" ? f == 1 || (above && f >= 2) : f == 0 || (!above && f >= 2);
-        }
-        // BlockBehaviour.canBeReplaced: replaceable, but not by the same item
-        return infos[state].replaceable && baseOf(state) != heldBase;
-    };
+    const place::Context pc = placeContext();
     int t[3] = {target_.x, target_.y, target_.z};
-    const bool replaceClicked = canBeReplaced(world_.block(t[0], t[1], t[2]), true, t);
+    const bool replaceClicked = place::canBeReplaced(pc, held, world_.block(t[0], t[1], t[2]), true, t);
     if (!replaceClicked)
         for (int a = 0; a < 3; ++a) t[a] += kDir[target_.face][a];
     const u16 existing = world_.block(t[0], t[1], t[2]);
-    if (!replaceClicked && !canBeReplaced(existing, false, t)) return send(kUseFail);  // !context.canPlace()
-    u16 id;
-    if (baseOf(existing) == heldBase && heldBase.ends_with("_slab")) {  // SlabBlock: a second slab makes a double one
-        id = registry_.withProperty(registry_.withProperty(existing, "type", "double"), "waterlogged", "false");
-    } else {
-        id = orientForPlacement(held, target_, t);
-        // Waterloggable blocks placed into a water source are waterlogged (getStateForPlacement).
-        if (!registry_.property(id, "waterlogged").empty()) {
-            const Physics::Fluid f = physics_.fluid(t[0], t[1], t[2]);
-            id = registry_.withProperty(id, "waterlogged", f.type == 1 && f.source ? "true" : "false");
-        }
-    }
+    if (!replaceClicked && !place::canBeReplaced(pc, held, existing, false, t)) return send(kUseFail);  // !context.canPlace()
+    const place::Result placed = place::placementState(pc, held, t, replaceClicked);  // getPlacementState
+    if (!placed.state) return send(kUseFail);
+    const u16 id = placed.state;
     const BlockInfo& b = infos[id];
     const AABB body = player_.box();
     float off[3];
@@ -462,6 +439,9 @@ int Game::useItemOn(int hand) {
     action.block = id;
     send(kUseConsume);
     edit(t[0], t[1], t[2], id);
+    for (const auto& [x, y, z, s] : placed.extra) edit(x, y, z, u16(s));  // setPlacedBy: door / plant tops, bed heads
+    updateNeighbourShapes(t[0], t[1], t[2]);
+    for (const auto& [x, y, z, s] : placed.extra) updateNeighbourShapes(x, y, z);
     placedLast_ = true;
     if (onBlockChanged) onBlockChanged(true, t[0], t[1], t[2], id);
     if (onSwing) {  // a use swing: the used hand's interact_animation
@@ -540,6 +520,7 @@ bool Game::destroyBlock(int x, int y, int z) {
     if (instabuild && canDestroyInCreative && !canDestroyInCreative()) return false;
     const BlockInfo& b = registry_.infos()[old];
     edit(x, y, z, b.waterlogged ? registry_.waterId() : 0);  // FluidState.createLegacyBlock
+    updateNeighbourShapes(x, y, z);  // Level.setBlock (UPDATE_ALL): the neighbours' updateShape
     if (onBlockChanged) onBlockChanged(false, x, y, z, old);
     return true;
 }
@@ -685,34 +666,34 @@ void Game::tickAttack(bool down) {
     if (missTime_ > 0) --missTime_;
 }
 
-// Adapts a held block state to how it is placed (axis, facing, top/bottom halves, wall torches),
-// following the game's placement rules for the common property names.
-u16 Game::orientForPlacement(u16 id, const RayHit& hit, const int target[3]) {
-    const std::string name = registry_.name(id);
-    const int face = hit.face;
-    if (face >= 2) {
-        const std::string facing = std::string("[facing=") + kFaceName[face];
-        if (name == "minecraft:torch") return registry_.idFor("minecraft:wall_torch" + facing + "]");
-        if (name == "minecraft:soul_torch") return registry_.idFor("minecraft:soul_wall_torch" + facing + "]");
-        if (name.starts_with("minecraft:redstone_torch"))
-            return registry_.idFor("minecraft:redstone_wall_torch" + facing + ",lit=true]");
-    }
-    if (!registry_.property(id, "axis").empty()) id = registry_.withProperty(id, "axis", face < 2 ? "y" : face < 4 ? "z" : "x");
-    if (!registry_.property(id, "facing").empty()) {
-        static const char* look[4] = {"south", "west", "north", "east"};
-        const int q = int(std::floor(player_.yaw / (kPi / 2) + 0.5)) & 3;
-        // Furnaces, chests... face the player; stairs, doors, fence gates and beds face where the player looks.
-        const std::string base = name.substr(0, name.find('['));
-        const bool towardsPlayer = name.find("stairs") == std::string::npos && !base.ends_with("_door") &&
-                                   !base.ends_with("_fence_gate") && !base.ends_with("_bed");
-        id = registry_.withProperty(id, "facing", look[towardsPlayer ? (q + 2) & 3 : q]);
-    }
-    const bool upper = face == 0 || (face >= 2 && hit.point[1] - target[1] > 0.5);
-    const std::string_view half = registry_.property(id, "half");
-    if (half == "top" || half == "bottom") id = registry_.withProperty(id, "half", upper ? "top" : "bottom");
-    const std::string_view type = registry_.property(id, "type");
-    if (type == "top" || type == "bottom") id = registry_.withProperty(id, "type", upper ? "top" : "bottom");
-    return id;
+place::Context Game::placeContext() {
+    place::Context c{registry_};
+    c.block = [this](int x, int y, int z) { return world_.block(x, y, z); };
+    c.waterSource = [this](int x, int y, int z) {
+        const Physics::Fluid f = physics_.fluid(x, y, z);
+        return f.type == 1 && f.source;
+    };
+    c.clicked[0] = target_.x, c.clicked[1] = target_.y, c.clicked[2] = target_.z;
+    c.face = target_.face;
+    std::copy(target_.point, target_.point + 3, c.hit);
+    c.yaw = player_.yaw, c.pitch = player_.pitch;
+    c.sneaking = player_.lastInput.sneak;
+    c.maxY = world_.maxSectionY() * 16 + 15;
+    return c;
+}
+
+// Level.setBlock's neighbour shape updates for a changed cell (connections, stair shapes, double chests, the other
+// halves of doors, tall plants and beds), as the client's prediction does them.
+void Game::updateNeighbourShapes(int x, int y, int z) {
+    std::vector<std::array<int, 4>> changes;
+    place::neighbourShapes(placeContext(), x, y, z, changes);
+    for (const auto& [cx, cy, cz, s] : changes) edit(cx, cy, cz, u16(s));
+    for (const auto& [cx, cy, cz, s] : changes)  // a removed half's own neighbours (its pair's other cells)
+        if (s == 0) {
+            std::vector<std::array<int, 4>> more;
+            place::neighbourShapes(placeContext(), cx, cy, cz, more);
+            for (const auto& [mx, my, mz, ms] : more) edit(mx, my, mz, u16(ms));
+        }
 }
 
 void Game::edit(int x, int y, int z, u16 id) {

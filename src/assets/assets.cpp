@@ -988,6 +988,11 @@ bool BlockRegistry::reloadTextures() {
     return true;
 }
 
+u16 BlockRegistry::defaultState(std::string_view name) {
+    if (!reports_ || !reports_->hasBlock(name)) return 0;
+    return idFor(reports_->complete(name));
+}
+
 u16 BlockRegistry::idFor(std::string_view key) {
     thread_local StrMap<u16> cache;
     thread_local const BlockRegistry* cacheOwner = nullptr;
