@@ -270,6 +270,7 @@ struct Visuals::Impl {
         int item = -1;
         i32 dye = -1;
         bool foil = false;
+        std::string key;  // count and components but damage (ItemStack.matchesIgnoringComponents(ignoreSwapAnimation))
         float height = 0, oHeight = 0;
     } mainHand, offHand;
     int itemSwapTicker = 0, lastMainItem = -2;
@@ -369,7 +370,7 @@ struct Visuals::Impl {
     const Tag& tag(const std::string& name);
     const Tag& tag(const ui::Text& text);  // styled (team colours), cached by its spans
     const PaintingInfo* painting(int id);
-    void heldStack(int slot, int& item, i32& dye, bool& foil) const;
+    void heldStack(int slot, int& item, i32& dye, bool& foil, std::string* key = nullptr) const;
     int chargeOf(int menuSlot) const;
     // Item model contexts (ItemModelResolver.updateForLiving / updateForNonLiving): the stack an entity shows (its
     // whole stack when the packets carried one) and the entity as the item's owner.
@@ -1233,13 +1234,22 @@ void Visuals::Impl::pushRaw(Lists& L, const ItemMesh& mesh, const Xf& m, u32 lig
     }
 }
 
-void Visuals::Impl::heldStack(int slot, int& item, i32& dye, bool& foil) const {
+void Visuals::Impl::heldStack(int slot, int& item, i32& dye, bool& foil, std::string* key) const {
     item = -1, dye = -1, foil = false;
+    if (key) key->clear();
     if (!ui) return;
     if (const ui::ItemStack* s = ui->playerSlot(slot)) {
         item = s->item;
         dye = s->dyedColor >= 0 ? i32(s->dyedColor & 0xFFFFFF) : -1;
         foil = items && items->foil(*s);
+        if (key && !s->empty()) {  // the count and the components that play the swap animation (all but damage)
+            static const int damage = items ? items->componentType("damage") : -1;
+            *key = std::to_string(s->count);
+            for (const auto& c : s->added)
+                if (c.type != damage) *key += "|" + std::to_string(c.type) + ":" + c.data;
+            for (int t : s->removed)
+                if (t != damage) *key += "|-" + std::to_string(t);
+        }
     }
 }
 
@@ -1658,34 +1668,37 @@ void Visuals::Impl::tickLocal() {
     int nextMain, nextOff;
     i32 dyeMain, dyeOff;
     bool foilMain, foilOff;
-    heldStack(36 + selected, nextMain, dyeMain, foilMain);
-    heldStack(45, nextOff, dyeOff, foilOff);
+    std::string keyMain, keyOff;
+    heldStack(36 + selected, nextMain, dyeMain, foilMain, &keyMain);
+    heldStack(45, nextOff, dyeOff, foilOff, &keyOff);
     ++itemSwapTicker;
     if (nextMain != lastMainItem) {  // Player.tick: a different item resets the attack strength / swap tickers
         if (lastMainItem != -2) itemSwapTicker = 0;
         lastMainItem = nextMain;
     }
     mainHand.oHeight = mainHand.height, offHand.oHeight = offHand.height;
-    auto sameVisible = [&](const HandState& h, int item, i32 dye) {
-        if (h.item == item && h.dye == dye) return true;
+    // shouldInstantlyReplaceVisibleItem: the same stack but its damage, or an item without the swap animation
+    auto sameVisible = [&](const HandState& h, int item, const std::string& key) {
+        if (h.item == item && h.key == key) return true;
         return item >= 0 && !models.handInfo(item).swapAnimation;
     };
-    if (sameVisible(mainHand, nextMain, dyeMain)) mainHand.item = nextMain, mainHand.dye = dyeMain, mainHand.foil = foilMain;
-    if (sameVisible(offHand, nextOff, dyeOff)) offHand.item = nextOff, offHand.dye = dyeOff, offHand.foil = foilOff;
-    const float speed = nextMain >= 0 ? models.handInfo(nextMain).attackSpeed : 4.0f;
-    const float delay = 20.0f / std::max(speed, 0.01f);
+    auto show = [](HandState& h, int item, i32 dye, bool foil, const std::string& key) { h.item = item, h.dye = dye, h.foil = foil, h.key = key; };
+    if (sameVisible(mainHand, nextMain, keyMain)) show(mainHand, nextMain, dyeMain, foilMain, keyMain);
+    if (sameVisible(offHand, nextOff, keyOff)) show(offHand, nextOff, dyeOff, foilOff, keyOff);
+    // Player.getItemSwapScale: over the live attack speed attribute's delay
+    const float delay = game ? game->attackStrengthDelay() : 20.0f / 4.0f;
     const float swap = std::clamp((float(itemSwapTicker) + 1.0f) / delay, 0.0f, 1.0f);
     if (game->handsBusy) {  // FirstPersonHandsAndItems.tick: busy hands (paddling) go down
         mainHand.height = std::clamp(mainHand.height - 0.4f, 0.0f, 1.0f);
         offHand.height = std::clamp(offHand.height - 0.4f, 0.0f, 1.0f);
     } else {
-        const float mainTarget = (mainHand.item != nextMain || mainHand.dye != dyeMain) ? 0.0f : swap * swap * swap;
-        const float offTarget = (offHand.item != nextOff || offHand.dye != dyeOff) ? 0.0f : 1.0f;
+        const float mainTarget = (mainHand.item != nextMain || mainHand.key != keyMain) ? 0.0f : swap * swap * swap;
+        const float offTarget = (offHand.item != nextOff || offHand.key != keyOff) ? 0.0f : 1.0f;
         mainHand.height += std::clamp(mainTarget - mainHand.height, -0.4f, 0.4f);
         offHand.height += std::clamp(offTarget - offHand.height, -0.4f, 0.4f);
     }
-    if (mainHand.height < 0.1f) mainHand.item = nextMain, mainHand.dye = dyeMain, mainHand.foil = foilMain;
-    if (offHand.height < 0.1f) offHand.item = nextOff, offHand.dye = dyeOff, offHand.foil = foilOff;
+    if (mainHand.height < 0.1f) show(mainHand, nextMain, dyeMain, foilMain, keyMain);
+    if (offHand.height < 0.1f) show(offHand, nextOff, dyeOff, foilOff, keyOff);
 
     // Third-person avatar: LivingEntity body rotation and walk animation.
     Entity& e = avatar;
