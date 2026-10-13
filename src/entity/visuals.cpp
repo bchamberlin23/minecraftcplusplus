@@ -451,6 +451,18 @@ bool Visuals::load(const fs::path& jar, const fs::path& minecraftDir, const Game
         return e != nullptr;
     };
     m.particles->onElderGuardian = [&world = m.world] { world.mobAppearances.push_back(nowSeconds()); };
+    m.particles->nearestPlayer = [&m](const double at[3], double maxDist, double out[4]) {
+        double best = maxDist * maxDist;
+        bool found = false;
+        auto consider = [&](const double pos[3], double yd) {
+            const double dx = pos[0] - at[0], dy = pos[1] - at[1], dz = pos[2] - at[2], d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 < best) best = d2, found = true, out[0] = pos[0], out[1] = pos[1], out[2] = pos[2], out[3] = yd;
+        };
+        if (m.game && !(m.gameMode && m.gameMode() == 3)) consider(m.game->player().pos, m.game->player().vel[1]);
+        for (const auto& [id, e] : m.world.entities())
+            if (e.category == Category::Player) consider(e.pos, e.vel[1]);
+        return found;
+    };
     m.loaded = true;
     LOG("visuals %7.1f ms  item models, font and particles from the game", t.ms());
     return true;

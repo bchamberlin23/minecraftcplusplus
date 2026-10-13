@@ -117,6 +117,9 @@ public:
     std::function<bool(net::Reader& r, int& item)> readItem;
     // EntityPositionSource: an entity's position (main thread); false when unknown (the vibration ends).
     std::function<bool(int entity, double pos[3])> entityPosition;
+    // Level.getNearestPlayer(x, y, z, maxDist, false): the nearest non-spectator player within maxDist; out = feet
+    // position and vertical speed (blocks per tick).
+    std::function<bool(const double at[3], double maxDist, double out[4])> nearestPlayer;
     std::function<void()> onElderGuardian;  // an elder_guardian particle (main thread)
 
     struct Particle;  // particles.cpp

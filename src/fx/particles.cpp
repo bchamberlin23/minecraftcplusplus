@@ -956,6 +956,7 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
             p.quadSize *= 1.875f;
             p.lifetime = std::max(int(8.0 / (randf() * 0.8 + 0.3) * 2.5), 1);
             p.sizeMode = SizeGrow;
+            p.flags &= u8(~Physics);
             if (t.name == "sneeze") p.r = 0.22f, p.g = 1.0f, p.b = 0.53f, p.a = 0.4f, p.flags |= Translucent;  // SneezeProvider
             ageSprite();
             break;
@@ -1101,10 +1102,9 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
                 p.lifetime = 60 + int(rng_() % 12);
                 if (rng_() % 4 == 0) p.r = 0.6f + randf() * 0.2f, p.g = 0.6f + randf() * 0.3f, p.b = randf() * 0.2f;
                 else p.r = 0.1f + randf() * 0.2f, p.g = 0.4f + randf() * 0.3f, p.b = randf() * 0.2f;
-            } else {  // EndRodParticle: no collisions, fades to #F2DEC9
+            } else {  // EndRodParticle: fades to #F2DEC9
                 p.gravity = 0.0125f;
                 p.lifetime = 60 + int(rng_() % 12);
-                p.flags &= u8(~Physics);
                 p.e0 = float(kSparkFade);
                 p.e1 = 0xF2 / 255.0f, p.e2 = 0xDE / 255.0f, p.e3 = 0xC9 / 255.0f;
             }
@@ -2585,6 +2585,22 @@ void Particles::tickOne(Particle& p) {
             p.b = float(p.sz) + (p.e3 - float(p.sz)) * f;
             break;
         }
+        case Kind::Cloud: {  // PlayerCloudParticle.tick: drawn down to a player within 2 blocks below
+            defaultTick();
+            ageSprite();
+            const double at[3] = {p.x, p.y, p.z};
+            double pl[4];
+            if (!(p.flags & Removed) && nearestPlayer && nearestPlayer(at, 2.0, pl) && p.y > pl[1]) {
+                p.y += (pl[1] - p.y) * 0.2;
+                p.yd += (pl[3] - p.yd) * 0.2;
+            }
+            break;
+        }
+        case Kind::Snowflake:  // SnowflakeParticle.tick
+            defaultTick();
+            ageSprite();
+            p.xd *= 0.95f, p.yd *= 0.9f, p.zd *= 0.95f;
+            break;
         case Kind::Lava:
             defaultTick();
             if (!(p.flags & Removed) && randf() > float(p.age) / float(p.lifetime)) {
