@@ -69,6 +69,8 @@ public:
     // Screen.getBackgroundMusic: a screen's own music (WinScreen: music.credits) over the situational one; "" ends
     // it (stopping it if it plays).
     void setScreenMusic(std::string_view event);
+    // BossHealthOverlay.shouldPlayMusic: in the End a boss bar asking for music plays Musics.END_BOSS (music.dragon).
+    void setBossMusic(bool on) { bossMusic_ = on; }
     // MusicManager: the Music Frequency option (0 default, 1 frequent, 2 constant); the song playing as a translation
     // key (getCurrentMusicTranslationKey: "music.game.sweden", "" none); counters of the now playing toast's show
     // requests (a song started audibly, or the music turned up while one plays silently) and hide requests.
@@ -142,7 +144,7 @@ private:
     void onPlayerTick();
     void stepSound(int x, int y, int z, const BlockSound& on);
     void tick();
-    void tickMusic(const AudioEnvironment* env, bool creative, bool underwater, float musicVolume);
+    void tickMusic(const AudioEnvironment* env, bool creative, bool underwater, float musicVolume, const MusicDef* situational = nullptr);
     void tickAmbient(const AmbientSounds* ambient);
     void handleNet(const NetSound& s);
     bool eyeInWater();
@@ -191,6 +193,8 @@ private:
     u32 music_ = 0;
     int musicEvent_ = -1;
     MusicDef screenMusic_;  // setScreenMusic (event < 0: none)
+    MusicDef menuMusic_, bossMusicDef_;  // Musics.MENU / END_BOSS (resolved on first use)
+    bool bossMusic_ = false;
     int nextSongDelay_ = 100;
     float musicGain_ = 1.0f;
     int musicFrequency_ = 0;

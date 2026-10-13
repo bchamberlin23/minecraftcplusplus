@@ -658,7 +658,12 @@ void AudioSystem::tick() {
             entitySounds_.pop_back();
         }
     }
-    if (!haveGameSounds_ || !world_) return;
+    if (!haveGameSounds_) return;
+    if (!world_ || info_.dimension.empty()) {  // getSituationalMusic without a player (no session): Musics.MENU
+        if (menuMusic_.event < 0 && ready()) menuMusic_ = MusicDef{bank_.eventId("music.menu"), 20, 600, true};
+        if (menuMusic_.event >= 0) tickMusic(nullptr, false, false, 1.0f, &menuMusic_);
+        return;
+    }
 
     // Environment attributes: the biome's value overrides its dimension's.
     if (biomeSource_ && ++biomeAge_ >= 20) {
@@ -677,7 +682,12 @@ void AudioSystem::tick() {
     const AudioEnvironment* musicEnv = bio && bio->hasMusic ? bio : dim && dim->hasMusic ? dim : nullptr;
     const AudioEnvironment* ambientEnv = bio && bio->hasAmbient ? bio : dim && dim->hasAmbient ? dim : nullptr;
     const float musicVolume = bio && bio->hasMusicVolume ? bio->musicVolume : dim && dim->hasMusicVolume ? dim->musicVolume : 1.0f;
-    tickMusic(musicEnv, info_.gameMode == 1, underwater, musicVolume);
+    const MusicDef* situational = nullptr;
+    if (bossMusic_ && info_.dimension == "minecraft:the_end") {  // Musics.END_BOSS
+        if (bossMusicDef_.event < 0) bossMusicDef_ = MusicDef{bank_.eventId("music.dragon"), 0, 0, true};
+        if (bossMusicDef_.event >= 0) situational = &bossMusicDef_;
+    }
+    tickMusic(musicEnv, info_.gameMode == 1, underwater, situational ? 1.0f : musicVolume, situational);
     tickAmbient(ambientEnv ? &ambientEnv->ambient : nullptr);
 }
 
@@ -694,7 +704,12 @@ void AudioSystem::setScreenMusic(std::string_view event) {
 }
 
 // MusicManager.tick; MusicFrequency.getNextSongDelay (at most 20, 10 or 0 minutes; constant: 5 seconds).
-void AudioSystem::tickMusic(const AudioEnvironment* env, bool creative, bool underwater, float volume) {
+void AudioSystem::tickMusic(const AudioEnvironment* env, bool creative, bool underwater, float volume, const MusicDef* situational) {
+    auto pick = [&]() -> const MusicDef* {  // the screen's music, else the situational one
+        if (screenMusic_.event >= 0) return &screenMusic_;
+        if (situational) return situational;
+        return env ? env->music.select(creative, underwater) : nullptr;
+    };
     const int maxFrequency = (musicFrequency_ == 0 ? 20 : musicFrequency_ == 1 ? 10 : 0) * 1200;
     auto nextDelay = [&](const MusicDef* m) {
         if (!m) return maxFrequency;
@@ -715,12 +730,12 @@ void AudioSystem::tickMusic(const AudioEnvironment* env, bool creative, bool und
             music_ = 0;
             musicSong_.clear();
             ++nowPlayingHides_;
-            nextSongDelay_ = nextDelay(screenMusic_.event >= 0 ? &screenMusic_ : env ? env->music.select(creative, underwater) : nullptr) + 100;
+            nextSongDelay_ = nextDelay(pick()) + 100;
             return;
         }
         engine_.setMusicFade(musicGain_);
     }
-    const MusicDef* music = screenMusic_.event >= 0 ? &screenMusic_ : env ? env->music.select(creative, underwater) : nullptr;
+    const MusicDef* music = pick();
     if (!music) {
         nextSongDelay_ = std::max(nextSongDelay_, 100);
         return;

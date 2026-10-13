@@ -1165,7 +1165,7 @@ int wmain(int argc, wchar_t** argv) {
             cam = game.viewCamera();  // F5: the detached camera
         }
         audio.update(dt, cam, {session ? session->gameMode() : 1,
-                               session ? std::string_view(session->dimension().name) : "minecraft:overworld"});
+                               session ? std::string_view(session->dimension().name) : std::string_view()});  // none: no player
         tickableSounds.frame(dt, session && haveEntities && !menu, session ? session->gameMode() : 1);
 
         const double preMs = frameTop.ms();

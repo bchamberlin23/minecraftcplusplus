@@ -2,6 +2,7 @@
 // sidebar (Hud.displayScoreboardSidebar), from the server's player info, tab list, boss event and scoreboard packets.
 #include "ui/mp_hud.h"
 
+#include "audio/audio.h"
 #include "entity/entities.h"
 #include "entity/skin_cache.h"
 #include "ui/resources.h"
@@ -666,6 +667,7 @@ void drawHud(UiState& s, Canvas& c) {
 void drawHudTop(UiState& s, Canvas& c) { drawPlayerList(s, c); }
 
 void tick(UiState& s) {  // downloaded profile skins for the faces (registered as UI textures "skin/<hash>")
+    if (audio::AudioSystem* a = audio::instance()) a->setBossMusic(bossPlayMusic());
     for (auto& [key, p] : g.players) {
         if (p.skinState != 1) continue;
         ent::ProfileTextures t;
