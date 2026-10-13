@@ -20,6 +20,7 @@
 #include <winhttp.h>
 
 #include <atomic>
+#include <cmath>
 #include <fstream>
 #include <thread>
 
@@ -55,6 +56,12 @@ struct Batch {
     };
     std::vector<Item> items;
     std::atomic<bool> done{false};
+    // DownloadedPackSource.createDownloadNotifier: the pack being fetched (1-based), failures, its bytes and size
+    // (-1 unknown, or before the download starts: no message), a change counter the main thread follows
+    std::atomic<int> count{0}, fails{0}, version{0};
+    std::atomic<i64> bytes{0}, size{-2};
+    int seen = 0;
+    std::string toastId;
 };
 
 struct Request {  // PackConfirmScreen.PendingRequest
@@ -215,7 +222,7 @@ std::wstring downloadHeaders(State& s) {
 }
 
 // HTTP(S) GET into `to` (at most 250 MB, like the game's MAX_PACK_SIZE_BYTES).
-bool download(const std::string& url, const std::wstring& headers, const fs::path& to) {
+bool download(const std::string& url, const std::wstring& headers, const fs::path& to, Batch* progress = nullptr) {
     const std::wstring wurl = widen(url);
     URL_COMPONENTS uc{};
     uc.dwStructSize = sizeof(uc);
@@ -240,6 +247,12 @@ bool download(const std::string& url, const std::wstring& headers, const fs::pat
         ok = WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX,
                                  &status, &size, WINHTTP_NO_HEADER_INDEX) &&
              status == 200;
+    if (ok && progress) {  // downloadStart(the Content-Length, if any)
+        DWORD length = 0, lsize = sizeof(length);
+        const bool known = WinHttpQueryHeaders(req, WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX,
+                                               &length, &lsize, WINHTTP_NO_HEADER_INDEX);
+        progress->bytes = 0, progress->size = known ? i64(length) : -1, ++progress->version;
+    }
     if (ok) {
         std::ofstream out(to, std::ios::binary | std::ios::trunc);
         std::vector<char> buf(1 << 16);
@@ -252,6 +265,7 @@ bool download(const std::string& url, const std::wstring& headers, const fs::pat
             }
             if (!got) break;
             total += got;
+            if (progress) progress->bytes = i64(total), ++progress->version;  // downloadedBytes
             if (total > 262144000ull) {
                 ok = false;
                 break;
@@ -273,10 +287,11 @@ void startDownloads(State& s, std::vector<Pack*> todo) {
     g.batch = batch;
     const wchar_t* local = _wgetenv(L"LOCALAPPDATA");
     const fs::path cache = fs::path(local ? local : L".") / "minecraftCplusplus" / "downloads";
-    const int count = int(todo.size());
-    showToast(translatable("download.pack.title", {Text("1"), Text(std::to_string(count))}, s.lang()));
+    static int nextToast = 0;
+    batch->toastId = "pack_download_" + std::to_string(++nextToast);  // a SystemToastId per batch
     std::thread([batch, cache, headers = downloadHeaders(s)] {
         for (Batch::Item& it : batch->items) {
+            batch->size = -2, ++batch->count, ++batch->version;  // requestStart
             // DownloadQueue: <cache>/<pack id>/<sha1>; a cached file with the expected hash is not downloaded again.
             const fs::path dir = cache / uuidText(it.id);
             std::error_code ec;
@@ -287,25 +302,56 @@ void startDownloads(State& s, std::vector<Pack*> todo) {
                 continue;
             }
             const fs::path tmp = dir / "download.tmp";
-            if (!download(it.url, headers, tmp)) continue;
+            if (!download(it.url, headers, tmp, batch.get())) {
+                ++batch->fails;  // requestFinished(false)
+                continue;
+            }
             const std::string sha1 = sha1Of(tmp);
             if (!it.hash.empty() && sha1 != it.hash) {
                 LOG("packs: %s has SHA-1 %s, expected %s", it.url.c_str(), sha1.c_str(), it.hash.c_str());
                 fs::remove(tmp, ec);
+                ++batch->fails;
                 continue;
             }
             fs::remove(dir / sha1, ec);
             fs::rename(tmp, dir / sha1, ec);
             it.path = dir / sha1, it.ok = !ec;
+            if (ec) ++batch->fails;
             LOG("packs: downloaded %s (SHA-1 %s)", it.url.c_str(), sha1.c_str());
         }
         batch->done = true;
     }).detach();
 }
 
+// The download toast (SystemToast.addOrUpdate): "Downloading resource pack n/total" with the progress.
+void updateDownloadToast(State& s, Batch& b) {
+    const int version = b.version;
+    if (version == b.seen) return;
+    b.seen = version;
+    const Text title = translatable("download.pack.title", {Text(std::to_string(b.count.load())), Text(std::to_string(b.items.size()))}, s.lang());
+    Text message;
+    const i64 size = b.size, bytes = b.bytes;
+    if (size >= 0) {
+        message = translatable("download.pack.progress.percent", {Text(std::to_string(size > 0 ? bytes * 100 / size : 0))}, s.lang());
+    } else if (size == -1) {  // Unit.humanReadable
+        std::string h;
+        if (bytes < 1024) {
+            h = std::to_string(bytes) + " B";
+        } else {
+            const int exp = int(std::log(double(bytes)) / std::log(1024.0));
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "%.1f %cB", double(bytes) / std::pow(1024.0, exp), "KMGTPE"[exp - 1]);
+            h = buf;
+        }
+        message = translatable("download.pack.progress.bytes", {Text(h)}, s.lang());
+    }
+    showToast(title, message, b.toastId);
+}
+
 // ServerPackManager.onDownload
 void finishDownloads(State& s) {
     std::shared_ptr<Batch> batch = std::move(g.batch);
+    updateDownloadToast(s, *batch);
     int failed = 0;
     for (const Batch::Item& it : batch->items) failed += !it.ok;
     if (failed) {
@@ -316,7 +362,10 @@ void finishDownloads(State& s) {
             p.remove(thisFailed ? kFailedDownload : kDiscarded);
         }
         showToast(translatable("download.pack.failed", {Text(std::to_string(failed)), Text(std::to_string(batch->items.size()))},
-                               s.lang()));
+                               s.lang()),
+                  Text(), batch->toastId);
+    } else {
+        forceHideToast(batch->toastId);  // every pack came: the toast goes
     }
     for (const Batch::Item& it : batch->items) {
         if (!it.ok) continue;
@@ -394,6 +443,7 @@ void reloadIfNeeded(State& s) {
 
 // ServerPackManager.tick
 void tickPacks(State& s) {
+    if (g.batch) updateDownloadToast(s, *g.batch);
     if (g.batch && g.batch->done) finishDownloads(s);
     std::vector<Pack*> todo;
     bool downloading = false;
