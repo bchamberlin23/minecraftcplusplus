@@ -2002,8 +2002,12 @@ bool EntityWorld::spectate(const double eye[3], const double dir[3], double bloc
 bool EntityWorld::attack(int id) {
     if (!client_ || !client_->alive()) return false;
     auto it = entities_.find(id);
-    // The server disconnects clients that attack items, experience orbs or arrows.
-    if (it == entities_.end() || it->second.category == Category::Item || it->second.category == Category::Projectile)
+    // The server disconnects clients that attack items, experience orbs or arrows (fireballs, shulker bullets and
+    // wind charges can be hit: deflected / destroyed).
+    if (it == entities_.end() || it->second.category == Category::Item) return false;
+    if (const TypeInfo* t = it->second.info;
+        !t || t->name == "minecraft:experience_orb" || t->name == "minecraft:arrow" || t->name == "minecraft:spectral_arrow" ||
+        t->name == "minecraft:trident")
         return false;
     net::Writer w;
     w.varInt(id);
