@@ -453,6 +453,9 @@ void optionsInput(UiState& s, const Window::InputEvent& e) {
 void onlineBuild(UiState& s) {
     OptionsList l(s, Text(s.res.translate("options.online.title")), Screen::Options);
     UiState* p = &s;
+    // Friends: only the in-game notifications (the friends list, requests and visibility are Microsoft account settings)
+    l.header(Text(s.res.translate("options.online.friends.header")));
+    l.half(onOffButton(s, "options.inGameNotification", &s.settings.inGameNotification, {}, "options.inGameNotification.tooltip"));
     l.header(Text(s.res.translate("options.online.servers.header")));
     l.big(onOffButton(s, "options.allowServerListing", &s.settings.allowServerListing, [p] { broadcastOptions(*p); },
                       "options.allowServerListing.tooltip"));

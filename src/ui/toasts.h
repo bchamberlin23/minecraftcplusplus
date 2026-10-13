@@ -18,6 +18,8 @@ struct ItemStack;
 // id: SystemToast.addOrUpdate (a toast with the same id shows the new text and starts its time again); none:
 // SystemToast.add (always a new one).
 void showToast(const Text& title, const Text& message = Text(), const std::string& id = {}, double displaySeconds = 5.0);
+// FriendToast (without a face): the "friends/toast_background" panel with the white message, five seconds.
+void showFriendToast(const Text& message);
 // type: AdvancementType (0 task, 1 challenge, 2 goal).
 void showAdvancementToast(const Text& title, int type, const ItemStack& icon);
 // icon: a "toast/<icon>" sprite ("movement_keys", "mouse", "tree", "recipe_book", "wooden_planks"). Returns a handle.

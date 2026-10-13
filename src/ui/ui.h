@@ -90,6 +90,7 @@ struct Settings {
     int mainHand = 1;
     int modelParts = 0x7F;
     bool allowServerListing = true;
+    bool inGameNotification = false;  // Online: friends' toasts while in a world
     bool pauseOnLostFocus = true, advancedItemTooltips = false;
     // The rest of Options (options_data.cpp keeps them in options.txt under the game's keys, with its defaults).
     // Video Settings: quality and preferences

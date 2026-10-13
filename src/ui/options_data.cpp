@@ -86,6 +86,7 @@ const Field kFields[] = {
     {"hideMatchedNames", &S::hideMatchedNames},
     {"reducedDebugInfo", &S::reducedDebugInfo},
     {"debugGuiScale", &S::debugGuiScale, -1, 1000000},
+    {"inGameNotification", &S::inGameNotification},
     {"onlyShowSecureChat", &S::onlyShowSecureChat},
     {"saveChatDrafts", &S::saveChatDrafts},
     {"chatOpacity", &S::chatOpacity, 0.0, 1.0},

@@ -570,14 +570,18 @@ void tick(UiState& s) {
         if (f.cfg.singleplayer && !f.cfg.menu && f.lanOpenPort) fr.setHost(f.lanOpenPort, g.canJoin);
         else fr.setHost(0, false);
     }
+    // RemoteFriendListUpdateHandler: FriendToasts, not in a world unless In-Game Notification is on
+    const bool quiet = !s.fe->cfg.menu && !s.settings.inGameNotification;
     for (const social::FriendEvent& e : fr.takeEvents()) {
         using T = social::FriendEvent::Type;
+        if (quiet) continue;
         switch (e.type) {
-            case T::Online: showToast(Text(e.name + " is online")); break;
-            case T::Request: showToast(Text("Friend Request"), Text(e.name + " wants to be friends")); break;
-            case T::Accepted: showToast(Text("Friend Request Accepted"), Text(e.name + " is now your friend")); break;
+            case T::Online: showFriendToast(Text(e.name + " is online")); break;  // this port's own (no game text)
+            case T::Request: showFriendToast(translatable("gui.friends.toast.request_received.message", {Text(e.name)}, s.lang())); break;
+            case T::Accepted: showFriendToast(translatable("gui.friends.toast.friend_added.message", {Text(e.name)}, s.lang())); break;
             case T::Invited:
-                showToast(Text(e.name + " invited you"), Text(s.fe->cfg.menu ? "Join from the Friends screen" : "Open Friends to join"));
+                showFriendToast(translatable("gui.friends.toast.invite_from_friend.message",
+                                             {Text(e.name), s.keyLabel(s.settings.key(Key::Friends))}, s.lang()));
                 break;
         }
     }

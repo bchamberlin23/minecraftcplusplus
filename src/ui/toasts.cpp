@@ -16,7 +16,7 @@ namespace {
 constexpr double kDisplay = 5.0, kSlide = 0.6;  // display time, ToastInstance slide animation
 constexpr int kSlots = 5;
 
-enum class Kind { System, Advancement, Tutorial, Custom };
+enum class Kind { System, Advancement, Tutorial, Custom, Friend };
 
 struct Toast {
     Kind kind = Kind::System;
@@ -77,10 +77,13 @@ std::vector<Text> tutorialLines(UiState& s, const Toast& t) {
         for (const Text& l : s.font.split(t.message, 126)) lines.push_back(l);
     return lines;
 }
+// FriendToast (no face): the message at 7, split at 160 - 7 - 4, 11 apart
+std::vector<Text> friendLines(UiState& s, const Toast& t) { return s.font.split(t.message, 160 - 7 - 4); }
 int toastHeight(UiState& s, const Toast& t) {
     if (t.kind == Kind::System)
         return 20 + (std::max(1, int(systemLines(s, t.title).size())) - 1) * 12 + std::max(int(systemLines(s, t.message).size()), 1) * 12;
     if (t.kind == Kind::Tutorial) return 7 + std::max(int(tutorialLines(s, t).size()), 2) * 11 + 3;
+    if (t.kind == Kind::Friend) return 7 + std::max(int(friendLines(s, t).size()), 2) * 11 + 3;
     return 32;
 }
 
@@ -135,6 +138,14 @@ void drawTutorial(UiState& s, Canvas& c, Toast& t, float x, float y) {
         const u32 col = t.progress >= t.smoothed ? 0xFF005500 : 0xFF550000;
         c.fill(x + 3, barY, x + float(int(3.0f + 154.0f * t.smoothed)), barY + 1, col);
     }
+}
+
+// FriendToast.extractRenderState
+void drawFriend(UiState& s, Canvas& c, const Toast& t, float x, float y) {
+    blitSprite(c, s.sprites.sprite("friends/toast_background"), x, y, 160, float(toastHeight(s, t)));
+    const std::vector<Text> lines = friendLines(s, t);
+    const int content = std::max(int(lines.size()), 2) * 11, top = 7 + (content - int(lines.size()) * 11) / 2;
+    for (size_t i = 0; i < lines.size(); ++i) s.drawText(c, lines[i], x + 7, y + float(top + int(i) * 11), 0xFFFFFFFF, false);
 }
 
 // --- NowPlayingToast: its own ToastInstance at the top left (MusicManager's song, the Music Toast option) ---------
@@ -240,7 +251,8 @@ void drawToasts(UiState& s, Canvas& c) {
                 if (t.changed) t.lastChanged = vis, t.changed = false;
                 wanted = !t.hideRequested && vis - t.lastChanged < (t.kind == Kind::System ? t.displayTime : kDisplay) * g_displayScale;
                 break;
-            case Kind::Advancement: wanted = vis < kDisplay * g_displayScale; break;
+            case Kind::Advancement:
+            case Kind::Friend: wanted = vis < kDisplay * g_displayScale; break;
             case Kind::Tutorial:
                 if (t.timeToDisplay > 0) {
                     t.progress = t.smoothed = float(std::min(vis / t.timeToDisplay, 1.0));
@@ -296,6 +308,7 @@ void drawToasts(UiState& s, Canvas& c) {
             case Kind::Advancement: drawAdvancement(s, c, t, x, y); break;
             case Kind::Tutorial: drawTutorial(s, c, t, x, y); break;
             case Kind::Custom: t.draw(c, x, y, t.fullyVisibleFor); break;
+            case Kind::Friend: drawFriend(s, c, t, x, y); break;
         }
     }
 }
@@ -327,6 +340,12 @@ void showToast(const Text& title, const Text& message, const std::string& id, do
     }
     Toast t;
     t.title = title, t.message = message, t.id = id, t.displayTime = displaySeconds;
+    g_queue.push_back(std::move(t));
+}
+
+void showFriendToast(const Text& message) {
+    Toast t;
+    t.kind = Kind::Friend, t.message = message;
     g_queue.push_back(std::move(t));
 }
 
