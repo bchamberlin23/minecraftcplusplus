@@ -286,6 +286,13 @@ u16 wireUpdate(const Context& c, u16 s, const int q[3], int dirToNeighbour) {
     return wireConnectionState(c, with(c, wireCrossState(c, s), kName[dirToNeighbour], side), q);
 }
 
+// TripWireBlock.shouldConnectTo: a hook facing back along `dir` (from the wire to it), or more wire
+bool tripwireConnects(const Context& c, u16 id, int dir) {
+    const std::string n = nameOf(c, id);
+    if (n == "minecraft:tripwire_hook") return faceByName(c.reg.property(id, "facing")) == opposite(dir);
+    return n == "minecraft:tripwire";
+}
+
 // StairBlock.getStairsShape of a stair state at p
 std::string_view stairsShape(const Context& c, u16 state, const int p[3]) {
     const int facing = faceByName(c.reg.property(state, "facing"));
@@ -621,6 +628,18 @@ Result placementState(const Context& c, u16 held, const int pos[3], bool replace
             s = with(c, s, kName[d], connect ? "true" : "false");
         }
     }
+    if (n == "minecraft:brown_mushroom_block" || n == "minecraft:red_mushroom_block" || n == "minecraft:mushroom_stem") {
+        for (int d = 0; d < 6; ++d)  // HugeMushroomBlock: a face shows unless the same block is there
+            s = with(c, s, kName[d], nameOf(c, at(c, pos, d)) == n ? "false" : "true");
+    }
+    if (n == "minecraft:chorus_plant") {  // ChorusPlantBlock.getStateWithConnections
+        for (int d = 0; d < 6; ++d) {
+            const std::string nb = nameOf(c, at(c, pos, d));
+            s = with(c, s, kName[d], nb == n || nb == "minecraft:chorus_flower" || (d == kDown && nb == "minecraft:end_stone") ? "true" : "false");
+        }
+    }
+    if (n == "minecraft:tripwire")  // TripWireBlock.shouldConnectTo
+        for (int d = 2; d < 6; ++d) s = with(c, s, kName[d], tripwireConnects(c, at(c, pos, d), d) ? "true" : "false");
     if (!reg.property(s, "waterlogged").empty()) s = with(c, s, "waterlogged", water ? "true" : "false");
     r.state = s;
     return r;
@@ -641,6 +660,14 @@ void neighbourShapes(const Context& c, int x, int y, int z, u16 old, std::vector
             updated = with(c, nb, kName[opposite(d)], connect ? "true" : "false");
         } else if (isWire(nn)) {
             updated = wireUpdate(c, nb, q, opposite(d));
+        } else if (nn == "minecraft:brown_mushroom_block" || nn == "minecraft:red_mushroom_block" || nn == "minecraft:mushroom_stem") {
+            if (selfName == nn) updated = with(c, nb, kName[opposite(d)], "false");  // HugeMushroomBlock.updateShape
+        } else if (nn == "minecraft:chorus_plant") {  // ChorusPlantBlock.updateShape (while it survives)
+            const int toUs = opposite(d);
+            const bool connect = selfName == nn || selfName == "minecraft:chorus_flower" || (toUs == kDown && selfName == "minecraft:end_stone");
+            updated = with(c, nb, kName[toUs], connect ? "true" : "false");
+        } else if (nn == "minecraft:tripwire" && horizontal(d)) {  // TripWireBlock.updateShape
+            updated = with(c, nb, kName[opposite(d)], tripwireConnects(c, self, opposite(d)) ? "true" : "false");
         } else if (isWall(nn) && d != kUp && !reg.property(nb, "up").empty()) {
             // WallBlock.updateShape: sideUpdate (the side facing us) or topUpdate (we are above it)
             bool connected[6] = {};
