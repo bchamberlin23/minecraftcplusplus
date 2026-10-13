@@ -467,7 +467,52 @@ bool scaffoldingTarget(const Context& c, int pos[3], int& face) {
     return false;
 }
 
+namespace {
+Result placementStateImpl(const Context& c, u16 held, const int pos[3], bool replaceClicked);
+
+// BlockItem.canPlace: state.canSurvive for the common families (true for the rest; the server has the last word)
+bool canSurviveHere(const Context& c, u16 state, const int p[3]) {
+    const std::string full = nameOf(c, state);
+    const std::string_view n = std::string_view(full).substr(10);  // without "minecraft:"
+    const u16 below = at(c, p, kDown);
+    const std::string bn = nameOf(c, below);
+    const std::string_view b = std::string_view(bn).size() > 10 ? std::string_view(bn).substr(10) : std::string_view();
+    auto vegetationGround = [&] {  // #supports_vegetation: #substrate_overworld (dirt, mud, moss, grass blocks) and farmland
+        for (std::string_view g : {"dirt", "coarse_dirt", "rooted_dirt", "mud", "muddy_mangrove_roots", "moss_block", "pale_moss_block",
+                                   "grass_block", "podzol", "mycelium", "farmland"})
+            if (b == g) return true;
+        return false;
+    };
+    static constexpr std::string_view kVegetation[] = {
+        "dandelion", "open_eyeblossom", "closed_eyeblossom", "poppy", "blue_orchid", "allium", "azure_bluet", "red_tulip",
+        "orange_tulip", "white_tulip", "pink_tulip", "oxeye_daisy", "cornflower", "lily_of_the_valley", "torchflower",
+        "golden_dandelion", "short_grass", "fern", "sunflower", "lilac", "rose_bush", "peony", "tall_grass", "large_fern",
+        "sweet_berry_bush"};
+    if (n == "wither_rose") return vegetationGround() || b == "netherrack" || b == "soul_sand" || b == "soul_soil";
+    if ((n.ends_with("_sapling") && n != "mangrove_propagule") ||
+        std::find(std::begin(kVegetation), std::end(kVegetation), n) != std::end(kVegetation)) {
+        if (c.reg.property(state, "half") == "upper") return true;  // DoublePlantBlock: the lower half carries it
+        return vegetationGround();
+    }
+    if (n == "wheat" || n == "carrots" || n == "potatoes" || n == "beetroots" || n == "torchflower_crop" || n == "pumpkin_stem" ||
+        n == "melon_stem")
+        return b == "farmland";  // CropBlock / StemBlock (#supports_crops)
+    if (n.ends_with("_carpet")) return below != 0;  // CarpetBlock: not over air
+    if (n.ends_with("rail") || n == "repeater" || n == "comparator") return sturdy(c.reg, below, kUp);  // canSupportRigidBlock
+    if (n.ends_with("_pressure_plate")) return sturdy(c.reg, below, kUp) || supportsCenter(c.reg, below, kUp);
+    if (!c.reg.property(state, "hinge").empty() && c.reg.property(state, "half") == "lower") return sturdy(c.reg, below, kUp);
+    return true;
+}
+}  // namespace
+
 Result placementState(const Context& c, u16 held, const int pos[3], bool replaceClicked) {
+    Result r = placementStateImpl(c, held, pos, replaceClicked);
+    if (r.state && !canSurviveHere(c, r.state, pos)) r = Result{};
+    return r;
+}
+
+namespace {
+Result placementStateImpl(const Context& c, u16 held, const int pos[3], bool replaceClicked) {
     Result r;
     BlockRegistry& reg = c.reg;
     const std::string n = nameOf(c, held);
@@ -782,6 +827,8 @@ Result placementState(const Context& c, u16 held, const int pos[3], bool replace
     r.state = s;
     return r;
 }
+
+}  // namespace
 
 void neighbourShapes(const Context& c, int x, int y, int z, u16 old, std::vector<std::array<int, 4>>& out) {
     BlockRegistry& reg = c.reg;
