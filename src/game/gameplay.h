@@ -85,6 +85,7 @@ private:
     int predictBucket(int hand, const std::string& name);
     void releaseUse();
     ItemRules::Use stackUse(const ui::ItemStack& s);  // the item's use with the stack's component patch
+    void playOwnVoice(const char* sound);
     int equipSlot(const ui::ItemStack& s, bool& allowed, bool* swappable);  // getEquipmentSlotForItem
     float riptideStrength(const ui::ItemStack& s) const;
     bool rainingAt(int x, int y, int z) const;

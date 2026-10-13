@@ -437,10 +437,34 @@ void Gameplay::attach(net::Client& client) {
             if (game_ && id == entityId_) game_->hurt(yaw);
         });
     });
-    client.onPlayPeek("damage_event", [this](net::Reader& r) {  // ClientboundDamageEventPacket: entity id first
+    client.onPlayPeek("damage_event", [this](net::Reader& r) {  // ClientboundDamageEventPacket: entity id, damage type
         const int id = r.varInt();
-        if (r.ok) post([this, id] {
-            if (game_ && id == entityId_) game_->hurt();
+        const int type = r.varInt();
+        if (r.ok) post([this, id, type] {
+            if (!game_ || id != entityId_) return;
+            game_->hurt();
+            // LivingEntity.handleDamageEvent -> Player.getHurtSound: the damage type's effects (DamageEffects), played
+            // here as the server leaves the player out (Player.playSound excepts itself).
+            std::string effects = "hurt";
+            if (client_) {
+                const std::vector<net::Client::RegistryEntry> types = client_->registryEntries("minecraft:damage_type");
+                NbtValue nbt;
+                if (type >= 0 && size_t(type) < types.size() &&
+                    nbtReadNetwork(reinterpret_cast<const u8*>(types[size_t(type)].nbt.data()), types[size_t(type)].nbt.size(), nbt))
+                    if (NbtValue* e = nbt.find("effects"); e && e->type == TagString) effects = e->s;
+            }
+            const char* sound = effects == "drowning"  ? "minecraft:entity.player.hurt_drown"
+                                : effects == "burning" ? "minecraft:entity.player.hurt_on_fire"
+                                : effects == "poking"  ? "minecraft:entity.player.hurt_sweet_berry_bush"
+                                : effects == "freezing" ? "minecraft:entity.player.hurt_freeze"
+                                                        : "minecraft:entity.player.hurt";
+            playOwnVoice(sound);
+        });
+    });
+    client.onPlayPeek("entity_event", [this](net::Reader& r) {  // ours: 3 death (LivingEntity.handleEntityEvent)
+        const int id = r.i32v(), event = r.u8v();
+        if (r.ok && event == 3) post([this, id] {
+            if (game_ && id == entityId_) playOwnVoice("minecraft:entity.player.death");  // Player.getDeathSound
         });
     });
     // Our own synched data: DATA_LIVING_ENTITY_FLAGS (index 8; bit 1 using an item, bit 2 the off hand), in front of
@@ -797,6 +821,16 @@ int Gameplay::componentType(const char* name) {
 // The stack's use as Item.getUseAnimation / getUseDuration, Consumable and UseEffects see it: the item's defaults
 // (component reports and the item classes) with the stack's own patch of consumable, food, blocks_attacks,
 // kinetic_weapon and use_effects.
+// Player.playSound for our own hurt / death: at the player, PLAYERS, volume 1, pitch 1 +- 0.2 (the server excepts us).
+void Gameplay::playOwnVoice(const char* sound) {
+    audio::AudioSystem* a = audio::instance();
+    if (!a || !game_) return;
+    static std::mt19937 rng(0x5EED);
+    std::uniform_real_distribution<float> u(0.0f, 1.0f);
+    const Player& p = game_->player();
+    a->play(sound, audio::Category::Player, p.pos[0], p.pos[1], p.pos[2], 1.0f, (u(rng) - u(rng)) * 0.2f + 1.0f);
+}
+
 ItemRules::Use Gameplay::stackUse(const ui::ItemStack& s) {
     const std::string name = itemName(s.item);
     ItemRules::Use u = rules_.use(name);
