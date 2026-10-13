@@ -6,6 +6,7 @@
 #include "assets/game_reports.h"
 #include "audio/audio.h"
 #include "entity/entities.h"
+#include "entity/item_models.h"
 #include "game/game.h"
 #include "net/client.h"
 #include "net/session.h"
@@ -23,6 +24,7 @@
 #include <psapi.h>
 #include <intrin.h>
 #include <json/json.hpp>
+#include <stb/stb_image_write.h>
 
 #include <algorithm>
 #include <array>
@@ -639,8 +641,49 @@ void drawDebugScreen(UiState& s, Canvas& c) {
 
 // --- the F3 key combinations (after bed_gamemode.cpp's) ---------------------------------------------------------
 
+// TextureManager.dumpAllSheets (F3 + S): each atlas as <id>_<mip>.png in screenshots\debug (the game: under its
+// directory; here the app's own folder); the block textures (a texture array here) laid out on a sheet.
+std::string dumpTextures(UiState& s) {
+    const wchar_t* appdata = _wgetenv(L"APPDATA");
+    const fs::path dir = fs::path(appdata ? appdata : L".") / L"minecraftCplusplus" / L"screenshots" / L"debug";
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    auto write = [&](const char* name, const u8* rgba, int w, int h) {
+        if (rgba && w > 0 && h > 0) stbi_write_png(utf8(dir / name).c_str(), w, h, 4, rgba, w * 4);
+    };
+    if (s.registry) {
+        const std::vector<u8>& layers = s.registry->texturePixels();
+        const int n = int(layers.size() / kTexLayerBytes), cols = 64, rows = (n + cols - 1) / cols;
+        std::vector<u8> sheet(size_t(cols * kTexSize) * size_t(rows * kTexSize) * 4, 0);
+        for (int i = 0; i < n; ++i)
+            for (int y = 0; y < kTexSize; ++y)
+                std::memcpy(&sheet[((size_t((i / cols) * kTexSize + y) * size_t(cols * kTexSize)) + size_t((i % cols) * kTexSize)) * 4],
+                            &layers[size_t(i) * kTexLayerBytes + size_t(y * kTexSize) * 4], size_t(kTexSize) * 4);
+        write("minecraft_textures_atlas_blocks.png_0.png", sheet.data(), cols * kTexSize, rows * kTexSize);
+    }
+    if (s.itemModels) {
+        const auto items = s.itemModels->atlasView(ent::kTexItems), entity = s.itemModels->atlasView(ent::kTexEntity);
+        write("minecraft_textures_atlas_items.png_0.png", items.rgba, items.w, items.h);
+        write("minecraft_textures_atlas_entity.png_0.png", entity.rgba, entity.w, entity.h);
+    }
+    write("minecraft_textures_atlas_gui.png_0.png", s.guiAtlas.data(), s.guiAtlas.width(), s.guiAtlas.height());
+    write("minecraft_textures_atlas_icons.png_0.png", s.iconAtlas.data(), s.iconAtlas.width(), s.iconAtlas.height());
+    return "screenshots/debug";
+}
+
 bool debugScreenKey(UiState& s, const InputEvent& e) {
     auto feedback = [&](const char* key) { debugFeedback(s, key); };
+    if (s.isKey(Key::DebugDumpDynamicTextures, e)) {  // F3 + S
+        Style link;
+        link.underlined = 1;
+        Style prefix = colorStyle(0xFFFF55);
+        prefix.bold = 1;
+        Text t(s.res.translate("debug.prefix"), prefix);
+        t.append(" ");
+        t.append(translatable("debug.dump_dynamic_textures", {Text(dumpTextures(s), link)}, s.lang()));
+        s.addChat(t);
+        return true;
+    }
     if (s.isKey(Key::DebugReloadChunk, e)) {  // F3 + A
         if (s.terrain) s.terrain->rebuildAll();
         feedback("debug.reload_chunks.message");
