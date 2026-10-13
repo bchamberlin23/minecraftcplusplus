@@ -970,6 +970,7 @@ void Ui::setItemModels(ent::ItemModels* models) {
 }
 
 int Ui::ticksFrozen() const { return s_->ticksFrozen; }
+int Ui::spectatorEffectToggles() const { return s_->spectatorEffectToggles; }
 
 const Items& Ui::items() const { return s_->items; }
 

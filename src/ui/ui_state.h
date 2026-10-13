@@ -232,6 +232,7 @@ struct Ui::State {
     int titleTime = 0, titleFadeIn = 10, titleStay = 70, titleFadeOut = 20;
     int actionbarTime = 0;
     bool actionbarAnimated = false;  // Hud.setNowPlaying: the overlay message's colour cycles
+    int spectatorEffectToggles = 0;  // presses of Toggle Spectator Shader Effects (GameRenderer.toggleSpectatorPostEffect)
     int toolHighlightTimer = 0;
     ItemStack lastToolHighlight;
     int lastSelected = -1;

@@ -85,6 +85,8 @@ struct PassContext {
     u32 shadowCascades = 0, shadowMask = 0;
     const float (*shadowMats)[16] = nullptr;
     const float* viewProjNoJitter = nullptr;  // viewProj without the temporal jitter (passes drawn after TAA / upscaling)
+    // Hud stage: the finished scene (the back buffer, R8G8B8A8, in RENDER_TARGET state) for passes that read it.
+    ID3D12Resource* sceneColor = nullptr;
 };
 // One shadow cascade being drawn: depth only (D32, LESS_EQUAL, no depth clip), viewport / DSV bound.
 struct ShadowContext {

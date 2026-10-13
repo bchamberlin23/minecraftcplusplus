@@ -3,6 +3,7 @@
 #include "assets/game_reports.h"
 #include "audio/audio.h"
 #include "audio/tickable_sounds.h"
+#include "render/post_effects.h"
 #include "audio/audio_test.h"
 #include "core/common.h"
 #include "core/jobs.h"
@@ -473,6 +474,7 @@ int wmain(int argc, wchar_t** argv) {
     const bool haveEntities = entityTask.get();
     ent::EntityWorld entities(entityAssets, world, registry, reports);
     ent::EntityRenderer entityRenderer(entities);  // declared before the renderer: destroyed after it
+    PostEffects postEffects;                       // the spectated entity's post effect (likewise)
     // Hands, held / worn items, item frames, paintings, name tags, particles (same lifetime rule).
     ent::Visuals visuals(entities, entityRenderer);
     // Local player gameplay rules and server state (mining speed, effects, attributes, cracks of others).
@@ -607,6 +609,7 @@ int wmain(int argc, wchar_t** argv) {
     }
     if (haveEntities && !renderer.addPass(&entityRenderer, PassStage::World)) LOG("warning: entity rendering unavailable");
     if (haveEntities) renderer.addPass(&entityRenderer.outlinePass(), PassStage::Hud);  // before the UI's Hud pass
+    renderer.addPass(&postEffects, PassStage::Hud);
     if (haveEntities && !renderer.addPass(&blockEntityRenderer, PassStage::World))
         LOG("warning: block entity rendering unavailable");
     if (haveEntities && !visuals.addPasses(renderer)) LOG("warning: hands / items / particles unavailable");
@@ -1092,6 +1095,29 @@ int wmain(int argc, wchar_t** argv) {
         if (session) game.player().waterEvaporates = session->dimension().waterEvaporates;
         if (haveEntities) entities.frame(dt);
         if (haveEntities) entities.viewEntity = game.cameraMode == 0 ? game.cameraEntity : -1;  // set_camera
+        {  // GameRenderer.checkEntityPostEffect: on a camera or perspective change (first person only); the toggle key
+            static int lastCamera = INT_MIN, lastMode = -1, lastToggles = 0;
+            static bool effectActive = false;
+            static PostEffects::Effect effect = PostEffects::None;
+            if (game.cameraEntity != lastCamera || game.cameraMode != lastMode) {
+                lastCamera = game.cameraEntity, lastMode = game.cameraMode;
+                effect = PostEffects::None;
+                const ent::Entity* e = haveEntities && game.cameraMode == 0 && game.cameraEntity >= 0 ? entities.entity(game.cameraEntity) : nullptr;
+                if (e && e->info) {
+                    const std::string& n = e->info->name;
+                    effect = n == "minecraft:creeper" ? PostEffects::Creeper
+                             : n == "minecraft:spider" || n == "minecraft:cave_spider" ? PostEffects::Spider
+                             : n == "minecraft:enderman" ? PostEffects::Invert
+                                                         : PostEffects::None;
+                }
+                effectActive = effect != PostEffects::None;
+            }
+            if (ui.spectatorEffectToggles() != lastToggles) {
+                if ((ui.spectatorEffectToggles() - lastToggles) % 2) effectActive = !effectActive;
+                lastToggles = ui.spectatorEffectToggles();
+            }
+            postEffects.setEffect(session && effectActive ? effect : PostEffects::None);
+        }
         ui.beginFrame(dt);  // UI input first: an open screen takes the game's input
 
         if (opt.bench && opt.fly) {

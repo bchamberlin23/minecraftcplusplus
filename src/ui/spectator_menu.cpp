@@ -209,6 +209,10 @@ void attached(UiState& s) {
 }
 
 bool worldKey(UiState& s, const InputEvent& e) {  // SpectatorGui.onHotbarActionKeyPressed (the Spectator Hotbar key)
+    if (!e.repeat && s.isKey(Key::ToggleSpectatorShaderEffects, e)) {  // Minecraft.handleKeybinds (any game mode)
+        ++s.spectatorEffectToggles;
+        return true;
+    }
     if (!s.spectator() || e.repeat || !s.isKey(Key::SpectatorHotbar, e)) return false;
     g.lastSelection = s.clock;
     if (!g.active) open(s);
