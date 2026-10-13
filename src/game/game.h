@@ -118,6 +118,7 @@ public:
     // Spectators: the hotbar keys (what 0, value the slot), the wheel (1, notches) and the pick block key (2) go to the
     // spectator menu (SpectatorGui) instead; true: taken.
     std::function<bool(int what, int value)> spectatorInput;
+    std::function<bool(int index)> hotbarKey;  // a hotbar key press first goes here (saved hotbars); true: taken
     // Block entities ticking on the client after the player (ClientLevel.tickBlockEntities): potent sulfur geysers.
     std::function<void(Player& p)> blockEntityTick;
     // Minecraft.startAttack for spectators: spectate the entity under the crosshair (or nothing); blockDistance < 0:

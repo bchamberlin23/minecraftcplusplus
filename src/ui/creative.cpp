@@ -9,8 +9,14 @@
 #include "ui/item_ui.h"
 #include "ui/ui_state.h"
 
+#include "world/nbt_dom.h"
+
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <unordered_map>
 
 namespace ui {
@@ -255,19 +261,119 @@ void refreshSearch(UiState& s) {
     g.scroll = 0;
 }
 
+// HotbarManager: the nine saved hotbars in hotbar.nbt next to options.txt (the game's file in its own directory). Its
+// layout: DataVersion, "0".."8" each a list of nine stacks, {} empty; a stack keeps its id and count and, instead of
+// the game's codec form of its components, the network encoding (mcpp_stack) the engine holds stacks in.
+struct Hotbars {
+    bool loaded = false;
+    std::array<std::array<ItemStack, 9>, 9> rows{};
+} hotbars;
+
+std::filesystem::path hotbarPath() {
+    const wchar_t* local = _wgetenv(L"LOCALAPPDATA");
+    return std::filesystem::path(local ? local : L".") / L"minecraftCplusplus" / L"hotbar.nbt";
+}
+
+Hotbars& loadedHotbars(UiState& s) {
+    if (hotbars.loaded) return hotbars;
+    hotbars.loaded = true;
+    std::ifstream in(hotbarPath(), std::ios::binary);
+    const std::vector<u8> data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    NbtValue root;
+    if (data.empty() || !nbtRead(data.data(), data.size(), root) || root.type != TagCompound) return hotbars;
+    for (int h = 0; h < 9; ++h) {
+        const NbtValue* row = root.find(std::to_string(h));
+        if (!row || row->type != TagList) continue;
+        for (size_t i = 0; i < 9 && i < row->items.size(); ++i) {
+            NbtValue item = row->items[i];
+            const NbtValue* id = item.find("id");
+            const NbtValue* count = item.find("count");
+            if (!id || id->type != TagString || s.items.id(id->s) < 0) continue;
+            ItemStack st;
+            if (NbtValue* enc = item.find("mcpp_stack")) {
+                net::Reader r(enc->bytes.data(), enc->bytes.size());
+                if (!s.items.read(r, st) || !r.ok) st = ItemStack{};
+            }
+            if (st.empty()) st = ItemStack{s.items.id(id->s), 1};
+            st.item = s.items.id(id->s);  // by name: the network ids may have moved
+            if (count) st.count = std::max(1, int(count->i));
+            hotbars.rows[size_t(h)][i] = st;
+        }
+    }
+    return hotbars;
+}
+
+void saveHotbars(UiState& s) {
+    NbtValue root = NbtValue::make(TagCompound);
+    NbtValue version = NbtValue::make(TagInt);
+    version.i = 4649;
+    root.set("DataVersion", version);
+    for (int h = 0; h < 9; ++h) {
+        NbtValue row = NbtValue::make(TagList);
+        row.listType = TagCompound;
+        for (const ItemStack& st : hotbars.rows[size_t(h)]) {
+            NbtValue item = NbtValue::make(TagCompound);
+            if (!st.empty()) {
+                NbtValue id = NbtValue::make(TagString), count = NbtValue::make(TagInt), enc = NbtValue::make(TagByteArray);
+                id.s = s.items.name(st.item), count.i = st.count;
+                net::Writer w;
+                s.items.write(w, st, false);
+                enc.bytes = w.buf;
+                item.set("id", id), item.set("count", count), item.set("mcpp_stack", enc);
+            }
+            row.items.push_back(std::move(item));
+        }
+        root.set(std::to_string(h), std::move(row));
+    }
+    std::vector<u8> out;
+    nbtWrite(root, out);
+    std::error_code ec;
+    std::filesystem::create_directories(hotbarPath().parent_path(), ec);
+    std::ofstream(hotbarPath(), std::ios::binary).write(reinterpret_cast<const char*>(out.data()), std::streamsize(out.size()));
+}
+
+bool rowEmpty(const std::array<ItemStack, 9>& row) {
+    return std::all_of(row.begin(), row.end(), [](const ItemStack& st) { return st.empty(); });
+}
+
+// Minecraft.handleKeybinds -> CreativeModeInventoryScreen.handleHotbarLoadOrSave: a hotbar key with the save / load
+// activator held, in creative without a screen.
+bool hotbarLoadOrSave(UiState& s, int index) {
+    if (!s.creative() || s.screen != Screen::None || !s.window) return false;
+    const int saveKey = s.settings.key(Key::SaveToolbarActivator), loadKey = s.settings.key(Key::LoadToolbarActivator);
+    const bool load = loadKey && s.window->keyDown(loadKey), save = saveKey && s.window->keyDown(saveKey);
+    if (!load && !save) return false;
+    Hotbars& hb = loadedHotbars(s);
+    if (load) {
+        for (int i = 0; i < 9; ++i) s.creativeSetSlot(36 + i, hb.rows[size_t(index)][size_t(i)]);
+    } else {
+        for (int i = 0; i < 9; ++i) hb.rows[size_t(index)][size_t(i)] = s.inventory.slots[size_t(36 + i)];
+        s.actionbar = translatable("inventory.hotbarSaved", {s.keyLabel(loadKey), s.keyLabel(s.settings.key(Key(int(Key::Hotbar1) + index)))}, s.lang());
+        s.actionbarTime = 60, s.actionbarAnimated = false;
+        saveHotbars(s);
+    }
+    return true;
+}
+
 void selectTab(UiState& s, int t) {
     const int old = g.selected;
     g.selected = t;
     g.shown.clear();
     if (tab().kind == TabKind::Hotbar) {
-        // No saved hotbars: each row shows a paper on its own column telling how to save one.
+        // The saved hotbars, a row each; an empty one shows a paper on its own column telling how to save it.
+        const Hotbars& hb = loadedHotbars(s);
         for (int h = 0; h < 9; ++h)
             for (int i = 0; i < 9; ++i) {
+                if (!rowEmpty(hb.rows[size_t(h)])) {
+                    g.shown.push_back(hb.rows[size_t(h)][size_t(i)]);
+                    continue;
+                }
                 ItemStack st;
                 if (i == h) {
                     st.item = s.items.id("paper"), st.count = 1;
                     st.hasItemName = true;
-                    st.itemName = translatable("inventory.hotbarInfo", {Text("C"), Text(std::to_string(h + 1))}, s.lang());
+                    st.itemName = translatable("inventory.hotbarInfo",
+                                               {s.keyLabel(s.settings.key(Key::SaveToolbarActivator)), s.keyLabel(s.settings.key(Key(int(Key::Hotbar1) + h)))}, s.lang());
                     st.maxStack = 0;  // creative_slot_lock: cannot be taken
                 }
                 g.shown.push_back(st);
@@ -658,6 +764,11 @@ void input(UiState& s, const InputEvent& e) {
 }
 
 const ScreenRegistrar kScreen({Screen::Creative, build, draw, input, closed});
+
+void hotbarsAttached(UiState& s) {
+    if (s.game) s.game->hotbarKey = [&s](int index) { return hotbarLoadOrSave(s, index); };
+}
+const UiModuleRegistrar kHotbars({.name = "saved_hotbars", .attached = hotbarsAttached});
 }  // namespace
 
 }  // namespace ui
