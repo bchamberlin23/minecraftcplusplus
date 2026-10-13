@@ -405,6 +405,10 @@ void Session::applyBiomes(const BiomesEvent& e) {
 void Session::teleport(const TeleportEvent& e) {
     Player& p = game_->player();
     const float yaw = float(p.yaw * 180.0 / kPi), pitch = float(p.pitch * 180.0 / kPi);
+    if (game_->riding()) {  // handleMovePlayer: a passenger keeps its place, the teleport is only accepted
+        client_.sendAcceptTeleport(e.id, p.pos, yaw, pitch);
+        return;
+    }
     double pos[3];
     for (int a = 0; a < 3; ++a) {
         pos[a] = ((e.relative >> a) & 1 ? p.pos[a] : 0.0) + e.pos[a];
