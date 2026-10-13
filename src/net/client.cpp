@@ -724,7 +724,8 @@ bool Client::handlePlay(const std::string& name, Reader& r, bool& handled) {
         r.u8v();                 // previous game mode
         r.boolean(), r.boolean();  // debug, flat
         if (r.boolean()) r.str(), r.i64v();  // last death location
-        r.varInt(), r.varInt();  // portal cooldown, sea level
+        e.portalCooldown = r.varInt();
+        r.varInt();  // sea level
         if (e.respawn) r.u8v();  // data to keep
         else r.boolean(), r.boolean();  // online mode, enforces secure chat
         if (!r.ok || type < 0 || size_t(type) >= dimensionTypes_.size()) {

@@ -84,6 +84,8 @@ void Ui::State::tickViewEffects(bool eyeWater) {
                 for (int z = int(std::floor(b.min[2] + 1e-5)); z <= int(std::floor(b.max[2] - 1e-5)) && !inPortal; ++z)
                     inPortal = registry->name(world->block(x, y, z)).starts_with("minecraft:nether_portal");
     }
+    // Entity.setAsInsidePortal: on portal cooldown the stay only renews it (Player.getDimensionChangingDelay: 10)
+    if (inPortal && game->player().portalCooldown > 0) game->player().portalCooldown = 10, inPortal = false;
     // Screens not allowed in a portal (Screen.isAllowedInPortal: the non-pause ones but chat and death) close, a
     // container's with closeContainer.
     if (inPortal && (screen == Screen::Inventory || screen == Screen::Container || screen == Screen::Creative ||

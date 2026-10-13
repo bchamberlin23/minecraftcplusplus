@@ -78,11 +78,14 @@ private:
     std::unordered_map<u64, Prediction> predictions_;  // block positions edited locally, awaiting an ack
     std::unordered_map<std::string, int> items_;        // item name -> network id
     int sequence_ = 0, gameMode_ = 0, entityId_ = 0;
+    int portalCooldown_ = 0;  // the login's spawn info, for the player once attached
     bool instabuild_ = false;
     double tickClock_ = 0;
     double serverPos_[3] = {};  // last teleport, or last position over a loaded chunk
     double sentPos_[3] = {};
     float sentRot_[2] = {};
+    int positionReminder_ = 0;  // LocalPlayer.positionReminder
+    bool lastOnGround_ = false, lastHorizontal_ = false;
     bool haveServerPos_ = false, loadedSent_ = false;
     double levelStart_ = 0;
     int sentSlot_ = -1;

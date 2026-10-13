@@ -1147,6 +1147,7 @@ void Player::tick(const Physics& physics, const PlayerInput& rawInput) {
 
     // --- LivingEntity.aiStep ---
     if (noJumpDelay_ > 0) --noJumpDelay_;
+    if (portalCooldown > 0) --portalCooldown;  // Entity.processPortalCooldown
     if (vel[0] * vel[0] + vel[2] * vel[2] < 9.0E-6) vel[0] = vel[2] = 0;  // players: the horizontal speed as a whole
     if (std::abs(vel[1]) < 0.003) vel[1] = 0;
     {  // LocalPlayer.applyInput / modifyInput: 0.98, the use slowdown, the sneaking speed, stretched to the unit square
@@ -1162,8 +1163,8 @@ void Player::tick(const Physics& physics, const PlayerInput& rawInput) {
         }
         xxa_ = input.strafe, zza_ = input.forward;
     }
-    // Jumping: from the ground (or shallow water), else up through water or lava.
-    if (input.jump) {
+    // Jumping: from the ground (or shallow water), else up through water or lava (Player.isAffectedByFluids: not flying).
+    if (input.jump && !flying) {
         const double fluidHeight = inLava ? lavaHeight : waterHeight;
         const bool waterWithHeight = inWater && fluidHeight > 0;
         const double threshold = fluidJumpThreshold();

@@ -143,6 +143,7 @@ public:
     bool foodSprint = true;          // food > 6 (the server's health updates)
     bool mayFly = true;              // Abilities.mayfly (double-tapping jump toggles flight only then)
     bool asleep = false;             // isSleeping (Game::sleeping): no forced crouch under a low ceiling
+    int portalCooldown = 0;          // Entity.portalCooldown (counted down each tick, the spawn info sets it)
     float flyingSpeed = 0.05f;       // Abilities flying / walking speed (the server's player_abilities)
     float walkingSpeed = 0.1f;
     bool noClip = false;             // spectator: flies through blocks

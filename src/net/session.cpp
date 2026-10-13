@@ -62,6 +62,7 @@ bool Session::join(double timeoutSeconds, PlayerStart& start, Dimension& dimensi
                 levelStart_ = j->receivedAt;
                 entityId_ = j->entityId;
                 gameMode_ = j->gameMode;
+                portalCooldown_ = j->portalCooldown;
                 instabuild_ = gameMode_ == 1;
                 continue;
             }
@@ -97,6 +98,7 @@ void Session::attach(Game& game, Terrain& terrain) {
     game.onEdit = [this](const Game::EditAction& a) { onEdit(a); };
     game.player().noClip = gameMode_ == 3;
     game.player().mayFly = gameMode_ == 1 || gameMode_ == 3;  // until the server's abilities arrive
+    game.player().portalCooldown = portalCooldown_;  // handleLogin: setPortalCooldown
     game.onPunch = [this] {
         if (gameMode_ != 3) client_.sendPlay("punch", Writer{});  // spectators do not attack
     };
@@ -205,6 +207,7 @@ void Session::handle(Event& e) {
         if (!j->respawn) entityId_ = j->entityId;
         gameMode_ = j->gameMode;
         game_->player().noClip = gameMode_ == 3;
+        game_->player().portalCooldown = j->portalCooldown;  // handleRespawn: the new player's setPortalCooldown
         instabuild_ = gameMode_ == 1;
         loadedSent_ = false;
         if (dimension_.minY < world_.minSectionY() * 16 || dimension_.minY + dimension_.height > (world_.maxSectionY() + 1) * 16)
@@ -450,25 +453,44 @@ void Session::tick() {
     client_.sendTickEnd();
 }
 
+// LocalPlayer.sendChanges / sendPosition: a passenger reports its rotation every tick; otherwise (while the camera
+// is our own) the position after a move over 2e-4 or every 20 ticks, the rotation when it changed, else the
+// on-ground / horizontal collision flags when those changed.
 void Session::sendPosition() {
     const Player& p = game_->player();
-    // Horizontal collision: the player's box, grown a hair sideways, touches a block.
-    AABB area = p.box();
-    for (int a : {0, 2}) area.min[a] -= 1e-3, area.max[a] += 1e-3;
-    area.min[1] += 1e-3;
-    std::vector<AABB> boxes;
-    physics_.collisionBoxes(area, boxes);
-    const bool horizontal = std::any_of(boxes.begin(), boxes.end(), [&](const AABB& b) { return b.intersects(area); });
-    std::copy(p.pos, p.pos + 3, sentPos_);
-    sentRot_[0] = float(p.yaw * 180.0 / kPi), sentRot_[1] = float(p.pitch * 180.0 / kPi);
-    if (game_->riding()) {  // LocalPlayer.sendChanges: a passenger only reports its rotation (the vehicle moves it)
+    const float yaw = float(p.yaw * 180.0 / kPi), pitch = float(p.pitch * 180.0 / kPi);
+    const u8 flags = u8((p.onGround ? 1 : 0) | (p.horizontalCollision ? 2 : 0));
+    if (game_->riding()) {
         Writer w;
-        w.f32(sentRot_[0]), w.f32(sentRot_[1]);
-        w.u8v(u8((p.onGround ? 1 : 0) | (horizontal ? 2 : 0)));
+        w.f32(yaw), w.f32(pitch), w.u8v(flags);
         client_.sendPlay("move_player_rot", w);
+        sentRot_[0] = yaw, sentRot_[1] = pitch;
         return;
     }
-    client_.sendMove(p.pos, sentRot_[0], sentRot_[1], p.onGround, horizontal);
+    if (game_->cameraEntity >= 0) return;  // isControlledCamera
+    const double dx = p.pos[0] - sentPos_[0], dy = p.pos[1] - sentPos_[1], dz = p.pos[2] - sentPos_[2];
+    ++positionReminder_;
+    const bool move = dx * dx + dy * dy + dz * dz > 2.0E-4 * 2.0E-4 || positionReminder_ >= 20;
+    const bool rot = yaw != sentRot_[0] || pitch != sentRot_[1];
+    if (move && rot) {
+        client_.sendMove(p.pos, yaw, pitch, p.onGround, p.horizontalCollision);
+    } else if (move) {
+        Writer w;
+        for (int a = 0; a < 3; ++a) w.f64(p.pos[a]);
+        w.u8v(flags);
+        client_.sendPlay("move_player_pos", w);
+    } else if (rot) {
+        Writer w;
+        w.f32(yaw), w.f32(pitch), w.u8v(flags);
+        client_.sendPlay("move_player_rot", w);
+    } else if (lastOnGround_ != p.onGround || lastHorizontal_ != p.horizontalCollision) {
+        Writer w;
+        w.u8v(flags);
+        client_.sendPlay("move_player_status_only", w);
+    }
+    if (move) std::copy(p.pos, p.pos + 3, sentPos_), positionReminder_ = 0;
+    if (rot) sentRot_[0] = yaw, sentRot_[1] = pitch;
+    lastOnGround_ = p.onGround, lastHorizontal_ = p.horizontalCollision;
 }
 
 int Session::itemFor(u16 block) const {

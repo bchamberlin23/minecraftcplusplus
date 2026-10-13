@@ -34,6 +34,7 @@ struct Dimension {
 struct JoinEvent {
     bool respawn = false;
     int entityId = 0, gameMode = 0, viewDistance = 0;
+    int portalCooldown = 0;  // CommonPlayerSpawnInfo.portalCooldown
     Dimension dimension;
     double receivedAt = 0;  // time the login/respawn packet was decoded, for destination readiness timing
 };
