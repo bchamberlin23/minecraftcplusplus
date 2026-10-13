@@ -53,6 +53,9 @@ u8 Physics::tagBits(u16 id) const {
 
 void Physics::addBoxes(u16 state, double x, double y, double z, const AABB& area, std::vector<AABB>& out) const {
     const BlockInfo& b = registry_.infos()[state];
+    float off[3];  // BlockState.getOffset (bamboo, pointed dripstone)
+    BlockRegistry::offset(b, i32(std::floor(x)), i32(std::floor(z)), off);
+    x += off[0], y += off[1], z += off[2];
     for (u32 i = 0; i < b.collisionCount; ++i) {
         const Box& s = registry_.box(b.collisionFirst + i);
         const AABB a{{x + s.min[0], y + s.min[1], z + s.min[2]}, {x + s.max[0], y + s.max[1], z + s.max[2]}};
@@ -354,10 +357,13 @@ RayHit Physics::raycast(const double o[3], const double d[3], double maxDistance
     const double test[3] = {o[0] + d[0] * maxDistance * 0.001, o[1] + d[1] * maxDistance * 0.001, o[2] + d[2] * maxDistance * 0.001};
     for (int i = 0; i < 64; ++i) {
         const BlockInfo& b = infos[world_.block(cell[0], cell[1], cell[2])];
+        float off[3];  // the shapes move with BlockState.getOffset (flowers, grass...)
+        BlockRegistry::offset(b, cell[0], cell[2], off);
+        const double at[3] = {cell[0] + off[0], cell[1] + off[1], cell[2] + off[2]};
         for (u32 k = 0; k < b.selectionCount; ++k) {
             const Box& s = registry_.box(b.selectionFirst + k);
             bool inside = true;
-            for (int a = 0; a < 3; ++a) inside = inside && test[a] > cell[a] + s.min[a] && test[a] < cell[a] + s.max[a];
+            for (int a = 0; a < 3; ++a) inside = inside && test[a] > at[a] + s.min[a] && test[a] < at[a] + s.max[a];
             if (inside) {
                 const int axis = std::abs(d[0]) >= std::abs(d[1]) && std::abs(d[0]) >= std::abs(d[2]) ? 0 : std::abs(d[1]) >= std::abs(d[2]) ? 1 : 2;
                 const int toward = d[axis] > 0 ? 1 : 0;  // Direction.getApproximateNearest, then its opposite
@@ -369,7 +375,7 @@ RayHit Physics::raycast(const double o[3], const double d[3], double maxDistance
             int face = -1;
             bool miss = false;
             for (int a = 0; a < 3 && !miss; ++a) {
-                const double lo = cell[a] + s.min[a], hi = cell[a] + s.max[a];
+                const double lo = at[a] + s.min[a], hi = at[a] + s.max[a];
                 if (d[a] == 0) {
                     miss = o[a] < lo || o[a] > hi;
                     continue;

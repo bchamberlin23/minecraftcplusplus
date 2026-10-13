@@ -313,7 +313,7 @@ static void fluidFaces(const u16* ids, const u8* light, const BlockRegistry& reg
 }
 
 void meshGrid(const u16* ids, const u8* light, const BlockRegistry& registry, bool models, bool skirts,
-              SectionMesh& out, const ColumnColors* colors) {
+              SectionMesh& out, const ColumnColors* colors, const i32* origin) {
     const bool smooth = gSmoothLighting.load(std::memory_order_relaxed), cutoutLeaves = gCutoutLeaves.load(std::memory_order_relaxed);
     Scratch& sc = scratch();
     const BlockInfo* infos = registry.infos();
@@ -399,7 +399,9 @@ void meshGrid(const u16* ids, const u8* light, const BlockRegistry& registry, bo
                             (!infos[sc.cube[p + kStrideY]].occludes || !infos[sc.cube[p + off + kStrideY]].occludes))
                             hidden = false;
                         if (!hidden) {
-                            const CubeFace& f = bc.faces[d];
+                            const BlockVariant* bv =
+                                origin && bc.variantCount ? registry.variantAt(c, origin[0] + x, origin[1] + y, origin[2] + z) : nullptr;
+                            const CubeFace& f = bv ? bv->faces[d] : bc.faces[d];
                             const int q = p + off;  // the cell the face looks into
                             const u32 lq = light ? light[q] : kFullSky;
                             u32 ao = 0, sky = 0, block = 0;
@@ -480,11 +482,18 @@ void meshGrid(const u16* ids, const u8* light, const BlockRegistry& registry, bo
                     int p = padIndex(x, y, z);
                     const BlockInfo& b = infos[ids[p]];
                     if (b.kind != KindModel) continue;
-                    for (u32 qi = b.quadFirst; qi < b.quadFirst + b.quadCount; ++qi) {
+                    u32 quadFirst = b.quadFirst, quadCount = b.quadCount;
+                    float offset[3] = {};
+                    if (origin) {
+                        if (const BlockVariant* bv = b.variantCount ? registry.variantAt(ids[p], origin[0] + x, origin[1] + y, origin[2] + z) : nullptr)
+                            quadFirst = bv->quadFirst, quadCount = bv->quadCount;
+                        BlockRegistry::offset(b, origin[0] + x, origin[2] + z, offset);
+                    }
+                    for (u32 qi = quadFirst; qi < quadFirst + quadCount; ++qi) {
                         const ModelQuad& m = registry.modelQuad(qi);
                         if (m.cull >= 0 && infos[ids[p + kDirOffset[m.cull]]].occludes) continue;
                         u16 pos[12], uv[8];
-                        const float base[3] = {float(x), float(y), float(z)};
+                        const float base[3] = {float(x) + offset[0], float(y) + offset[1], float(z) + offset[2]};
                         for (int v = 0; v < 4; ++v) {
                             for (int k = 0; k < 3; ++k)
                                 pos[v * 3 + k] =

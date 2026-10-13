@@ -450,9 +450,12 @@ int Game::useItemOn(int hand) {
     }
     const BlockInfo& b = infos[id];
     const AABB body = player_.box();
+    float off[3];
+    BlockRegistry::offset(b, t[0], t[2], off);
     for (u32 i = 0; i < b.collisionCount; ++i) {  // Level.isUnobstructed: never into the player
         const Box& s = registry_.box(b.collisionFirst + i);
-        const AABB a{{t[0] + s.min[0], t[1] + s.min[1], t[2] + s.min[2]}, {t[0] + s.max[0], t[1] + s.max[1], t[2] + s.max[2]}};
+        const double x = t[0] + off[0], y = t[1] + off[1], z = t[2] + off[2];
+        const AABB a{{x + s.min[0], y + s.min[1], z + s.min[2]}, {x + s.max[0], y + s.max[1], z + s.max[2]}};
         if (a.intersects(body)) return send(kUseFail);
     }
     std::copy(t, t + 3, action.at);
@@ -769,7 +772,9 @@ void Game::buildOverlay() {
             return false;
         };
         std::vector<std::array<float, 6>> edges;
-        const double base[3] = {target_.x - cam.x, target_.y - cam.y, target_.z - cam.z};
+        float off[3];  // BlockState.getOffset moves the shape
+        BlockRegistry::offset(b, target_.x, target_.z, off);
+        const double base[3] = {target_.x - cam.x + off[0], target_.y - cam.y + off[1], target_.z - cam.z + off[2]};
         auto emit = [&](int axis, int a, int bb, int c0, int c1) {
             const int a1 = (axis + 1) % 3, a2 = (axis + 2) % 3;
             std::array<float, 6> e{};

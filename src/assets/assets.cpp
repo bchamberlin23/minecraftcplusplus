@@ -6,6 +6,7 @@
 #include "assets/game_reports.h"
 #include "assets/zip.h"
 #include "core/jobs.h"
+#include "worldgen/rng.h"
 
 #include <json/json.hpp>
 #include <stb/stb_image.h>
@@ -14,6 +15,7 @@
 #include <cmath>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 
 using json = nlohmann::json;
 
@@ -126,7 +128,9 @@ struct Cond {
 
 struct Case {
     std::vector<Cond> any;  // OR; empty = always
-    ModelRef ref;
+    ModelRef ref;           // refs[0]
+    std::vector<ModelRef> refs;  // a weighted list's entries (one for a single model)
+    std::vector<u32> weights;
 };
 
 struct BlockDef {
@@ -429,6 +433,14 @@ struct BlockRegistry::Impl {
         return r;
     }
 
+    void parseRefs(const json& j, Case& c) {
+        for (const json& e : j.is_array() ? j : json::array({j})) {
+            c.refs.push_back(parseRef(e));
+            c.weights.push_back(u32(std::max(1, int(num(member(e, "weight"), 1)))));
+        }
+        c.ref = c.refs.empty() ? ModelRef{} : c.refs[0];
+    }
+
     std::vector<Cond> parseWhen(const json& w) {
         std::vector<Cond> out;
         if (!w.is_object()) return out;
@@ -475,7 +487,7 @@ struct BlockRegistry::Impl {
                     }
                     c.any.push_back(std::move(cond));
                 }
-                c.ref = parseRef(item.value());
+                parseRefs(item.value(), c);
                 d.cases.push_back(std::move(c));
             }
         } else if (const json& parts = member(j, "multipart"); parts.is_array()) {
@@ -483,7 +495,7 @@ struct BlockRegistry::Impl {
             for (const json& part : parts) {
                 Case c;
                 c.any = parseWhen(member(part, "when"));
-                c.ref = parseRef(member(part, "apply"));
+                parseRefs(member(part, "apply"), c);
                 d.cases.push_back(std::move(c));
             }
         }
@@ -577,6 +589,34 @@ BlockRegistry::BlockRegistry() : impl_(std::make_unique<Impl>()) {}
 BlockRegistry::~BlockRegistry() = default;
 
 u32 BlockRegistry::textureCount() const { return impl_->texCount; }
+
+const BlockVariant* BlockRegistry::variantAt(u16 id, i32 x, i32 y, i32 z) const {
+    const BlockInfo& b = blocks_[id];
+    if (b.variantCount < 2) return nullptr;
+    wg::LegacyRandom random(wg::positionSeed(x, y, z));  // ModelBlockRenderer.tesselateBlock: state.getSeed(pos)
+    u32 index = 0;
+    if (b.variantMultipart) {  // MultiPartModel.collectParts: one seed for every part
+        random.setSeed(random.nextLong());
+        index = u32(random.nextInt(b.variantCount));
+    } else {  // WeightedVariants: WeightedList.getRandom
+        i32 total = 0;
+        for (u32 v = 0; v < b.variantCount; ++v) total += i32(variants_[b.variantFirst + v].weight);
+        i32 pick = random.nextInt(total);
+        while (index + 1 < b.variantCount && pick >= i32(variants_[b.variantFirst + index].weight))
+            pick -= i32(variants_[b.variantFirst + index++].weight);
+    }
+    return &variants_[b.variantFirst + index];
+}
+
+void BlockRegistry::offset(const BlockInfo& b, i32 x, i32 z, float out[3]) {
+    out[0] = out[1] = out[2] = 0;
+    if (!b.offsetType) return;
+    const i64 seed = wg::positionSeed(x, 0, z);
+    const double h = b.maxOffsetH;
+    out[0] = float(std::clamp((double(float(seed & 15) / 15.0f) - 0.5) * 0.5, -h, h));
+    out[2] = float(std::clamp((double(float((seed >> 8) & 15) / 15.0f) - 0.5) * 0.5, -h, h));
+    if (b.offsetType == 2) out[1] = float((double(float((seed >> 4) & 15) / 15.0f) - 1.0) * b.maxOffsetV);
+}
 
 u32 fixedTintRgb(u8 tint) {
     static constexpr u32 kFixed[TintRedstone] = {0xFFFFFF, 0x91BD59, 0x77AB2F, 0x80A755, 0x619961,
@@ -1182,16 +1222,27 @@ u16 BlockRegistry::create(std::string_view key) {
     } else if (shortName == "lava") {
         fluidCube("block/lava_still", TintNone, "lava");
     } else if (const BlockDef* d = im.def(shortName)) {
-        std::vector<ModelRef> refs;
+        std::vector<const Case*> matched;
         for (const Case& c : d->cases)
             if (caseMatch(c, props)) {
-                if (c.ref.model >= 0) refs.push_back(c.ref);
+                if (c.ref.model >= 0) matched.push_back(&c);
                 if (!d->multipart) break;
             }
-        if (refs.size() == 1 && isFullCube(im.models[refs[0].model])) {
-            const ModelRef& r = refs[0];
+        // Weighted lists: variant v takes entry v (a multipart's parts share one seed: with power-of-two list sizes,
+        // a part of n entries takes v * n / count, the same pick as its own nextInt(n)).
+        u32 variants = 1;
+        for (const Case* c : matched) variants = std::max(variants, u32(c->refs.size()));
+        auto refsFor = [&](u32 v) {
+            std::vector<ModelRef> refs;
+            for (const Case* c : matched) {
+                const u32 n = u32(c->refs.size());
+                refs.push_back(c->refs[d->multipart ? v * n / variants : std::min(v, n - 1)]);
+            }
+            return refs;
+        };
+        auto isCube = [&](const std::vector<ModelRef>& refs) { return refs.size() == 1 && isFullCube(im.models[refs[0].model]); };
+        auto cubeFaces = [&](const ModelRef& r, CubeFace out[6]) {
             const Element& e = im.models[r.model].elements[0];
-            bi.kind = KindCube;
             u8 layer = LayerOpaque;
             for (int t = 0; t < 6; ++t) {
                 int s = 0;
@@ -1203,15 +1254,12 @@ u16 BlockRegistry::create(std::string_view key) {
                     rot = a == kU[t] ? 0 : a == kV[t] ? 1 : a == -kU[t] ? 2 : 3;
                 }
                 rot = (rot + f.rot) & 3;
-                bi.faces[t] = {u16(f.tex), u8(rot), tintForBlock(shortName, props, f.tintIndex)};
+                out[t] = {u16(f.tex), u8(rot), tintForBlock(shortName, props, f.tintIndex)};
                 layer = std::max(layer, im.texClass[f.tex]);
             }
-            bi.layer = layer;
-            bi.occludes = layer == LayerOpaque;
-            addBox(kFull, true);
-            addBox(kFull, false);
-        } else {
-            u32 first = u32(quads_.size());
+            return layer;
+        };
+        auto bakeQuads = [&](const std::vector<ModelRef>& refs, bool shapes) {
             u8 layer = LayerOpaque;
             const bool solid = !passable(shortName);
             for (const ModelRef& r : refs)
@@ -1223,13 +1271,48 @@ u16 BlockRegistry::create(std::string_view key) {
                             layer = std::max(layer, q.layer);
                         }
                     }
+                    if (!shapes) continue;
                     if (bi.selectionCount < 16) addBox(elementBox(e, r), false);
                     if (solid && !e.rotated && bi.collisionCount < 16) addBox(elementBox(e, r), true);
                 }
+            return layer;
+        };
+        const std::vector<ModelRef> refs = refsFor(0);
+        if (isCube(refs)) {
+            bi.kind = KindCube;
+            bi.layer = cubeFaces(refs[0], bi.faces);
+            bi.occludes = bi.layer == LayerOpaque;
+            addBox(kFull, true);
+            addBox(kFull, false);
+        } else {
+            u32 first = u32(quads_.size());
+            bi.layer = bakeQuads(refs, true);
             bi.quadFirst = first;
             bi.quadCount = u32(quads_.size()) - first;
             bi.kind = bi.quadCount ? KindModel : KindAir;
-            bi.layer = layer;
+        }
+        if (variants > 1 && variants <= 255 && bi.kind != KindAir) {
+            bi.variantFirst = u32(variants_.size());
+            bi.variantCount = u8(variants);
+            bi.variantMultipart = d->multipart;
+            for (u32 v = 0; v < variants; ++v) {
+                BlockVariant bv;
+                bv.weight = d->multipart ? 1 : matched[0]->weights[std::min<size_t>(v, matched[0]->weights.size() - 1)];
+                const std::vector<ModelRef> rv = refsFor(v);
+                if (v == 0) {
+                    std::copy(std::begin(bi.faces), std::end(bi.faces), bv.faces);
+                    bv.quadFirst = bi.quadFirst, bv.quadCount = bi.quadCount;
+                } else if (bi.kind == KindCube && isCube(rv)) {
+                    cubeFaces(rv[0], bv.faces);
+                } else if (bi.kind == KindModel && !isCube(rv)) {
+                    bv.quadFirst = u32(quads_.size());
+                    bakeQuads(rv, false);
+                    bv.quadCount = u32(quads_.size()) - bv.quadFirst;
+                } else {
+                    bv = variants_[bi.variantFirst];  // a different kind of model: keep the first
+                }
+                variants_.push_back(bv);
+            }
         }
     }
     bi.waterlogged = propIs("waterlogged", "true") || shortName == "kelp" || shortName == "kelp_plant" ||
@@ -1247,6 +1330,18 @@ u16 BlockRegistry::create(std::string_view key) {
     }
 
     bi.leaves = shortName.ends_with("_leaves");
+    // Blocks.java .offsetType(...); SpeleothemBlock / SmallDripleafBlock change the limits.
+    static const std::unordered_set<std::string_view> kOffsetXZ = {
+        "mangrove_propagule", "tall_seagrass", "dandelion", "golden_dandelion", "torchflower", "poppy", "blue_orchid", "allium",
+        "azure_bluet", "red_tulip", "orange_tulip", "white_tulip", "pink_tulip", "oxeye_daisy", "cornflower", "wither_rose",
+        "lily_of_the_valley", "sunflower", "lilac", "rose_bush", "peony", "tall_grass", "large_fern", "pitcher_plant",
+        "bamboo_sapling", "bamboo", "warped_roots", "nether_sprouts", "crimson_roots", "pointed_dripstone", "sulfur_spike",
+        "hanging_roots", "open_eyeblossom", "closed_eyeblossom"};
+    static const std::unordered_set<std::string_view> kOffsetXYZ = {"short_grass", "fern", "short_dry_grass", "tall_dry_grass",
+                                                                    "small_dripleaf"};
+    bi.offsetType = kOffsetXZ.contains(shortName) ? 1 : kOffsetXYZ.contains(shortName) ? 2 : 0;
+    if (shortName == "pointed_dripstone" || shortName == "sulfur_spike") bi.maxOffsetH = 0.125f;
+    if (shortName == "small_dripleaf") bi.maxOffsetV = 0.1f;
     blocks_.push_back(bi);
     names_.push_back(std::string(key));
     blockCount_ = blocks_.size();

@@ -475,7 +475,8 @@ void Terrain::workerMain() {
                     if (biomeColors_) gatherColumnColors(world_, *biomeColors_, r.cx, r.cz, colors);
                 }
                 results[i].req = r;
-                meshGrid(padded, light, registry_, true, false, results[i].mesh, biomeColors_ ? &colors : nullptr);
+                const i32 origin[3] = {r.cx * 16, r.sy * 16, r.cz * 16};
+                meshGrid(padded, light, registry_, true, false, results[i].mesh, biomeColors_ ? &colors : nullptr, origin);
             });
             {
                 std::lock_guard lock(mutex_);
@@ -697,7 +698,8 @@ void Terrain::remesh(const std::vector<u64>& sections, bool byPlayer) {
         thread_local ColumnColors colors;
         if (biomeColors_) gatherColumnColors(world_, *biomeColors_, cx, cz, colors);
         SectionMesh mesh;
-        meshGrid(padded, light, registry_, true, false, mesh, biomeColors_ ? &colors : nullptr);
+        const i32 origin[3] = {cx * 16, sy * 16, cz * 16};
+        meshGrid(padded, light, registry_, true, false, mesh, biomeColors_ ? &colors : nullptr, origin);
         state = mesh.empty() ? Renderer::kNoSlot : renderer_.addMesh(mesh, 0, cx * 16, sy * 16, cz * 16);
         sectionSerial_[k] = ++meshSerial_;
         markDirty(it->second);

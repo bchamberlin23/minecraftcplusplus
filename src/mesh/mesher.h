@@ -71,5 +71,6 @@ MeshOptions meshOptions();
 //  models: also emit non-cube block models (full detail only).
 //  skirts: keep horizontal border faces in the surface band so seams between LOD levels never gap.
 //  colors: biome tint colours per padded column (null: the fixed default tints).
+//  origin: the section's world block position (full detail: per-position model variants and offsets).
 void meshGrid(const u16* padded, const u8* light, const BlockRegistry& registry, bool models, bool skirts,
-              SectionMesh& out, const ColumnColors* colors = nullptr);
+              SectionMesh& out, const ColumnColors* colors = nullptr, const i32* origin = nullptr);

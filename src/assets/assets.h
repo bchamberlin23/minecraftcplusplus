@@ -57,6 +57,21 @@ struct BlockInfo {
     u32 collisionFirst = 0, selectionFirst = 0;  // into BlockRegistry::boxes()
     u8 collisionCount = 0, selectionCount = 0;
     u16 icon = 0;  // texture layer used for UI icons
+    // Weighted model lists in the blockstate (grass / stone / sand rotations...): BlockRegistry::variantAt picks one
+    // per position; 0 = a single model (the fields above).
+    u8 variantCount = 0;
+    bool variantMultipart = false;
+    u32 variantFirst = 0;
+    // BlockBehaviour.OffsetType (flowers, grass, bamboo...): 0 none, 1 XZ, 2 XYZ; see BlockRegistry::offset.
+    u8 offsetType = 0;
+    float maxOffsetH = 0.25f, maxOffsetV = 0.2f;
+};
+
+// One entry of a weighted model list (BlockInfo::variantCount).
+struct BlockVariant {
+    CubeFace faces[6];
+    u32 quadFirst = 0, quadCount = 0;
+    u32 weight = 1;
 };
 
 constexpr int kTexSize = 16;
@@ -101,6 +116,10 @@ public:
     size_t blockCount() const { return blockCount_; }
     const ModelQuad& modelQuad(u32 i) const { return quads_[i]; }
     const Box& box(u32 i) const { return boxes_[i]; }
+    // The model variant of state `id` at block (x, y, z), seeded like ModelBlockRenderer (null: a single model).
+    const BlockVariant* variantAt(u16 id, i32 x, i32 y, i32 z) const;
+    // BlockState.getOffset at block (x, z): the model / shape offset in blocks.
+    static void offset(const BlockInfo& b, i32 x, i32 z, float out[3]);
     u16 waterId() const { return waterId_; }
 
     u32 textureCount() const;  // layers, including the extra frames of animated textures
@@ -120,6 +139,7 @@ private:
     std::atomic<size_t> blockCount_{0};
     std::deque<ModelQuad> quads_;    // deque: push_back keeps existing elements in place
     std::deque<Box> boxes_;
+    std::deque<BlockVariant> variants_;
     std::deque<std::string> names_;
     u16 waterId_ = 0;
     const GameReports* reports_ = nullptr;
