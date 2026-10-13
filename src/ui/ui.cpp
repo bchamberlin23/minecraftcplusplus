@@ -474,6 +474,7 @@ void Ui::State::dropSelected(bool all) {
         client->sendPlayerAction(all ? 4 : 5, 0, 0, 0, 0, 0);  // DROP_ALL_ITEMS / DROP_ITEM
     }
     s = all ? ItemStack{} : s.withCount(s.count - 1);
+    if (game->onSwing) game->onSwing(0, 1);  // MultiPlayerGameMode.dropItem: swing(MAIN_HAND, SwingAnimation.DEFAULT)
 }
 
 void Ui::State::swapHands() {
@@ -1341,33 +1342,16 @@ void Ui::beginFrame(double dt) {
         }
         if (std::getenv("MCPP_UI_VERBOSE") && e.type == Window::InputEvent::Key && e.down)
             LOG("ui: key %d, screen %d", e.code, int(s.screen));
-        // KeyboardHandler: the fullscreen key works on every screen (not while a key is being bound).
-        if (s.isKey(Key::Fullscreen, e) && !e.repeat && !s.keyCaptureActive) {
+        // Minecraft.handleGlobalKeyPress: fullscreen and screenshot work on every screen (not while a key is being bound,
+        // nor with the debug modifier held).
+        const int debugModifier = s.settings.key(Key::DebugModifier);
+        const bool debugHeld = debugModifier && s.window->keyDown(debugModifier);
+        if (s.isKey(Key::Fullscreen, e) && !e.repeat && !s.keyCaptureActive && !debugHeld) {
             s.toggleFullscreen();
             continue;
         }
-        // Ctrl+B: the narrator hotkey (not while typing in a text field or binding a key).
-        if (!s.keyCaptureActive && s.screen != Screen::Chat && s.screen != Screen::Language && narrator::hotkey(s, e)) continue;
-        // Minecraft.handleGlobalKeyPress: the friends key (not with F3 held or while a text field has focus).
-        if (s.isKey(Key::Friends, e) && !e.repeat && !s.keyCaptureActive && s.fe->focus < 0 && s.screen != Screen::Chat &&
-            !(s.settings.key(Key::DebugModifier) && s.window->keyDown(s.settings.key(Key::DebugModifier))) && toggleFriendsScreen(s))
-            continue;
-        if (s.screen != Screen::None) {
-            s.screenInput(e);
-            continue;
-        }
-        bool consumed = false;  // modules.h: keys of registered features (player list, advancements...)
-        for (const UiModule& m : uiModules())
-            if (!consumed && m.worldKey) consumed = m.worldKey(s, e);
-        if (consumed) continue;
-        if ((e.type != Window::InputEvent::Key && e.type != Window::InputEvent::Button) || !e.down || e.repeat) continue;
-        // Minecraft.handleKeybinds / KeyboardHandler with the bound keys (Escape always pauses).
-        if (e.type == Window::InputEvent::Key && e.code == VK_ESCAPE) {
-            s.pauseMenuShown = true;
-            s.openScreen(Screen::Pause);
-        } else if (s.isKey(Key::ToggleGui, e)) {
-            s.hudHidden = !s.hudHidden;
-        } else if (s.isKey(Key::Screenshot, e)) {  // %APPDATA%\minecraftCplusplus\screenshots\<date>.png (game: .minecraft)
+        // The screenshot: %APPDATA%\minecraftCplusplus\screenshots\<date>.png (game: .minecraft)
+        if (s.isKey(Key::Screenshot, e) && !e.repeat && !s.keyCaptureActive && !debugHeld) {
             const wchar_t* appdata = _wgetenv(L"APPDATA");
             const fs::path dir = fs::path(appdata ? appdata : L".") / L"minecraftCplusplus" / L"screenshots";
             std::error_code ec;
@@ -1389,16 +1373,45 @@ void Ui::beginFrame(double dt) {
             events->click = "open_file", events->clickValue = utf8(s.shotPath);
             link.events = events;
             s.addChat(translatable("screenshot.success", {Text(name, link)}, s.lang()));
+            continue;
+        }
+        // Ctrl+B: the narrator hotkey (not while typing in a text field or binding a key).
+        if (!s.keyCaptureActive && s.screen != Screen::Chat && s.screen != Screen::Language && narrator::hotkey(s, e)) continue;
+        // Minecraft.handleGlobalKeyPress: the friends key (not with F3 held or while a text field has focus).
+        if (s.isKey(Key::Friends, e) && !e.repeat && !s.keyCaptureActive && s.fe->focus < 0 && s.screen != Screen::Chat &&
+            !debugHeld && toggleFriendsScreen(s))
+            continue;
+        if (s.screen != Screen::None) {
+            // KeyboardHandler.keyPress: what the screen leaves reaches the debug overlay key and the F3 combinations
+            // (Escape stays the screen's; a hotbar key over a slot is the screen's swap; not while binding a key)
+            bool hotbarSwap = false;
+            for (int k = 0; k < 9 && s.hoveredSlot >= 0; ++k) hotbarSwap |= s.isKey(Key(int(Key::Hotbar1) + k), e);
+            const bool capture = s.keyCaptureActive;
+            s.screenInput(e);
+            if (!capture && !hotbarSwap && !(e.type == Window::InputEvent::Key && e.code == VK_ESCAPE)) debugKeys(s, e);
+            continue;
+        }
+        bool consumed = false;  // modules.h: keys of registered features (player list, advancements...)
+        for (const UiModule& m : uiModules())
+            if (!consumed && m.worldKey) consumed = m.worldKey(s, e);
+        if (consumed) continue;
+        if ((e.type != Window::InputEvent::Key && e.type != Window::InputEvent::Button) || !e.down || e.repeat) continue;
+        // Minecraft.handleKeybinds / KeyboardHandler with the bound keys (Escape always pauses).
+        if (e.type == Window::InputEvent::Key && e.code == VK_ESCAPE) {
+            s.pauseMenuShown = true;
+            s.openScreen(Screen::Pause);
+        } else if (s.isKey(Key::ToggleGui, e)) {
+            s.hudHidden = !s.hudHidden;
         } else if (s.isKey(Key::Inventory, e)) {
             s.openScreen(s.creative() ? Screen::Creative : Screen::Inventory);
         } else if (s.isKey(Key::Chat, e) || s.isKey(Key::Command, e)) {
             s.openChat(!s.isKey(Key::Chat, e));
             skipChar = e.type == Window::InputEvent::Key;
-        } else if (s.isKey(Key::Drop, e)) {
+        } else if (s.isKey(Key::Drop, e)) {  // not as a spectator
             if (std::getenv("MCPP_UI_VERBOSE")) LOG("ui: drop slot %d", s.game->selectedSlot());
-            s.dropSelected(s.window->keyDown(VK_CONTROL));
+            if (s.gameMode() != 3) s.dropSelected(s.window->keyDown(VK_CONTROL));
         } else if (s.isKey(Key::SwapOffhand, e)) {
-            s.swapHands();
+            if (s.gameMode() != 3) s.swapHands();
         } else if (s.isKey(Key::SmoothCamera, e)) {  // Options.smoothCamera (not saved)
             s.game->smoothCamera = !s.game->smoothCamera;
         }

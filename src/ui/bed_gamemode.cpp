@@ -184,9 +184,7 @@ void debugFeedback(UiState& s, const char* key) {
     s.addChat(t);
 }
 
-namespace {
-
-bool worldKey(UiState& s, const InputEvent& e) {
+bool debugKeys(UiState& s, const InputEvent& e) {
     if (e.type != InputEvent::Key || e.repeat) return false;
     const int overlay = s.settings.key(Key::DebugOverlay), modifier = s.settings.key(Key::DebugModifier);
     if (overlay && e.code == overlay && overlay != modifier) {  // its own key: toggles on the press
@@ -210,7 +208,7 @@ bool worldKey(UiState& s, const InputEvent& e) {
         s.openScreen(Screen::Pause);
         return true;
     }
-    if (s.isKey(Key::DebugSwitchGameMode, e)) {  // GameModeSwitcherScreen
+    if (s.isKey(Key::DebugSwitchGameMode, e) && s.screen == Screen::None) {  // GameModeSwitcherScreen
         sw.usedAsModifier = true;
         if (s.online() && mayChangeGameMode()) s.openScreen(Screen::GameModeSwitcher);
         else debugFeedback(s, "debug.gamemodes.error");
@@ -254,6 +252,10 @@ bool worldKey(UiState& s, const InputEvent& e) {
     }
     return false;
 }
+
+namespace {
+
+bool worldKey(UiState& s, const InputEvent& e) { return debugKeys(s, e); }
 
 const UiModuleRegistrar kModule({"bed_gamemode", handlers, attached, tick, nullptr, nullptr, worldKey});
 

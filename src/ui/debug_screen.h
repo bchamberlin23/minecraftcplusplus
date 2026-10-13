@@ -11,6 +11,7 @@ namespace ui {
 
 void drawDebugScreen(UiState& s, Canvas& c);  // the overlay (always-on entries without F3 too)
 bool debugEntryEnabled(UiState& s, std::string_view id);  // "chunk_borders", "3d_crosshair", ...
+bool debugKeys(UiState& s, const InputEvent& e);  // bed_gamemode.cpp: the debug overlay key and F3 combinations
 bool debugScreenKey(UiState& s, const InputEvent& e);     // an F3 + key combination (F3 held); true: handled
 bool debugChart(int which);  // 0 fps (+ tps), 1 network, 2 profiler, 3 lightmap: shown
 // The debug renderers' lines (camera-relative; the screen size for line widths).

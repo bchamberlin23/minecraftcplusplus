@@ -710,8 +710,15 @@ bool debugScreenKey(UiState& s, const InputEvent& e) {
         return true;
     }
     if (s.isKey(Key::DebugDebugOptions, e)) {  // F3 + F6
-        if (s.screen == Screen::DebugOptions) s.closeScreen();
-        else if (s.screen == Screen::None) s.openScreen(Screen::DebugOptions);
+        // Minecraft.canInterruptScreen: none open, or one that closes on Escape (then closed first)
+        const bool interrupt = s.screen != Screen::Death && s.screen != Screen::Dialog && s.screen != Screen::ServerPackPrompt &&
+                               s.screen != Screen::CodeOfConduct && s.screen != Screen::Reconfiguring && s.screen != Screen::Loading;
+        if (s.screen == Screen::DebugOptions) {
+            s.closeScreen();
+        } else if (interrupt) {
+            if (s.screen != Screen::None) s.closeScreen();
+            s.openScreen(Screen::DebugOptions);
+        }
         return true;
     }
     auto chartToggle = [&](bool& flag, bool exclusive) {  // DebugScreenOverlay.toggleFpsCharts and friends

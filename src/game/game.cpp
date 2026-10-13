@@ -193,7 +193,7 @@ void Game::frame(Window& w, double dt) {
         player_.pitch = std::clamp(player_.pitch + float(dy), -1.55f, 1.55f);
     }
 
-    if (presses(keys.perspective) % 2) cameraMode = (cameraMode + 1) % 3;
+    for (int n = presses(keys.perspective); n > 0; --n) cameraMode = (cameraMode + 1) % 3;  // CameraType.cycle per click
     const bool esc = w.keyDown(VK_ESCAPE);
     if (handleEscape && esc && !escWasDown_) w.setMouseCaptured(false);
     escWasDown_ = esc;
@@ -318,6 +318,7 @@ void Game::handleClicks(Window& w, double dt, int rightPresses, int middlePresse
     // Held: Minecraft.handleKeybinds repeats startUseItem every 4 ticks (rightClickDelay), not while an item is in use.
     const bool doPlace = (ev.right > 0 || (rightHeld && repeatTimer_ <= 0 && !use.active)) && !dig_.active && !handsBusy;
     if (doPlace) repeatTimer_ = 0.2;  // rightClickDelay 4 (ticks)
+    if (usingItem_) ev.middle = 0;  // Minecraft.handleKeybinds: pick clicks are dropped while an item is in use
     if (ev.middle && spectatorInput && spectatorInput(2, 0)) ev.middle = 0;
     if (ev.middle && onPickEntity && onPickEntity(target_.hit ? blockDistance_ : -1.0)) {
         // Minecraft.pickBlockOrEntity: the entity under the crosshair
