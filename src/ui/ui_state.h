@@ -55,6 +55,7 @@ struct Menu {
 // Where a menu's slots are on screen (relative to the background) and how it is drawn.
 struct SlotPos {
     int x, y;
+    bool highlightable = true;  // Slot.isHighlightable (NonInteractiveResultSlot: false)
 };
 struct Layout {
     std::string background;  // texture below textures/ ("gui/container/inventory")
@@ -330,6 +331,7 @@ struct Ui::State {
     // Container interaction (AbstractContainerScreen).
     int hoveredSlot = -1;
     bool isQuickCrafting = false;
+    float dragMouseX = -1, dragMouseY = -1;  // the mouse at the last frame (mouseDragged: only frames it moved)
     int quickCraftButton = 0, quickCraftType = 0;
     std::vector<int> quickCraftSlots;
     int quickCraftRemaining = 0;

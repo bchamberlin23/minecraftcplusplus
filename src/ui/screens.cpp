@@ -856,15 +856,17 @@ void Ui::State::drawScreen(Canvas& c) {
             const float sx = left + float(l.slots[i].x), sy = top + float(l.slots[i].y);
             if (mouseX >= sx - 1 && mouseX < sx + 17 && mouseY >= sy - 1 && mouseY < sy + 17) hoveredSlot = int(i);
         }
-        // Dragging with a carried stack (mouseDragged): collect slots for quick crafting.
-        if (isQuickCrafting && hoveredSlot >= 0 && !carried.empty() && size_t(hoveredSlot) < m.slots.size() &&
+        // Dragging with a carried stack (mouseDragged, on the frames the mouse moved): collect slots for quick crafting.
+        const bool moved = mouseX != dragMouseX || mouseY != dragMouseY;
+        dragMouseX = mouseX, dragMouseY = mouseY;
+        if (isQuickCrafting && moved && hoveredSlot >= 0 && !carried.empty() && size_t(hoveredSlot) < m.slots.size() &&
             std::find(quickCraftSlots.begin(), quickCraftSlots.end(), hoveredSlot) == quickCraftSlots.end() &&
             (carried.count > int(quickCraftSlots.size()) || quickCraftType == 2)) {
             // AbstractContainerScreen.shouldAddSlotToQuickCraft: canItemQuickReplace, Slot.mayPlace (menu.canDragTo: always)
             Sim sim = makeSim(*this, m, carried, creative());
             if (sim.canQuickReplace(hoveredSlot, carried) && sim.mayPlace(hoveredSlot, carried)) quickCraftSlots.push_back(hoveredSlot);
         }
-        if (hoveredSlot >= 0)
+        if (hoveredSlot >= 0 && l.slots[size_t(hoveredSlot)].highlightable)
             blitSprite(c, sprites.sprite("container/slot_highlight_back"), left + float(l.slots[size_t(hoveredSlot)].x) - 4,
                        top + float(l.slots[size_t(hoveredSlot)].y) - 4, 24, 24);
         // Armor slot placeholders and the offhand shield (InventoryMenu empty slot icons).
@@ -897,7 +899,7 @@ void Ui::State::drawScreen(Canvas& c) {
             drawItem(c, shown, sx, sy, true, countOverride, shown.sameItemSameComponents(m.slots[i]) ? playerSlot : -1);
         }
         recipeBookDrawGhosts(*this, c, m, l, left, top);  // item_ui.h
-        if (hoveredSlot >= 0)
+        if (hoveredSlot >= 0 && l.slots[size_t(hoveredSlot)].highlightable)
             blitSprite(c, sprites.sprite("container/slot_highlight_front"), left + float(l.slots[size_t(hoveredSlot)].x) - 4,
                        top + float(l.slots[size_t(hoveredSlot)].y) - 4, 24, 24);
         // Labels.
@@ -910,7 +912,7 @@ void Ui::State::drawScreen(Canvas& c) {
     recipeBookDraw(*this, c, m);  // item_ui.h: over the menu
     // Carried item, then the tooltip.
     if (!carried.empty()) {
-        std::string remaining;
+        ItemStack shown = carried;  // the remainder as the stack's own count; at 0 nothing (an empty copy)
         bool none = false;
         if (isQuickCrafting && quickCraftSlots.size() > 1) {  // recalculateQuickCraftRemaining
             int left2 = quickCraftType == 2 ? items.maxStack(carried) : carried.count;  // cloning: a full stack, untouched
@@ -923,9 +925,9 @@ void Ui::State::drawScreen(Canvas& c) {
                 }
             }
             none = left2 <= 0;  // copyWithCount(0) is empty: nothing at the cursor
-            remaining = std::to_string(left2);
+            shown = carried.withCount(left2);
         }
-        if (!none) drawItem(c, carried, mouseX - 8, mouseY - 8, true, remaining.empty() ? nullptr : remaining.c_str());
+        if (!none) drawItem(c, shown, mouseX - 8, mouseY - 8, true);
     }
     bundleHovered(*this, m, hoveredSlot);  // item_ui.h: leaving a bundle's slot clears its selection
     // The tooltip (over the carried item only for tooltips shown with an item in hand: bundles).
@@ -1043,10 +1045,11 @@ void Ui::State::screenInput(const Window::InputEvent& e) {
     }
     if (e.type == E::Key && e.down) {
         if (e.code == VK_ESCAPE || isKey(Key::Inventory, e)) return closeScreen();
-        if (carried.empty() && slot >= 0) {  // checkHotbarKeyPressed
-            for (int i = 0; i < 9; ++i)
-                if (isKey(Key(int(Key::Hotbar1) + i), e)) return containerClick(slot, i, Swap);
-            if (isKey(Key::SwapOffhand, e)) return containerClick(slot, 40, Swap);
+        if (carried.empty() && slot >= 0) {  // checkHotbarKeyPressed (then the pick and drop keys all the same)
+            bool swapped = false;
+            if (isKey(Key::SwapOffhand, e)) containerClick(slot, 40, Swap), swapped = true;
+            for (int i = 0; i < 9 && !swapped; ++i)
+                if (isKey(Key(int(Key::Hotbar1) + i), e)) containerClick(slot, i, Swap), swapped = true;
         }
         if (slot >= 0 && size_t(slot) < m.slots.size() && !m.slots[size_t(slot)].empty() && isKey(Key::PickItem, e))
             return containerClick(slot, 0, Clone);  // keyPickItem bound to a key
@@ -1103,7 +1106,12 @@ void Ui::State::screenInput(const Window::InputEvent& e) {
                 // Slot.container identity: the result, the menu's own container (the crafting grid), the player's
                 // inventory (with the armour and offhand slots of the inventory menu)
                 Sim sim = makeSim(*this, m, carried, creative());
-                auto containerOf = [&](int i) { return i == sim.resultSlot ? 0 : (i < l.playerStart && !(m.type < 0 && i >= 5)) ? 1 : 2; };
+                // (furnaces and the merchant keep the result in the same container as the inputs)
+                const bool sharedResult = m.typeName == "furnace" || m.typeName == "blast_furnace" || m.typeName == "smoker" ||
+                                          m.typeName == "merchant";
+                auto containerOf = [&](int i) {
+                    return i == sim.resultSlot && !sharedResult ? 0 : (i < l.playerStart && !(m.type < 0 && i >= 5)) ? 1 : 2;
+                };
                 if (!lastQuickMoved.empty() && sim.canPickAll(slot))
                     for (size_t i = 0; i < m.slots.size(); ++i)
                         if (!m.slots[i].empty() && containerOf(int(i)) == containerOf(slot) && sim.mayPickup(int(i)) &&
@@ -1131,7 +1139,7 @@ void Ui::State::screenInput(const Window::InputEvent& e) {
                 containerClick(-999, (2 & 3) | ((type & 3) << 2), QuickCraft);
             } else if (!carried.empty()) {
                 static const int kButtons[5] = {VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2};
-                if (e.code >= 0 && e.code < 5 && settings.key(Key::PickItem) == kButtons[e.code] && creative()) {  // matchesMouse
+                if (e.code >= 0 && e.code < 5 && settings.key(Key::PickItem) == kButtons[e.code]) {  // keyPickItem.matchesMouse
                     containerClick(slotId, e.code, Clone);
                 } else {
                     const bool quick = slotId != -999 && shift;

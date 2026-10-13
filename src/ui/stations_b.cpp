@@ -521,7 +521,7 @@ void crafterLayout(const Menu&, Layout& l) {
     for (int y = 0; y < 3; ++y)
         for (int x = 0; x < 3; ++x) l.slots.push_back({26 + x * 18, 17 + y * 18});
     standardSlots(l, 8, 84);
-    l.slots.push_back({134, 35});  // the result (NonInteractiveResultSlot), after the player inventory
+    l.slots.push_back({134, 35, false});  // the result (NonInteractiveResultSlot, not highlighted), after the player inventory
     l.titleX = -1;
 }
 bool crafterDisabled(const Menu& m, int slot) { return slot >= 0 && slot < 9 && m.data[size_t(slot)] == 1; }
