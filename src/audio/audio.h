@@ -217,7 +217,6 @@ private:
     int loopEvent_ = -1;
     float moodiness_ = 0;
     std::string biome_;
-    int biomeAge_ = 1000;
 
     std::vector<EntityBound> entitySounds_;
     std::vector<u32> finished_;

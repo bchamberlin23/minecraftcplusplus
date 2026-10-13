@@ -690,9 +690,8 @@ void AudioSystem::tick() {
         return;
     }
 
-    // Environment attributes: the biome's value overrides its dimension's.
-    if (biomeSource_ && ++biomeAge_ >= 20) {
-        biomeAge_ = 0;
+    // Environment attributes (the camera's attribute probe, every tick): the biome's value overrides its dimension's.
+    if (biomeSource_) {
         const std::string_view b = biomeSource_(int(std::floor(camera_.x)), int(std::floor(camera_.y)), int(std::floor(camera_.z)));
         if (b != biome_) biome_ = b;
     }
@@ -713,7 +712,9 @@ void AudioSystem::tick() {
         if (bossMusicDef_.event >= 0) situational = &bossMusicDef_;
     }
     // Minecraft.getMusicVolume: 1 under a screen with its own music (credits), else the environment's music_volume
-    tickMusic(musicEnv, info_.gameMode == 1, underwater, screenMusic_.event >= 0 ? 1.0f : musicVolume, situational);
+    // Minecraft.getSituationalMusic: underwater from the player (LocalPlayer.isUnderWater), not the camera
+    const bool playerUnderwater = gameRef_ && gameRef_->player().underWater();
+    tickMusic(musicEnv, info_.gameMode == 1, playerUnderwater, screenMusic_.event >= 0 ? 1.0f : musicVolume, situational);
     tickAmbient(ambientEnv ? &ambientEnv->ambient : nullptr);
 }
 
@@ -792,9 +793,7 @@ void AudioSystem::tickMusic(const AudioEnvironment* env, bool creative, bool und
     }
     nextSongDelay_ = std::min(nextSongDelay_, music->maxDelay);
     if (!music_ && --nextSongDelay_ <= 0) {  // startPlaying: SimpleSoundInstance.forMusic
-        const double zero[3] = {};
-        musicGain_ = volume;
-        engine_.setMusicFade(musicGain_);
+        const double zero[3] = {};  // the music category keeps its faded gain (fadePlaying moves it while a song plays)
         music_ = play(music->event, Category::Music, zero, 1.0f, 1.0f, rng_.nextLong(), false, true);
         musicEvent_ = music_ ? music->event : -1;
         if (music_ && lastFile_ >= 0) {  // Identifier.toShortLanguageKey with '/' as '.'
