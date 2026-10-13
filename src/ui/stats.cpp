@@ -24,6 +24,9 @@ struct Stats {
     int tab = 0;
     double scroll[3] = {};
     bool draggingBar = false;
+    float dragY = 0;          // the mouse at the last drag step (AbstractScrollArea.mouseDragged moves by dy)
+    int selected[3] = {-1, -1, -1};  // General / Mobs: ObjectSelectionList's selected row
+    bool listFocused = false;        // the outline white (focused) or gray
     int sortColumn = -1, sortOrder = 0;  // items: column 0..5, -1 / 1
     bool returnToPause = true;
 };
@@ -159,9 +162,9 @@ void buildRows(UiState& s) {
     }
 }
 
-void sortItems() {  // ItemRowComparator
+void sortItems() {  // ItemRowComparator (no column: equal, the order stays)
+    if (g.sortColumn < 0) return;
     std::stable_sort(rows[1].begin(), rows[1].end(), [](const Row& a, const Row& b) {
-        if (g.sortColumn < 0) return a.item < b.item;
         const int ka = g.sortColumn == 0 && !a.hasBlock ? -1 : a.cols[g.sortColumn];
         const int kb = g.sortColumn == 0 && !b.hasBlock ? -1 : b.cols[g.sortColumn];
         if (ka == kb) return g.sortOrder * (a.item - b.item) < 0;
@@ -175,13 +178,14 @@ int listBottom(const UiState& s) { return s.guiH() - kFooterH; }
 int contentHeight(int tab) { return (int(rows[tab].size()) + (tab == 1 && !rows[1].empty() ? 1 : 0)) * rowHeight(tab) + 4; }
 int maxScroll(const UiState& s, int tab) { return std::max(0, contentHeight(tab) - (listBottom(s) - listTop())); }
 
-bool tabActive(int t) { return t == 0 ? g.received : g.received && !rows[t].empty(); }
+// General stays active while loading; Items / Mobs need rows (setTabActiveStateAndTooltip)
+bool tabActive(int t) { return t == 0 || (g.received && !rows[t].empty()); }
 
 // MenuTabBar geometry.
 void tabGeometry(int W, int& x0, int& tabW) {
     const int tabsW = std::min(400, W) - 28;
-    tabW = (tabsW / 3) / 2 * 2;
-    x0 = ((W - tabsW) / 2) / 2 * 2;
+    tabW = (tabsW / 3 + 1) / 2 * 2;  // Mth.roundToward: up to even
+    x0 = ((W - tabsW) / 2 + 1) / 2 * 2;
 }
 
 void tile(Canvas& c, const Sprite* s, float x, float y, float w, float h, float tw, float th, u32 color = 0xFFFFFFFF) {
@@ -206,8 +210,9 @@ void handlers(UiState& s, net::Client& client) {
         if (!r.ok) return;
         sp->post([sp, v] {
             for (auto [t, id, val] : v) g.values[{t, id}] = val;
+            const bool first = !g.received;  // onStatsUpdated: only while loading; the lists stay as built
             g.received = true;
-            if (sp->screen == Screen::Stats) {
+            if (sp->screen == Screen::Stats && first) {
                 loadRegistries(*sp);
                 buildRows(*sp);
                 sortItems();
@@ -249,7 +254,7 @@ void draw(UiState& s, Canvas& c) {
     c.gradient(0, 0, float(W), float(H), 0xC0101010, 0xD0101010);
     tile(c, s.sprites.texture("gui/tab_header_background"), 0, 0, float(W), float(kTabBarH), 16, 16);
     tile(c, s.sprites.texture("gui/inworld_menu_background"), 0, float(kTabBarH), float(W), float(H - kTabBarH), 16, 16);
-    tile(c, s.sprites.texture("gui/inworld_footer_separator"), 0, float(H - kFooterH), float(W), 2, 32, 2);
+    tile(c, s.sprites.texture("gui/footer_separator"), 0, float(H - kFooterH), float(W), 2, 32, 2);  // Screen.FOOTER_SEPARATOR
     // Tab bar.
     int x0, tabW;
     tabGeometry(W, x0, tabW);
@@ -279,19 +284,26 @@ void draw(UiState& s, Canvas& c) {
     const int rowLeft = W / 2 - kRowW / 2;
     const int t = g.tab;
     g.scroll[t] = std::clamp(g.scroll[t], 0.0, double(maxScroll(s, t)));
-    if (g.draggingBar && s.leftDown) {
+    if (g.draggingBar && s.leftDown) {  // AbstractScrollArea.mouseDragged
         const int barH = std::clamp(int(float((bottom - top) * (bottom - top)) / float(contentHeight(t))), 32, bottom - top - 8);
-        g.scroll[t] = std::clamp((my - float(top) - float(barH) / 2) / float(std::max(1, bottom - top - barH)) * float(maxScroll(s, t)), 0.f,
-                                 float(maxScroll(s, t)));
+        if (my < float(top)) g.scroll[t] = 0;
+        else if (my > float(bottom)) g.scroll[t] = maxScroll(s, t);
+        else {
+            const double scale = std::max(1.0, double(std::max(1, maxScroll(s, t))) / double(bottom - top - barH));
+            g.scroll[t] = std::clamp(g.scroll[t] + double(my - g.dragY) * scale, 0.0, double(maxScroll(s, t)));
+        }
+        g.dragY = my;
     }
     if (!s.leftDown) g.draggingBar = false;
     Text tooltip;
     bool hasTooltip = false;
+    float tipX = mx, tipY = my;
     c.pushScissor(0, float(top), float(W), float(bottom));
-    if (!g.received) {
-        s.drawCentered(c, Text(s.res.translate("multiplayer.downloadingStats")), float(W / 2), float((top + bottom) / 2 - 9), 0xFFFFFFFF);
+    if (!g.received) {  // LoadingTab: a LoadingDotsWidget (28 high, 30 below it) centred in the tab area
+        const int y = top + int(float(bottom - top - 58) * 0.5f);
+        s.drawCentered(c, Text(s.res.translate("multiplayer.downloadingStats")), float(W / 2), float(y + 2), 0xFFFFFFFF);
         static const char* kDots[4] = {"O o o", "o O o", "o o O", "o O o"};
-        s.drawCentered(c, Text(kDots[int(s.clock * 3) % 4]), float(W / 2), float((top + bottom) / 2 + 3), 0xFF808080);
+        s.drawCentered(c, Text(kDots[i64(s.clock * 1000.0) / 300 % 4]), float(W / 2), float(y + 28 - 9 - 2), 0xFF808080);
     } else {
         int y = top + 2 - int(g.scroll[t]);
         const int rh = rowHeight(t);
@@ -312,6 +324,10 @@ void draw(UiState& s, Canvas& c) {
             if (y + rh < top || y > bottom) continue;
             const Row& r = rows[t][i];
             const int cx = rowLeft + 2, cy = y + 2, ch = rh - 4;
+            if (t != 1 && int(i) == g.selected[t]) {  // AbstractSelectionList.extractSelection
+                c.fill(float(rowLeft), float(y), float(rowLeft + kRowW), float(y + rh), g.listFocused ? 0xFFFFFFFF : 0xFF808080);
+                c.fill(float(rowLeft + 1), float(y + 1), float(rowLeft + kRowW - 1), float(y + rh - 1), 0xFF000000);
+            }
             if (t == 0) {
                 const u32 color = i % 2 == 0 ? 0xFFFFFFFF : 0xFFBABABA;
                 const int ty = cy + ch / 2 - 9 / 2;
@@ -323,8 +339,8 @@ void draw(UiState& s, Canvas& c) {
                 ItemStack st;
                 st.item = r.item, st.count = 1;
                 s.drawItem(c, st, float(cx + 1), float(cy + 1), false);
-                if (mx >= cx && mx < cx + 18 && my >= cy && my < cy + 18 && my >= top && my < bottom)
-                    tooltip = s.items.hoverName(st), hasTooltip = true;
+                if (mx >= cx && mx < cx + 18 && my >= cy && my < cy + 18 && my >= top && my < bottom)  // at the slot's corner
+                    tooltip = s.items.hoverName(st), hasTooltip = true, tipX = float(cx + 18), tipY = float(cy + 18);
                 for (int col = 0; col < 6; ++col) {
                     const Text v = col == 0 && !r.hasBlock ? Text(s.res.translate("stats.none")) : Text(formatDefault(r.cols[col]));
                     s.drawText(c, v, float(cx + 75 + 40 * col - s.font.width(v)), float(cy + ch / 2 - 9 / 2),
@@ -348,11 +364,27 @@ void draw(UiState& s, Canvas& c) {
     }
     s.drawButtons(c);
     if (hoveredTab >= 0 && g.received && !tabActive(hoveredTab)) tooltip = Text(s.res.translate("gui.stats.none_found")), hasTooltip = true;
-    if (hasTooltip) s.drawTooltip(c, {tooltip}, mx, my);
+    if (hasTooltip) s.drawTooltip(c, {tooltip}, tipX, tipY);
 }
 
 void input(UiState& s, const InputEvent& e) {
     if (e.type == InputEvent::Key && e.down && e.code == VK_ESCAPE) return close(s);
+    // TabNavigationBar.keyPressed: Ctrl+Tab cycles (Shift: back), Ctrl+1..3 picks; inactive tabs are skipped
+    if (e.type == InputEvent::Key && e.down && s.window->keyDown(VK_CONTROL)) {
+        int to = -1;
+        if (e.code == VK_TAB) {
+            const int step = s.window->keyDown(VK_SHIFT) ? 2 : 1;
+            for (int k = 1, t = (g.tab + step) % 3; k < 3 && to < 0; ++k, t = (t + step) % 3)
+                if (tabActive(t)) to = t;
+        } else if (e.code >= '1' && e.code <= '3' && tabActive(e.code - '1')) {
+            to = e.code - '1';
+        }
+        if (to >= 0 && to != g.tab) {
+            audio::playUiClick();
+            g.tab = to, g.listFocused = false;
+        }
+        if (e.code == VK_TAB || (e.code >= '1' && e.code <= '3')) return;
+    }
     if (s.buttonsInput(e)) return;
     const int W = s.guiW(), top = listTop(), bottom = listBottom(s);
     if (e.type == InputEvent::Wheel) {
@@ -367,12 +399,17 @@ void input(UiState& s, const InputEvent& e) {
         for (int t = 0; t < 3; ++t)
             if (mx >= float(x0 + t * tabW) && mx < float(x0 + (t + 1) * tabW) && tabActive(t) && t != g.tab) {
                 audio::playUiClick();
-                g.tab = t;
+                g.tab = t, g.listFocused = false;
                 return;
             }
     const int rowLeft = W / 2 - kRowW / 2, barX = rowLeft + kRowW + 8;
     if (mx >= barX && mx <= barX + 6 && my >= top && my < bottom && maxScroll(s, g.tab) > 0) {
-        g.draggingBar = true;
+        g.draggingBar = true, g.dragY = my;  // updateScrolling: no jump, the drag moves it
+        return;
+    }
+    if (g.tab != 1 && g.received && mx >= rowLeft && mx < rowLeft + kRowW && my >= top && my < bottom) {  // a row: selected
+        const int i = int(std::floor((my - float(top) - 2 + float(g.scroll[g.tab])) / float(rowHeight(g.tab))));
+        if (i >= 0 && i < int(rows[g.tab].size())) g.selected[g.tab] = i, g.listFocused = true;
         return;
     }
     if (g.tab == 1 && !rows[1].empty()) {  // sort buttons in the header row
@@ -401,6 +438,7 @@ void openStatsFromPause(UiState& s) {
     loadRegistries(s);
     g.tab = 0;
     g.received = false;
+    g.selected[0] = g.selected[1] = g.selected[2] = -1, g.listFocused = false;
     g.scroll[0] = g.scroll[1] = g.scroll[2] = 0;
     g.returnToPause = true;
     s.openScreen(Screen::Stats);
