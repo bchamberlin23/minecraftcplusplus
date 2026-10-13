@@ -221,7 +221,7 @@ uint mcppRead16(uint base, uint index) {
 McppVertex mcppPull(uint vid) {
     McppVertex v = mcppDefaultVertex();
     v.vertexId = vid;
-    uint base = (mcppDraw.quadOffset + (vid >> 2)) * 12;
+    uint base = (mcppDraw.quadOffset + (vid >> 2)) * 15;
     uint c = vid & 3;
     float3 p = float3(mcppRead16(base, c * 3), mcppRead16(base, c * 3 + 1), mcppRead16(base, c * 3 + 2)) / 2048.0 - 8.0;
     float2 uv = float2(mcppRead16(base, 12 + c * 2), mcppRead16(base, 13 + c * 2)) / 65535.0;
@@ -250,9 +250,9 @@ McppVertex mcppPull(uint vid) {
     v.tile = float4(tile.xy, 0, 0);  // model UVs stay inside their tile: no wrapping
 
     float3 tint = mcppTint(lit >> 8);
-    v.color = float4(tint, 1);
-    uint light = lit & 0xFF;
-    v.uv1 = float4(float((light & 15) << 4), float((light >> 4) << 4), 0, 1);
+    float ao = float((mcppModel[base + 14] >> (c * 8)) & 0xFF) / 255.0;
+    v.color = mcppAtlas.w > 0.5 ? float4(tint, ao) : float4(tint * ao, 1);
+    v.uv1 = float4(float((mcppModel[base + 13] >> (c * 8)) & 0xFF), float((mcppModel[base + 12] >> (c * 8)) & 0xFF), 0, 1);
     uint4 info = mcppLayerInfo(layer);
     v.entity = float4(float(asint(info.x)), 0, 0, 0);
     float2 d1 = uv1 - uv, d2 = uv2 - uv;

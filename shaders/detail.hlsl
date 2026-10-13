@@ -1,4 +1,4 @@
-// Non-cube block model quads (plants, stairs, fences...): 48 bytes per quad, vertex pulled.
+// Non-cube block model quads (plants, stairs, fences...): 60 bytes per quad (mesher.h), vertex pulled.
 // DetailVS / DetailPS: vanilla look. DetailGbuf* / DetailShadow*: the shader pipeline (see terrain.hlsl).
 #include "common.hlsli"
 #include "shading.hlsli"
@@ -14,16 +14,20 @@ struct ModelVertex {
     float3 rel;
     float2 uv;
     uint meta, lit;
+    float sky, block, ao;  // this corner's smooth light (levels) and ambient occlusion brightness
 };
 
 ModelVertex pullModel(uint vid) {
     ModelVertex v;
-    uint base = (gDraw.quadOffset + (vid >> 2)) * 12;
+    uint base = (gDraw.quadOffset + (vid >> 2)) * 15;
     uint c = vid & 3;
     float3 p = float3(read16(base, c * 3), read16(base, c * 3 + 1), read16(base, c * 3 + 2)) / 2048.0 - 8.0;
     v.uv = float2(read16(base, 12 + c * 2), read16(base, 13 + c * 2)) / 65535.0;
     v.meta = gModel[base + 10];
     v.lit = gModel[base + 11];
+    v.sky = float((gModel[base + 12] >> (c * 8)) & 0xFF) / 16.0;
+    v.block = float((gModel[base + 13] >> (c * 8)) & 0xFF) / 16.0;
+    v.ao = float((gModel[base + 14] >> (c * 8)) & 0xFF) / 255.0;
     int3 origin = gSections[gDraw.sectionIndex].origin.xyz;
     v.rel = float3(origin - gCamBlock.xyz) - gCamFrac.xyz + p;
     return v;
@@ -34,7 +38,7 @@ VSOut DetailVS(uint vid : SV_VertexID) {
     VSOut o;
     o.pos = mul(gViewProj, float4(v.rel, 1));
     o.uvl = float3(v.uv, float(gTextureRemap[v.meta & 0xFFFF]));
-    o.color = tintColor(v.lit >> 8) * (float((v.meta >> 19) & 255) / 255.0) * lightColor(v.lit & 0xFF);
+    o.color = tintColor(v.lit >> 8) * (float((v.meta >> 19) & 255) / 255.0 * v.ao) * lightColorLevels(v.sky, v.block);
     o.fog = fogFactor(v.rel);
     return o;
 }
@@ -81,7 +85,7 @@ DetailGbufVSOut DetailGbufVS(uint vid : SV_VertexID) {
     o.pos = mul(gViewProj, float4(rel, 1));
     o.uvl = float3(v.uv, float(gTextureRemap[layer]));
     o.tint = tintColor(v.lit >> 8);
-    o.light = float3(float((v.lit >> 4) & 15), float(v.lit & 15), 1);
+    o.light = float3(v.sky, v.block, v.ao);
     o.rel = rel;
     o.mat = matClass(m);
     return o;
@@ -101,7 +105,7 @@ GbufTargets DetailGbufPS(DetailGbufVSOut i) {
     uint mat = i.mat > 7 ? 0 : i.mat;
     if (mat == kMatPlant) n = float3(0, 1, 0);
     GbufTargets o;
-    o.albedo = float4(c.rgb * i.tint, float((31u << 3) | mat) / 255.0);  // sRGB values (decoded by the deferred pass)
+    o.albedo = float4(c.rgb * i.tint, float((uint(saturate(i.light.z) * 31.0 + 0.5) << 3) | mat) / 255.0);  // sRGB values
     o.normal = float4(octEncode(n), i.light.x / 15.0, i.light.y / 15.0);
     return o;
 }

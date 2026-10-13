@@ -196,6 +196,49 @@ u8 fluidCode(const BlockRegistry& registry, u16 id) {
 }
 }  // namespace
 
+// ---- BlockModelLighter: smooth lighting of model quads ----------------------------------------------------
+namespace {
+constexpr int kStep[6][3] = {{0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}};
+// SizeInfo: the quad's min / max along a direction's axis (DOWN = minY ... EAST = maxX), then the flipped (1 - v) ones.
+enum { SD, SU, SN, SS, SW, SE, FD, FU, FN, FS, FW, FE };
+struct Adjacency {
+    int corners[4];
+    int weights[4][8];
+};
+constexpr Adjacency kAdjacency[6] = {
+    {{4, 5, 2, 3}, {{FW, SS, FW, FS, SW, FS, SW, SS}, {FW, SN, FW, FN, SW, FN, SW, SN}, {FE, SN, FE, FN, SE, FN, SE, SN}, {FE, SS, FE, FS, SE, FS, SE, SS}}},
+    {{5, 4, 2, 3}, {{SE, SS, SE, FS, FE, FS, FE, SS}, {SE, SN, SE, FN, FE, FN, FE, SN}, {SW, SN, SW, FN, FW, FN, FW, SN}, {SW, SS, SW, FS, FW, FS, FW, SS}}},
+    {{1, 0, 5, 4}, {{SU, FW, SU, SW, FU, SW, FU, FW}, {SU, FE, SU, SE, FU, SE, FU, FE}, {SD, FE, SD, SE, FD, SE, FD, FE}, {SD, FW, SD, SW, FD, SW, FD, FW}}},
+    {{4, 5, 0, 1}, {{SU, FW, FU, FW, FU, SW, SU, SW}, {SD, FW, FD, FW, FD, SW, SD, SW}, {SD, FE, FD, FE, FD, SE, SD, SE}, {SU, FE, FU, FE, FU, SE, SU, SE}}},
+    {{1, 0, 2, 3}, {{SU, SS, SU, FS, FU, FS, FU, SS}, {SU, SN, SU, FN, FU, FN, FU, SN}, {SD, SN, SD, FN, FD, FN, FD, SN}, {SD, SS, SD, FS, FD, FS, FD, SS}}},
+    {{0, 1, 2, 3}, {{FD, SS, FD, FS, SD, FS, SD, SS}, {FD, SN, FD, FN, SD, FN, SD, SN}, {FU, SN, FU, FN, SU, FN, SU, SN}, {FU, SS, FU, FS, SU, FS, SU, SS}}},
+};
+constexpr int kRemap[6][4] = {{0, 1, 2, 3}, {2, 3, 0, 1}, {3, 0, 1, 2}, {0, 1, 2, 3}, {3, 0, 1, 2}, {1, 2, 3, 0}};  // AmbientVertexRemap
+// FaceInfo: the corner of the quad's box (x, y, z: 0 min, 1 max) each baked vertex sits at.
+constexpr u8 kFaceInfo[6][4][3] = {{{0, 0, 1}, {0, 0, 0}, {1, 0, 0}, {1, 0, 1}}, {{0, 1, 0}, {0, 1, 1}, {1, 1, 1}, {1, 1, 0}},
+                                   {{1, 1, 0}, {1, 0, 0}, {0, 0, 0}, {0, 1, 0}}, {{0, 1, 1}, {0, 0, 1}, {1, 0, 1}, {1, 1, 1}},
+                                   {{0, 1, 0}, {0, 0, 0}, {0, 0, 1}, {0, 1, 1}}, {{1, 1, 1}, {1, 0, 1}, {1, 0, 0}, {1, 1, 0}}};
+
+// LightCoordsUtil packing: block << 4 | sky << 20 (smooth values: 0..240 in bytes 0 and 2).
+u32 javaLight(u8 cell) { return u32(cell & 15) << 4 | u32(cell >> 4) << 20; }
+u32 smoothBlend(u32 n1, u32 n2, u32 n3, u32 center) {
+    auto sky = [](u32 c) { return (c >> 20) & 15; };
+    auto block = [](u32 c) { return (c >> 4) & 15; };
+    if (sky(center) > 2 || block(center) > 2) {
+        for (u32* n : {&n1, &n2, &n3}) {
+            if (*n == 0) *n = center;
+            else if (sky(*n) == 0) *n |= center & 0xFF0000;
+        }
+    }
+    return ((n1 + n2 + n3 + center) >> 2) & 0xFF00FF;
+}
+u32 smoothWeightedBlend(const u32 c[4], const float w[4]) {
+    float sky = 0, block = 0;
+    for (int i = 0; i < 4; ++i) sky += float((c[i] >> 16) & 0xFF) * w[i], block += float(c[i] & 0xFF) * w[i];
+    return (u32(int(block)) & 0xFF) | (u32(int(sky)) & 0xFF) << 16;
+}
+}  // namespace
+
 // FluidRenderer.tesselate: each fluid cell's faces with the corner heights averaged from its neighbours, the top
 // textured by its flow (FlowingFluid.getFlow), the sides by the flowing texture (the overlay against glass / leaves).
 static void fluidFaces(const u16* ids, const u8* light, const BlockRegistry& registry, const ColumnColors* colors,
@@ -336,6 +379,15 @@ void meshGrid(const u16* ids, const u8* light, const BlockRegistry& registry, bo
                 full = box.min[0] <= 0 && box.min[1] <= 0 && box.min[2] <= 0 && box.max[0] >= 1 && box.max[1] >= 1 &&
                        box.max[2] >= 1;
             }
+            // getShadeBrightness overrides: TransparentBlock (glass, copper grates), barrier, light and structure void
+            // never darken; mud, soul sand and a full snow layer do.
+            const std::string& n = registry.name(ids[i]);
+            const std::string_view s = std::string_view(n).substr(0, n.find('['));
+            if (s == "minecraft:glass" || s.ends_with("_stained_glass") || s == "minecraft:tinted_glass" || s.ends_with("copper_grate") ||
+                s == "minecraft:barrier" || s == "minecraft:light" || s == "minecraft:structure_void")
+                full = false;
+            else if (s == "minecraft:mud" || s == "minecraft:soul_sand" || (s == "minecraft:snow" && registry.property(ids[i], "layers") == "8"))
+                full = true;
             solid = full;
         }
         sc.solid[i] = u8(solid);
@@ -498,9 +550,115 @@ void meshGrid(const u16* ids, const u8* light, const BlockRegistry& registry, bo
                             quadFirst = bv->quadFirst, quadCount = bv->quadCount;
                         BlockRegistry::offset(b, origin[0] + x, origin[2] + z, offset);
                     }
+                    // ModelBlockRenderer.tesselateBlock: smooth lighting unless the block emits light or its model opts
+                    // out; else flat (BlockModelLighter.prepareQuadFlat).
+                    const bool ao = light && smooth && b.emission == 0 && b.modelAo;
+                    const bool fullCollision = sc.solid[p];  // isCollisionShapeFullBlock (approximately: its shade solidity)
+                    auto cellAt = [&](int cx, int cy, int cz) {  // padded cell, clamped to the one-cell border
+                        return padIndex(std::clamp(cx, -1, 16), std::clamp(cy, -1, 16), std::clamp(cz, -1, 16));
+                    };
+                    auto coordsAt = [&](int c, const BlockInfo& state) -> u32 {  // LightCoordsUtil.getLightCoords
+                        if (state.emissiveRendering) return 0xF000F0u;
+                        u32 l = javaLight(light[c]);
+                        if (((l >> 4) & 15) < state.emission) l = (l & 0xFF0000) | (u32(state.emission) << 4);
+                        return l;
+                    };
                     for (u32 qi = quadFirst; qi < quadFirst + quadCount; ++qi) {
                         const ModelQuad& m = registry.modelQuad(qi);
                         if (m.cull >= 0 && infos[ids[p + kDirOffset[m.cull]]].occludes) continue;
+                        u32 cornerLight[4], cornerAo[4] = {255, 255, 255, 255};  // smooth coords per our vertex
+                        if (light) {
+                            // prepareQuadShape
+                            float lo[3] = {32, 32, 32}, hi[3] = {-32, -32, -32};
+                            for (int v = 0; v < 4; ++v)
+                                for (int k = 0; k < 3; ++k) lo[k] = std::min(lo[k], m.pos[v][k]), hi[k] = std::max(hi[k], m.pos[v][k]);
+                            const int dir = m.dir, axis = dir < 2 ? 1 : dir < 4 ? 2 : 0;
+                            const bool partial = dir < 2   ? lo[0] >= 1e-4f || lo[2] >= 1e-4f || hi[0] <= 0.9999f || hi[2] <= 0.9999f
+                                                 : dir < 4 ? lo[0] >= 1e-4f || lo[1] >= 1e-4f || hi[0] <= 0.9999f || hi[1] <= 0.9999f
+                                                           : lo[1] >= 1e-4f || lo[2] >= 1e-4f || hi[1] <= 0.9999f || hi[2] <= 0.9999f;
+                            const bool cubicFace = lo[axis] == hi[axis] && (((dir & 1) ? hi[axis] > 0.9999f : lo[axis] < 1e-4f) || fullCollision);
+                            // Our vertices -> the FaceInfo vertex at the same corner of the quad's box.
+                            int javaIndex[4];
+                            for (int v = 0; v < 4; ++v) {
+                                javaIndex[v] = v;
+                                for (int i = 0; i < 4; ++i) {
+                                    bool match = true;
+                                    for (int k = 0; k < 3 && match; ++k)
+                                        if (k != axis && hi[k] - lo[k] > 1e-5f)
+                                            match = (m.pos[v][k] > (lo[k] + hi[k]) * 0.5f) == (kFaceInfo[dir][i][k] != 0);
+                                    if (match) {
+                                        javaIndex[v] = i;
+                                        break;
+                                    }
+                                }
+                            }
+                            u32 vertLight[4];
+                            float vertAo[4] = {1, 1, 1, 1};
+                            if (ao) {  // prepareQuadAmbientOcclusion
+                                float shape[12];
+                                shape[SW] = lo[0], shape[SE] = hi[0], shape[SD] = lo[1], shape[SU] = hi[1], shape[SN] = lo[2], shape[SS] = hi[2];
+                                for (int k = 0; k < 6; ++k) shape[6 + k] = 1.0f - shape[k];
+                                const int* s = kStep[dir];
+                                const int bx = x + (cubicFace ? s[0] : 0), by = y + (cubicFace ? s[1] : 0), bz = z + (cubicFace ? s[2] : 0);
+                                const Adjacency& info = kAdjacency[dir];
+                                u32 l[4];
+                                float sh[4];
+                                bool permeable[4];
+                                for (int k = 0; k < 4; ++k) {
+                                    const int* c = kStep[info.corners[k]];
+                                    const int ci = cellAt(bx + c[0], by + c[1], bz + c[2]);
+                                    l[k] = coordsAt(ci, infos[ids[ci]]);
+                                    sh[k] = sc.solid[ci] ? 0.2f : 1.0f;
+                                    const int pi = cellAt(bx + c[0] + s[0], by + c[1] + s[1], bz + c[2] + s[2]);
+                                    permeable[k] = !infos[ids[pi]].occludes;  // BlockState.isLightPermeable
+                                }
+                                auto corner = [&](int a, int bb, float& shade, u32& lc) {
+                                    if (!permeable[bb] && !permeable[a]) {
+                                        shade = sh[0], lc = l[0];
+                                        return;
+                                    }
+                                    const int* ca = kStep[info.corners[a]];
+                                    const int* cb = kStep[info.corners[bb]];
+                                    const int ci = cellAt(bx + ca[0] + cb[0], by + ca[1] + cb[1], bz + ca[2] + cb[2]);
+                                    shade = sc.solid[ci] ? 0.2f : 1.0f, lc = coordsAt(ci, infos[ids[ci]]);
+                                };
+                                float s02, s03, s12, s13;
+                                u32 l02, l03, l12, l13;
+                                corner(0, 2, s02, l02), corner(0, 3, s03, l03), corner(1, 2, s12, l12), corner(1, 3, s13, l13);
+                                u32 lightCenter = coordsAt(p, b);
+                                const int next = cellAt(x + s[0], y + s[1], z + s[2]);
+                                if (cubicFace || !infos[ids[next]].occludes) lightCenter = coordsAt(next, infos[ids[next]]);
+                                const float shadeCenter = sc.solid[cubicFace ? cellAt(bx, by, bz) : p] ? 0.2f : 1.0f;
+                                const int* remap = kRemap[dir];
+                                const float t[4] = {(sh[3] + sh[0] + s03 + shadeCenter) * 0.25f, (sh[2] + sh[0] + s02 + shadeCenter) * 0.25f,
+                                                    (sh[2] + sh[1] + s12 + shadeCenter) * 0.25f, (sh[3] + sh[1] + s13 + shadeCenter) * 0.25f};
+                                const u32 tc[4] = {smoothBlend(l[3], l[0], l03, lightCenter), smoothBlend(l[2], l[0], l02, lightCenter),
+                                                   smoothBlend(l[2], l[1], l12, lightCenter), smoothBlend(l[3], l[1], l13, lightCenter)};
+                                for (int k = 0; k < 4; ++k) {
+                                    if (partial) {
+                                        const int* w = info.weights[k];
+                                        const float wt[4] = {shape[w[0]] * shape[w[1]], shape[w[2]] * shape[w[3]], shape[w[4]] * shape[w[5]],
+                                                             shape[w[6]] * shape[w[7]]};
+                                        vertAo[remap[k]] = std::clamp(t[0] * wt[0] + t[1] * wt[1] + t[2] * wt[2] + t[3] * wt[3], 0.0f, 1.0f);
+                                        vertLight[remap[k]] = smoothWeightedBlend(tc, wt);
+                                    } else {
+                                        vertAo[remap[k]] = t[k];
+                                        vertLight[remap[k]] = tc[k];
+                                    }
+                                }
+                            } else {  // prepareQuadFlat: a culled face by the cell it faces, else its own (or the next if on the boundary)
+                                int lc = p;
+                                if (m.cull >= 0) lc = p + kDirOffset[m.cull];
+                                else if (cubicFace) lc = cellAt(x + kStep[dir][0], y + kStep[dir][1], z + kStep[dir][2]);
+                                for (u32& v : vertLight) v = coordsAt(lc, b);
+                            }
+                            for (int v = 0; v < 4; ++v) {
+                                cornerLight[v] = vertLight[javaIndex[v]];
+                                cornerAo[v] = u32(std::clamp(vertAo[javaIndex[v]], 0.0f, 1.0f) * 255.0f + 0.5f);
+                            }
+                        } else {
+                            for (u32& v : cornerLight) v = 0xF000F0u;
+                        }
                         u16 pos[12], uv[8];
                         const float base[3] = {float(x) + offset[0], float(y) + offset[1], float(z) + offset[2]};
                         for (int v = 0; v < 4; ++v) {
@@ -516,10 +674,20 @@ void meshGrid(const u16* ids, const u8* light, const BlockRegistry& registry, bo
                         sc.model.push_back(u32(m.tex) | (u32(m.tint & 7) << 16) | (shade << 19));
                         const int kind = biomeKind(m.tint);
                         const u32 color = colors && kind >= 0 ? colors->index[kind][(z + 1) * 18 + (x + 1)] : m.tint;
-                        u32 lit = light ? light[p] : kFullSky;
-                        if (b.emissiveRendering) lit = 0xFF;
-                        else if (const u32 e = std::max<u32>(b.emission, m.emission); (lit & 15) < e) lit = (lit & 0xF0) | e;
-                        sc.model.push_back(lit | (color << 8));
+                        // The element's light_emission (QuadInstance.getLightCoordsWithEmission: both levels at least it).
+                        u32 skyBytes = 0, blockBytes = 0, aoBytes = 0, skySum = 0, blockSum = 0;
+                        for (int v = 0; v < 4; ++v) {
+                            u32 sky = (cornerLight[v] >> 16) & 0xFF, blk = cornerLight[v] & 0xFF;
+                            if (m.emission) sky = std::max<u32>(sky >> 4, m.emission) << 4, blk = std::max<u32>(blk >> 4, m.emission) << 4;
+                            skyBytes |= std::min<u32>(sky, 240) << (v * 8), blockBytes |= std::min<u32>(blk, 240) << (v * 8);
+                            aoBytes |= cornerAo[v] << (v * 8);
+                            skySum += sky, blockSum += blk;
+                        }
+                        const u32 lit = ((skySum / 4 + 8) / 16) << 4 | std::min<u32>((blockSum / 4 + 8) / 16, 15);
+                        sc.model.push_back(std::min<u32>(lit, 0xFF) | (color << 8));
+                        sc.model.push_back(skyBytes);
+                        sc.model.push_back(blockBytes);
+                        sc.model.push_back(aoBytes);
                     }
                 }
     }

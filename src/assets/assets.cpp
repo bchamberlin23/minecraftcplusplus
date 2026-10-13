@@ -114,6 +114,7 @@ struct Element {
 
 struct Model {
     std::vector<Element> elements;
+    bool ambientOcclusion = true;
 };
 
 struct ModelRef {
@@ -346,6 +347,7 @@ struct BlockRegistry::Impl {
 
         StrMap<std::string> vars;
         const json* elements = nullptr;
+        int ambientOcclusion = -1;  // the nearest model in the parent chain that sets it
         std::string cur = name;
         for (int guard = 0; guard < 32; ++guard) {
             auto it = modelJson.find(cur);
@@ -361,12 +363,15 @@ struct BlockRegistry::Impl {
                         vars.emplace(item.key(), member(v, "sprite").get<std::string>());
                 }
             if (!elements && member(j, "elements").is_array()) elements = &member(j, "elements");
+            if (ambientOcclusion < 0 && member(j, "ambientocclusion").is_boolean())
+                ambientOcclusion = member(j, "ambientocclusion").get<bool>() ? 1 : 0;
             const json& parent = member(j, "parent");
             if (!parent.is_string()) break;
             cur = stripNs(parent.get<std::string>());
         }
 
         Model m;
+        m.ambientOcclusion = ambientOcclusion != 0;
         if (elements)
             for (const json& ej : *elements) {
                 if (!ej.is_object()) continue;
@@ -575,14 +580,12 @@ struct BlockRegistry::Impl {
         q.cull = f.cull >= 0 ? i8(dirIndex(rotVariant(kDir[f.cull], r.x, r.y))) : i8(-1);
         // BlockModelLighter.getDirectionalBrightness: the shade direction override, else the face direction nearest
         // to the quad's normal (FaceBakery.calculateFacing)
-        int shadeFace = 1;
-        if (e.shadeDir >= 0) {
-            shadeFace = dirIndex(rotVariant(kDir[e.shadeDir], r.x, r.y));
-        } else {
-            float best = -1e9f;
-            for (int k = 0; k < 6; ++k)
-                if (const float p = dot(normal, toF(kDir[k])); p > best) best = p, shadeFace = k;
-        }
+        int nearest = 1;
+        float best = -1e9f;
+        for (int k = 0; k < 6; ++k)
+            if (const float p = dot(normal, toF(kDir[k])); p > best) best = p, nearest = k;
+        const int shadeFace = e.shadeDir >= 0 ? dirIndex(rotVariant(kDir[e.shadeDir], r.x, r.y)) : nearest;
+        q.dir = i8(nearest);
         q.shadeFace = i8(shadeFace);
         q.shade = u8(kFaceShade[shadeFace] * 255.0f + 0.5f);
         return true;
@@ -1282,6 +1285,7 @@ u16 BlockRegistry::create(std::string_view key) {
             return layer;
         };
         const std::vector<ModelRef> refs = refsFor(0);
+        if (!refs.empty()) bi.modelAo = im.models[refs[0].model].ambientOcclusion;  // parts.getFirst().useAmbientOcclusion()
         if (isCube(refs)) {
             bi.kind = KindCube;
             bi.layer = cubeFaces(refs[0], bi.faces);

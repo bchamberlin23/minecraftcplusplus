@@ -43,7 +43,7 @@ uint rtKind(uint map, uint geometry) { return (map >> (geometry * 2)) & 3; }
 float3 rtSectionRel(uint slot) { return float3(gSections[slot].origin.xyz - gCamBlock.xyz) - gCamFrac.xyz; }
 
 uint rtCubeIndex(uint slot, uint kind, uint quad) { return gSections[slot].ranges[kind * 6].x + quad; }
-uint rtModelBase(uint slot, uint quad) { return (gSections[slot].ranges[18].x + quad) * 12; }
+uint rtModelBase(uint slot, uint quad) { return (gSections[slot].ranges[18].x + quad) * 15; }
 
 uint rtRead16(uint base, uint index) {
     uint w = gRtModel[base + (index >> 1)];

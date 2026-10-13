@@ -9,7 +9,7 @@ struct ColumnColors;
 // translucent x 6 face directions), then one range of model quads.
 constexpr int kRangeCount = 19;
 constexpr int kModelRange = 18;
-constexpr int kModelQuadWords = 12;  // u32s per model quad on the GPU (48 bytes)
+constexpr int kModelQuadWords = 15;  // u32s per model quad on the GPU (60 bytes)
 
 // Meshing input: a 16^3 grid plus a one-cell border, indexed by padIndex.
 constexpr int kPad = 18;
@@ -39,7 +39,9 @@ public:
 // a + 2b, in 1/240 block) or a side's two top heights (bytes 0 / 1 by a); block = the block's light (sky << 4 |
 // block); tex bits 12..19 = the top's flow angle (255: still, no rotation) instead of the ambient occlusion.
 // Coordinates are in cells; LOD meshes scale cells by 2^level on the GPU.
-// Model quads carry the light of their own cell in word 11 (low 8 bits) and their colour index above it.
+// Model quads: words 0..5 positions, 6..9 UVs, 10 texture | shade << 19, 11 flat light (sky << 4 | block; the
+// corners' average) | colour index << 8, 12 / 13 per corner sky / block light (4.4 fixed point, byte c), 14 per corner
+// ambient occlusion brightness (byte c, 255 = none) (BlockModelLighter).
 constexpr u8 kFullSky = 0xF0;
 struct CubeQuad {
     u32 geo, tex, sky, block;

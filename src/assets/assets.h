@@ -33,6 +33,7 @@ struct ModelQuad {
     u8 tint;
     u8 shade;  // 0..255 directional shade (CardinalLighting.DEFAULT of shadeFace)
     i8 shadeFace;  // the face direction whose cardinal shade it takes (nearest to its normal, or the override)
+    i8 dir;        // the face direction nearest to its normal (BakedQuad.direction)
     i8 cull;   // face direction whose neighbour hides this quad, or -1
     u8 layer;
     u8 emission = 0;  // the element's light_emission (its block light is at least this)
@@ -52,6 +53,7 @@ struct BlockInfo {
     bool replaceable = false;  // placing a block here overwrites it (air, fluids, grass, snow layer...)
     u8 emission = 0;           // block light emitted, 0..15
     bool emissiveRendering = false;  // BlockBehaviour.emissiveRendering: drawn full bright (magma, active sculk sensor)
+    bool modelAo = true;             // the (first) model's "ambientocclusion": smooth lighting applies to it
     u8 opacity = 0;            // light absorbed when passing through (15 = opaque)
     u16 cullGroup = 0;         // same group + non-opaque => shared faces are hidden (glass, water)
     bool leaves = false;       // a LeavesBlock (the See-Through Leaves option)
