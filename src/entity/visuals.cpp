@@ -240,6 +240,7 @@ struct Visuals::Impl {
     // Entity.doWaterSplashEffect's particles and spawnSprintParticle (world lock held).
     void waterAndSprint(const double pos[3], const double vel[3], float width, bool inWater, bool& wasIn, bool sprinting);
     std::unordered_map<int, int> stunnedTicks;  // Ravager.stunnedTick (event 39)
+    std::unordered_map<int, std::pair<u8, int>> pandaState;  // was sneezing, the last EAT_COUNTER seen
     std::unordered_map<int, std::pair<int, u64>> stateStart;  // pose / sniffer state and the age it began (animation times)
     std::unordered_map<int, std::pair<int, int>> breezeState;  // Breeze.jumpTrailStartedTick, soundTick
     // LivingEntity.breakItem: the item's break sound and five shards from the eyes (item: network id).
@@ -2756,6 +2757,31 @@ void Visuals::Impl::mobTick(const Entity& e) {
         } else if (e.snifferState == 4 && e.age % 20 == 0) {  // SEARCHING
             sound("minecraft:entity.sniffer.searching", audio::Category::Neutral, e.pos[0], e.pos[1], e.pos[2], 1.0f, 1.0f);
         }
+    } else if (n == "minecraft:panda") {  // Panda.tick: afterSneeze (when the sneeze ends), addEatingParticles
+        auto& ps = pandaState[e.id];
+        const bool sneezing = (dataInt(e, "DATA_ID_FLAGS") & 2) != 0;
+        const float eyeY = float(e.pos[1]) + h * 0.85f;
+        if (ps.first && !sneezing) {
+            const float by = e.bodyYaw * kDeg;
+            particles->spawn("sneeze", e.pos[0] - (w + 1.0f) * 0.5 * std::sin(by), eyeY - 0.1f, e.pos[2] + (w + 1.0f) * 0.5 * std::cos(by), e.vel[0], 0,
+                             e.vel[2]);
+        }
+        ps.first = sneezing;
+        const int eat = int(dataInt(e, "EAT_COUNTER"));
+        if (eat > 0 && eat != ps.second && eat % 5 == 0 && e.equipment[0] >= 0) {
+            const float xr = -e.pitch * kDeg, yr = -e.yaw * kDeg, br = -e.bodyYaw * kDeg;
+            for (int i = 0; i < 6; ++i) {
+                double vx = (R() - 0.5) * 0.1, vy = R() * 0.1 + 0.1, vz = (R() - 0.5) * 0.1;
+                double t = vy * std::cos(xr) + vz * std::sin(xr);  // Vec3.xRot
+                vz = vz * std::cos(xr) - vy * std::sin(xr), vy = t;
+                t = vx * std::cos(yr) + vz * std::sin(yr);  // Vec3.yRot
+                vz = vz * std::cos(yr) - vx * std::sin(yr), vx = t;
+                const double px = (R() - 0.5) * 0.8, py = -R() * 0.6 - 0.3, pz = 1.0 + (R() - 0.5) * 0.4;
+                particles->itemShard(e.equipment[0], e.pos[0] + px * std::cos(br) + pz * std::sin(br), eyeY + 1.0 + py,
+                                     e.pos[2] + pz * std::cos(br) - px * std::sin(br), vx, vy + 0.05, vz);
+            }
+        }
+        ps.second = eat;
     } else if (n == "minecraft:ravager") {  // Ravager.aiStep: stunEffect while stunned
         auto it = stunnedTicks.find(e.id);
         if (it != stunnedTicks.end()) {
