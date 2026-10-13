@@ -1248,6 +1248,7 @@ void Ui::beginFrame(double dt) {
         if ((e.type != Window::InputEvent::Key && e.type != Window::InputEvent::Button) || !e.down || e.repeat) continue;
         // Minecraft.handleKeybinds / KeyboardHandler with the bound keys (Escape always pauses).
         if (e.type == Window::InputEvent::Key && e.code == VK_ESCAPE) {
+            s.pauseMenuShown = true;
             s.openScreen(Screen::Pause);
         } else if (s.isKey(Key::ToggleGui, e)) {
             s.hudHidden = !s.hudHidden;

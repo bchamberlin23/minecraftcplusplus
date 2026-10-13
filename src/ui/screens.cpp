@@ -525,6 +525,7 @@ void Ui::State::buildButtons() {
     if (screen == Screen::PackOptions) return buildPackButtons();  // render/packs/pack_screen.cpp
     if (frontEndScreen()) return buildFrontEndButtons();     // title.cpp
     if (const ScreenDef* d = screenDef(screen); d && d->build) return d->build(*this);  // modules.h
+    if (screen == Screen::Pause && !pauseMenuShown) return;  // F3 + Esc: no buttons
     if (screen == Screen::Pause) {
         Text dialogLabel;  // dialogs.h: custom options / server links
         std::function<void()> openDialog;
@@ -717,6 +718,10 @@ void Ui::State::drawScreen(Canvas& c) {
             return;
         }
         case Screen::Pause: {
+            if (!pauseMenuShown) {  // PauseScreen without the menu: the "Game Paused" title at the top, no background
+                drawCentered(c, Text(res.translate("menu.paused")), float(W / 2), 10.f, 0xFFFFFFFF);
+                return;
+            }
             c.gradient(0, 0, float(W), float(H), 0xC0101010, 0xD0101010);
             drawCentered(c, Text(res.translate("menu.game")), float(W / 2), 40.f, 0xFFFFFFFF);
             drawButtons(c);

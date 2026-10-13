@@ -196,6 +196,12 @@ bool worldKey(UiState& s, const InputEvent& e) {
         return true;
     }
     if (!e.down || !modifier || !s.window->keyDown(modifier)) return false;
+    if (e.code == VK_ESCAPE) {  // KeyboardHandler: F3 + Esc pauses without the menu (Minecraft.pauseGame(true))
+        sw.usedAsModifier = true;
+        s.pauseMenuShown = false;
+        s.openScreen(Screen::Pause);
+        return true;
+    }
     if (s.isKey(Key::DebugSwitchGameMode, e)) {  // GameModeSwitcherScreen
         sw.usedAsModifier = true;
         if (s.online()) s.openScreen(Screen::GameModeSwitcher);
