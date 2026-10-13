@@ -305,7 +305,7 @@ void drawFields(State& s, Canvas& c) {
             continue;
         }
         c.pushScissor(fl.x + 2, fl.y, fl.x + fl.w - 2, fl.y + fl.h);
-        s.drawTextField(c, fl.text, fl.x + 4, ty, fl.w - 8, 0xFFE0E0E0, focused, true);
+        s.drawTextField(c, fl.text, fl.x + 4, ty, fl.w - 8, fl.textColor, focused, true);
         c.popScissor();
     }
 }

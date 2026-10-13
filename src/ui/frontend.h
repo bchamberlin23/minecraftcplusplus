@@ -67,6 +67,7 @@ struct Field {  // a text box of a front-end screen (EditBox)
     TextField text;
     float x = 0, y = 0, w = 200, h = 20;
     std::string hint;  // shown gray while empty
+    u32 textColor = 0xFFE0E0E0;  // EditBox.setTextColor
 };
 
 struct FrontEndState {

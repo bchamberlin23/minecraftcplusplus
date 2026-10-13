@@ -6,6 +6,7 @@
 // The world itself is made by the official server (net/local_server.h Config::Create, --create-* flags): world preset
 // and Superflat layers through server.properties level-type / generator-settings, Single Biome through a preset
 // override pack, --bonusChest, experiments as initial-enabled-packs, game rules from its console before anyone joins.
+#include "assets/assets.h"
 #include "ui/frontend.h"
 
 #include "assets/asset_source.h"
@@ -63,7 +64,8 @@ enum class Page { Tabs, Flat, FlatPresets, Buffet, Experiments, GameRules, DataP
 
 struct Create {
     Page page = Page::Tabs;
-    bool fresh = false;  // CreateWorldScreen.openFresh from an empty world list: Cancel goes to the title
+    bool fresh = false;
+    bool cheatsSet = false;  // WorldCreationUiState.allowCommands != null (clicked, or a re-created world's)  // CreateWorldScreen.openFresh from an empty world list: Cancel goes to the title
     int tab = 0;
     // World tab
     std::vector<std::string> presets, altPresets;  // world_preset tags normal / extended (Shift)
@@ -79,6 +81,7 @@ struct Create {
     FlatSettings flatEdit;
     std::vector<FlatPreset> flatPresets;
     std::vector<std::string> biomes;  // sorted by name
+    FlatSettings presetBase;          // PresetFlatWorldScreen.settings: what Select's text applies over
     std::string biomeEdit;
     std::vector<Experiment> experimentsEdit;
     std::map<std::string, std::string> rulesEdit;
@@ -160,31 +163,77 @@ std::string flatString(const FlatSettings& f) {
     }
     return s + ";" + f.biome;
 }
-bool parseFlatString(const std::string& text, const FlatSettings& base, FlatSettings& out) {
-    out = base;
+// FlatLevelGeneratorSettings.getDefault: bedrock, 2 dirt, grass on plains with strongholds and villages
+FlatSettings flatDefault() {
+    FlatSettings f;
+    f.layers = {{"minecraft:bedrock", 1}, {"minecraft:dirt", 2}, {"minecraft:grass_block", 1}};
+    f.structures = {"minecraft:strongholds", "minecraft:villages"};
+    return f;
+}
+
+// Identifier.tryParse: [a-z0-9_.-] namespace, [a-z0-9_./-] path (no namespace: minecraft)
+bool parseId(const std::string& text, std::string& out) {
+    const size_t colon = text.find(':');
+    const std::string ns = colon == std::string::npos ? "minecraft" : text.substr(0, colon);
+    const std::string path = colon == std::string::npos ? text : text.substr(colon + 1);
+    auto ok = [](const std::string& v, bool slash) {
+        for (char ch : v)
+            if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '.' || ch == '-' || (slash && ch == '/')))
+                return false;
+        return true;
+    };
+    if (!ok(ns, false) || !ok(path, true)) return false;
+    out = (ns.empty() ? "minecraft" : ns) + ":" + path;
+    return true;
+}
+
+// PresetFlatWorldScreen.fromString: "<height>*<block>,...;<biome>" over `base`; a bad layer or no layers at all
+// give the default settings, an unknown biome plains, layers stop at the world's height (DimensionType.Y_SIZE).
+FlatSettings parseFlatString(State& s, const std::string& text, const FlatSettings& base) {
+    constexpr int kYSize = 4064;
+    FlatSettings out = base;
     out.layers.clear();
     const size_t semi = text.find(';');
     const std::string layers = text.substr(0, semi);
-    for (size_t i = 0; i <= layers.size();) {
-        const size_t comma = std::min(layers.find(',', i), layers.size());
-        std::string part = layers.substr(i, comma - i);
+    std::vector<std::string> parts;  // String.split(","): trailing empty parts dropped
+    for (size_t i = 0;;) {
+        const size_t comma = layers.find(',', i);
+        parts.push_back(layers.substr(i, comma == std::string::npos ? std::string::npos : comma - i));
+        if (comma == std::string::npos) break;
         i = comma + 1;
-        while (!part.empty() && part.front() == ' ') part.erase(part.begin());
-        while (!part.empty() && part.back() == ' ') part.pop_back();
-        if (part.empty()) continue;
-        int height = 1;
-        if (const size_t star = part.find('*'); star != std::string::npos) {
-            height = std::atoi(part.substr(0, star).c_str());
-            part = part.substr(star + 1);
-        }
-        if (height <= 0 || part.empty()) return false;
-        out.layers.push_back({withNs(part), height});
     }
-    int total = 0;
-    for (const FlatLayer& l : out.layers) total += l.height;
-    if (out.layers.empty() || total > 4064) return false;  // DimensionType.Y_SIZE
-    if (semi != std::string::npos && semi + 1 < text.size()) out.biome = withNs(text.substr(semi + 1));
-    return true;
+    while (!parts.empty() && parts.back().empty()) parts.pop_back();
+    int firstFree = 0;
+    for (const std::string& part : parts) {
+        std::string block = part;
+        long long height = 1;
+        if (const size_t star = part.find('*'); star != std::string::npos) {  // Splitter.on('*').limit(2)
+            const std::string n = part.substr(0, star);
+            block = part.substr(star + 1);
+            size_t digits = n.size() > 0 && (n[0] == '-' || n[0] == '+') ? 1 : 0;  // Integer.parseInt
+            if (digits == n.size() || n.size() > 11) return flatDefault();
+            for (size_t k = digits; k < n.size(); ++k)
+                if (n[k] < '0' || n[k] > '9') return flatDefault();
+            height = std::max(0LL, std::stoll(n));
+            if (height > 2147483647LL) return flatDefault();
+        }
+        std::string id;
+        if (!parseId(block, id)) return flatDefault();
+        if (id != "minecraft:air" && (!s.registry || !s.registry->defaultState(id))) return flatDefault();  // unknown block
+        const int actual = int(std::min<long long>(firstFree + height, kYSize)) - firstFree;
+        if (kYSize - firstFree > 0) {
+            out.layers.push_back({id, std::min(actual, kYSize - firstFree)});  // heightLimited
+            firstFree += actual;
+        }
+    }
+    if (out.layers.empty()) return flatDefault();
+    out.biome = "minecraft:plains";
+    if (semi != std::string::npos) {
+        const std::string biome = text.substr(semi + 1, text.find(';', semi + 1) - semi - 1);
+        std::string id;
+        if (parseId(biome, id) && std::find(g.biomes.begin(), g.biomes.end(), id) != g.biomes.end()) out.biome = id;
+    }
+    return out;
 }
 
 // Game rule definitions: the registry, types, defaults, categories and bounds only the game's code has.
@@ -390,12 +439,16 @@ void openPage(State& s, Page p) {
 struct ListArea {
     float top, bottom, left, width;
     int rowH, rows;
-    float y(int i) const { return top + 4 + float(i * rowH) - g.scroll; }
-    float maxScroll() const { return std::max(0.0f, float(rows * rowH + 8) - (bottom - top)); }
+    int firstH = 0;  // the first row's height when it differs (the flat list's header: 13)
+    int h0() const { return firstH ? firstH : rowH; }
+    float y(int i) const { return top + 4 + float(i == 0 ? 0 : h0() + (i - 1) * rowH) - g.scroll; }
+    float maxScroll() const { return std::max(0.0f, float((rows ? h0() + (rows - 1) * rowH : 0) + 8) - (bottom - top)); }
     int at(float mx, float my) const {
         if (my < top || my >= bottom || mx < left || mx >= left + width) return -1;
-        const int i = int(std::floor((my - top - 4 + g.scroll) / float(rowH)));
-        return i >= 0 && i < rows ? i : -1;
+        const float off = my - top - 4 + g.scroll;
+        if (off < 0) return -1;
+        const int i = off < float(h0()) ? 0 : 1 + int(std::floor((off - float(h0())) / float(rowH)));
+        return i < rows ? i : -1;
     }
     bool visible(int i) const { return y(i) >= top && y(i) + float(rowH) <= bottom + 1; }
 };
@@ -448,12 +501,18 @@ int tabTop(State& s, int contentH) {
     return kTabBar + int(float(area - contentH) / 6.0f);  // GridLayoutTab: aligned at 1/6 of the tab area
 }
 
+// WorldCreationUiState.isAllowCommands: debug on, hardcore off, unset follows the mode (creative)
+bool allowCommands(State& s) {
+    if (isDebug()) return true;
+    if (s.fe->createMode == 1) return false;
+    return g.cheatsSet ? s.fe->createCheats : s.fe->createMode == 2;
+}
+
 void cycleWorldType(State& s) {
     const bool alt = s.window->keyDown(VK_SHIFT);  // CycleButton.DEFAULT_ALT_LIST_SELECTOR
     const std::vector<std::string>& list = alt ? g.altPresets : g.presets;
     auto it = std::find(list.begin(), list.end(), g.preset);
     g.preset = it == list.end() || it + 1 == list.end() ? list.front() : *(it + 1);
-    if (isDebug()) s.fe->createCheats = true;
     s.buildButtons();
 }
 
@@ -473,14 +532,15 @@ void buildTabs(State& s) {
         Button& mode = addButton(s, x, float(y0 + 41), 210, Text(), [p] {
             FrontEndState& fe = *p->fe;
             fe.createMode = (fe.createMode + 1) % 3;
-            fe.createCheats = fe.createMode == 2;  // WorldCreationUiState.setGameMode: creative turns commands on
             p->buildButtons();
         }, !isDebug());
         mode.labelFn = [p] {
             if (isDebug()) return cycleLabel(*p, "selectWorld.gameMode", p->res.translate("selectWorld.gameMode.spectator"));
             return cycleLabel(*p, "selectWorld.gameMode", p->res.translate(std::string("selectWorld.gameMode.") + kModes[p->fe->createMode]));
         };
-        mode.tooltip = [p] { return Text(p->res.translate(std::string("selectWorld.gameMode.") + kModes[p->fe->createMode] + ".info")); };
+        mode.tooltip = [p] {  // getGameMode: DEBUG (spectator) in a debug world
+            return Text(p->res.translate(std::string("selectWorld.gameMode.") + (isDebug() ? "spectator" : kModes[p->fe->createMode]) + ".info"));
+        };
         Button& diff = addButton(s, x, float(y0 + 69), 210, Text(), [p] {
             p->fe->createDifficulty = (p->fe->createDifficulty + 1) % 4;
         }, !isHardcore(s));
@@ -492,11 +552,10 @@ void buildTabs(State& s) {
             const int d = isHardcore(*p) ? 3 : p->fe->createDifficulty;
             return Text(p->res.translate(std::string("options.difficulty.") + kDifficulties[d] + ".info"));
         };
-        Button& cheats = addButton(s, x, float(y0 + 97), 210, Text(), [p] { p->fe->createCheats = !p->fe->createCheats; },
-                                   !isHardcore(s) && !isDebug());
-        cheats.labelFn = [p] {
-            return cycleLabel(*p, "selectWorld.allowCommands", onOff(*p, p->fe->createCheats && !isHardcore(*p)));
-        };
+        Button& cheats = addButton(s, x, float(y0 + 97), 210, Text(), [p] {
+            p->fe->createCheats = !allowCommands(*p), g.cheatsSet = true;  // setAllowCommands
+        }, !isHardcore(s) && !isDebug());
+        cheats.labelFn = [p] { return cycleLabel(*p, "selectWorld.allowCommands", onOff(*p, allowCommands(*p))); };
         cheats.tooltip = [p] { return tr(*p, "selectWorld.allowCommands.info"); };
     } else if (g.tab == 1) {
         const int y0 = tabTop(s, 113);
@@ -521,11 +580,11 @@ void buildTabs(State& s) {
         setFields(s, {&f.createSeed}, -1);
         Button& structures = addButton(s, x0 + 266, float(y0 + 61), 44, Text(), [p] { p->fe->createStructures = !p->fe->createStructures; },
                                        !isDebug());
-        structures.labelFn = [p] { return Text(onOff(*p, p->fe->createStructures)); };
+        structures.labelFn = [p] { return Text(onOff(*p, p->fe->createStructures && !isDebug())); };  // isGenerateStructures
         structures.tooltip = [p] { return tr(*p, "selectWorld.mapFeatures.info"); };
         Button& bonus = addButton(s, x0 + 266, float(y0 + 85), 44, Text(), [] { g.bonusChest = !g.bonusChest; },
                                   !isHardcore(s) && !isDebug());
-        bonus.labelFn = [p] { return Text(onOff(*p, g.bonusChest && !isHardcore(*p))); };
+        bonus.labelFn = [p] { return Text(onOff(*p, g.bonusChest && !isHardcore(*p) && !isDebug())); };  // isBonusChest
     } else {
         const int y0 = tabTop(s, 76);
         const float x = float(W / 2 - 105);
@@ -593,8 +652,9 @@ void drawTabs(State& s, Canvas& c) {
         s.drawText(c, tr(s, "selectWorld.enterName"), float(W / 2 - 104), float(y0), 0xFFFFFFFF, true);
         const Field& n = f.createName;
         if (s.mouseX >= n.x && s.mouseY >= n.y && s.mouseX < n.x + n.w && s.mouseY < n.y + n.h) {
-            std::string name = n.text.value;
+            std::string name = n.text.value;  // WorldCreationUiState: the name trimmed
             while (!name.empty() && name.back() == ' ') name.pop_back();
+            while (!name.empty() && name.front() == ' ') name.erase(name.begin());
             if (name.empty()) name = s.res.translate("selectWorld.newWorld");
             const std::string fmt = s.res.translate("selectWorld.targetFolder");
             Text t(fmt.substr(0, fmt.find("%s")));
@@ -619,7 +679,7 @@ void drawTabs(State& s, Canvas& c) {
 // --- Superflat customization and presets --------------------------------------------------------------------------
 
 ListArea flatList(State& s) {
-    return {33, float(s.guiH() - 64), float(s.guiW() / 2 - 110), 220, 24, int(g.flatEdit.layers.size()) + 1};
+    return {33, float(s.guiH() - 64), float(s.guiW() / 2 - 110), 220, 24, int(g.flatEdit.layers.size()) + 1, 13};  // header (int)(9 * 1.5)
 }
 
 void buildFlat(State& s) {
@@ -628,24 +688,24 @@ void buildFlat(State& s) {
     addButton(s, float(W / 2 - 154), float(H - 54), 150, tr(s, "createWorld.customize.flat.removeLayer"), [p] {
         if (g.sel < 0 || g.sel >= int(g.flatEdit.layers.size())) return;
         g.flatEdit.layers.erase(g.flatEdit.layers.begin() + g.sel);
-        g.sel = std::min(g.sel, int(g.flatEdit.layers.size()) - 1);
+        g.sel = g.flatEdit.layers.empty() ? -1 : std::max(g.sel - 1, 0);  // deleteLayer: the row that moved up
         p->buildButtons();
     }, g.sel >= 0);
     addButton(s, float(W / 2 + 4), float(H - 54), 150, tr(s, "createWorld.customize.presets"), [p] {
         openPage(*p, Page::FlatPresets);
+        g.presetBase = g.flatEdit;
         g.presetText.text.value = flatString(g.flatEdit);
         g.presetText.text.maxLength = 1230;
         g.presetText.text.cursor = g.presetText.text.selection = 0;
         p->buildButtons();
     });
-    auto done = [p] {
-        if (!g.flatEdit.layers.empty()) g.flat = g.flatEdit;
+    auto done = [p] {  // applySettings, even without layers
+        g.flat = g.flatEdit;
         openPage(*p, Page::Tabs);
     };
     addButton(s, float(W / 2 - 154), float(H - 30), 150, tr(s, "gui.done"), done);
     addButton(s, float(W / 2 + 4), float(H - 30), 150, tr(s, "gui.cancel"), [p] { openPage(*p, Page::Tabs); });
     s.fe->onBack = [p] { openPage(*p, Page::Tabs); };
-    s.fe->onEnter = done;
     s.onFilesDrop = [p](const std::vector<fs::path>& files) {  // the new packs join the list (off)
         dropIntoModsFolder(*p, files, Screen::CreateWorld, [] {
             for (const mods::Entry& e : mods::Manager::get().entries()) {
@@ -696,12 +756,8 @@ ListArea presetList(State& s) {
     return {80, float(s.guiH() - 37), float(s.guiW() / 2 - 110), 220, 24, int(g.flatPresets.size())};
 }
 
-void usePreset(State& s) {
-    FlatSettings out;
-    const bool exact = g.sel >= 0 && g.sel < int(g.flatPresets.size()) && g.presetText.text.value == flatString(g.flatPresets[size_t(g.sel)].settings);
-    if (exact) out = g.flatPresets[size_t(g.sel)].settings;
-    else if (!parseFlatString(g.presetText.text.value, g.flatEdit, out)) return;
-    g.flatEdit = out;
+void usePreset(State& s) {  // Select: the text over the selected preset's (else the editor's) settings
+    g.flatEdit = parseFlatString(s, g.presetText.text.value, g.presetBase);
     openPage(s, Page::Flat);
 }
 
@@ -710,12 +766,11 @@ void buildFlatPresets(State& s) {
     State* p = &s;
     g.presetText.x = 50, g.presetText.y = 40, g.presetText.w = float(W - 100);
     setFields(s, {&g.presetText}, -1);
-    FlatSettings probe;
+    // updateButtonValidity: a preset selected or more than one character typed
     addButton(s, float(W / 2 - 155), float(H - 28), 150, tr(s, "createWorld.customize.presets.select"), [p] { usePreset(*p); },
-              parseFlatString(g.presetText.text.value, g.flatEdit, probe));
+              g.sel >= 0 || g.presetText.text.value.size() > 1);
     addButton(s, float(W / 2 + 5), float(H - 28), 150, tr(s, "gui.cancel"), [p] { openPage(*p, Page::Flat); });
     s.fe->onBack = [p] { openPage(*p, Page::Flat); };
-    s.fe->onEnter = [p] { usePreset(*p); };
 }
 
 void drawFlatPresets(State& s, Canvas& c) {
@@ -901,6 +956,7 @@ void syncRuleFields() {  // the integer fields on screen -> the edited values
         const RuleDef* d = ruleDef(g.ruleFieldIds[i]);
         if (!d) continue;
         const std::string& v = g.ruleFields[i].text.value;
+        g.ruleFields[i].textColor = ruleValid(*d, v) ? 0xFFE0E0E0 : 0xFFFF0000;  // IntegerRuleEntry: red while invalid
         if (v == d->def) g.rulesEdit.erase(d->id);
         else g.rulesEdit[d->id] = v;
     }
@@ -985,7 +1041,10 @@ void drawGameRules(State& s, Canvas& c) {
         if (y + float(l.rowH) < l.top || y > l.bottom) continue;
         const RuleRow& r = g_ruleRows[size_t(i)];
         if (!r.rule) {  // CategoryRuleEntry
-            s.drawCentered(c, Text(lang(s, "gamerule.category." + pathOf(r.category), pathOf(r.category))), float(W / 2), y + 6, 0xFFFFFFFF);
+            Style header;  // BOLD, YELLOW, UNDERLINE
+            header.bold = 1, header.underlined = 1, header.color = 0xFFFF55;
+            s.drawCentered(c, Text(lang(s, "gamerule.category." + pathOf(r.category), pathOf(r.category)), header), float(W / 2), y + 6,
+                           0xFFFFFFFF);
             continue;
         }
         const std::vector<Text> name = s.font.split(Text(ruleName(s, r.rule->id)), 170);
@@ -993,8 +1052,6 @@ void drawGameRules(State& s, Canvas& c) {
         if (name.size() == 1) s.drawText(c, name[0], x, y + 5, 0xFFFFFFFF, true);
         else
             for (size_t k = 0; k < name.size() && k < 2; ++k) s.drawText(c, name[k], x, y + float(k) * 10, 0xFFFFFFFF, true);
-        if (!r.rule->boolean && !ruleValid(*r.rule, ruleValue(*r.rule)))  // an invalid number: red frame
-            c.fill(l.left + l.width - 50, y - 1, l.left + l.width - 3, y + 21, 0xFFFF0000);
         if (s.mouseX >= x && s.mouseX < x + 170 && s.mouseY >= y && s.mouseY < y + 20 && s.mouseY >= l.top && s.mouseY < l.bottom) {
             tooltip.push_back(Text(r.rule->id, colorStyle(0xFFFF55)));
             for (const Text& t : s.font.split(Text(ruleDescription(s, r.rule->id)), 150))
@@ -1164,7 +1221,7 @@ void createWorldNow(State& s) {
     a.insert(a.end(), {L"--play", L"--world", dir.wstring(), L"--create-name", widen(name), L"--create-seed",
                        widen(f.createSeed.text.value), L"--create-mode", widen(mode), L"--create-difficulty",
                        widen(kDifficulties[debug ? 0 : hc ? 3 : f.createDifficulty]), L"--create-cheats",
-                       (f.createCheats && !hc) || debug ? L"1" : L"0", L"--create-structures", f.createStructures ? L"1" : L"0"});
+                       allowCommands(s) ? L"1" : L"0", L"--create-structures", f.createStructures ? L"1" : L"0"});
     if (g.preset != "minecraft:normal") a.insert(a.end(), {L"--create-type", widen(g.preset)});
     if (g.preset == "minecraft:flat") a.insert(a.end(), {L"--create-generator", widen(flatJson(g.flat).dump())});
     if (g.preset == "minecraft:single_biome_surface") a.insert(a.end(), {L"--create-biome", widen(g.biome)});
@@ -1188,7 +1245,7 @@ void createWorldNow(State& s) {
     }
     LOG("ui: creating world \"%s\" in %s (%s)", name.c_str(), folder.c_str(), g.preset.c_str());
     f.failTitle = Text("Could not create the world");
-    startChild(s, a, Text("Creating \"" + name + "\""), Screen::Worlds, false);
+    startChild(s, a, tr(s, "createWorld.preparing"), Screen::Worlds, false);  // CreateWorldScreen: PREPARING_WORLD_DATA
 }
 
 }  // namespace
@@ -1205,6 +1262,7 @@ void openCreateWorld(State& s, bool fresh) {
     f.createSeed.text.maxLength = 32;
     f.createSeed.hint = s.res.translate("selectWorld.seedInfo");
     f.createMode = 0, f.createDifficulty = 2, f.createCheats = false, f.createStructures = true;
+    g.cheatsSet = false;
     g.page = Page::Tabs, g.tab = 0;
     g.preset = "minecraft:normal", g.bonusChest = false, g.biome = "minecraft:plains";
     for (const FlatPreset& p : g.flatPresets)
@@ -1284,10 +1342,10 @@ void createWorldInput(State& s, const Window::InputEvent& e) {
             if (i >= 0) {
                 if (g.page == Page::Flat && i > 0) g.sel = int(g.flatEdit.layers.size()) - i;
                 if (g.page == Page::FlatPresets) {
-                    g.sel = i;
-                    g.presetText.text.value = flatString(g.flatPresets[size_t(i)].settings);
+                    g.sel = i;  // Entry.select: the preset's settings and text (a click only selects)
+                    g.presetBase = g.flatPresets[size_t(i)].settings;
+                    g.presetText.text.value = flatString(g.presetBase);
                     g.presetText.text.cursor = g.presetText.text.selection = 0;
-                    if (doubleClicked(s, i)) return usePreset(s);
                 }
                 if (g.page == Page::Buffet) {
                     g.biomeEdit = g.biomes[size_t(g.view[size_t(i)])];
@@ -1351,6 +1409,7 @@ bool recreateWorld(State& s, const fs::path& dir) {
         if (difficulty == kDifficulties[i]) f.createDifficulty = i;
     f.createMode = hardcore ? 1 : type == 1 ? 2 : 0;
     f.createCheats = num(data, "allowCommands", 0) != 0;
+    g.cheatsSet = true;  // a re-created world's setting
     if (NbtValue* packs = data->find("DataPacks"))
         if (NbtValue* enabled = packs->find("Enabled"))
             for (const NbtValue& v : enabled->items)
