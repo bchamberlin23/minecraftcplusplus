@@ -238,6 +238,7 @@ struct Visuals::Impl {
     // Entity.doWaterSplashEffect's particles and spawnSprintParticle (world lock held).
     void waterAndSprint(const double pos[3], const double vel[3], float width, bool inWater, bool& wasIn, bool sprinting);
     std::unordered_map<int, int> stunnedTicks;  // Ravager.stunnedTick (event 39)
+    std::unordered_map<int, std::pair<int, u64>> stateStart;  // pose / sniffer state and the age it began (animation times)
     // LivingEntity.breakItem: the item's break sound and five shards from the eyes (item: network id).
     void breakItem(int item, const double pos[3], double eyeHeight, float yaw, float pitch, bool silent, audio::Category category);
     bool emit(Emitter& em);  // TrackingEmitter.tick; false when the emitter is done
@@ -2616,6 +2617,37 @@ void Visuals::Impl::mobTick(const Entity& e) {
                     }
                 }
             }
+        }
+    } else if (n == "minecraft:warden") {  // Warden.tick (client): the heartbeat, digging particles while emerging / digging
+        const float anger = std::clamp(float(dataInt(e, "CLIENT_ANGER_LEVEL")) / 80.0f, 0.0f, 1.0f);
+        const int delay = 40 - int(std::floor(anger * 30.0f));
+        if (delay > 0 && e.age % u64(delay) == 0)
+            sound("minecraft:entity.warden.heartbeat", audio::Category::Hostile, e.pos[0], e.pos[1], e.pos[2], 5.0f, float((R() - R()) * 0.2 + 1.0));
+        auto& st = stateStart[e.id];
+        if (st.first != e.pose) st = {e.pose, e.age};
+        if ((e.pose == 13 || e.pose == 14) && double(e.age - st.second) * 50.0 < 4500.0) {
+            const int bx = int(std::floor(e.pos[0])), by = int(std::floor(e.pos[1] - 1e-5)), bz = int(std::floor(e.pos[2]));
+            const u16 below = world.world().block(bx, by, bz);
+            if (below) {
+                const std::string key = world.registry().name(below);
+                for (int i = 0; i < 30; ++i)
+                    particles->spawnBlock("block", key, e.pos[0] + (R() * 1.4 - 0.7), e.pos[1], e.pos[2] + (R() * 1.4 - 0.7), 0, 0, 0);
+            }
+        }
+    } else if (n == "minecraft:sniffer") {  // Sniffer.tick: digging particles, the searching sound
+        auto& st = stateStart[e.id];
+        if (st.first != e.snifferState) st = {e.snifferState, e.age};
+        const double ms = double(e.age - st.second) * 50.0;
+        if (e.snifferState == 5 && ms > 1700.0 && ms < 6000.0) {  // DIGGING: at the head block's floor
+            const float yaw = e.yaw * kDeg;
+            const double hx = e.pos[0] - std::sin(yaw) * 2.25, hz = e.pos[2] + std::cos(yaw) * 2.25;
+            const int bx = int(std::floor(hx)), by = int(std::floor(e.pos[1] + 0.2)), bz = int(std::floor(hz));
+            const u16 below = world.world().block(bx, by - 1, bz);
+            if (below)
+                for (int i = 0; i < 30; ++i)
+                    particles->spawnBlock("block", world.registry().name(below), bx + 0.5, by + 0.5 - 0.65, bz + 0.5, 0, 0, 0);
+        } else if (e.snifferState == 4 && e.age % 20 == 0) {  // SEARCHING
+            sound("minecraft:entity.sniffer.searching", audio::Category::Neutral, e.pos[0], e.pos[1], e.pos[2], 1.0f, 1.0f);
         }
     } else if (n == "minecraft:ravager") {  // Ravager.aiStep: stunEffect while stunned
         auto it = stunnedTicks.find(e.id);
