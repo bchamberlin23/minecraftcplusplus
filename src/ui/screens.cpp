@@ -809,7 +809,8 @@ void Ui::State::drawScreen(Canvas& c) {
             const int mx = items.maxStack(carried);
             const int nc = std::min(per + carry, mx);
             shown = carried.withCount(nc);
-            if (nc == mx) cnt = "\xC2\xA7" "e" + std::to_string(nc), countOverride = cnt.c_str();
+            if (per + carry > mx) cnt = "\xC2\xA7" "e" + std::to_string(nc), countOverride = cnt.c_str();  // clamped
+            c.fill(sx, sy, sx + 16, sy + 16, 0x80FFFFFF);  // extractSlot: the quick-craft slot's white wash
         }
         // The player inventory slot this is: the inventory menu itself, else a container's last 36 slots (27 + hotbar).
         int playerSlot = -1;
@@ -832,16 +833,19 @@ void Ui::State::drawScreen(Canvas& c) {
     // Carried item, then the tooltip.
     if (!carried.empty()) {
         std::string remaining;
-        if (isQuickCrafting && quickCraftSlots.size() > 1) {
-            int left2 = carried.count;
-            for (int q : quickCraftSlots) {
-                const int carry = m.slots[size_t(q)].empty() ? 0 : m.slots[size_t(q)].count;
-                const int per = quickCraftType == 0 ? carried.count / int(quickCraftSlots.size()) : quickCraftType == 1 ? 1 : items.maxStack(carried);
-                left2 -= std::min(per + carry, items.maxStack(carried)) - carry;
-            }
-            remaining = left2 <= 0 ? "\xC2\xA7" "e0" : std::to_string(left2);
+        bool none = false;
+        if (isQuickCrafting && quickCraftSlots.size() > 1) {  // recalculateQuickCraftRemaining
+            int left2 = quickCraftType == 2 ? items.maxStack(carried) : carried.count;  // cloning: a full stack, untouched
+            if (quickCraftType != 2)
+                for (int q : quickCraftSlots) {
+                    const int carry = m.slots[size_t(q)].empty() ? 0 : m.slots[size_t(q)].count;
+                    const int per = quickCraftType == 0 ? carried.count / int(quickCraftSlots.size()) : 1;
+                    left2 -= std::min(per + carry, items.maxStack(carried)) - carry;
+                }
+            none = left2 <= 0;  // copyWithCount(0) is empty: nothing at the cursor
+            remaining = std::to_string(left2);
         }
-        drawItem(c, carried, mouseX - 8, mouseY - 8, true, remaining.empty() ? nullptr : remaining.c_str());
+        if (!none) drawItem(c, carried, mouseX - 8, mouseY - 8, true, remaining.empty() ? nullptr : remaining.c_str());
     }
     bundleHovered(*this, m, hoveredSlot);  // item_ui.h: leaving a bundle's slot clears its selection
     // The tooltip (over the carried item only for tooltips shown with an item in hand: bundles).
