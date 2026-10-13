@@ -405,7 +405,15 @@ void meshGrid(const u16* ids, const u8* light, const BlockRegistry& registry, bo
                             const int q = p + off;  // the cell the face looks into
                             const u32 lq = light ? light[q] : kFullSky;
                             u32 ao = 0, sky = 0, block = 0;
-                            if (light && bc.layer != LayerTranslucent && smooth) {
+                            // Light-emitting blocks are lit flat (ModelBlockRenderer.tesselateBlock: no ambient occlusion
+                            // with a light emission), their block light at least their emission; emissiveRendering ones
+                            // full bright.
+                            if (light && bc.emissiveRendering) {
+                                sky = block = 0xF0F0F0F0u;
+                            } else if (light && bc.emission) {
+                                sky = ((lq >> 4) * 16) * 0x01010101u;
+                                block = (std::max(lq & 15, u32(bc.emission)) * 16) * 0x01010101u;
+                            } else if (light && bc.layer != LayerTranslucent && smooth) {
                                 // Smooth lighting: each corner averages the four cells in front of it (dark solid
                                 // cells take the centre's light) and darkens by the solid cells beside it; a corner
                                 // behind two solid sides counts as solid itself.
@@ -506,7 +514,10 @@ void meshGrid(const u16* ids, const u8* light, const BlockRegistry& registry, bo
                         sc.model.push_back(u32(m.tex) | (u32(m.tint & 7) << 16) | (u32(m.shade) << 19));
                         const int kind = biomeKind(m.tint);
                         const u32 color = colors && kind >= 0 ? colors->index[kind][(z + 1) * 18 + (x + 1)] : m.tint;
-                        sc.model.push_back((light ? light[p] : kFullSky) | (color << 8));
+                        u32 lit = light ? light[p] : kFullSky;
+                        if (b.emissiveRendering) lit = 0xFF;
+                        else if (const u32 e = std::max<u32>(b.emission, m.emission); (lit & 15) < e) lit = (lit & 0xF0) | e;
+                        sc.model.push_back(lit | (color << 8));
                     }
                 }
     }

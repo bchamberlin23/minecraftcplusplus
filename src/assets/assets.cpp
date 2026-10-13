@@ -108,6 +108,7 @@ struct Element {
     float rescale = 1.0f;
     bool shade = true;
     int shadeDir = -1;
+    u8 lightEmission = 0;
     Face faces[6];
     u8 faceMask = 0;
 };
@@ -391,6 +392,7 @@ struct BlockRegistry::Impl {
                     }
                 }
                 if (member(ej, "shade").is_boolean()) e.shade = member(ej, "shade").get<bool>();
+                e.lightEmission = u8(std::clamp(int(num(member(ej, "light_emission"), 0)), 0, 15));
                 if (member(ej, "shade_direction_override").is_string())
                     e.shadeDir = faceIndex(member(ej, "shade_direction_override").get<std::string>());
                 const json& faces = member(ej, "faces");
@@ -570,6 +572,7 @@ struct BlockRegistry::Impl {
         }
         q.tex = u16(f.tex);
         q.tint = tintForBlock(blockName, props, f.tintIndex);
+        q.emission = e.lightEmission;
         q.layer = texClass[f.tex];
         q.cull = f.cull >= 0 ? i8(dirIndex(rotVariant(kDir[f.cull], r.x, r.y))) : i8(-1);
         float shade;
@@ -1318,6 +1321,8 @@ u16 BlockRegistry::create(std::string_view key) {
     bi.waterlogged = propIs("waterlogged", "true") || shortName == "kelp" || shortName == "kelp_plant" ||
                      shortName == "seagrass" || shortName == "tall_seagrass" || shortName == "bubble_column";
     bi.emission = emissionFor(shortName, props);
+    bi.emissiveRendering = shortName == "magma_block" ||
+                           ((shortName == "sculk_sensor" || shortName == "calibrated_sculk_sensor") && propIs("sculk_sensor_phase", "active"));
     const bool dims = bi.fluid || bi.waterlogged || shortName.ends_with("leaves") || shortName == "cobweb" ||
                       shortName == "ice" || shortName == "frosted_ice";
     bi.opacity = bi.occludes ? 15 : dims ? 1 : 0;

@@ -34,6 +34,7 @@ struct ModelQuad {
     u8 shade;  // 0..255 directional shade
     i8 cull;   // face direction whose neighbour hides this quad, or -1
     u8 layer;
+    u8 emission = 0;  // the element's light_emission (its block light is at least this)
 };
 
 // Axis-aligned box in block-local units [0,1].
@@ -49,6 +50,7 @@ struct BlockInfo {
     bool fluid = false;        // water / lava source or flow
     bool replaceable = false;  // placing a block here overwrites it (air, fluids, grass, snow layer...)
     u8 emission = 0;           // block light emitted, 0..15
+    bool emissiveRendering = false;  // BlockBehaviour.emissiveRendering: drawn full bright (magma, active sculk sensor)
     u8 opacity = 0;            // light absorbed when passing through (15 = opaque)
     u16 cullGroup = 0;         // same group + non-opaque => shared faces are hidden (glass, water)
     bool leaves = false;       // a LeavesBlock (the See-Through Leaves option)

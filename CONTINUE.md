@@ -63,7 +63,8 @@ columns and gliding rules, own hurt / death sounds, hitting fireballs / shulker 
 dragon's parts (Entity.isPickable, getPickRadius), predicted entity interactions passing to item use,
 attack / use timing details, carrot / fungus on a stick boosts, vehicle fluid rules, block tints exactly as BlockColors (per tint layer, redstone power, stem
 age, leaf litter's dry foliage colormap), weighted model variants picked per position (grass / stone / sand rotations,
-multipart lists), random block offsets (models, outlines, picking, collision) and fluid shapes (FluidRenderer:
+multipart lists), random block offsets (models, outlines, picking, collision), flat full-emission lighting of light sources
+(emissiveRendering, element light_emission) and fluid shapes (FluidRenderer:
 averaged corner heights, flow-turned flowing textures, side faces with the water overlay; full detail only, LOD keeps
 cubes). ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
 switch (automated runs never change the display mode) and the LAN publish from World Options (it would open a
@@ -84,8 +85,8 @@ listening socket).
 - **Improved Transparency** (video option) is stored but not read; this engine's translucency path (OIT under the
   shader pipeline) is its own. The nausea overlay and vignette draw after the UI layer (they also tint the HUD).
 
-- **Block rendering audit, still open**: no ambient occlusion on emissive blocks, per-element `light_emission`, `emissiveRendering` (magma, sculk sensor),
-  the Nether's cardinal shade. Fluids skip self-occlusion of waterlogged partial blocks (faces hidden inside them). Falling blocks / moving pistons
+- **Block rendering audit, still open**: the Nether's cardinal shade; smooth lighting (corner light, ambient occlusion)
+  on non-cube models (stairs, slabs...: lit flat by their own cell here); translucent cubes skip ambient occlusion. Fluids skip self-occlusion of waterlogged partial blocks (faces hidden inside them). Falling blocks / moving pistons
   draw a block's first variant without its offset.
 - **VIS-06 residual**: glowing outlines under a shader pack (entities go through the pack's gbuffers there).
 - Test instance blocks: optional tests' failure beam is red, not orange (the test registry is not sent to clients);

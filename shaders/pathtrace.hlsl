@@ -89,6 +89,8 @@ void BlasGenCS(uint id : SV_DispatchThreadID) {
         layer = q.y & 0xFFF;
         // The cells in front of an emitting face are lit one level below its emission.
         level = isFluidQuad(q) ? fluidBlock(q) + 1.0 : max(max(q.w & 0xFF, (q.w >> 8) & 0xFF), max((q.w >> 16) & 0xFF, q.w >> 24)) / 16.0 + 1.0;
+        // Full bright (emissiveRendering: magma, whose light emission is 3) says nothing of the emission.
+        if (q.z == 0xF0F0F0F0u && q.w == 0xF0F0F0F0u) level = 4.0;
     } else {
         uint base = rtModelBase(j.slot, local);
         layer = gRtModel[base + 10] & 0xFFFF;
