@@ -314,6 +314,22 @@ struct Sim {
 static int qcStatus = 0, qcType = 0;
 static int deathScreenTick = 0;  // DeathScreen.delayTicker start (guiTicks)
 static bool deathConfirm = false;  // DeathScreen.TitleConfirmScreen up (the title button outside hardcore)
+// The death message's style under the mouse (centred at y 85, TOOLTIP_AND_CURSOR / ClickableStyleFinder)
+static bool deathStyleAt(UiState& s, const Text& msg, float mx, float my, Style& out) {
+    if (my < 85 || my >= 94) return false;
+    float pen = float(s.guiW() / 2 - s.font.width(msg) / 2);
+    bool found = false;
+    s.font.iterate(msg, [&](int, const Style& st, u32 cp) {
+        const float adv = s.font.glyph(cp, st).advanceFor(st.isBold());
+        if (mx >= pen && mx < pen + adv) {
+            out = st, found = true;
+            return false;
+        }
+        pen += adv;
+        return true;
+    });
+    return found;
+}
 static int deathConfirmTick = 0;   // its ConfirmScreen.setDelay(20) start
 void openAdvancementsFromPause(UiState& s);  // advancements.cpp
 void openStatsFromPause(UiState& s);          // stats.cpp
@@ -763,11 +779,17 @@ void Ui::State::drawScreen(Canvas& c) {
             drawCentered(c, Text(res.translate(hardcore ? "deathScreen.title.hardcore" : "deathScreen.title")), float(W / 2 / 2), 30, 0xFFFFFFFF);
             c.pop();
             if (!deathMessage.plain().empty()) drawCentered(c, deathMessage, float(W / 2), 85, 0xFFFFFFFF);
+            Style hovered;  // the message's hover events (the tooltip drawn after the buttons)
+            const bool hoverStyled = deathStyleAt(*this, deathMessage, mouseX, mouseY, hovered) && hovered.events;
             // Player.getScore: DATA_SCORE_ID (the experience gained, not what is left)
             const i64 score = entities ? ent::dataInt(entities->self, "DATA_SCORE_ID", xpTotal) : xpTotal;
             drawCentered(c, translatable("deathScreen.score.value", {Text(std::to_string(score), colorStyle(0xFFFF55))}, lang()),
                          float(W / 2), 100, 0xFFFFFFFF);
             drawButtons(c);
+            if (hoverStyled && !hovered.events->click.empty()) requestCursor(CursorPointingHand);
+            if (hoverStyled && !hovered.events->hover.empty())
+                if (const std::vector<Text> lines = hoverLines(*this, *hovered.events); !lines.empty())
+                    drawTooltip(c, lines, mouseX, mouseY, nullptr, hovered.events->hover == "show_item");
             return;
         }
         case Screen::Pause: {
@@ -965,6 +987,12 @@ void Ui::State::screenInput(const Window::InputEvent& e) {
         if (deathConfirm && e.type == Window::InputEvent::Key && e.down && e.code == VK_ESCAPE && guiTicks - deathConfirmTick >= 20 &&
             buttons.size() > 1) {
             if (auto fn = buttons[1].onPress) fn();
+            return;
+        }
+        Style st;  // mouseClicked: an open_url component of the message
+        if (!deathConfirm && e.type == Window::InputEvent::Button && e.down && e.code == 0 &&
+            deathStyleAt(*this, deathMessage, mouseX, mouseY, st) && st.events && st.events->click == "open_url") {
+            openConfirmLink(*this, st.events->clickValue, Screen::Death, false);
             return;
         }
         buttonsInput(e);
