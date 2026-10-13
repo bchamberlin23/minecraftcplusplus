@@ -16,7 +16,8 @@ in-world game rules (NET-13) and Restrictions, waypoints and the locator bar (NE
 `add_transient_block`, camera overlays from the equippable component (ITEM-03), the operator block editors
 (ITEM-09) with structure / test boxes (VIS-13), area effect cloud particles (VIS-04), all level events and
 jukebox songs (FX-06), the tickable sounds (FX-10: minecarts, riding, elytra, bees, guardian, sniffer, underwater,
-bubble columns), terrain textures with shaders off (a min-LOD clamp bug). ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
+bubble columns), terrain textures with shaders off (a min-LOD clamp bug), the 26.3 title screen layout, the spectator
+menu / HUD / spectate click (PLAY-08). ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
 switch (automated runs never change the display mode) and the LAN publish from World Options (it would open a
 listening socket).
 
@@ -40,11 +41,9 @@ listening socket).
 
 - Command suggestions in the command block editor (CommandSuggestions; the chat has them).
 - SocialInteractionsScreen (hide players' chat; the pause menu's Player Reporting icon is disabled meanwhile).
-- Compare TitleScreen with 26.3 (its icon buttons).
 
 ## Gameplay / world
 
-- **PLAY-08**: spectator HUD and menu (hotbar teleport menu).
 - **WORLD-04**: Blender port (blending old pre-1.18 chunks with new generation). Low priority: it only affects
   upgraded old worlds.
 - **WORLD-06 residual**: 0.3–0.8% feature-position mismatches (coal ore, sculk, moss, dark oak). The cause is open;
