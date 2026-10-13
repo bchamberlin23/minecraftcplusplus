@@ -67,6 +67,7 @@ struct Team {
     int color = -1;      // TeamColor id (0..15), -1 none
     int collision = 0;   // Team.CollisionRule: 0 always, 1 never, 2 push other teams, 3 push own team
     u8 options = 0;      // 1 friendly fire, 2 see friendly invisibles
+    int nameTags = 0;    // Team.Visibility: 0 always, 1 never, 2 hide for other teams, 3 hide for own team
 };
 
 // --- boss bars --------------------------------------------------------------------------------------------------
@@ -374,7 +375,7 @@ void registerHandlers(UiState& s, net::Client& client) {
             t.displayName = parseComponent(r.nbt(), lang);
             t.prefix = parseComponent(r.nbt(), lang);
             t.suffix = parseComponent(r.nbt(), lang);
-            r.varInt();  // name tag visibility
+            t.nameTags = r.varInt();
             t.collision = r.varInt();
             if (r.boolean()) t.color = r.varInt();
             t.options = r.u8v();
@@ -763,6 +764,21 @@ bool belowNameText(const std::string& owner, Text& out) {
     out = Text();
     out.append(formatScore(sc->second, *obj, noStyle)).append(" ").append(obj->display);
     return true;
+}
+
+int teamNameTagShown(const std::string& us, const std::string& them, bool visible) {
+    auto b = g.playerTeam.find(them);
+    if (b == g.playerTeam.end()) return -1;
+    auto t = g.teams.find(b->second);
+    if (t == g.teams.end()) return -1;
+    auto a = g.playerTeam.find(us);
+    const bool mine = a != g.playerTeam.end() && g.teams.count(a->second), allied = mine && a->second == b->second;
+    switch (t->second.nameTags) {
+        case 1: return 0;
+        case 2: return !mine ? visible : allied && ((t->second.options & 2) || visible);
+        case 3: return !mine ? visible : !allied && visible;
+        default: return visible;
+    }
 }
 
 bool seesInvisible(const std::string& us, const std::string& them) {  // Entity.isInvisibleTo: canSeeFriendlyInvisibles

@@ -2424,12 +2424,28 @@ void Visuals::Impl::buildTags(const PassContext& ctx) {
         if (!e.info || e.deathTime > 0) continue;
         // ItemFrameRenderer.shouldShowName / getNameTag: only the targeted frame's item, when it has a custom name
         const bool frame = e.type >= 0 && (e.type == frameTypes[0] || e.type == frameTypes[1]);
-        if (frame && !(id == targeted && e.itemStack && e.itemStack->hasCustomName)) continue;
+        if (frame && !(id == targeted && e.itemStack && e.itemStack->hasCustomName && !(ui && ui->hudHidden()))) continue;
         if (!frame && e.name.empty()) continue;
-        if (e.category == Category::Living && (e.sharedFlags & 0x20)) continue;
         const bool player = e.category == Category::Player;
-        if (!frame && !player && !(e.nameVisible || id == targeted)) continue;
-        if (!frame && !player && e.category != Category::Living && !e.nameVisible) continue;
+        char uuidText[37];
+        std::snprintf(uuidText, sizeof(uuidText), "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x", e.uuid[0], e.uuid[1],
+                      e.uuid[2], e.uuid[3], e.uuid[4], e.uuid[5], e.uuid[6], e.uuid[7], e.uuid[8], e.uuid[9], e.uuid[10], e.uuid[11], e.uuid[12],
+                      e.uuid[13], e.uuid[14], e.uuid[15]);
+        const std::string member = player ? e.name : std::string(uuidText);
+        if (!frame) {
+            // EntityRenderer / MobRenderer / AvatarRenderer.shouldShowName: shown always (players) or named and looked at;
+            // ArmorStandRenderer: only with CustomNameVisible (invisible ones too: holograms).
+            if (e.info->name == "minecraft:armor_stand") {
+                if (!e.nameVisible) continue;
+            } else {
+                if (!player && !e.nameVisible && id != targeted) continue;
+                if (player || e.category == Category::Living) {  // LivingEntityRenderer.shouldShowName
+                    const bool visible = !(e.sharedFlags & 0x20) || (gameMode && gameMode() == 3) || ui::seesInvisible(playerName, member);
+                    const int team = ui::teamNameTagShown(playerName, member, visible);
+                    if (team == 0 || (team < 0 && (!visible || e.passengerCount > 0 || (ui && ui->hudHidden())))) continue;
+                }
+            }
+        }
         double p[3];
         for (int a = 0; a < 3; ++a) p[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt;
         if (frame) {  // ItemFrameRenderer.getRenderOffset: (0.3 x step, -0.25, 0.3 z step)
@@ -2448,11 +2464,6 @@ void Visuals::Impl::buildTags(const PassContext& ctx) {
         if (d2 > 64.0f * 64.0f || (discrete && d2 >= 1024.0f)) continue;
         if (fwd[0] * x + fwd[1] * y + fwd[2] * z < -1.0f) continue;  // behind the camera
         // Entity.getDisplayName: the team's prefix, colour and suffix (members: a player's name, else the UUID).
-        char uuidText[37];
-        std::snprintf(uuidText, sizeof(uuidText), "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x", e.uuid[0], e.uuid[1],
-                      e.uuid[2], e.uuid[3], e.uuid[4], e.uuid[5], e.uuid[6], e.uuid[7], e.uuid[8], e.uuid[9], e.uuid[10], e.uuid[11], e.uuid[12],
-                      e.uuid[13], e.uuid[14], e.uuid[15]);
-        const std::string member = player ? e.name : std::string(uuidText);
         const u32 light = lightAt(p[0], p[1] + e.info->eye, p[2]) | 512u;
         const u32 textHalf = 0x80FFFFFFu, bgColor = ui ? ui->textBackground(0.25f) : 0x3F000000u;  // white at 0.5, black
         auto submit = [&](const Tag& t, float yUp) {  // EntityRenderer.submitNameTag at the attachment, raised by yUp

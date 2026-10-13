@@ -38,6 +38,9 @@ bool socialHidden(const std::string& uuid);
 Text teamFormattedName(const std::string& member, const Text& name);
 bool belowNameText(const std::string& owner, Text& out);
 bool seesInvisible(const std::string& us, const std::string& them);  // the same team, seeing friendly invisibles
+// LivingEntityRenderer.shouldShowName's team part (`them` a player name or an entity UUID): -1 when `them` is in no
+// team, else whether its name tag shows (visible: not invisible to us).
+int teamNameTagShown(const std::string& us, const std::string& them, bool visible);
 void openSocialInteractions(UiState& s, Screen back);
 struct TeamView {
     std::string name;
