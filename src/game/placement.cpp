@@ -530,6 +530,28 @@ bool canSurviveHere(const Context& c, u16 state, const int p[3]) {
         const BlockInfo& above = c.reg.infos()[at(c, p, kUp)];
         return (b == "cactus" || sand) && !above.fluid;
     }
+    // GrowingPlantBlock: attached against the growth to its own head / body, or a sturdy face (kelp: in full water,
+    // not on magma; seagrass likewise on a sturdy top)
+    struct Growing { std::string_view head, body; int growth; };
+    static constexpr Growing kGrowing[] = {{"kelp", "kelp_plant", kUp}, {"weeping_vines", "weeping_vines_plant", kDown},
+                                          {"twisting_vines", "twisting_vines_plant", kUp}, {"cave_vines", "cave_vines_plant", kDown}};
+    for (const Growing& gp : kGrowing)
+        if (n == gp.head || n == gp.body) {
+            if (gp.head == "kelp" && !(c.waterSource && c.waterSource(p[0], p[1], p[2]))) return false;
+            const u16 attached = at(c, p, opposite(gp.growth));
+            const std::string an = nameOf(c, attached);
+            if (gp.head == "kelp" && an == "minecraft:magma_block") return false;
+            return an.substr(std::min<size_t>(10, an.size())) == gp.head || an.substr(std::min<size_t>(10, an.size())) == gp.body ||
+                   sturdy(c.reg, attached, gp.growth);
+        }
+    if (n == "seagrass")
+        return c.waterSource && c.waterSource(p[0], p[1], p[2]) && b != "magma_block" && sturdy(c.reg, below, kUp);
+    if (n == "cocoa") {  // CocoaBlock: a jungle log in its facing
+        const int f = faceByName(c.reg.property(state, "facing"));
+        const std::string log = f >= 2 ? nameOf(c, at(c, p, f)) : std::string();
+        return log == "minecraft:jungle_log" || log == "minecraft:jungle_wood" || log == "minecraft:stripped_jungle_log" ||
+               log == "minecraft:stripped_jungle_wood";
+    }
     if (n.ends_with("_carpet")) return below != 0;  // CarpetBlock: not over air
     if (n.ends_with("rail") || n == "repeater" || n == "comparator") return sturdy(c.reg, below, kUp);  // canSupportRigidBlock
     if (n.ends_with("_pressure_plate")) return sturdy(c.reg, below, kUp) || supportsCenter(c.reg, below, kUp);
@@ -583,6 +605,17 @@ Result placementStateImpl(const Context& c, u16 held, const int pos[3], bool rep
         // BaseRailBlock.getStateForPlacement: straight along the look (updateDir does nothing on a client)
         const bool eastWest = horiz == kEast || horiz == kWest;
         r.state = with(c, with(c, held, "shape", eastWest ? "east_west" : "north_south"), "waterlogged", water ? "true" : "false");
+        return r;
+    }
+    if (n == "minecraft:cocoa") {  // CocoaBlock.getStateForPlacement: the first horizontal look direction it survives in
+        for (int d : nearestLookingDirections(c, replaceClicked)) {
+            if (!horizontal(d)) continue;
+            const u16 st = with(c, held, "facing", kName[d]);
+            if (canSurviveHere(c, st, pos)) {
+                r.state = st;
+                return r;
+            }
+        }
         return r;
     }
     if (n == "minecraft:big_dripleaf") {  // BigDripleafBlock.getStateForPlacement: on a dripleaf part, its facing

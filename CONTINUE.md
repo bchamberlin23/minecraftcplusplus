@@ -135,7 +135,8 @@ docs/audit-26.3 was re-checked: most of it is done, its remaining items are fold
   instruments, repeater / comparator neighbours' power, and BlockItem.canPlace's canSurvive beyond the covered families
   (vegetation and wither roses by their tags, crops / stems on farmland, carpets, rails, diodes, pressure plates, door
   bottoms, torches, signs, banners, lanterns, attached blocks, ladders, vines, dripstone, wire): mushrooms by light,
-  lily pads, kelp / seagrass, cocoa and the like (dry vegetation, nether plants, wart, bamboo, cactus and sugar cane are in). The face sturdiness tests use collision boxes (Java: the
+  lily pads (placed on water), tall seagrass and the like (dry vegetation, nether plants, wart, bamboo, cactus, sugar cane,
+  kelp / seagrass, the growing vines and cocoa are in). The face sturdiness tests use collision boxes (Java: the
   support shape), which differ for leaves, scaffolding and a few others.
 - **WORLD-04**: Blender port (blending old pre-1.18 chunks with new generation). Low priority: it only affects
   upgraded old worlds.
