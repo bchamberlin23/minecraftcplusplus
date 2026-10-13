@@ -255,6 +255,7 @@ public:
     std::function<void()> onStab;
     std::function<void()> onStabEffects;  // PiercingWeapon.makeSound for the local player (gameplay layer)
     bool crosshairOnLiving = false;    // a living entity is under the crosshair (Minecraft.crosshairPickEntity)
+    int crosshairEntity = -1;          // any entity in front of the targeted block (hitResult is then no block)
     bool crosshairOnMenuEntity = false;  // ... an entity with a menu (MenuProvider: chest / hopper minecarts, chest boats)
     float attackStrengthScale(float a) const {
         const float delay = 20.0f / std::max(attackSpeed, 1e-4f);

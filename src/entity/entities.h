@@ -190,6 +190,7 @@ struct Entity {
     int mapId = -1;             // item / item frame stack: map_id component (-1 none)
     int rotation = 0;           // item frame rotation (0..7)
     int direction = 0;          // add_entity data: facing of hanging entities (Direction 3D value)
+    int attachBlock[3] = {};    // BlockAttachedEntity.pos: the block of item frames, paintings and leash knots
     int painting = -1;          // painting_variant network id
     bool nameVisible = false;   // DATA_CUSTOM_NAME_VISIBLE
 
@@ -428,6 +429,8 @@ public:
     // (the command block minecart's editor) and the packet is still sent.
     std::function<void(const Entity& e)> onUse;
     std::function<void(const std::string& raw, double x, double y, double z, double vx, double vy, double vz)> spawnParticle;
+    // A painting variant's size in blocks (the renderer's registry): false when unknown.
+    std::function<bool(int variant, int& w, int& h)> paintingSize;
     std::function<u64()> meshSerial;
     std::function<u64(int, int, int)> sectionMeshSerial;
 

@@ -724,7 +724,7 @@ void Game::buildOverlay() {
     // LevelRenderer.submitBlockOutline: the targeted block's selection shape (none outside the world border). High
     // contrast draws a 7 px black pass, then the aqua outline (0xFF57FFE1); otherwise ARGB.black(102). The width is
     // Window.appropriateLineWidth: max(2.5, width / 1920 * 2.5).
-    if (target_.hit && border.blockWithinBounds(target_.x, target_.z)) {
+    if (target_.hit && crosshairEntity < 0 && border.blockWithinBounds(target_.x, target_.z)) {
         const BlockInfo& b = registry_.infos()[world_.block(target_.x, target_.y, target_.z)];
         // VoxelShape.forAllEdges: the edges of the joined shape (DiscreteVoxelShape over the boxes' coordinates), each
         // run along an axis merged into one line.

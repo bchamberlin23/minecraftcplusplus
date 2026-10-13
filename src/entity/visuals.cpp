@@ -428,6 +428,12 @@ bool Visuals::load(const fs::path& jar, const fs::path& minecraftDir, const Game
         return ok;
     };
     m.world.readParticle = [p = m.particles.get()](net::Reader& r, std::string& raw) { return p->readEncoded(r, raw); };
+    m.world.paintingSize = [&m](int variant, int& w, int& h) {
+        const Impl::PaintingInfo* p = m.painting(variant);
+        if (!p) return false;
+        w = p->w, h = p->h;
+        return true;
+    };
     m.world.spawnParticle = [p = m.particles.get()](const std::string& raw, double x, double y, double z, double vx, double vy, double vz) {
         p->spawnEncoded(raw, x, y, z, vx, vy, vz);
     };
@@ -2413,14 +2419,24 @@ void Visuals::Impl::buildTags(const PassContext& ctx) {
     if (frameCounter % 256 == 0)  // forget the text of removed displays
         for (auto it = textBlocks.begin(); it != textBlocks.end();)
             it = world.entities().count(it->first) ? std::next(it) : textBlocks.erase(it);
+    static const int frameTypes[2] = {assets.typeId("minecraft:item_frame"), assets.typeId("minecraft:glow_item_frame")};
     for (const auto& [id, e] : world.entities()) {
-        if (!e.info || e.name.empty() || e.deathTime > 0) continue;
+        if (!e.info || e.deathTime > 0) continue;
+        // ItemFrameRenderer.shouldShowName / getNameTag: only the targeted frame's item, when it has a custom name
+        const bool frame = e.type >= 0 && (e.type == frameTypes[0] || e.type == frameTypes[1]);
+        if (frame && !(id == targeted && e.itemStack && e.itemStack->hasCustomName)) continue;
+        if (!frame && e.name.empty()) continue;
         if (e.category == Category::Living && (e.sharedFlags & 0x20)) continue;
         const bool player = e.category == Category::Player;
-        if (!player && !(e.nameVisible || id == targeted)) continue;
-        if (!player && e.category != Category::Living && !e.nameVisible) continue;
+        if (!frame && !player && !(e.nameVisible || id == targeted)) continue;
+        if (!frame && !player && e.category != Category::Living && !e.nameVisible) continue;
         double p[3];
         for (int a = 0; a < 3; ++a) p[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt;
+        if (frame) {  // ItemFrameRenderer.getRenderOffset: (0.3 x step, -0.25, 0.3 z step)
+            static const int kStepXZ[6][2] = {{0, 0}, {0, 0}, {0, -1}, {0, 1}, {-1, 0}, {1, 0}};
+            const int dir = std::clamp(e.direction, 0, 5);
+            p[0] += kStepXZ[dir][0] * 0.3, p[1] -= 0.25, p[2] += kStepXZ[dir][1] * 0.3;
+        }
         const bool discrete = e.pose == 5;  // crouching
         float h = e.info->height;
         if (player && discrete) h = 1.5f;
@@ -2459,7 +2475,7 @@ void Visuals::Impl::buildTags(const PassContext& ctx) {
         float raise = 0;
         ui::Text score;
         if (d2 < 100.0f && ui::belowNameText(member, score)) submit(tag(score), 0), raise = 9.0f * 1.15f * 0.025f;
-        submit(tag(ui::teamFormattedName(member, ui::Text(e.name))), raise);
+        submit(tag(frame ? e.itemStack->customName : ui::teamFormattedName(member, ui::Text(e.name))), raise);
         ++self.stats_.tags;
     }
 }

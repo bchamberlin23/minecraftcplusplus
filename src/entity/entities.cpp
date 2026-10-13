@@ -931,6 +931,58 @@ void EntityWorld::startInterpolation(Entity& e, const Step* steps, u32 count, fl
     }
 }
 
+namespace {
+// BlockAttachedEntity: item frames, paintings and leash knots stand on a block (setPos snaps any position to it, there
+// is no interpolation) and place themselves from it (recalculateBoundingBox): frames and paintings at the centre of
+// their box, 0.46875 from the block's centre towards their wall (even sized paintings half a block to the left and
+// up), knots at (0.5, 0.375, 0.5). 0: not block-attached, 1 item frame, 2 painting, 3 leash knot.
+int attachedKind(const Entity& e) {
+    if (!e.info) return 0;
+    const std::string& n = e.info->name;
+    if (n == "minecraft:item_frame" || n == "minecraft:glow_item_frame") return 1;
+    return n == "minecraft:painting" ? 2 : n == "minecraft:leash_knot" ? 3 : 0;
+}
+constexpr int kAttachDir[6][3] = {{0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}};
+bool paintingBlocks(const EntityWorld& w, const Entity& e, int& pw, int& ph) {
+    pw = ph = 1;
+    return w.paintingSize && w.paintingSize(e.painting, pw, ph);
+}
+void recalcAttached(const EntityWorld& w, Entity& e, int kind) {
+    const int d = std::clamp(e.direction, 0, 5);
+    double off[3] = {};
+    if (kind == 2) {  // Painting.calculateBoundingBox: the size offsets, left = counter-clockwise of the facing
+        static constexpr int kLeft[6][2] = {{0, 0}, {0, 0}, {-1, 0}, {1, 0}, {0, 1}, {0, -1}};
+        int pw, ph;
+        paintingBlocks(w, e, pw, ph);
+        const double hOff = pw % 2 == 0 ? 0.5 : 0.0;
+        off[0] = kLeft[d][0] * hOff, off[1] = ph % 2 == 0 ? 0.5 : 0.0, off[2] = kLeft[d][1] * hOff;
+    }
+    for (int a = 0; a < 3; ++a) {
+        const double block = e.attachBlock[a];
+        e.pos[a] = e.prevPos[a] = kind == 3 ? block + (a == 1 ? 0.375 : 0.5) : block + 0.5 - kAttachDir[d][a] * 0.46875 + off[a];
+    }
+    if (kind == 1) std::copy(e.pos, e.pos + 3, e.codecBase);  // ItemFrame.recalculateBoundingBox: syncPacketPositionCodec
+    e.stepCount = 0, e.remainingTicks = 0, e.linearRemaining = 0;
+}
+void placeAttached(const EntityWorld& w, Entity& e, int kind, const double at[3]) {
+    for (int a = 0; a < 3; ++a) e.attachBlock[a] = int(std::floor(at[a]));
+    recalcAttached(w, e, kind);
+}
+// The box of a frame or painting (centred, 1/16 deep), relative to its position.
+bool attachedBox(const EntityWorld& w, const Entity& e, double lo[3], double hi[3]) {
+    const int kind = attachedKind(e);
+    if (kind != 1 && kind != 2) return false;
+    int pw = 1, ph = 1;
+    double width = 0.75, height = 0.75;  // ItemFrame.createBoundingBox: a framed map fills the block
+    if (kind == 2) paintingBlocks(w, e, pw, ph), width = pw, height = ph;
+    else if (e.itemId >= 0 && e.mapId >= 0) width = height = 1.0;
+    const int d = std::clamp(e.direction, 0, 5);
+    const double size[3] = {kAttachDir[d][0] ? 0.0625 : width, kAttachDir[d][1] ? 0.0625 : height, kAttachDir[d][2] ? 0.0625 : width};
+    for (int a = 0; a < 3; ++a) lo[a] = -size[a] / 2, hi[a] = size[a] / 2;
+    return true;
+}
+}  // namespace
+
 void EntityWorld::apply(const Event& ev, const EventQueue& q) {
     if (ev.type == EventType::TransientBlock) {  // ClientPacketListener.handleAddTransientBlockPacket
         std::erase_if(transientBlocks, [&](const TransientBlock& t) { return t.x == int(ev.d[0]) && t.y == int(ev.d[1]) && t.z == int(ev.d[2]); });
@@ -982,14 +1034,7 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
         e.lerpHeadYaw = ev.f[2];
         if (e.category == Category::Block) e.blockState = ev.b;
         e.direction = ev.b;
-        if (e.info && (e.info->name == "minecraft:item_frame" || e.info->name == "minecraft:glow_item_frame")) {
-            // ItemFrame.recreateFromPacket: the packet holds the block position; the frame sits at the block's centre
-            // moved 0.46875 back against the wall it hangs on (createBoundingBox).
-            static constexpr int kDir[6][3] = {{0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}};
-            const int d = std::clamp(ev.b, 0, 5);
-            for (int a = 0; a < 3; ++a)
-                e.pos[a] = e.prevPos[a] = std::floor(ev.d[a]) + 0.5 - kDir[d][a] * 0.46875;
-        }
+        if (const int kind = attachedKind(e)) placeAttached(*this, e, kind, ev.d);  // recreateFromPacket: the block position
         e.display.is = size_t(ev.a) < dataIds_.size() && dataIds_[size_t(ev.a)].dTranslation >= 0;
         if (e.category == Category::Player) {
             auto it = players_.find(uuidKey(ev.uuid));
@@ -1058,6 +1103,11 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
                 if (n) std::copy(steps[n - 1].pos, steps[n - 1].pos + 3, e.codecBase);
             }
             if (e.id == localControl_) break;  // our own vehicle: the client moves it
+            if (const int kind = attachedKind(e)) {
+                const double at[3] = {n ? steps[n - 1].pos[0] : e.pos[0], n ? steps[n - 1].pos[1] : e.pos[1], n ? steps[n - 1].pos[2] : e.pos[2]};
+                placeAttached(*this, e, kind, at);
+                break;
+            }
             e.onGround = ev.b != 0;
             if (n || ev.hasRot) startInterpolation(e, steps, n, ev.f[0], ev.f[1], ev.hasRot);
             break;
@@ -1066,6 +1116,10 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
             const Step& last = q.steps[ev.first + ev.count - 1];
             std::copy(last.pos, last.pos + 3, e.codecBase);
             if (e.id == localControl_) break;
+            if (const int kind = attachedKind(e)) {
+                placeAttached(*this, e, kind, last.pos);
+                break;
+            }
             const double dx = last.pos[0] - e.pos[0], dy = last.pos[1] - e.pos[1], dz = last.pos[2] - e.pos[2];
             if (dx * dx + dy * dy + dz * dz > 4096.0) {
                 std::copy(last.pos, last.pos + 3, e.pos);
@@ -1088,6 +1142,10 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
             const float pitch = (ev.a & 16) ? e.pitch + ev.f[1] : ev.f[1];
             std::copy(s.pos, s.pos + 3, e.codecBase);
             if (e.id == localControl_) break;
+            if (const int kind = attachedKind(e)) {
+                placeAttached(*this, e, kind, s.pos);
+                break;
+            }
             for (int a = 0; a < 3; ++a) e.vel[a] = (ev.a & (32 << a)) ? e.vel[a] + ev.d[3 + a] : ev.d[3 + a];
             startInterpolation(e, &s, 1, yaw, pitch, true);
             e.onGround = ev.flag;
@@ -1208,7 +1266,10 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
             e.itemId = int(v.i), e.itemCount = std::max(1, int(v.f[0])), e.itemDye = i32(v.f[1]), e.itemFoil = v.f[2] > 0.5f,
             e.mapId = int(v.f[3]), e.itemStack = v.stack >= 0 ? q.stacks[size_t(v.stack)] : nullptr;
         else if (idx == d.rotation && v.serializer == 1) e.rotation = int(v.i);
-        else if (idx == d.painting && v.serializer == 34) e.painting = int(v.i);
+        else if (idx == d.painting && v.serializer == 34) {
+            e.painting = int(v.i);
+            if (attachedKind(e) == 2) recalcAttached(*this, e, 2);  // Painting.onSyncedDataUpdated
+        }
         else if (idx == d.nameVisible && v.serializer == 8) e.nameVisible = v.i != 0;
         else if (idx == d.size) e.size = std::max(1, int(v.i));
         else if (idx == d.swellDir) e.swellDir = int(v.i);
@@ -1767,7 +1828,9 @@ PickResult EntityWorld::pick(const double o[3], const double dir[3], double maxD
         entitySize(e, w, h);
         double c[3];
         for (int a = 0; a < 3; ++a) c[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt;
-        const double lo[3] = {c[0] - w / 2, c[1], c[2] - w / 2}, hi[3] = {c[0] + w / 2, c[1] + h, c[2] + w / 2};
+        double lo[3] = {c[0] - w / 2, c[1], c[2] - w / 2}, hi[3] = {c[0] + w / 2, c[1] + h, c[2] + w / 2};
+        if (double blo[3], bhi[3]; attachedBox(*this, e, blo, bhi))
+            for (int a = 0; a < 3; ++a) lo[a] = c[a] + blo[a], hi[a] = c[a] + bhi[a];
         double t0 = 0, t1 = best.distance;
         bool hit = true;
         for (int a = 0; a < 3 && hit; ++a) {
