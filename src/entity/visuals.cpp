@@ -232,6 +232,10 @@ struct Visuals::Impl {
     std::mt19937 fxRandom{0xC0FFEEu};
     void entityEffect(const Entity& e, int event, bool animate);
     void mobTick(const Entity& e);  // the client-side particles / sounds of entity ticks (aiStep's isClientSide parts)
+    std::unordered_map<int, u8> wasOnGround;  // AbstractCubeMob.wasOnGround (landing particles)
+    std::unordered_map<int, int> stunnedTicks;  // Ravager.stunnedTick (event 39)
+    // LivingEntity.breakItem: the item's break sound and five shards from the eyes (item: network id).
+    void breakItem(int item, const double pos[3], double eyeHeight, float yaw, float pitch, bool silent, audio::Category category);
     bool emit(Emitter& em);  // TrackingEmitter.tick; false when the emitter is done
     void tickEmitters();
     bool crackDraw = false;
@@ -2310,6 +2314,100 @@ void Visuals::Impl::entityEffect(const Entity& e, int event, bool animate) {
     const bool tamable = n == "minecraft:wolf" || n == "minecraft:cat" || n == "minecraft:parrot" || n.ends_with("horse") ||
                          n == "minecraft:donkey" || n == "minecraft:mule" || n.ends_with("llama") || n == "minecraft:camel" ||
                          n == "minecraft:nautilus";
+    std::shared_lock lock0(world.world().mutex(), std::defer_lock);
+    auto R = [&] { return u(fxRandom); };
+    auto at = [&](double s) {  // getRandomX(s), getRandomY(), getRandomZ(s)
+        return std::array<double, 3>{e.pos[0] + (2 * R() - 1) * w * s, e.pos[1] + R() * h, e.pos[2] + (2 * R() - 1) * w * s};
+    };
+    audio::AudioSystem* au = e.silent ? nullptr : audio::instance();
+    const audio::Category cat = e.category == Category::Player ? audio::Category::Player : audio::Category::Hostile;
+    if (!animate && event >= 47 && event <= 68) {  // LivingEntity: items breaking, honey, drowning
+        static const int kBreakSlot[22] = {0, 1, 5, 4, 3, 2, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 6, -1, -1, 7};  // 47..68
+        const int slot = kBreakSlot[event - 47];
+        if (slot >= 0 && e.equipment[slot] >= 0) {
+            breakItem(e.equipment[slot], e.pos, e.info->eye, e.yaw, e.pitch, e.silent, cat);
+            return;
+        }
+        if (event == 53 || event == 54) {  // HoneyBlock.showSlideParticles / showJumpParticles
+            lock0.lock();
+            for (int i = 0; i < (event == 53 ? 5 : 10); ++i) particles->spawnBlock("block", "minecraft:honey_block", e.pos[0], e.pos[1], e.pos[2], 0, 0, 0);
+            return;
+        }
+        if (event == 67) {  // makeDrownParticles
+            lock0.lock();
+            for (int i = 0; i < 8; ++i)
+                particles->spawn("bubble", e.pos[0] + (R() - R()), e.pos[1] + (R() - R()), e.pos[2] + (R() - R()), e.vel[0], e.vel[1], e.vel[2]);
+            return;
+        }
+    }
+    if (!animate && event == 3 && (n == "minecraft:snowball" || n == "minecraft:egg" || n == "minecraft:blue_egg" || n == "minecraft:brown_egg")) {
+        lock0.lock();  // Snowball / ThrownEgg: the item's shards where it hit
+        for (int i = 0; i < 8; ++i) {
+            if (n == "minecraft:snowball") {
+                if (e.itemId >= 0) particles->itemShard(e.itemId, e.pos[0], e.pos[1], e.pos[2], 0, 0, 0);
+                else particles->spawn("item_snowball", e.pos[0], e.pos[1], e.pos[2], 0, 0, 0);
+            } else if (e.itemId >= 0) {
+                particles->itemShard(e.itemId, e.pos[0], e.pos[1], e.pos[2], (R() - 0.5) * 0.08, (R() - 0.5) * 0.08, (R() - 0.5) * 0.08);
+            }
+        }
+        return;
+    }
+    if (!animate && event == 0 && n == "minecraft:arrow") {  // Arrow: its potion's colour bursting
+        const i64 color = dataInt(e, "ID_EFFECT_COLOR", -1);
+        if (color != -1) {
+            lock0.lock();
+            for (int i = 0; i < 20; ++i) {
+                const auto p = at(0.5);
+                particles->spawnColored("entity_effect", p[0], p[1], p[2], 0, 0, 0, 0xFF000000u | u32(color & 0xFFFFFF));
+            }
+        }
+        return;
+    }
+    if (!animate && event == 38 && n == "minecraft:dolphin") {  // Dolphin.addParticlesAroundSelf
+        lock0.lock();
+        for (int i = 0; i < 7; ++i) {
+            const auto p = at(1.0);
+            particles->spawn("happy_villager", p[0], p[1] + 0.2, p[2], g(fxRandom) * 0.01, g(fxRandom) * 0.01, g(fxRandom) * 0.01);
+        }
+        return;
+    }
+    if (!animate && event == 15 && n == "minecraft:witch") {  // Witch: drinking
+        lock0.lock();
+        const int count = int(fxRandom() % 35) + 10;
+        for (int i = 0; i < count; ++i)
+            particles->spawn("witch", e.pos[0] + g(fxRandom) * 0.13, e.pos[1] + h + 0.5 + g(fxRandom) * 0.13, e.pos[2] + g(fxRandom) * 0.13, 0, 0, 0);
+        return;
+    }
+    if (!animate && event == 45 && n == "minecraft:fox" && e.equipment[0] >= 0) {  // Fox: eating what it holds
+        lock0.lock();
+        const float yaw = e.yaw * kDeg, pitch = e.pitch * kDeg;
+        const double lx = -std::sin(yaw) * std::cos(pitch), lz = std::cos(yaw) * std::cos(pitch);
+        for (int i = 0; i < 8; ++i) {
+            double d[3] = {(R() - 0.5) * 0.1, R() * 0.1 + 0.1, 0.0};
+            const double y1 = d[1] * std::cos(-pitch) - d[2] * std::sin(-pitch), z1 = d[1] * std::sin(-pitch) + d[2] * std::cos(-pitch);  // xRot
+            const double x2 = d[0] * std::cos(-yaw) + z1 * std::sin(-yaw), z2 = -d[0] * std::sin(-yaw) + z1 * std::cos(-yaw);       // yRot
+            particles->itemShard(e.equipment[0], e.pos[0] + lx / 2.0, e.pos[1], e.pos[2] + lz / 2.0, x2, y1 + 0.05, z2);
+        }
+        return;
+    }
+    if (!animate && (event == 40 || event == 41) && n == "minecraft:ocelot") {  // Ocelot.spawnTrustingParticles
+        burst(event == 41 ? "heart" : "smoke", 7, 0.5, 0);
+        return;
+    }
+    if (!animate && event == 69 && n == "minecraft:ravager") {  // Ravager.addRoarParticleEffects
+        lock0.lock();
+        for (int i = 0; i < 40; ++i) particles->spawn("poof", e.pos[0], e.pos[1] + h / 2, e.pos[2], g(fxRandom) * 0.2, g(fxRandom) * 0.2, g(fxRandom) * 0.2);
+        return;
+    }
+    if (!animate && event == 39 && n == "minecraft:ravager") stunnedTicks[e.id] = 40;
+    if (!animate && au) {  // playLocalSound in handleEntityEvent
+        if (event == 16 && n == "minecraft:zombie_villager")
+            au->play("minecraft:entity.zombie_villager.cure", audio::Category::Hostile, e.pos[0], e.pos[1] + e.info->eye, e.pos[2], float(1 + R()), float(R() * 0.7 + 0.3));
+        else if (event == 64 && n == "minecraft:armadillo")
+            au->play("minecraft:entity.armadillo.peek", audio::Category::Neutral, e.pos[0], e.pos[1], e.pos[2], 1.0f, 1.0f);
+        else if (event == 4 && n == "minecraft:evoker_fangs")
+            au->play("minecraft:entity.evoker_fangs.attack", audio::Category::Hostile, e.pos[0], e.pos[1], e.pos[2], 1.0f, float(R() * 0.2 + 0.85));
+    }
     if (event == 60 || event == 20) burst("poof", 20, 0, 10);  // LivingEntity.makePoofParticles, Mob.spawnAnim
     else if (event == 18 && e.category == Category::Living) burst("heart", 7, 0.5, 0);  // Animal: in love
     else if ((event == 6 || event == 7) && tamable) burst(event == 7 ? "heart" : "smoke", 7, 0.5, 0);  // taming
@@ -2328,6 +2426,55 @@ void Visuals::Impl::entityEffect(const Entity& e, int event, bool animate) {
             const double z = e.prevPos[2] + (e.pos[2] - e.prevPos[2]) * d + (u(fxRandom) - 0.5) * w * 2.0;
             particles->spawn("portal", x, y, z, xa, ya, za);
         }
+    }
+}
+
+void Visuals::Impl::breakItem(int item, const double pos[3], double eyeHeight, float yawDeg, float pitchDeg, bool silent, audio::Category category) {
+    if (item < 0 || !particles) return;
+    std::uniform_real_distribution<double> u(0.0, 1.0);
+    const std::string name = models.itemName(item);
+    if (audio::AudioSystem* a = silent ? nullptr : audio::instance()) {  // DataComponents.BREAK_SOUND
+        const char* sound = name == "shield" ? "minecraft:item.shield.break" : name == "wolf_armor" ? "minecraft:item.wolf_armor.break" : "minecraft:entity.item.break";
+        a->play(sound, category, pos[0], pos[1], pos[2], 0.8f, float(0.8 + u(fxRandom) * 0.4));
+    }
+    const double yaw = -yawDeg * kDeg, pitch = -pitchDeg * kDeg;
+    auto rot = [&](double v[3]) {  // Vec3.xRot(-xRot).yRot(-yRot)
+        const double y1 = v[1] * std::cos(pitch) + v[2] * std::sin(pitch), z1 = v[2] * std::cos(pitch) - v[1] * std::sin(pitch);
+        const double x2 = v[0] * std::cos(yaw) + z1 * std::sin(yaw), z2 = z1 * std::cos(yaw) - v[0] * std::sin(yaw);
+        v[0] = x2, v[1] = y1, v[2] = z2;
+    };
+    std::shared_lock lock(world.world().mutex());
+    for (int i = 0; i < 5; ++i) {  // spawnItemParticles
+        double d[3] = {(u(fxRandom) - 0.5) * 0.1, u(fxRandom) * 0.1 + 0.1, 0.0};
+        rot(d);
+        double p[3] = {(u(fxRandom) - 0.5) * 0.3, -u(fxRandom) * 0.6 - 0.3, 0.6};
+        rot(p);
+        particles->itemShard(item, pos[0] + p[0], pos[1] + eyeHeight + p[1], pos[2] + p[2], d[0], d[1] + 0.05, d[2]);
+    }
+}
+
+void Visuals::localEntityEvent(int event) {  // our own entity's events (LocalPlayer.handleEntityEvent)
+    Impl& m = *impl_;
+    if (!m.game || !m.particles) return;
+    const Player& p = m.game->player();
+    static const int kSlots[22] = {-2, 45, 5, 6, 7, 8, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};  // 47..
+    if (event >= 47 && event <= 52) {
+        const int slot = kSlots[event - 47] == -2 ? 36 + m.game->selectedSlot() : kSlots[event - 47];
+        int item;
+        i32 dye;
+        bool foil;
+        m.heldStack(slot, item, dye, foil);
+        m.breakItem(item, p.pos, p.eyeHeight(), p.yaw / kDeg, p.pitch / kDeg, false, audio::Category::Player);
+    } else if (event == 53 || event == 54 || event == 67) {
+        std::uniform_real_distribution<double> u(0.0, 1.0);
+        std::shared_lock lock(m.world.world().mutex());
+        if (event == 67)
+            for (int i = 0; i < 8; ++i)
+                m.particles->spawn("bubble", p.pos[0] + (u(m.fxRandom) - u(m.fxRandom)), p.pos[1] + (u(m.fxRandom) - u(m.fxRandom)),
+                                   p.pos[2] + (u(m.fxRandom) - u(m.fxRandom)), p.vel[0], p.vel[1], p.vel[2]);
+        else
+            for (int i = 0; i < (event == 53 ? 5 : 10); ++i)
+                m.particles->spawnBlock("block", "minecraft:honey_block", p.pos[0], p.pos[1], p.pos[2], 0, 0, 0);
     }
 }
 
@@ -2384,6 +2531,66 @@ void Visuals::Impl::mobTick(const Entity& e) {
         const float hh = (0.3f + anim * 0.45f) * h * 2.5f;
         particles->spawn("mycelium", e.pos[0] + c, e.pos[1] + hh, e.pos[2] + s, 0, 0, 0);
         particles->spawn("mycelium", e.pos[0] - c, e.pos[1] + hh, e.pos[2] - s, 0, 0, 0);
+    } else if (n == "minecraft:guardian" || n == "minecraft:elder_guardian") {  // Guardian.aiStep (client)
+        const bool moving = dataInt(e, "DATA_ID_MOVING") != 0;
+        if (!e.inWater) {  // flopping on land
+            u8& touched = wasOnGround[e.id];
+            if (e.vel[1] > 0.0 && touched)
+                sound(n == "minecraft:guardian" ? "minecraft:entity.guardian.flop" : "minecraft:entity.elder_guardian.flop", audio::Category::Hostile,
+                      e.pos[0], e.pos[1], e.pos[2], 1.0f, 1.0f);
+            touched = e.vel[1] < 0.0 && e.onGround;
+        } else if (moving) {
+            const float yaw = e.yaw * kDeg, pitch = e.pitch * kDeg;
+            const double vx = -std::sin(yaw) * std::cos(pitch), vy = -std::sin(pitch), vz = std::cos(yaw) * std::cos(pitch);
+            for (int i = 0; i < 2; ++i) particles->spawn("bubble", rx(0.5) - vx * 1.5, ry() - vy * 1.5, rz(0.5) - vz * 1.5, 0, 0, 0);
+        }
+        if (e.attackTarget != 0) {  // the beam's bubbles towards the target
+            auto t = world.entities().find(e.attackTarget);
+            if (t != world.entities().end() && t->second.info) {
+                const double duration = n == "minecraft:elder_guardian" ? 60.0 : 80.0;
+                const double scale = std::min(double(e.attackTime) / duration, 1.0);  // getAttackAnimationScale
+                const double eye = e.pos[1] + e.info->eye;
+                double dx = t->second.pos[0] - e.pos[0], dy = t->second.pos[1] + t->second.info->height * 0.5 - eye, dz = t->second.pos[2] - e.pos[2];
+                const double dd = std::sqrt(dx * dx + dy * dy + dz * dz);
+                if (dd > 0) {
+                    dx /= dd, dy /= dd, dz /= dd;
+                    for (double dist = R(); dist < dd;) {
+                        dist += 1.8 - scale + R() * (1.7 - scale);
+                        particles->spawn("bubble", e.pos[0] + dx * dist, eye + dy * dist, e.pos[2] + dz * dist, 0, 0, 0);
+                    }
+                }
+            }
+        }
+    } else if (n == "minecraft:ravager") {  // Ravager.aiStep: stunEffect while stunned
+        auto it = stunnedTicks.find(e.id);
+        if (it != stunnedTicks.end()) {
+            if (fxRandom() % 6 == 0) {
+                const float by = e.bodyYaw * kDeg;
+                particles->spawnColored("entity_effect", e.pos[0] - w * std::sin(by) + (R() * 0.6 - 0.3), e.pos[1] + h - 0.3,
+                                        e.pos[2] + w * std::cos(by) + (R() * 0.6 - 0.3), 0, 0, 0, 0xFF7F8392);
+            }
+            if (--it->second <= 0) stunnedTicks.erase(it);
+        }
+    } else if (n == "minecraft:slime" || n == "minecraft:magma_cube") {  // AbstractCubeMob.tick: particles on landing
+        u8& was = wasOnGround[e.id];
+        if (e.onGround && !was) {
+            const float size = w * 2.0f, radius = size / 2.0f;
+            for (int i = 0; i < int(size * 16.0f); ++i) {
+                const float dir = float(R()) * 6.2831853f, d = float(R()) * 0.5f + 0.5f;
+                particles->spawn(n == "minecraft:slime" ? "item_slime" : "flame", e.pos[0] + std::sin(dir) * radius * d, e.pos[1],
+                                 e.pos[2] + std::cos(dir) * radius * d, 0, 0, 0);
+            }
+        }
+        was = e.onGround;
+    } else if (n == "minecraft:evoker" || n == "minecraft:illusioner") {  // SpellcasterIllager.tick: the spell in its hands
+        const int spell = int(dataInt(e, "DATA_SPELL_CASTING_ID"));
+        static const u32 kSpell[6] = {0xFF000000, 0xFFB3B3CC, 0xFF664D59, 0xFFB38033, 0xFF4D4DCC, 0xFF1A1A33};
+        if (spell > 0 && spell < 6) {
+            const float angle = e.bodyYaw * kDeg + std::cos(float(e.age) * 0.6662f) * 0.25f;
+            const float c = std::cos(angle), s = std::sin(angle);
+            particles->spawnColored("entity_effect", e.pos[0] + c * 0.6, e.pos[1] + 1.8, e.pos[2] + s * 0.6, 0, 0, 0, kSpell[spell]);
+            particles->spawnColored("entity_effect", e.pos[0] - c * 0.6, e.pos[1] + 1.8, e.pos[2] - s * 0.6, 0, 0, 0, kSpell[spell]);
+        }
     } else if (n == "minecraft:wither") {  // WitherBoss.aiStep: smoke at the heads, powered / invulnerable sparkles
         const bool powered = e.health <= 150.0f;
         for (int i = 0; i < 3; ++i) {

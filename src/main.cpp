@@ -921,6 +921,7 @@ int wmain(int argc, wchar_t** argv) {
                                    });
         entities.onUntrackedEntityEvent = [&](int id, int event) {  // our own entity events
             if (event == 2 && session && id == session->entityId()) gameplay.kineticHit();  // EntityEvent.KINETIC_HIT
+            if (session && id == session->entityId()) visuals.localEntityEvent(event);
         };
         blockEntityRenderer.setBlockSink([&](const std::vector<net::BlockChange>& c) {
             if (session) session->applyClientBlocks(c);

@@ -78,6 +78,8 @@ public:
     void spawn(std::string_view type, double x, double y, double z, double vx, double vy, double vz);
     // ColorParticleOption types (entity_effect, tinted_leaves...): with an ARGB colour.
     void spawnColored(std::string_view type, double x, double y, double z, double vx, double vy, double vz, u32 argb);
+    // BlockParticleOption types (block, falling_dust...) for a block state key ("minecraft:honey_block").
+    void spawnBlock(std::string_view type, std::string_view stateKey, double x, double y, double z, double vx, double vy, double vz);
     // An encoded ParticleOptions (type id, then its options: an entity's synched particle): read past it keeping the
     // bytes (network thread), and spawn one from such bytes (main thread, ClientLevel.addAlwaysVisibleParticle).
     bool readEncoded(net::Reader& r, std::string& raw) const;

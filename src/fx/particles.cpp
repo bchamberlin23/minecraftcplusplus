@@ -1651,6 +1651,12 @@ void Particles::spawn(std::string_view type, double x, double y, double z, doubl
     add(typeId(type), x, y, z, vx, vy, vz);
 }
 
+void Particles::spawnBlock(std::string_view type, std::string_view stateKey, double x, double y, double z, double vx, double vy, double vz) {
+    Options o;
+    o.block = reports_.stateId(reports_.complete(stateKey));
+    if (o.block > 0) add(typeId(type), x, y, z, vx, vy, vz, &o);
+}
+
 void Particles::spawnColored(std::string_view type, double x, double y, double z, double vx, double vy, double vz, u32 argb) {
     Options o;
     o.hasColor = true, o.color = argb;
