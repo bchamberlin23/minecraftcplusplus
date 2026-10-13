@@ -90,7 +90,10 @@ pings on five threads, the legacy ping fallback, the pinging / unreachable / inc
 LAN entries, Shift+arrow moves, F5) and ConnectScreen while joining; the world list as LevelSummary / WorldOpenFlows
 (incompatible / conversion / file fixing / downgrade / experimental states and overlays, the backup questions, low
 disk space, an empty list opening Create World), OptimizeWorldScreen, the Message / Confirm screens as
-DisconnectedScreen / AlertScreen / ConfirmScreen, and tab list heads. Tested against local mock status servers
+DisconnectedScreen / AlertScreen / ConfirmScreen, and tab list heads; note block instruments predicted (a table generated
+from Blocks.java); Create World (Allow Commands, debug states, flat preset parsing, the flat list, game rule styles);
+Statistics (loading tab, selection, sorting, Ctrl+Tab); the menu background blur (Canvas.markBlur + PostEffects.blur
+mid-UI, both with and without the UI layer; the pause menu and the menus use it, block editors the gradient). Tested against local mock status servers
 (a Python script: modern, no-version, legacy-only, silent and closing servers).
 
 ## Protocol / networking
@@ -136,6 +139,8 @@ DisconnectedScreen / AlertScreen / ConfirmScreen, and tab list heads. Tested aga
   server upgrades on start, without Java's "upgradeWorld.done / joinNow" confirmation; Optimize World shows one bar and
   the total from the server's log (no per-dimension bars or converted / skipped counts); a failed backup's toast has
   no reason line.
+- Pack screens: Options' Resource Packs and Create World's Data Packs are this port's Mods & Packs manager (one list
+  of switches) rather than PackSelectionScreen's Available / Selected lists.
 - SystemToasts without a trigger here: PACK_LOAD_FAILURE, FILE_DROP_FAILURE, CHUNK_LOAD/SAVE_FAILURE (the server
   runs out of process), the demo overlay and the regional PeriodicNotificationManager.
 
@@ -152,7 +157,7 @@ DisconnectedScreen / AlertScreen / ConfirmScreen, and tab list heads. Tested aga
   `{Name:...}` compound is silently ignored (an air display).
 - **Placement prediction (game/placement.cpp) residual**: not predicted client-side (the server's block updates
   fix them a moment later; rails are straight along the look as the Java client places them): note block
-  instruments, repeater / comparator neighbours' power, and BlockItem.canPlace's canSurvive beyond the covered families
+  repeater / comparator neighbours' power, and BlockItem.canPlace's canSurvive beyond the covered families
   (vegetation and wither roses by their tags, crops / stems on farmland, carpets, rails, diodes, pressure plates, door
   bottoms, torches, signs, banners, lanterns, attached blocks, ladders, vines, dripstone, wire): mushrooms by light,
   lily pads (placed on water), tall seagrass and the like (dry vegetation, nether plants, wart, bamboo, cactus, sugar cane,
