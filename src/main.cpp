@@ -1314,6 +1314,7 @@ int wmain(int argc, wchar_t** argv) {
             sky.setOptions({vs.cloudStatus, vs.cloudRange, vs.weatherRadius, float(vs.gamma), vs.hideLightningFlash});
             visuals.setVideo(vs.particles, vs.weatherRadius);
             glintOptions().speed = vs.glintSpeed, glintOptions().strength = float(vs.glintStrength);
+            renderer.setTextureFiltering(vs.textureFiltering, vs.mipmapLevels, vs.maxAnisotropyBit);  // block texture sampling
         }
         if (haveEntities)
             entityRenderer.setShadows(ui.settings().entityShadows, sky.skyDarken(), session ? session->dimension().ambientLight : 0.0f);
