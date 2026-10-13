@@ -95,7 +95,9 @@ from Blocks.java); Create World (Allow Commands, debug states, flat preset parsi
 Statistics (loading tab, selection, sorting, Ctrl+Tab); the menu background blur (Canvas.markBlur + PostEffects.blur
 mid-UI, both with and without the UI layer; the pause menu and the menus use it, block editors the gradient); lily
 pads / frogspawn and mushrooms predicted; the death screen's title confirmation and score; game mode switching
-permissions and the previous mode; credits details; options sliders and Ctrl+wheel GUI scale. Tested against local mock status servers
+permissions and the previous mode; credits details; options sliders and Ctrl+wheel GUI scale; repeater locking; the
+death message's hover / links; books (lengths, truncation, lectern click events, silent key page turns) and the sign
+preview in the world; the recipe book (narrow windows, overlay, resets, id searches, ghosts, toast list). Tested against local mock status servers
 (a Python script: modern, no-version, legacy-only, silent and closing servers).
 
 ## Protocol / networking
