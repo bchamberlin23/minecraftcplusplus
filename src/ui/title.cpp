@@ -16,7 +16,7 @@ namespace {
 
 constexpr float kPi = 3.14159265f;
 
-std::string pickSplash(const Resources& res) {
+std::string pickSplash(const Resources& res, const std::string& playerName) {
     const std::time_t now = std::time(nullptr);
     std::tm tm{};
     localtime_s(&tm, &now);
@@ -26,21 +26,29 @@ std::string pickSplash(const Resources& res) {
     if (tm.tm_mon == 9 && tm.tm_mday == 31) return "OOoooOOOoooo! Spooky!";
     std::vector<u8> bytes;
     if (!res.read("assets/minecraft/texts/splashes.txt", bytes)) return {};
+    // SplashManager.prepare: every line trimmed, without the one that "will never appear"
     std::vector<std::string> lines;
     std::string cur;
+    auto add = [&] {
+        const size_t a = cur.find_first_not_of(" \t\r"), b = cur.find_last_not_of(" \t\r");
+        std::string line = a == std::string::npos ? std::string() : cur.substr(a, b - a + 1);
+        if (line != "This message will never appear on the splash screen, isn't that weird?") lines.push_back(std::move(line));
+        cur.clear();
+    };
     for (u8 b : bytes) {
-        if (b == '\n') {
-            if (!cur.empty() && cur.back() == '\r') cur.pop_back();
-            if (!cur.empty()) lines.push_back(cur);
-            cur.clear();
-        } else {
-            cur += char(b);
-        }
+        if (b == '\n') add();
+        else cur += char(b);
     }
-    if (!cur.empty()) lines.push_back(cur);
+    if (!cur.empty()) add();
     if (lines.empty()) return {};
     std::mt19937 rng(std::random_device{}());
-    return lines[std::uniform_int_distribution<size_t>(0, lines.size() - 1)(rng)];
+    auto pick = [&] { return std::uniform_int_distribution<size_t>(0, lines.size() - 1)(rng); };
+    if (!playerName.empty() && pick() == 42) {  // "<NAME> IS YOU"
+        std::string upper = playerName;
+        for (char& ch : upper) ch = char(std::toupper(u8(ch)));
+        return upper + " IS YOU";
+    }
+    return lines[pick()];
 }
 
 void tileTexture(Canvas& c, const Sprite* t, float x0, float y0, float x1, float y1, float tile) {
@@ -417,7 +425,10 @@ void frontEndInit(State& s) {
     FrontEndState& f = *s.fe;
     if (f.cfg.lanPort) f.lanOpenPort = f.cfg.lanPort;
     if (!f.cfg.menu) return;
-    f.splash = pickSplash(s.res);
+    f.splash = pickSplash(s.res, f.cfg.playerName);
+    f.titleFading = f.cfg.openScreen.empty();  // a fresh start (returning from a world passes --menu title / a list)
+    std::mt19937 rng(std::random_device{}());
+    f.minceraft = std::uniform_real_distribution<float>(0.0f, 1.0f)(rng) < 1.0E-4f;
     // The title screen is the first screen: no cursor recentring (openScreen does that when leaving the game).
     s.screen = Screen::Title;
     s.window->setClickCaptures(false);
@@ -471,9 +482,31 @@ void buildTitle(State& s) {
 void drawTitle(State& s, Canvas& c) {
     FrontEndState& f = *s.fe;
     const int W = c.guiWidth(), H = c.guiHeight();
+    float widgetFade = 1.0f;  // TitleScreen.extractRenderState: fade = elapsed / 2 s, widgets from half way
+    if (f.titleFading) {
+        if (f.titleFadeStart < 0) f.titleFadeStart = s.clock;
+        const float fade = float(s.clock - f.titleFadeStart) / 2.0f;
+        if (fade > 1.0f) f.titleFading = false;
+        else widgetFade = std::clamp((std::clamp(fade, 0.0f, 1.0f) - 0.5f) / 0.5f, 0.0f, 1.0f);
+    }
+    // The widgets first (the buttons and the copyright line), then the logo, the splash and the version.
+    c.setAlpha(widgetFade);
+    // PlainTextButton: the copyright line, underlined while hovered, opens Credits and Attribution.
+    Text credits(s.res.translate("title.credits"));
+    const int cw = s.font.width(credits);
+    if (s.mouseX >= W - cw - 2 && s.mouseX < W - 2 && s.mouseY >= H - 10 && s.mouseY < H) {
+        Style underlined;
+        underlined.underlined = 1;
+        credits = credits.withStyle(underlined);
+    }
+    s.drawText(c, credits, float(W - cw - 2), float(H - 10), 0xFFFFFFFF, true);
+    s.drawButtons(c);
     // LogoRenderer: 256x44 of the 256x64 logo, the edition 7 pixels into it.
-    blitTexture(c, s.sprites.texture("gui/title/minecraft"), float(W / 2 - 128), 30, 0, 0, 256, 44, 256, 64);
+    c.setAlpha(f.keepLogoThroughFade ? 1.0f : widgetFade);
+    blitTexture(c, s.sprites.texture(f.minceraft ? "gui/title/minceraft" : "gui/title/minecraft"), float(W / 2 - 128), 30, 0, 0, 256, 44,
+                256, 64);
     blitTexture(c, s.sprites.texture("gui/title/edition"), float(W / 2 - 64), 30 + 44 - 7, 0, 0, 128, 14, 128, 16);
+    c.setAlpha(widgetFade);
     if (!f.splash.empty() && !s.settings.hideSplashTexts) {  // SplashRenderer (TitleScreen: unless Hide Splash Texts)
         const Text splash(f.splash);
         const int textW = s.font.width(splash);
@@ -487,16 +520,7 @@ void drawTitle(State& s, Canvas& c) {
         c.pop();
     }
     s.drawText(c, Text("Minecraft " + f.cfg.version + " (minecraftCplusplus)"), 2, float(H - 10), 0xFFFFFFFF, true);
-    // PlainTextButton: the copyright line, underlined while hovered, opens Credits and Attribution.
-    Text credits(s.res.translate("title.credits"));
-    const int cw = s.font.width(credits);
-    if (s.mouseX >= W - cw - 2 && s.mouseX < W - 2 && s.mouseY >= H - 10 && s.mouseY < H) {
-        Style underlined;
-        underlined.underlined = 1;
-        credits = credits.withStyle(underlined);
-    }
-    s.drawText(c, credits, float(W - cw - 2), float(H - 10), 0xFFFFFFFF, true);
-    s.drawButtons(c);
+    c.setAlpha(1.0f);
 }
 
 // --- dispatch -----------------------------------------------------------------------------------------------------
@@ -636,7 +660,8 @@ void Ui::startTitle() {
     State& s = *s_;
     FrontEndState& f = *s.fe;
     std::vector<std::wstring> args = launch::stickyArguments();
-    if (!f.titleMenu.empty()) args.insert(args.end(), {L"--menu", widen(f.titleMenu)});
+    // the list to open, or the plain title screen (no fade-in: not the game's first title screen)
+    args.insert(args.end(), {L"--menu", f.titleMenu.empty() ? std::wstring(L"title") : widen(f.titleMenu)});
     f.child = std::make_unique<launch::Child>();
     f.loadingStart = s.clock;
     if (!f.child->start(args, *s.window)) {

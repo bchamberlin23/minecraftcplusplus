@@ -82,6 +82,7 @@ void finish(UiState& s) {  // close(true, onClose): Options.onboardingAccessibil
     s.settings.onboardAccessibility = false;
     s.settings.save();
     g = Onboarding{};
+    s.fe->keepLogoThroughFade = true;  // LogoRenderer(onboardingScreenAdded): the logo does not fade in
     s.openScreen(Screen::Title);
 }
 

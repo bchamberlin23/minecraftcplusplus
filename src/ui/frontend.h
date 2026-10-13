@@ -77,6 +77,10 @@ struct FrontEndState {
     bool handedOff = false;       // the next instance shows its window: this one exits
     std::string titleMenu;        // the title instance opens this list ("servers" after a multiplayer disconnect)
     std::string splash;
+    // TitleScreen(fading) on the game's first title screen: the widgets fade in over 2 s (the logo too unless the
+    // onboarding screen came first: keepLogoThroughFade); LogoRenderer's 1-in-10000 "Minceraft"
+    bool titleFading = false, keepLogoThroughFade = false, minceraft = false;
+    double titleFadeStart = -1;
     int protocol = 0;
     std::string gameVersion;  // "26.3"
 

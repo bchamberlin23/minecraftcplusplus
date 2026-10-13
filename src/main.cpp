@@ -1232,7 +1232,7 @@ int wmain(int argc, wchar_t** argv) {
             selfTest(game, world, registry, frame - base);
             cam = game.camera();
         } else if (menu) {
-            cam.yaw += dt * 0.035f * float(ui.settings().panoramaSpeed);  // the title panorama turns slowly (Panorama Scroll Speed)
+            cam.yaw += dt * (2.0f * 3.14159265f / 180.0f) * float(ui.settings().panoramaSpeed);  // Panorama: 0.1 deg/tick  // the title panorama turns slowly (Panorama Scroll Speed)
         } else {
             game.frame(window, dt);
             cam = game.viewCamera();  // F5: the detached camera
