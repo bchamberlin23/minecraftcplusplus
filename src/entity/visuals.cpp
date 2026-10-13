@@ -514,6 +514,11 @@ void Visuals::setPlayer(Game& game, ui::Ui& ui, const std::string& name, std::fu
         std::shared_lock lock(m.world.world().mutex());
         m.particles->spawn(type, pos[0], pos[1], pos[2], vel[0], vel[1], vel[2]);
     };
+    game.onLevelEvent = [&m](int type, int x, int y, int z, int data) {
+        if (!m.particles) return;
+        std::shared_lock lock(m.world.world().mutex());
+        m.particles->localLevelEvent(type, x, y, z, data);
+    };
     game.onBlockParticle = [&m](u16 state, const double pos[3], const double vel[3]) {
         if (!m.particles) return;
         std::shared_lock lock(m.world.world().mutex());

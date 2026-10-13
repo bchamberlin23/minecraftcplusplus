@@ -201,6 +201,8 @@ public:
     std::function<void(int item, const double pos[3], const double vel[3])> onItemParticle;
     // A particle of a type by name ("minecraft:large_smoke") at a position with a velocity (the client's own effects).
     std::function<void(std::string_view type, const double pos[3], const double vel[3])> onParticle;
+    // A level event the client plays for itself (level.levelEvent(player, ...): the server skips the user).
+    std::function<void(int type, int x, int y, int z, int data)> onLevelEvent;
     // ParticleTypes.BLOCK of a block state at a position with a velocity (brushing dust).
     std::function<void(u16 state, const double pos[3], const double vel[3])> onBlockParticle;
     bool usePressed() const { return usingItem_; }  // the use key is held after a use press

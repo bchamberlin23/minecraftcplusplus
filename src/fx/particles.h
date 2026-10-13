@@ -104,6 +104,8 @@ public:
     // creative player's held barrier / light marks ("" none).
     // Video Settings: Particles (ParticleStatus 0 all, 1 decreased, 2 minimal) and Weather Radius.
     void setVideo(int particleStatus, int weatherRadius) { status_ = particleStatus, weatherRadius_ = weatherRadius; }
+    // A level event the client plays for itself (level.levelEvent(player, ...)): world lock held, main thread.
+    void localLevelEvent(int type, int x, int y, int z, int data) { levelEvent(type, x, y, z, data); }
     void setAmbientEnv(bool night, bool nether, int skyDarken, std::string markerBlock) {
         ambientNight_ = night, ambientNether_ = nether, skyDarken_ = skyDarken, markerBlock_ = std::move(markerBlock);
     }

@@ -1102,18 +1102,32 @@ int Gameplay::predictUseOn(int hand, const RayHit& hit) {
     }
     if (name == "end_crystal") return block == "obsidian" || block == "bedrock" ? Game::kUseConsume : Game::kUseFail;
     if (name.ends_with("minecart")) return block.find("rail") != std::string::npos ? Game::kUseConsume : Game::kUseFail;
-    if (name.ends_with("_hoe") && hit.face != 0 && airAbove &&  // HoeItem: tilling
-        (block == "grass_block" || block == "dirt_path" || block == "dirt" || block == "coarse_dirt" || block == "rooted_dirt"))
+    // BlockTransformer.transformBlock: the user hears the transform's sound and sees its particle level event (both
+    // played with the player as the exception, so only here).
+    auto transformed = [&](const char* sound, int levelEvent) {
+        if (audio::AudioSystem* a = audio::instance())
+            a->play(sound, audio::Category::Block, hit.x + 0.5, hit.y + 0.5, hit.z + 0.5, 1.0f, 1.0f);
+        if (levelEvent && game_->onLevelEvent) game_->onLevelEvent(levelEvent, hit.x, hit.y, hit.z, 0);
         return Game::kUseConsume;
-    if (name.ends_with("_shovel") && hit.face != 0 && airAbove &&  // ShovelItem: paths
+    };
+    if (name.ends_with("_hoe") && hit.face != 0 && airAbove &&  // block_transformer/hoe: tilling
+        (block == "grass_block" || block == "dirt_path" || block == "dirt" || block == "coarse_dirt" || block == "rooted_dirt"))
+        return transformed("minecraft:item.hoe.till", 0);
+    if (name.ends_with("_shovel") && hit.face != 0 && airAbove &&  // block_transformer/shovel: paths
         (block == "grass_block" || block == "dirt" || block == "podzol" || block == "coarse_dirt" || block == "mycelium" ||
          block == "rooted_dirt"))
-        return Game::kUseConsume;
-    if (name.ends_with("_axe") && !block.starts_with("stripped_") &&  // AxeItem: stripping, scraping, unwaxing
+        return transformed("minecraft:item.shovel.flatten", 0);
+    if (name.ends_with("_axe") && !block.starts_with("stripped_") &&  // block_transformer/axe: stripping, scraping, unwaxing
         (block.ends_with("_log") || block.ends_with("_wood") || block.ends_with("_stem") || block.ends_with("_hyphae") ||
-         block == "bamboo_block" || block.find("copper") != std::string::npos))
+         block == "bamboo_block" || block.find("copper") != std::string::npos)) {
+        if (block.find("copper") == std::string::npos) return transformed("minecraft:item.axe.strip", 0);
+        if (block.starts_with("waxed_")) return transformed("minecraft:item.axe.wax_off", 3004);
+        if (block.starts_with("exposed_") || block.starts_with("weathered_") || block.starts_with("oxidized_"))
+            return transformed("minecraft:item.axe.scrape", 3005);
         return Game::kUseConsume;
-    if (name == "honeycomb" && block.find("copper") != std::string::npos && !block.starts_with("waxed_")) return Game::kUseConsume;
+    }
+    if (name == "honeycomb" && block.find("copper") != std::string::npos && !block.starts_with("waxed_"))  // HoneycombItem
+        return transformed("minecraft:item.honeycomb.wax_on", 3003);
     if (name == "ender_eye" && block == "end_portal_frame" && registry_.property(world_.block(hit.x, hit.y, hit.z), "eye") == "false")
         return Game::kUseConsume;
     return Game::kUsePass;
