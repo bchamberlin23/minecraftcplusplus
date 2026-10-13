@@ -99,6 +99,7 @@ void Session::attach(Game& game, Terrain& terrain) {
     game.onEdit = [this](const Game::EditAction& a) { onEdit(a); };
     game.player().noClip = gameMode_ == 3;
     game.player().mayFly = gameMode_ == 1 || gameMode_ == 3;  // until the server's abilities arrive
+    game.player().canSprint = game.player().foodSprint || game.player().mayFly;
     game.player().portalCooldown = portalCooldown_;  // handleLogin: setPortalCooldown
     game.onPunch = [this] {
         if (gameMode_ != 3) client_.sendPlay("punch", Writer{});  // spectators do not attack
