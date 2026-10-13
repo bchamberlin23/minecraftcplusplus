@@ -168,11 +168,43 @@ void updateParse(UiState& s) {
     if (cx.haveParse) cx.parse = cmd::parse(commands.tree, v, slash ? 1 : 0);
 }
 
+// ChatScreen: ChatAbilities from the Chat option (Hidden: neither, Commands Only: no messages); the input as a command
+// (currentParseIsCommand) and as a message (currentParseIsMessage: plain text, or a command with a message argument).
+struct InputKind {
+    bool command = false, message = false;
+};
+InputKind inputKind(const std::string& v) {
+    InputKind k;
+    if (!v.empty() && v[0] == '/') {
+        k.command = true;
+        if (commands.tree.valid()) k.message = cmd::hasSignedArguments(commands.tree, cmd::parse(commands.tree, v, 1));
+    } else {
+        k.message = v.find_first_not_of(" \t\n\r") != std::string::npos;
+    }
+    return k;
+}
+bool messagesAllowed(const UiState& s) { return s.settings.chatVisibility == 0; }
+bool commandsAllowed(const UiState& s) { return s.settings.chatVisibility != 2; }
+
+// The red lines under the usage when the chat screen's input may not be sent.
+void restrictionUsage(UiState& s) {
+    if (tg.field != &s.chatInput) return;
+    const InputKind k = inputKind(tg.field->value);
+    if (k.command && !commandsAllowed(s)) cx.usage.push_back(Text(s.res.translate("chat_screen.commands_not_allowed"), colorStyle(0xFF5555)));
+    if (k.message && !messagesAllowed(s)) cx.usage.push_back(Text(s.res.translate("chat_screen.messages_not_allowed"), colorStyle(0xFF5555)));
+}
+
 // CommandSuggestions.updateUsageInfo: parse errors when the cursor is at the end and nothing completes, else the
 // usage of the arguments at the cursor (fillNodeUsage), else the trailing-data error.
 void updateUsage(UiState& s) {
     cx.usage.clear();
-    if (!cx.haveParse) return;
+    if (!cx.haveParse) {
+        restrictionUsage(s);
+        cx.usageW = 0;
+        for (const Text& t : cx.usage) cx.usageW = std::max(cx.usageW, s.font.width(t));
+        cx.usageX = 0;  // commandUsagePosition = 0
+        return;
+    }
     const auto& f = *tg.field;
     const Lang* lang = &s.res.lang();
     bool trailing = false;
@@ -195,6 +227,7 @@ void updateUsage(UiState& s) {
         if (entries.empty() && trailing && cmd::parseException(cx.parse, e)) cx.usage.push_back(cmd::errorText(e, lang));
         cx.usage.insert(cx.usage.end(), entries.begin(), entries.end());
     }
+    restrictionUsage(s);
     cx.usageW = 0;
     for (const Text& t : cx.usage) cx.usageW = std::max(cx.usageW, s.font.width(t));
     cx.usageX = cx.usage.empty() ? 0 : std::clamp(screenX(s, cx.ctxStart), 0, tg.originX + tg.innerW - cx.usageW);
@@ -255,6 +288,7 @@ void update(UiState& s) {
         cx.haveResult = true, cx.start = lastWord, cx.length = int(partial.size()) - lastWord;
         cx.result.clear();
         for (const std::string& t : customTabSuggestions(partial.substr(size_t(lastWord)))) cx.result.push_back({t});
+        updateUsage(s);  // no parse: only the restriction
         return;
     }
     const bool slash = !f.value.empty() && f.value[0] == '/';
@@ -550,28 +584,37 @@ std::vector<Text> tagTooltip(UiState& s, const ChatTag& tag) {
     return s.font.split(t, 210);
 }
 
+// CommandSuggestions.hasAllowedInput: Enter sends nothing while the input is of a kind the Chat option forbids.
+bool chatInputAllowed(UiState& s) {
+    const InputKind k = inputKind(s.chatInput.value);
+    return !(k.message && !messagesAllowed(s)) && (!k.command || commandsAllowed(s));
+}
+
 void chatExtDraw(UiState& s, Canvas& c) {
     useTarget(chatTarget(s));
     if (suggestionsDraw(s, c)) return;
     const float mx = s.mouseX, my = s.mouseY;
-    // Hovered message tag indicator (DrawingFocusedGraphicsAccess.handleTag): the tag's text.
-    const int chatBottom = s.guiH() - 40;
-    const int line = int(std::floor((float(chatBottom) - my) / 9.0f));
-    if (my < float(chatBottom) && mx >= 0 && mx < 2 && line >= 0 && line < std::min(int(s.chatLines.size()) - s.chatScroll, 20)) {
-        const ChatTag& tag = s.chatLines[size_t(line + s.chatScroll)].tag;
-        if (tag.color && !tag.key.empty()) {
-            s.drawTooltip(c, tagTooltip(s, tag), mx, my);
-            return;
-        }
-    }
-    // ... and over a tag's icon at the end of its line (icon/chat_modified)
-    if (my < float(chatBottom) && line >= 0 && line < std::min(int(s.chatLines.size()) - s.chatScroll, 20)) {
-        const ChatLine& l = s.chatLines[size_t(line + s.chatScroll)];
-        const float left = 4.0f + float(s.font.width(l.text) + 4);
-        const float top = float(chatBottom - line * 9 - 9);
-        if (l.tag.icon && mx >= left && mx < left + 9 && my >= top && my < top + 9) {
-            s.drawTooltip(c, tagTooltip(s, l.tag), mx, my);
-            return;
+    // Hovered message tag indicator (DrawingFocusedGraphicsAccess.handleTag) or a tag's icon (handleTagIcon): the
+    // tag's text. The chat's geometry: scaled, 4 px in, the line spacing (hud.cpp drawChat).
+    {
+        const float scale = float(std::max(0.01, s.settings.chatScale));
+        const int chatBottom = int(std::floor(float(s.guiH() - 40) / scale));
+        const double spacing = s.settings.chatLineSpacing;
+        const int entryHeight = int(9.0 * (spacing + 1.0));
+        const int entryBottomToMessageY = int(std::lround(8.0 * (spacing + 1.0) - 4.0 * spacing));
+        const float lx = mx / scale - 4.0f, ly = my / scale;
+        for (int i = std::min(int(s.chatLines.size()) - s.chatScroll, s.chatLinesPerPage()) - 1; i >= 0; --i) {
+            const ChatLine& l = s.chatLines[size_t(i + s.chatScroll)];
+            if (!l.tag.color) continue;
+            const int entryBottom = chatBottom - i * entryHeight, entryTop = entryBottom - entryHeight;
+            const int textBottom = entryBottom - entryBottomToMessageY + 9;
+            const float left = float(s.font.width(l.text) + 4);
+            const bool overBar = lx >= -4 && lx < -2 && ly >= float(entryTop) && ly < float(entryBottom);
+            const bool overIcon = l.tag.icon && lx >= left && lx < left + 9 && ly >= float(textBottom - 10) && ly < float(textBottom);
+            if ((overBar || overIcon) && !l.tag.key.empty()) {
+                s.drawTooltip(c, tagTooltip(s, l.tag), mx, my);
+                return;
+            }
         }
     }
     // Hovered chat component: its hover event.

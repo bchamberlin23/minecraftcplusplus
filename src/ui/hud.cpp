@@ -678,7 +678,8 @@ void Ui::State::addChatMessage(ChatMessage m) {
     if (!chatVisible(m.source)) return;
     nativeMods.chatReceived(m.text.plain());
     const int maxWidth = int(std::floor(double(chatWidthPixels(settings.chatWidth)) / std::max(0.01, chatScale(*this))));
-    const std::vector<Text> lines = wrapChat(*this, m.text, maxWidth);
+    // GuiMessage.splitLines: a tag's icon takes its width + 4 + 2 off the line
+    const std::vector<Text> lines = wrapChat(*this, m.text, maxWidth - (m.tag.icon ? 9 + 4 + 2 : 0));
     for (size_t i = 0; i < lines.size(); ++i) {
         if (screen == Screen::Chat && chatScroll > 0) newMessageSinceScroll = true, scrollChat(1);
         chatLines.insert(chatLines.begin(), ChatLine{lines[i], m.addedTick, i == lines.size() - 1, m.tag});
@@ -695,7 +696,7 @@ void Ui::State::refreshChatLines() {  // ChatComponent.refreshTrimmedMessages: t
     for (size_t i = chatMessages.size(); i-- > 0;) {
         const ChatMessage& msg = chatMessages[i];
         if (!chatVisible(msg.source)) continue;
-        const std::vector<Text> lines = wrapChat(*this, msg.text, maxWidth);
+        const std::vector<Text> lines = wrapChat(*this, msg.text, maxWidth - (msg.tag.icon ? 9 + 4 + 2 : 0));
         for (size_t k = 0; k < lines.size(); ++k)
             chatLines.insert(chatLines.begin(), ChatLine{lines[k], msg.addedTick, k == lines.size() - 1, msg.tag});
     }
@@ -784,7 +785,7 @@ void Ui::State::drawChat(Canvas& c, bool focused) {
     if (focused) {  // DrawingFocusedGraphicsAccess.handleTagIcon: shown over a hovered message (on its last line) or icon
         const float lmx = mouseX / scale - 4.0f, lmy = mouseY / scale;
         bool hoveredMessage = false;
-        for (int i = 0; i < std::min(total - chatScroll, linesPerPage); ++i) {  // bottom first, as forEachLine
+        for (int i = std::min(total - chatScroll, linesPerPage) - 1; i >= 0; --i) {  // top first, as forEachLine
             const ChatLine& line = chatLines[size_t(i + chatScroll)];
             const int entryBottom = chatBottom - i * entryHeight, textTop = entryBottom - entryBottomToMessageY;
             const int width = font.width(line.text);
@@ -792,8 +793,8 @@ void Ui::State::drawChat(Canvas& c, bool focused) {
             const bool force = line.endOfEntry && hoveredMessage;
             if (line.endOfEntry) hoveredMessage = false;
             if (!line.tag.icon) continue;
-            const int left = width + 4, top = textTop + 9 - 9 - 1;
-            const bool over = lmx >= float(left) && lmx < float(left + 9) && lmy >= float(top) && lmy < float(top + 9);
+            const int left = width + 4, top = textTop + 9 - 9 - 1;  // handleTagIcon: bottom - height - 1 .. bottom
+            const bool over = lmx >= float(left) && lmx < float(left + 9) && lmy >= float(top) && lmy < float(textTop + 9);
             if (force || over) blitSprite(c, sprites.sprite("icon/chat_modified"), float(left), float(top), 9, 9);
         }
     }

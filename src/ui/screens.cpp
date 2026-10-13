@@ -959,6 +959,7 @@ void Ui::State::screenInput(const Window::InputEvent& e) {
                 return;
             }
             if (e.code == VK_RETURN) {
+                if (!chatInputAllowed(*this)) return;  // stays open, nothing sent
                 const std::string text = chatInput.value;
                 chatExit = 2;
                 closeScreen();
@@ -966,11 +967,15 @@ void Ui::State::screenInput(const Window::InputEvent& e) {
                 return;
             }
             if (e.code == VK_UP || e.code == VK_DOWN) {  // ChatScreen.moveInHistory
-                if (sentHistory.empty()) return;
-                if (historyPos < 0) historyDraft = chatInput.value, historyPos = int(sentHistory.size());
-                historyPos = std::clamp(historyPos + (e.code == VK_UP ? -1 : 1), 0, int(sentHistory.size()));
-                chatInput.value = historyPos == int(sentHistory.size()) ? historyDraft : sentHistory[size_t(historyPos)];
+                const int max = int(sentHistory.size());
+                if (historyPos < 0) historyPos = max;  // opened at the bottom (the draft buffer empty)
+                const int next = std::clamp(historyPos + (e.code == VK_UP ? -1 : 1), 0, max);
+                if (next == historyPos) return;
+                if (next != max && historyPos == max) historyDraft = chatInput.value;  // leaving the bottom: the buffer
+                historyPos = next;
+                chatInput.value = next == max ? historyDraft : sentHistory[size_t(next)];  // setValue (onEdited)
                 chatInput.cursor = chatInput.selection = int(chatInput.value.size());
+                chatIsDraft = false;
                 return;
             }
             if (e.code == VK_PRIOR || e.code == VK_NEXT) {

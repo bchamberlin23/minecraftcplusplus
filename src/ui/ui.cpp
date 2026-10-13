@@ -405,23 +405,38 @@ void Ui::State::persistCommand(const std::string& command) {  // CommandHistory.
 }
 
 void Ui::State::sendChat(const std::string& raw) {
-    // ChatScreen.normalizeChatMessage: trimmed, whitespace runs as one space, at most 256 characters
-    std::string text;
-    for (char ch : raw) {
-        const bool space = ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
-        if (space) {
-            if (!text.empty() && text.back() != ' ') text += ' ';
-        } else {
-            text += ch;
+    // StringUtil.trimChatMessage: StringUtils.normalizeSpace (Character.isWhitespace runs as one space, trimmed, a
+    // no-break space as a plain one), then at most 256 UTF-16 units (truncateStringIfNecessary)
+    auto javaWhitespace = [](u32 cp) {
+        return (cp >= 9 && cp <= 13) || (cp >= 28 && cp <= 32) || cp == 0x1680 || (cp >= 0x2000 && cp <= 0x2006) ||
+               (cp >= 0x2008 && cp <= 0x200A) || cp == 0x2028 || cp == 0x2029 || cp == 0x205F || cp == 0x3000;
+    };
+    std::string text;  // normalizeSpace
+    bool pendingSpace = false;
+    for (size_t i = 0; i < raw.size();) {
+        const size_t at = i;
+        const u32 cp = nextCodepoint(raw, i);
+        if (javaWhitespace(cp)) {
+            pendingSpace = !text.empty();
+            continue;
+        }
+        if (pendingSpace) text += ' ';
+        pendingSpace = false;
+        if (cp == 0xA0) text += ' ';
+        else text.append(raw, at, i - at);
+    }
+    const size_t first = text.find_first_not_of(' '), last = text.find_last_not_of(' ');  // String.trim
+    text = first == std::string::npos ? std::string() : text.substr(first, last - first + 1);
+    int units = 0;  // truncateStringIfNecessary(256)
+    for (size_t i = 0; i < text.size();) {
+        const size_t at = i;
+        units += nextCodepoint(text, i) > 0xFFFF ? 2 : 1;
+        if (units > 256) {
+            text.resize(at);
+            break;
         }
     }
-    while (!text.empty() && text.back() == ' ') text.pop_back();
     if (text.empty()) return;
-    if (text.size() > 256) {  // StringUtil.truncateStringIfNecessary (whole UTF-8 characters)
-        size_t cut = 256;
-        while (cut > 0 && (u8(text[cut]) & 0xC0) == 0x80) --cut;
-        text.resize(cut);
-    }
     if (sentHistory.empty() || sentHistory.back() != text) sentHistory.push_back(text);  // ChatComponent.addRecentChat
     if (sentHistory.size() > 100) sentHistory.erase(sentHistory.begin());
     if (text[0] == '/') persistCommand(text);
