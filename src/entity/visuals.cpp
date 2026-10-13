@@ -2561,6 +2561,32 @@ void Visuals::Impl::mobTick(const Entity& e) {
         const float hh = (0.3f + anim * 0.45f) * h * 2.5f;
         particles->spawn("mycelium", e.pos[0] + c, e.pos[1] + hh, e.pos[2] + s, 0, 0, 0);
         particles->spawn("mycelium", e.pos[0] - c, e.pos[1] + hh, e.pos[2] - s, 0, 0, 0);
+    } else if (n == "minecraft:arrow" || n == "minecraft:spectral_arrow" || n == "minecraft:trident") {  // AbstractArrow.tick
+        if (!e.inGround) {
+            if (e.inWater)
+                for (int i = 0; i < 4; ++i)
+                    particles->spawn("bubble", e.pos[0] - e.vel[0] * 0.25, e.pos[1] - e.vel[1] * 0.25, e.pos[2] - e.vel[2] * 0.25, e.vel[0], e.vel[1], e.vel[2]);
+            if (dataInt(e, "ID_FLAGS") & 1)  // a critical arrow
+                for (int i = 0; i < 4; ++i)
+                    particles->spawn("crit", e.pos[0] + e.vel[0] * i / 4.0, e.pos[1] + e.vel[1] * i / 4.0, e.pos[2] + e.vel[2] * i / 4.0, -e.vel[0],
+                                     -e.vel[1] + 0.2, -e.vel[2]);
+            if (n == "minecraft:spectral_arrow") particles->spawnColored("effect", e.pos[0], e.pos[1], e.pos[2], 0, 0, 0, 0xFFFFFFFF);
+        }
+    } else if (n == "minecraft:fireball" || n == "minecraft:small_fireball" || n == "minecraft:wither_skull" ||
+               n == "minecraft:dragon_fireball") {  // AbstractHurtingProjectile.tick: the trail (and bubbles in water)
+        if (e.inWater)
+            for (int i = 0; i < 4; ++i)
+                particles->spawn("bubble", e.pos[0] - e.vel[0] * 0.25, e.pos[1] - e.vel[1] * 0.25, e.pos[2] - e.vel[2] * 0.25, e.vel[0], e.vel[1], e.vel[2]);
+        if (n == "minecraft:dragon_fireball") particles->spawnPower("dragon_breath", e.pos[0], e.pos[1] + 0.5, e.pos[2], 0, 0, 0, 1.0f);
+        else particles->spawn("smoke", e.pos[0], e.pos[1] + 0.5, e.pos[2], 0, 0, 0);
+    } else if (n == "minecraft:shulker_bullet") {  // ShulkerBullet.tick
+        particles->spawn("end_rod", e.pos[0] - e.vel[0], e.pos[1] - e.vel[1] + 0.15, e.pos[2] - e.vel[2], 0, 0, 0);
+    } else if (n == "minecraft:eye_of_ender") {  // EyeOfEnder.spawnParticles
+        const double ox = e.pos[0] - e.vel[0] * 0.25, oy = e.pos[1] - e.vel[1] * 0.25, oz = e.pos[2] - e.vel[2] * 0.25;
+        if (e.inWater)
+            for (int i = 0; i < 4; ++i) particles->spawn("bubble", ox, oy, oz, e.vel[0], e.vel[1], e.vel[2]);
+        else
+            particles->spawn("portal", ox + R() * 0.6 - 0.3, oy - 0.5, oz + R() * 0.6 - 0.3, e.vel[0], e.vel[1], e.vel[2]);
     } else if (n == "minecraft:guardian" || n == "minecraft:elder_guardian") {  // Guardian.aiStep (client)
         const bool moving = dataInt(e, "DATA_ID_MOVING") != 0;
         if (!e.inWater) {  // flopping on land

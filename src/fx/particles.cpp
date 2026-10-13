@@ -1673,6 +1673,12 @@ void Particles::sprintDust(double x, double y, double z, double width, const dou
     add(block, px, y + 0.1, pz, vel[0] * -4.0, 1.5, vel[2] * -4.0, &o);
 }
 
+void Particles::spawnPower(std::string_view type, double x, double y, double z, double vx, double vy, double vz, float power) {
+    Options o;
+    o.scale = power;
+    add(typeId(type), x, y, z, vx, vy, vz, &o);
+}
+
 void Particles::spawnColored(std::string_view type, double x, double y, double z, double vx, double vy, double vz, u32 argb) {
     Options o;
     o.hasColor = true, o.color = argb;

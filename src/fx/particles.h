@@ -78,6 +78,7 @@ public:
     void spawn(std::string_view type, double x, double y, double z, double vx, double vy, double vz);
     // ColorParticleOption types (entity_effect, tinted_leaves...): with an ARGB colour.
     void spawnColored(std::string_view type, double x, double y, double z, double vx, double vy, double vz, u32 argb);
+    void spawnPower(std::string_view type, double x, double y, double z, double vx, double vy, double vz, float power);  // PowerParticleOption
     // BlockParticleOption types (block, falling_dust...) for a block state key ("minecraft:honey_block").
     void spawnBlock(std::string_view type, std::string_view stateKey, double x, double y, double z, double vx, double vy, double vz);
     // Entity.spawnSprintParticle: dust of the block under (x, y, z) kicked back against the movement (world lock held).
