@@ -2722,6 +2722,11 @@ void EntityRenderer::freeEntity(const Entity& e, const TypeDef& d, float pt, con
         if (!d.block.empty() && !d.blockId) d.blockId = reg.idFor(world_.reports().complete(d.block));
         const u16 block = !d.block.empty() ? d.blockId : world_.localBlock(e.blockState);
         if (!block) return;
+        if (d.block.empty() && d.special != SpDisplay) {  // FallingBlockRenderer.shouldRender: not where the same block is
+            const World& world = world_.world();
+            const int bx = int(std::floor(e.pos[0])), by = int(std::floor(e.pos[1])), bz = int(std::floor(e.pos[2]));
+            if (by >= world.minSectionY() * 16 && by < (world.maxSectionY() + 1) * 16 && world.block(bx, by, bz) == block) return;
+        }
         M34 m = translate(float(p[0]) - 0.5f, float(p[1]), float(p[2]) - 0.5f);
         u32 overlay = 0;
         if (!d.block.empty()) {  // TntRenderer: swells over its last 10 ticks, flashes white every 5
