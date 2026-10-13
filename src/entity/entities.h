@@ -431,6 +431,8 @@ public:
     // The local player uses an entity (before the interact packet; main thread): true opens something client side
     // (the command block minecart's editor) and the packet is still sent.
     std::function<void(const Entity& e)> onUse;
+    // The local player attacked an entity (after the packets): Player.attack's client-side part.
+    std::function<void(const Entity& e)> onLocalAttack;
     std::function<void(const std::string& raw, double x, double y, double z, double vx, double vy, double vz)> spawnParticle;
     // EnvironmentAttributes.PIGLINS_ZOMBIFY in the current dimension (piglins and hoglins shake while converting).
     bool piglinsZombify = true;

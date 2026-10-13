@@ -842,15 +842,16 @@ void Player::applyEffectsFromBlocks(const Physics& physics) {
                 const u16 id = physics.world().block(x, y, z);
                 const std::string_view n = shortBlock(physics.registry().name(id));
                 if (n == "powder_snow") isInPowderSnow_ = true;
-                if (n == "bubble_column" && !bubbled) {  // BubbleColumnBlock.entityInside
+                if (n == "bubble_column" && !bubbled && !flying) {  // BubbleColumnBlock.entityInside (Player: not while flying)
                     bubbled = true;
                     const bool down = physics.registry().property(id, "drag") == "true";
                     const BlockInfo& a = physics.registry().infos()[physics.world().block(x, y + 1, z)];
-                    if (!a.collisionCount && !a.fluid && !a.waterlogged)  // Entity.onAboveBubbleColumn
+                    if (!a.collisionCount && !a.fluid && !a.waterlogged) {  // Entity.onAboveBubbleColumn
                         vel[1] = down ? std::max(-0.9, vel[1] - 0.03) : std::min(1.8, vel[1] + 0.1);
-                    else  // onInsideBubbleColumn
+                    } else {  // onInsideBubbleColumn (resets the fall)
                         vel[1] = down ? std::max(-0.3, vel[1] - 0.03) : std::min(0.7, vel[1] + 0.06);
-                    fallDistance = 0;
+                        fallDistance = 0;
+                    }
                 }
                 if (n == "honey_block" && !honeyed) {  // HoneyBlock.isSlidingDown / doSlideMovement
                     const double old = vel[1] / double(0.98f) + 0.08;  // getOldDeltaY
@@ -1081,7 +1082,7 @@ void Player::tick(const Physics& physics, const PlayerInput& rawInput) {
     }
     // Jump pressed in mid-air with a glider starts gliding (Player.tryToStartFallFlying).
     if (input.jump && !justToggledFlight && !wasJumping && !onClimbable(physics) && !fallFlying && !flying && !onGround &&
-        attr.canGlide && attr.levitation < 0 && !inWater) {
+        attr.canGlide && attr.levitation < 0 && !inWater && !inLava) {  // !isInLiquid
         fallFlying = true;
         if (onStartFallFlying) onStartFallFlying();
     }

@@ -745,6 +745,8 @@ void Ui::registerHandlers(net::Client& client) {
             if (air >= 0) s->air = air, s->serverAir = true;
             if (frozen >= 0) s->ticksFrozen = frozen;
             if (flags >= 0) s->onFire = (flags & 1) != 0;
+            // LocalPlayer.isSprinting reads the synched flag: the server ending the sprint (a sprinting hit) ends ours
+            if (flags >= 0 && s->game) s->game->player().sprinting = (flags & 8) != 0;
         });
     });
     // Registry ids resolved once (the handlers run for every entity on the network thread).

@@ -955,6 +955,19 @@ int wmain(int argc, wchar_t** argv) {
             if (ui) ui(e);
             visuals.predictUse(e);
         };
+    // Player.attack on the client: entities whose hurtClient succeeds (vehicles, frames, paintings, knots, crystals,
+    // cushions) take a sprinting full-strength hit's knockback, which slows the player (0.6) and ends the sprint.
+    entities.onLocalAttack = [&](const ent::Entity& e) {
+        if (!e.info || !game.player().sprinting || game.attackStrengthScale(0.5f) <= 0.9f) return;
+        const std::string& n = e.info->name;
+        const bool hurtClient = e.category == ent::Category::Vehicle || n == "minecraft:item_frame" || n == "minecraft:glow_item_frame" ||
+                                n == "minecraft:painting" || n == "minecraft:leash_knot" || n == "minecraft:end_crystal" ||
+                                n == "minecraft:cushion";
+        if (!hurtClient) return;
+        Player& p = game.player();
+        p.vel[0] *= 0.6, p.vel[2] *= 0.6;
+        p.sprinting = false;
+    };
     game.onEntityClick = [&](bool attack, bool use, double blockDistance) {  // attack / use entities first
         if (!session || !haveEntities) return false;
         const CameraState c = game.camera();

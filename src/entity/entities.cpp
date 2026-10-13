@@ -2010,6 +2010,7 @@ bool EntityWorld::attack(int id) {
     const bool ok = client_->sendPlay("attack", w);
     LOG("entities: attack %d (%s)", id, it->second.info ? it->second.info->name.c_str() : "?");
     client_->sendPlay("punch", net::Writer{});
+    if (onLocalAttack) onLocalAttack(it->second);  // MultiPlayerGameMode.attack: player.attack(entity) client side
     return ok;
 }
 
