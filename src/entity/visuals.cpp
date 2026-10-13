@@ -3063,7 +3063,7 @@ void Visuals::Impl::buildHand(const PassContext& ctx, float viewProj[16], bool j
     const Vec3 fwd{-sy * cp, -sp, cy * cp};
     const Vec3 right = normalize(cross(fwd, {0, 1, 0}));
     const Vec3 up = cross(right, fwd);
-    Mat4 proj = perspectiveReverseZ(ui->fovRadians(), float(ctx.width) / float(std::max(ctx.height, 1u)), 0.05f);
+    Mat4 proj = perspectiveReverseZ(ui->handFovRadians(), float(ctx.width) / float(std::max(ctx.height, 1u)), 0.05f);
     if (noJitter) std::memcpy(noJitter, (proj * viewFromBasis(right, up, fwd)).m, sizeof(float) * 16);
     if (jittered) proj(0, 2) = ctx.jitter[0], proj(1, 2) = ctx.jitter[1];
     const Mat4 vpm = proj * viewFromBasis(right, up, fwd);

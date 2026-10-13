@@ -246,6 +246,7 @@ public:
     const fs::path* screenshotRequest();  // scripted screenshots: pass to Renderer::render
     bool loadScript(const fs::path& file);
     float fovRadians() const;
+    float handFovRadians() const;  // the first-person hand's: 70 degrees, only by death or fluid
     bool hudHidden() const;  // F1
     bool inBed() const;      // sleeping (the bed screen is up)
     // F3 biome name at a block position (local worlds with the generator); unset: not shown.

@@ -282,6 +282,7 @@ struct Ui::State {
     };
     // EditBox.onClick at the mouse: the cursor at the clicked character (Shift: extending the selection; a double click:
     // the word), and onDrag while the left button stays down. textFieldHit: the mouse is over the field's text line.
+    float fovDeathOrFluid(float fovDegrees) const;  // Camera.modifyFovBasedOnDeathOrFluid
     void textFieldMouseDown(TextField& f);
     bool textFieldHit(const TextField& f) const;
     TextField* dragField = nullptr;

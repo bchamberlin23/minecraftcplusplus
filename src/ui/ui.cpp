@@ -462,17 +462,27 @@ void Ui::setServerSaving(bool saving) { s_->serverSaving = saving; }
 
 bool Ui::menuOpen() const { return s_->screen != Screen::None && s_->screen != Screen::Chat; }
 
-float Ui::fovRadians() const {  // Camera.getFov: the option scaled by the dynamic FOV modifier
-    const float m = s_->oldFovModifier + (s_->fovModifier - s_->oldFovModifier) * s_->partialTick;
-    // modifyFovBasedOnDeathOrFluid: x 6/7 with the eyes in water or lava.
-    float fluid = 1.0f;
-    if (s_->game && s_->world && s_->registry) {
-        const CameraState cam = s_->game->camera();
-        const u16 eye = s_->world->block(int(std::floor(cam.x)), int(std::floor(cam.y)), int(std::floor(cam.z)));
-        if (s_->eyeInWater || s_->registry->name(eye).starts_with("minecraft:lava")) fluid = 0.85714287f;
+// Camera.modifyFovBasedOnDeathOrFluid: dying zooms in over 20 ticks; water or lava at the eyes x 6/7 (by FOV Effects).
+float Ui::State::fovDeathOrFluid(float fov) const {
+    if (game && game->dead) {
+        const float duration = std::min(float(game->deathTime) + game->partialTick(), 20.0f);
+        fov /= (1.0f - 500.0f / (duration + 500.0f)) * 2.0f + 1.0f;
     }
-    return s_->settings.fov * m * fluid * kPi / 180.0f;
+    if (game && world && registry) {
+        const CameraState cam = game->camera();
+        const u16 eye = world->block(int(std::floor(cam.x)), int(std::floor(cam.y)), int(std::floor(cam.z)));
+        if (eyeInWater || registry->name(eye).starts_with("minecraft:lava"))
+            fov *= 1.0f + (0.85714287f - 1.0f) * float(settings.fovEffectScale);
+    }
+    return fov;
 }
+
+float Ui::fovRadians() const {  // Camera.calculateFov: the option scaled by the dynamic FOV modifier
+    const float m = s_->oldFovModifier + (s_->fovModifier - s_->oldFovModifier) * s_->partialTick;
+    return s_->fovDeathOrFluid(float(s_->settings.fov) * m) * kPi / 180.0f;
+}
+
+float Ui::handFovRadians() const { return s_->fovDeathOrFluid(70.0f) * kPi / 180.0f; }  // Camera.calculateHudFov
 bool Ui::hudHidden() const { return s_->hudHidden; }
 bool Ui::inBed() const { return s_->screen == Screen::InBed; }
 void Ui::setBiomeLookup(std::function<std::string(int, int, int)> fn) { s_->biomeLookup = std::move(fn); }
