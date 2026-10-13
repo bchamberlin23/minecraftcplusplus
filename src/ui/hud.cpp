@@ -908,15 +908,21 @@ bool Ui::State::textFieldKey(TextField& f, const Window::InputEvent& e) {
             if (cp >= 32 && cp != 127 && cp != 0xA7) appendUtf8(clean, cp);  // StringUtil.filterText
         }
         const size_t a = size_t(std::min(f.cursor, f.selection)), b = size_t(std::max(f.cursor, f.selection));
+        auto chars = [](const std::string& t) {  // String.length: UTF-16 units
+            int n = 0;
+            for (size_t i = 0; i < t.size();) n += nextCodepoint(t, i) > 0xFFFF ? 2 : 1;
+            return n;
+        };
         std::string v = f.value.substr(0, a) + clean + f.value.substr(b);
-        if (int(v.size()) > f.maxLength) {
-            const size_t room = size_t(std::max(0, f.maxLength - int(f.value.size() - (b - a))));
+        if (chars(v) > f.maxLength) {  // EditBox.insertText: maxLength - length + the selection, in characters
+            const int room = std::max(0, f.maxLength - chars(f.value) + chars(f.value.substr(a, b - a)));
             std::string cut;
+            int used = 0;
             for (size_t i = 0; i < clean.size();) {
                 size_t j = i;
-                nextCodepoint(clean, j);
-                if (cut.size() + (j - i) > room) break;
-                cut += clean.substr(i, j - i);
+                const int w = nextCodepoint(clean, j) > 0xFFFF ? 2 : 1;
+                if (used + w > room) break;
+                cut += clean.substr(i, j - i), used += w;
                 i = j;
             }
             clean = cut;

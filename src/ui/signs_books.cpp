@@ -388,9 +388,18 @@ bool mlInsert(UiState& s, MultiLine& m, const std::string& text) {
         const u32 cp = nextCodepoint(text, i);
         if ((cp >= 32 && cp != 127 && cp != 0xA7) || cp == '\n') appendUtf8(clean, cp);  // StringUtil.filterText (keep \n)
     }
+    // truncateInsertionText: what fits in the limit less the whole current text (the selection still counted)
+    const int room = m.charLimit - int(cpCount(m.value));
+    std::string fit;
+    int used = 0;
+    for (size_t i = 0; i < clean.size() && used < room;) {
+        const size_t from = i;
+        nextCodepoint(clean, i);
+        fit += clean.substr(from, i - from), ++used;
+    }
+    clean = fit;
     const size_t a = std::min(m.cursor, m.selection), b = std::max(m.cursor, m.selection);
     std::string v = m.value.substr(0, a) + clean + m.value.substr(b);
-    if (int(cpCount(v)) > m.charLimit) return false;
     if (int(wrapLines(s, v, m.width).size()) > m.lineLimit) return false;  // overflowsLineLimit
     m.value = v;
     m.cursor = m.selection = a + clean.size();
@@ -544,8 +553,8 @@ void editShowPage() {
 }
 void editStore() { edit.pages[size_t(edit.page)] = edit.field.value; }
 
-void editTurn(UiState& s, bool forward) {
-    pageSound();
+void editTurn(UiState& s, bool forward, bool sound = true) {  // keys: Button.onPress alone, no click sound
+    if (sound) pageSound();
     editStore();
     if (forward) {
         if (edit.page < int(edit.pages.size()) - 1) ++edit.page;
@@ -569,8 +578,8 @@ void editSend(UiState& s, bool sign) {
     w.boolean(sign);
     if (sign) {
         std::string t = edit.title.value;
-        while (!t.empty() && t.back() == ' ') t.pop_back();
-        while (!t.empty() && t.front() == ' ') t.erase(t.begin());
+        while (!t.empty() && u8(t.back()) <= 0x20) t.pop_back();  // String.trim: every char up to U+0020
+        while (!t.empty() && u8(t.front()) <= 0x20) t.erase(t.begin());
         w.str(t);
     }
     s.client->sendPlay("edit_book", w);
@@ -670,7 +679,7 @@ void editInput(UiState& s, const InputEvent& e) {
         s.buttonsInput(e);
         return;
     }
-    if (e.type == E::Key && e.down && (e.code == VK_PRIOR || e.code == VK_NEXT)) return editTurn(s, e.code == VK_NEXT);
+    if (e.type == E::Key && e.down && (e.code == VK_PRIOR || e.code == VK_NEXT)) return editTurn(s, e.code == VK_NEXT, false);
     if (e.type == E::Char || e.type == E::Key) return mlKey(s, edit.field, e);
     if (e.type == E::Button && e.down && e.code == 0) {
         if (s.canvas && overPageButton(s, *s.canvas, true)) return editTurn(s, true);
@@ -779,8 +788,8 @@ void viewInput(UiState& s, const InputEvent& e) {
     using E = InputEvent;
     if (e.type == E::Key && e.down) {
         if (e.code == VK_ESCAPE) return s.closeScreen();
-        if (e.code == VK_PRIOR && view.page > 0) --view.page, pageSound();
-        if (e.code == VK_NEXT && view.page < int(view.pages.size()) - 1) ++view.page, pageSound();
+        if (e.code == VK_PRIOR && view.page > 0) --view.page;  // Button.onPress: no sound from the keys
+        if (e.code == VK_NEXT && view.page < int(view.pages.size()) - 1) ++view.page;
         return;
     }
     if (e.type == E::Button && e.down && e.code == 0 && s.canvas) {
@@ -835,6 +844,12 @@ void lecternDraw(UiState& s, Canvas& c, Menu& m, const Layout&, float, float) {
     if (page < count - 1) drawPageButton(s, c, true);
     if (page > 0) drawPageButton(s, c, false);
     s.drawButtons(c);
+    view.pages = b.pages, view.page = page;  // BookViewScreen's hover over the lectern's page
+    Style st;
+    if (bookStyleAt(s, c, st) && st.events && !st.events->click.empty()) s.requestCursor(UiState::CursorPointingHand);
+    if (bookStyleAt(s, c, st) && st.events)
+        if (const std::vector<Text> lines = hoverLines(s, *st.events); !lines.empty())
+            s.drawTooltip(c, lines, s.mouseX, s.mouseY, nullptr, st.events->hover == "show_item");
 }
 
 bool lecternInput(UiState& s, const InputEvent& e, Menu& m, const Layout&, float, float) {
@@ -855,6 +870,19 @@ bool lecternInput(UiState& s, const InputEvent& e, Menu& m, const Layout&, float
         }
         if (page > 0 && overPageButton(s, *s.canvas, false)) {
             sendContainerButton(s, 1);
+            return true;
+        }
+        // LecternScreen: a change_page goes to the server (sendButtonClick(100 + page)); a run_command closes the
+        // container first (bookClick's closeScreen); the others as in BookViewScreen
+        view.pages = b.pages, view.page = page;
+        Style st;
+        if (bookStyleAt(s, *s.canvas, st) && st.events && !st.events->click.empty()) {
+            if (st.events->click == "change_page") {
+                const int to = std::clamp(std::atoi(st.events->clickValue.c_str()) - 1, 0, std::max(count - 1, 0));
+                if (to != page) sendContainerButton(s, 100 + to);
+            } else {
+                bookClick(s, *st.events);
+            }
             return true;
         }
     }
