@@ -224,7 +224,7 @@ void Game::frame(Window& w, double dt) {
         // LivingEntity.updatingUsingItem, then LocalPlayer.modifyInput / sprinting with the use's slowdown.
         if (use.active) {
             if (onUseTick) onUseTick();
-            if (use.active && use.remaining > 0) --use.remaining;
+            if (use.active) --use.remaining;  // below 0 too (useItemRemaining is not clamped)
         }
         player_.useSpeed = use.active ? use.speed : 1.0f;
         player_.useBlocksSprint = use.active && !use.canSprint;

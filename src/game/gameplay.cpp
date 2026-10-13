@@ -921,7 +921,6 @@ void Gameplay::playOwnVoice(const char* sound) {
 ItemRules::Use Gameplay::stackUse(const ui::ItemStack& s) {
     const std::string name = itemName(s.item);
     ItemRules::Use u = rules_.use(name);
-    if (name == "minecraft:crossbow" && ui_) u.duration = ui::crossbowChargeTicks(ui_->items(), s) + 3;  // CrossbowItem.getUseDuration
     const ItemRules::Components& d = rules_.components(name);
     auto present = [&](const char* type, bool fallback) {
         const int t = componentType(type);
@@ -1090,6 +1089,7 @@ int Gameplay::predictItemUse(int hand, const RayHit* target) {
         if (id < 0 || size_t(id) >= list.size()) return Game::kUseFail;
         const ui::Items::RegistryInfo& ins = list[size_t(id)];
         const int result = start();
+        game_->use.duration = game_->use.remaining = int(std::floor(ins.useDuration * 20.0f));  // InstrumentItem.getUseDuration
         if (!ins.soundEvent.empty()) localSound(ins.soundEvent, audio::Category::Record, ins.range / 16.0f, 1.0f);
         game_->addCooldown(ui_->items().cooldownGroup(*s), int(std::floor(ins.useDuration * 20.0f)));
         return result;
@@ -1501,9 +1501,8 @@ void Gameplay::tickUse() {
 void Gameplay::tickBrush() {
     Game::ItemUse& use = game_->use;
     const RayHit& hit = game_->target();
-    if (!hit.hit) {  // releaseUsingItem
+    if (!hit.hit) {  // LivingEntity.releaseUsingItem on the client (no packet: the server stops its own brushing)
         use.active = false;
-        if (game_->onReleaseUseItem) game_->onReleaseUseItem();
         return;
     }
     if ((use.duration - use.remaining + 1) % 10 != 5) return;

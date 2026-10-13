@@ -111,6 +111,7 @@ void Session::attach(Game& game, Terrain& terrain) {
         if (verbose_) LOG("net: player_action stab");
     };
     game.onReleaseUseItem = [this] {  // ServerPlayerGameMode.releaseUsingItem (bows; stops eating early)
+        syncHotbar();  // MultiPlayerGameMode.releaseUsingItem: ensureHasSentCarriedItem first
         client_.sendPlayerAction(kReleaseUseItem, 0, 0, 0, 0, 0);
         if (verbose_) LOG("net: release_use_item");
     };

@@ -370,7 +370,7 @@ const ItemRules::ItemInfo& ItemRules::item(std::string_view itemName) {
     k.classUse = shortName == "bow" || shortName == "crossbow" || shortName == "trident" || shortName == "spyglass" ||
                  shortName == "goat_horn" || shortName == "brush" || shortName == "bundle" || shortName.ends_with("_bundle");
     if (shortName == "bow") info.use = {Anim::Bow, 72000};
-    else if (shortName == "crossbow") info.use = {Anim::Crossbow, 28};  // CrossbowItem: charge (1.25 s) + 3
+    else if (shortName == "crossbow") info.use = {Anim::Crossbow, 72000};  // CrossbowItem.getUseDuration
     else if (shortName == "trident") info.use = {Anim::Trident, 72000};
     else if (shortName == "spyglass") info.use = {Anim::Spyglass, 1200};
     else if (shortName == "goat_horn") info.use = {Anim::TootHorn, 140};  // the instrument's use duration (7 s)
