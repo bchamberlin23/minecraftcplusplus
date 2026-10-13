@@ -91,6 +91,11 @@ public:
     };
     void setOptions(const Options& o);
 
+    // ClientLevel.getPrecipitationAt: 0 none, 1 rain, 2 snow (the biome's precipitation, its temperature at y).
+    int precipitationAt(int x, int y, int z);
+    // Heightmap.Types.MOTION_BLOCKING: one above the highest block with collision or fluid (leaves included).
+    int motionBlocking(int x, int z) { return motionBlockingHeight(x, z); }
+
     // Shared with the render passes.
     struct Frame;
     const Frame& frame() const { return *frame_; }

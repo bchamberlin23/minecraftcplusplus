@@ -275,6 +275,7 @@ WeatherLayer weatherLayer(bool thunder) {
     set(Attr::CloudColor, Op::BlendToGray, thunder ? Value{0.095f, 0.94f} : Value{0.24f, 0.5f});
     set(Attr::SkyLightColor, Op::AlphaBlend, {0.48f, 0.48f, 1.0f, level});
     set(Attr::SkyLightFactor, Op::AlphaBlend, {0.24f, level});
+    set(Attr::SkyLightLevel, Op::AlphaBlend, {4.0f, level});
     set(Attr::StarBrightness, Op::Override, {0});
     set(Attr::SunriseSunsetColor, Op::Multiply, thunder ? Value{0.25f, 0.25f, 0.3f, 1} : Value{0.5f, 0.5f, 0.6f, 1});
     return w;

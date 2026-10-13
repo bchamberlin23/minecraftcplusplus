@@ -3431,42 +3431,48 @@ void Particles::weather(const double cam[3]) {
     const int count = int(0.225f * float(diameter * diameter) * rain * rain) / (status_ == 1 ? 2 : 1);
     int soundAt[3] = {};
     bool haveSound = false;
+    const World& world = world_;
+    auto height = [&](int x, int z) { return motionBlocking ? motionBlocking(x, z) : surfaceY(x, z, false); };
+    // FluidState.getHeight: a full block under the same fluid, else its amount / 9
+    auto fluidTop = [&](int x, int y, int z, u16 id) -> double {
+        const BlockInfo& b = registry_.infos()[id];
+        if (!b.fluid && !b.waterlogged) return 0.0;
+        auto lava = [&](u16 i) { return registry_.infos()[i].fluid && registry_.name(i).starts_with("minecraft:lava"); };
+        const u16 above = blockAt(x, y + 1, z);
+        const BlockInfo& a = registry_.infos()[above];
+        const bool same = lava(id) ? lava(above) : (a.waterlogged || (a.fluid && !lava(above)));
+        if (same) return 1.0;
+        const std::string_view level = b.fluid ? registry_.property(id, "level") : std::string_view();
+        const int l = level.empty() ? 0 : std::atoi(std::string(level).c_str());
+        return double(l == 0 || l >= 8 ? 8 : 8 - l) / 9.0;
+    };
     for (int i = 0; i < count; ++i) {
         const int x = cx + int(rng_() % u32(diameter)) - radius, z = cz + int(rng_() % u32(diameter)) - radius;
-        const u8 biome = world_.biomeAt(x, z);
-        if (biome != World::kUnknownBiome) {
-            const std::string_view b = World::biomeNameView(biome);
-            if (b.find("desert") != b.npos || b.find("savanna") != b.npos || b.find("badlands") != b.npos ||
-                b.find("snowy") != b.npos || b.find("frozen") != b.npos || b.find("ice") != b.npos ||
-                b.find("grove") != b.npos || b.find("peaks") != b.npos || b.find("nether") != b.npos ||
-                b.find("the_end") != b.npos)
-                continue;
+        const int h = height(x, z);
+        if (h <= world.minSectionY() * 16 || h > cy + 10 || h < cy - 10) continue;
+        if (!precipitationAt || precipitationAt(x, h, z) != 1) continue;
+        const int y = h - 1;
+        soundAt[0] = x, soundAt[1] = y, soundAt[2] = z, haveSound = true;
+        if (status_ == 2) break;  // MINIMAL: the first column's position for the sound, no drops
+        const double bx = randf(), bz = randf();
+        const u16 id = blockAt(x, y, z);
+        const BlockInfo& b = registry_.infos()[id];
+        double top = 0.0;  // VoxelShape.max(Y, bx, bz), then the fluid's height
+        for (u32 k = 0; k < b.collisionCount; ++k) {
+            const Box& s = registry_.box(b.collisionFirst + k);
+            if (bx >= s.min[0] && bx <= s.max[0] && bz >= s.min[2] && bz <= s.max[2]) top = std::max(top, double(s.max[1]));
         }
-        for (int y = cy + 10; y >= cy - 10; --y) {
-            const u16 id = blockAt(x, y, z);
-            if (!id) continue;
-            const BlockInfo& b = registry_.infos()[id];
-            if (!b.collisionCount && !b.fluid && !b.waterlogged) continue;
-            const double bx = randf(), bz = randf();
-            double top = (b.fluid || b.waterlogged) ? 0.875 : 0.0;
-            for (u32 k = 0; k < b.collisionCount; ++k) {
-                const Box& s = registry_.box(b.collisionFirst + k);
-                if (bx >= s.min[0] && bx <= s.max[0] && bz >= s.min[2] && bz <= s.max[2]) top = std::max(top, double(s.max[1]));
-            }
-            soundAt[0] = x, soundAt[1] = y, soundAt[2] = z, haveSound = true;
-            if (status_ == 2) break;  // MINIMAL: only the sound position
-            const std::string& n = registry_.name(id);
-            const bool hot = n.starts_with("minecraft:lava") || n == "minecraft:magma_block" ||
-                             (n.find("campfire") != std::string::npos && n.find("lit=true") != std::string::npos);
-            const int type = hot ? smokeType : rainType;
-            if (levelAllows(type, false, false, x + bx, y + top, z + bz)) add(type, x + bx, y + top, z + bz, 0, 0, 0);
-            break;
-        }
+        top = std::max(top, fluidTop(x, y, z, id));
+        const std::string& n = registry_.name(id);
+        const bool hot = n.starts_with("minecraft:lava") || n.starts_with("minecraft:magma_block") ||
+                         (n.find("campfire") != std::string::npos && n.find("lit=true") != std::string::npos);
+        const int type = hot ? smokeType : rainType;
+        if (levelAllows(type, false, false, x + bx, y + top, z + bz)) add(type, x + bx, y + top, z + bz, 0, 0, 0);
     }
     // ClientLevel.tickRain: now and then the rain sound at the last drop (muffled when it falls on a roof above).
     if (haveSound && int(rng_() % 3) < rainSoundTime_++) {
         rainSoundTime_ = 0;
-        const bool above = soundAt[1] > cy + 1 && surfaceY(cx, cz, true) > cy;
+        const bool above = soundAt[1] > cy + 1 && height(cx, cz) > cy;
         if (audio::AudioSystem* a = audio::instance()) {
             const double pos[3] = {soundAt[0] + 0.5, soundAt[1] + 0.5, soundAt[2] + 0.5};
             a->playNetwork(-1, above ? "minecraft:weather.rain.above" : "minecraft:weather.rain", audio::Category::Weather, pos,

@@ -496,6 +496,12 @@ void Visuals::setParticleSources(std::function<bool(std::string_view, std::strin
     impl_->particles->foliageColor = std::move(foliage);
 }
 
+void Visuals::setWeatherSources(std::function<int(int, int, int)> precipitation, std::function<int(int, int)> motionBlocking) {
+    if (!impl_->particles) return;
+    impl_->particles->precipitationAt = std::move(precipitation);
+    impl_->particles->motionBlocking = std::move(motionBlocking);
+}
+
 void Visuals::setItemRules(ItemRules* rules) {
     impl_->rules = rules;
     impl_->er.setRules(rules);

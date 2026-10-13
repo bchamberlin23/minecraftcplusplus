@@ -112,6 +112,8 @@ public:
     // Block tags ("minecraft:logs", block id "minecraft:oak_log") and the biome foliage colour (0xRRGGBB) at a column.
     std::function<bool(std::string_view tag, std::string_view block)> blockTag;
     std::function<u32(int x, int z)> foliageColor;
+    std::function<int(int x, int y, int z)> precipitationAt;  // ClientLevel.getPrecipitationAt: 0 none, 1 rain, 2 snow
+    std::function<int(int x, int z)> motionBlocking;          // Heightmap MOTION_BLOCKING height
     // ItemParticleOption (ItemStackTemplate.STREAM_CODEC): reads the stack and returns its item network id (network
     // thread; unset or false: the packet is dropped).
     std::function<bool(net::Reader& r, int& item)> readItem;

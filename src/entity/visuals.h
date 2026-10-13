@@ -61,6 +61,8 @@ public:
     void localEntityEvent(int event);  // our own entity's events: items breaking, honey, drowning
     void predictUse(const Entity& e);  // our interaction's client-side half (Player.interactOn on the client)
     void setParticleSources(std::function<bool(std::string_view, std::string_view)> blockTag, std::function<u32(int, int)> foliage);
+    // Rain splashes (ClientLevel.tickWeatherEffects): precipitation (0 none, 1 rain, 2 snow) and the MOTION_BLOCKING height.
+    void setWeatherSources(std::function<int(int, int, int)> precipitation, std::function<int(int, int)> motionBlocking);
 
     struct Stats {
         double updateMs = 0, worldMs = 0, afterMs = 0, hudMs = 0;

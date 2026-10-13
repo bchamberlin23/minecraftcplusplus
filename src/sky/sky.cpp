@@ -479,6 +479,14 @@ int Sky::biomeAtQuart(int qx, int qy, int qz) {
     return b;
 }
 
+int Sky::precipitationAt(int x, int y, int z) {
+    if (!world_ || !world_->section(x >> 4, world_->minSectionY(), z >> 4, nullptr)) return 0;  // chunk not loaded
+    const int biome = biomeAtQuart(x >> 2, y >> 2, z >> 2);
+    if (biome < 0) return 0;
+    if (!env_.biomeInfo(biome).precipitation) return 0;
+    return temperature(biome, x, y, z) < 0.15f ? 2 : 1;  // Biome.coldEnoughToSnow
+}
+
 float Sky::temperature(int biome, int x, int y, int z) const {  // Biome.getHeightAdjustedTemperature
     const BiomeInfo& b = env_.biomeInfo(biome);
     float t = b.temperature;
@@ -1068,9 +1076,9 @@ void Sky::buildWeather(const CameraState& cam, const Value* a, float rain) {
             const int height = motionBlockingHeight(x, z);
             const int y0 = std::max(camY - r, height), y1 = std::max(camY + r, height);
             if (y1 == y0) continue;
-            const int biome = biomeAtQuart(x >> 2, camY >> 2, z >> 2);
-            if (biome >= 0 && !env_.biomeInfo(biome).precipitation) continue;
-            const bool isSnow = biome >= 0 && temperature(biome, x, camY, z) < 0.15f;
+            const int precipitation = precipitationAt(x, camY, z);  // NONE where the chunk is not loaded
+            if (!precipitation) continue;
+            const bool isSnow = precipitation == 2;
             const i32 seed = i32(u32(x) * u32(x) * 3121u + u32(x) * 45238971u) ^ i32(u32(z) * u32(z) * 418711u + u32(z) * 13761u);
             random.setSeed(seed);
             const int lightY = std::max(camY, height);

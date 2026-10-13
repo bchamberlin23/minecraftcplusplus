@@ -934,6 +934,8 @@ int wmain(int argc, wchar_t** argv) {
                                    [&](int x, int z) {
                                        return haveBiomeColors ? biomeColors.color(world.biomeAt(x, z), BiomeColors::Foliage) : 0x48B518u;
                                    });
+        visuals.setWeatherSources([&](int x, int y, int z) { return sky.precipitationAt(x, y, z); },
+                                  [&](int x, int z) { return sky.motionBlocking(x, z); });
         entities.onUntrackedEntityEvent = [&](int id, int event) {  // our own entity events
             if (event == 2 && session && id == session->entityId()) gameplay.kineticHit();  // EntityEvent.KINETIC_HIT
             if (session && id == session->entityId()) visuals.localEntityEvent(event);
