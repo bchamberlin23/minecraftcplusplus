@@ -44,7 +44,8 @@ overlay (start-up, F3 + T, server packs), block entity client ticks (spawner fla
 particles and ambience, note block notes), team-formatted name tags with the below-name score, screenshot names /
 links, pick block on entities (Ctrl: with data), the fuller F3 + B hitboxes, the happy ghast harness goggles, F3 + Esc
 (pause without the menu), the window icon, the quick-craft drag preview, mouse editing in text fields and the
-container key / mouse bindings. ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
+container key / mouse bindings, and the sounds the server leaves to the acting player (doors, trapdoors, fence gates,
+buttons, comparators, buckets, bottles, block transformers, shears, dye, allays, milking, igniting creepers). ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
 switch (automated runs never change the display mode) and the LAN publish from World Options (it would open a
 listening socket).
 
