@@ -98,7 +98,9 @@ pads / frogspawn and mushrooms predicted; the death screen's title confirmation 
 permissions and the previous mode; credits details; options sliders and Ctrl+wheel GUI scale; repeater locking; the
 death message's hover / links; books (lengths, truncation, lectern click events, silent key page turns) and the sign
 preview in the world; the recipe book (narrow windows, overlay, resets, id searches, ghosts, toast list); station
-screens (tooltips while carrying, stonecutter / loom clicks, the merchant's active offer, mount slots). Tested against local mock status servers
+screens (tooltips while carrying, stonecutter / loom clicks, the merchant's active offer, mount slots); movement
+fixes (block speed while flying, underwater, crouch timing); component hashes for container clicks; movement sounds
+(emission gating, fall sounds by block, honey slides). Fall sounds do not model the pointed dripstone's fallOn. Tested against local mock status servers
 (a Python script: modern, no-version, legacy-only, silent and closing servers).
 
 ## Protocol / networking
