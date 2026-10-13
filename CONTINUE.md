@@ -158,8 +158,8 @@ permissions and the previous mode; credits details; options sliders and Ctrl+whe
 - **Test commands in 26.3**: block states in NBT are strings (`{block_state:"minecraft:stone"}`); the old
   `{Name:...}` compound is silently ignored (an air display).
 - **Placement prediction (game/placement.cpp) residual**: not predicted client-side (the server's block updates
-  fix them a moment later; rails are straight along the look as the Java client places them):
-  repeater / comparator neighbours' power, and BlockItem.canPlace's canSurvive beyond the covered families
+  fix them a moment later; rails are straight along the look as the Java client places them;
+  repeaters' locked state is predicted, power changes are the server's as in Java): BlockItem.canPlace's canSurvive beyond the covered families
   (vegetation and wither roses by their tags, crops / stems on farmland, carpets, rails, diodes, pressure plates, door
   bottoms, torches, signs, banners, lanterns, attached blocks, ladders, vines, dripstone, wire, mushrooms, lily pads and
   frogspawn): tall seagrass and the like (dry vegetation, nether plants, wart, bamboo, cactus, sugar cane,
