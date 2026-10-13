@@ -205,7 +205,7 @@ u32 AudioSystem::playNetwork(int registryId, std::string_view name, Category cat
 }
 
 u32 AudioSystem::play(int event, Category category, const double pos[3], float volume, float pitch, i64 seed, bool linear,
-                      bool relative, bool looping, float* soundVolume) {
+                      bool relative, bool looping, float* soundVolume, bool canStartSilent) {
     if (!ready() || event < 0) return 0;
     JavaRandom random(seed);  // SimpleSoundInstance(..., RandomSource.create(seed), ...)
     ResolvedSound s;
@@ -221,7 +221,8 @@ u32 AudioSystem::play(int event, Category category, const double pos[3], float v
     }
     const float clamped = std::clamp(instVolume, 0.0f, 1.0f);
     const float gain = clamped * volumes_[int(category)] * (category == Category::Master ? 1.0f : volumes_[0]);
-    if (gain <= 0.0f && category != Category::Music) return 0;  // SoundEngine.play: skipped when silent
+    // SoundEngine.play: skipped when silent, unless the instance canStartSilent (bees, minecarts, riding) or music
+    if (gain <= 0.0f && category != Category::Music && !canStartSilent) return 0;
     PlayRequest r;
     r.handle = nextHandle_++;
     if (!r.handle) r.handle = nextHandle_++;

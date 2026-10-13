@@ -63,7 +63,7 @@ public:
     // (0 if nothing was played).
     u32 play(std::string_view event, Category category, double x, double y, double z, float volume, float pitch);
     u32 play(int event, Category category, const double pos[3], float volume, float pitch, i64 seed, bool linear = true,
-             bool relative = false, bool looping = false, float* soundVolume = nullptr);
+             bool relative = false, bool looping = false, float* soundVolume = nullptr, bool canStartSilent = false);
     // SimpleSoundInstance.forUI: not positioned, UI category.
     u32 playUi(std::string_view event, float pitch = 1.0f, float volume = 0.25f);
     // Screen.getBackgroundMusic: a screen's own music (WinScreen: music.credits) over the situational one; "" ends

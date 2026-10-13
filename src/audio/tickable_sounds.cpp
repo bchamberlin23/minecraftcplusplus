@@ -24,7 +24,11 @@ bool TickableSounds::start(Instance& in, const char* event, Category category, c
                            bool looping) {
     const int id = audio_.eventId(event);
     if (id < 0) return false;
-    in.handle = audio_.play(id, category, pos, 1.0f, 1.0f, audio_.nextSeed(), linear, relative, looping, &in.soundVolume);
+    // SoundInstance.canStartSilent: BeeSoundInstance, MinecartSoundInstance, RidingEntitySoundInstance
+    const std::string_view e(event);
+    const bool silentOk = e.starts_with("minecraft:entity.bee.loop") || e == "minecraft:entity.minecart.riding" ||
+                          e == "minecraft:entity.nautilus.riding" || e == "minecraft:entity.happy_ghast.riding";
+    in.handle = audio_.play(id, category, pos, 1.0f, 1.0f, audio_.nextSeed(), linear, relative, looping, &in.soundVolume, silentOk);
     if (!in.handle) return false;
     audio_.setVolume(in.handle, in.volume * in.soundVolume);  // the instance's starting volume (0: started silently)
     if (in.pitch != 1.0f) audio_.setPitch(in.handle, in.pitch);
