@@ -41,6 +41,7 @@ struct ServerEntry {
     std::string icon;  // base64 PNG (from servers.dat or the last status)
     int packStatus = 0;  // ServerData.ServerPackStatus: 0 prompt, 1 enabled, 2 disabled
     i32 acceptedCodeOfConduct = 0;  // String.hashCode of the accepted code of conduct, 0: none
+    bool hidden = false;  // ServerList.hiddenServerList: a direct connection's entry (not shown, at most 16)
 };
 // Our list; on first use it is imported from the game's servers.dat (which is only read).
 std::vector<ServerEntry> loadServers(const fs::path& json, const fs::path& dat);
@@ -104,6 +105,7 @@ struct FrontEndState {
 
     // Server list
     std::vector<ServerEntry> servers;
+    std::vector<ServerEntry> hiddenServers;  // the hidden entries, newest first
     std::shared_ptr<PingBoard> pings;
     int serverSel = -1;  // servers index, then LAN worlds (servers.size() + i)
     float serverScroll = 0;

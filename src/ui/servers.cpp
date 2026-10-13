@@ -34,7 +34,9 @@ std::string lastDirect(const fs::path& json) {
 void saveAll(State& s, const std::string* direct = nullptr) {
     FrontEndState& f = *s.fe;
     const std::string keep = direct ? *direct : lastDirect(f.cfg.serversFile);
-    saveServers(f.cfg.serversFile, f.servers);
+    std::vector<ServerEntry> all = f.servers;  // ServerList.save: the shown entries, then the hidden ones
+    all.insert(all.end(), f.hiddenServers.begin(), f.hiddenServers.end());
+    saveServers(f.cfg.serversFile, all);
     // lastDirect rides along in the same file.
     std::vector<u8> bytes;
     if (!readFile(f.cfg.serversFile, bytes)) return;
@@ -126,9 +128,7 @@ void openEditServer(State& s, int index) {
         f.serverName.text.value = f.servers[size_t(index)].name;
         f.serverIp.text.value = f.servers[size_t(index)].ip;
         f.editPackStatus = f.servers[size_t(index)].packStatus;
-    } else {
-        f.serverName.text.value = s.res.translate("selectServer.defaultName");
-    }
+    }  // Add: an empty name (the default is the field's hint, and the name when left empty)
     for (Field* fl : {&f.serverName, &f.serverIp})
         fl->text.cursor = fl->text.selection = int(fl->text.value.size());
     s.openScreen(Screen::EditServer);
@@ -174,21 +174,39 @@ bool validAddress(const std::string& in) {
     return true;
 }
 
+// setScreen(this) on the JoinMultiplayerScreen already inited: the list in memory, the pings kept
+void backToServers(State& s) {
+    if (s.fe->serverSel >= int(s.fe->servers.size()) + 1 + int(s.fe->lanWorlds.size())) s.fe->serverSel = -1;
+    s.openScreen(Screen::Servers);
+}
+
 void saveEditServer(State& s) {
     FrontEndState& f = *s.fe;
     std::string ip = f.serverIp.text.value, name = f.serverName.text.value;  // ManageServerScreen.onAdd
     if (!validAddress(ip)) return;
     if (name.empty()) name = s.res.translate("selectServer.defaultName");
     if (f.editServer >= 0 && f.editServer < int(f.servers.size())) {
+        // editServerCallback: the name, address and pack status (the icon stays); the entry pings again
         ServerEntry& e = f.servers[size_t(f.editServer)];
-        if (e.ip != ip) e.icon.clear();
         e.name = name, e.ip = ip, e.packStatus = f.editPackStatus;
-    } else {
-        f.servers.push_back({name, ip, {}, f.editPackStatus});
-        f.serverSel = int(f.servers.size()) - 1;
+        if (f.pings) {
+            std::lock_guard lock(f.pings->mutex);
+            f.pings->results.erase(ip);
+        }
+    } else {  // JoinMultiplayerScreen.addServerCallback: ServerList.unhide, copyNameIconFrom (the pack status stays)
+        const auto hid = std::find_if(f.hiddenServers.begin(), f.hiddenServers.end(), [&](const ServerEntry& e) { return e.ip == ip; });
+        if (hid != f.hiddenServers.end()) {
+            ServerEntry e = *hid;
+            f.hiddenServers.erase(hid);
+            e.hidden = false, e.name = name, e.icon.clear();
+            f.servers.push_back(std::move(e));
+        } else {
+            f.servers.push_back({name, ip, {}, f.editPackStatus});
+        }
+        f.serverSel = -1;  // serverSelectionList.setSelected(null)
     }
     saveAll(s);
-    openServers(s);
+    backToServers(s);
 }
 
 void deleteServer(State& s) {
@@ -204,7 +222,7 @@ void deleteServer(State& s) {
                     if (index < int(fe.servers.size())) fe.servers.erase(fe.servers.begin() + index);
                     fe.serverSel = -1;
                     saveAll(*p);
-                    openServers(*p);
+                    backToServers(*p);
                 },
                 Screen::Servers);
 }
@@ -240,6 +258,7 @@ std::vector<ServerEntry> loadServers(const fs::path& json, const fs::path& dat) 
                     const std::string packs = e.value("resourcePack", "prompt");
                     s.packStatus = packs == "enabled" ? 1 : packs == "disabled" ? 2 : 0;
                     s.acceptedCodeOfConduct = e.value("acceptedCodeOfConduct", 0);
+                    s.hidden = e.value("hidden", false);
                     out.push_back(std::move(s));
                 }
         return out;
@@ -249,9 +268,8 @@ std::vector<ServerEntry> loadServers(const fs::path& json, const fs::path& dat) 
     if (!dat.empty() && readFile(dat, bytes) && nbtRead(bytes.data(), bytes.size(), root))
         if (NbtValue* list = root.find("servers"))
             for (NbtValue& e : list->items) {
-                const NbtValue* hidden = e.find("hidden");
-                if (hidden && hidden->i) continue;
                 ServerEntry s;
+                if (const NbtValue* v = e.find("hidden")) s.hidden = v->i != 0;
                 if (const NbtValue* v = e.find("name")) s.name = v->s;
                 if (const NbtValue* v = e.find("ip")) s.ip = v->s;
                 if (const NbtValue* v = e.find("icon")) s.icon = v->s;
@@ -272,8 +290,10 @@ void saveServers(const fs::path& json, const std::vector<ServerEntry>& servers) 
         if (!e.icon.empty()) o["icon"] = e.icon;
         if (e.packStatus) o["resourcePack"] = e.packStatus == 1 ? "enabled" : "disabled";
         if (e.acceptedCodeOfConduct) o["acceptedCodeOfConduct"] = e.acceptedCodeOfConduct;
+        if (e.hidden) o["hidden"] = true;
         j["servers"].push_back(std::move(o));
     }
+    if (const std::string last = lastDirect(json); !last.empty()) j["lastDirect"] = last;  // kept as it was
     std::error_code ec;
     fs::create_directories(json.parent_path(), ec);
     const fs::path tmp = json.wstring() + L".tmp";
@@ -291,6 +311,10 @@ void openServers(State& s) {
     FrontEndState& f = *s.fe;
     if (!f.protocol) f.protocol = net::gameProtocol(f.cfg.jar, &f.gameVersion);
     f.servers = loadServers(f.cfg.serversFile, f.cfg.serversDat);
+    f.hiddenServers.clear();
+    for (const ServerEntry& e : f.servers)
+        if (e.hidden) f.hiddenServers.push_back(e);
+    std::erase_if(f.servers, [](const ServerEntry& e) { return e.hidden; });
     if (f.serverSel >= int(f.servers.size())) f.serverSel = -1;
     if (!f.lan.running() && !f.lan.start()) LOG("ui: LAN discovery unavailable");
     refreshPings(s);
@@ -591,8 +615,8 @@ void buildEditServer(State& s) {
     };
     Button& done = addButton(s, x, float(H / 4 + 96 + 18), 200, tr(s, "addServer.add"), [p] { saveEditServer(*p); });
     done.labelFn = [p] { return tr(*p, "addServer.add"); };
-    addButton(s, x, float(H / 4 + 120 + 18), 200, tr(s, "gui.cancel"), [p] { openServers(*p); });
-    f.onBack = [p] { openServers(*p); };
+    addButton(s, x, float(H / 4 + 120 + 18), 200, tr(s, "gui.cancel"), [p] { backToServers(*p); });
+    f.onBack = [p] { backToServers(*p); };
     f.onEnter = nullptr;  // ManageServerScreen has no Enter shortcut
 }
 
@@ -629,8 +653,17 @@ void buildDirectConnect(State& s) {
         p->settings.lastServer = ip, p->settings.save();
     };
     auto join = [p, keep] {
-        const std::string ip = p->fe->directIp.text.value;
+        FrontEndState& fe = *p->fe;
+        const std::string ip = fe.directIp.text.value;
         if (!validAddress(ip)) return;
+        // directJoinCallback: ServerList.get finds no entry of the address -> add(hidden)
+        const auto same = [&](const ServerEntry& e) { return e.ip == ip; };
+        if (std::none_of(fe.servers.begin(), fe.servers.end(), same) && std::none_of(fe.hiddenServers.begin(), fe.hiddenServers.end(), same)) {
+            ServerEntry e;
+            e.name = p->res.translate("selectServer.defaultName"), e.ip = ip, e.hidden = true;
+            fe.hiddenServers.insert(fe.hiddenServers.begin(), std::move(e));
+            if (fe.hiddenServers.size() > 16) fe.hiddenServers.resize(16);
+        }
         keep();
         connect(*p, ip);
     };
@@ -639,7 +672,7 @@ void buildDirectConnect(State& s) {
     };
     auto cancel = [p, keep] {
         keep();
-        openServers(*p);
+        backToServers(*p);
     };
     addButton(s, x, float(H / 4 + 120 + 12), 200, tr(s, "gui.cancel"), cancel);
     f.onBack = cancel;
