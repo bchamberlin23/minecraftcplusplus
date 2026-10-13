@@ -913,13 +913,8 @@ bool Gameplay::inWaterOrRain() const {  // Entity.isInWaterOrRain
 // EnchantmentHelper.getTridentSpinAttackStrength: the stack's enchantments with a trident_spin_attack_strength effect
 // (riptide: 1.5 + 0.75 per level above the first).
 float Gameplay::riptideStrength(const ui::ItemStack& s) const {
-    if (!ui_) return 0;
-    float strength = 0;
-    const auto& reg = ui_->items().enchantments();
-    for (const auto& [id, level] : s.enchantList)
-        if (id >= 0 && size_t(id) < reg.size() && reg[size_t(id)].id == "minecraft:riptide")
-            strength += 1.5f + 0.75f * float(level - 1);
-    return strength;
+    // EnchantmentHelper.getTridentSpinAttackStrength: the trident_spin_attack_strength effects (riptide)
+    return ui_ ? ui::enchantmentValue(ui_->items(), s, "minecraft:trident_spin_attack_strength", 0.0f) : 0.0f;
 }
 
 // Minecraft.startUseItem -> MultiPlayerGameMode.useItem -> ItemStack.use for one hand: kUseConsume when the use was
