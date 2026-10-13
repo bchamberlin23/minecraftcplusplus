@@ -25,6 +25,16 @@ namespace ui {
 
 namespace {
 
+// Util.parseAndValidateUntrustedUri: the scheme (lower-cased) is http or https
+bool webScheme(const std::string& url) {
+    const size_t colon = url.find("://");
+    if (colon == std::string::npos) return false;
+    std::string scheme = url.substr(0, colon);
+    for (char& ch : scheme) ch = char(std::tolower(u8(ch)));
+    return scheme == "http" || scheme == "https";
+}
+
+
 // --- model (net.minecraft.server.dialog) ----------------------------------------------------------------------------
 
 struct Action {  // dialog Action: a static click event, dynamic/run_command or dynamic/custom
@@ -573,7 +583,7 @@ void openUrl(const std::string& url) {
 
 // Screen.clickUrlAction: ConfirmLinkScreen (untrusted): Yes / Copy to Clipboard / No, then `after`.
 void clickUrl(UiState& s, const std::string& url, const Target& after) {
-    if (!url.starts_with("http://") && !url.starts_with("https://")) return;  // ExtraCodecs.UNTRUSTED_URI
+    if (!webScheme(url)) return;  // ExtraCodecs.UNTRUSTED_URI
     // Screen.clickUrlAction: the Web Links option, then Prompt on Links.
     if (!s.settings.chatLinks) return;
     if (!s.settings.chatLinksPrompt) return openUrl(url);
@@ -1477,7 +1487,7 @@ void registerHandlers(UiState& s, net::Client& client) {
                 l.name = parseComponent(r.nbt(), lang);
             }
             l.url = std::string(r.str());
-            if (l.url.starts_with("http://") || l.url.starts_with("https://")) list.push_back(std::move(l));
+            if (webScheme(l.url)) list.push_back(std::move(l));
             else LOG("ui: received invalid link %s", l.url.c_str());
         }
         if (r.ok) sp->post([list] { g.links = list; });
