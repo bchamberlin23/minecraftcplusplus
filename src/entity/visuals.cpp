@@ -1386,7 +1386,7 @@ const Visuals::Impl::Tag& Visuals::Impl::mapLabel(const std::string& nbt) {
         std::vector<MeshQuad> quads;
         MeshQuad bg{};  // Font background: x - 1 .. x + width, y - 1 .. y + 9, behind the glyphs
         const float corners[4][2] = {{-1, -1}, {-1, 9}, {t.width, 9}, {t.width, -1}};
-        for (int k = 0; k < 4; ++k) bg.pos[k][0] = corners[k][0], bg.pos[k][1] = corners[k][1], bg.pos[k][2] = 0.01f;
+        for (int k = 0; k < 4; ++k) bg.pos[k][0] = corners[k][0], bg.pos[k][1] = corners[k][1], bg.pos[k][2] = -0.01f;  // Font: the background at -0.01 (UNDER_EFFECT_DEPTH)
         bg.normal = packNormal(0, 0, -1), bg.color = 0xFFFFFFFF, bg.tex = kTexSolid, bg.flags = kQuadNoShade;
         quads.push_back(bg);
         const auto& v = canvas.vertices();
