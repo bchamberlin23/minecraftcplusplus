@@ -244,6 +244,8 @@ private:
     int spinModel_ = -1, spinTex_ = -1;  // SpinAttackEffectLayer (riptide)
     int capeModel_ = -1;                 // CapeLayer
     int chestModel_ = -1, chestTex_ = -1;  // chest minecarts: the chest's special block model
+    int parrotModel_ = -1, earsModel_ = -1, arrowModel_ = -1, arrowTex_ = -1, stingerModel_ = -1, stingerTex_ = -1;  // player layers
+    std::vector<Mat34> baseMats_;  // the current entity's base layer part matrices (StuckInBodyLayer anchors)
 
     // Shader packs (PassContext::pack): vanilla-style vertices per entity for the pack's gbuffers_entities programs.
     PackSink* pack_ = nullptr;

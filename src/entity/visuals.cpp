@@ -1701,6 +1701,8 @@ void Visuals::Impl::update() {
         e.swingHand = swingHand, e.swingType = swingType;
         e.kineticHitTicks = game->kineticHitTicks;
         e.mainArm = ui ? ui->settings().mainHand : 1;
+        e.arrowCount = world.self.arrowCount, e.stingerCount = world.self.stingerCount;  // our own synched data
+        e.shoulderParrot[0] = world.self.shoulderParrot[0], e.shoulderParrot[1] = world.self.shoulderParrot[1];
         if (const PlayerInfo* info = world.playerNamed(playerName)) e.skin = info->skin, e.slim = info->slim, e.cape = info->cape;
         else if (e.skin < 0) e.skin = assets.texture("entity/player/wide/steve"), e.slim = false;
         auto equip = [&](int slot, int menuSlot) {

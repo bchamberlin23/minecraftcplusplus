@@ -1306,6 +1306,7 @@ int wmain(int argc, wchar_t** argv) {
         }
         if (haveEntities)
             entityRenderer.setShadows(ui.settings().entityShadows, sky.skyDarken(), session ? session->dimension().ambientLight : 0.0f);
+        if (haveEntities) entities.selfId = session ? session->entityId() : INT_MIN;
         if (haveEntities && session) {  // the day timeline's creaking_active / firefly_bush_sounds stretch: 12600..23400
             const std::string& dim = session->dimension().name;
             const i64 t = i64(sky.dayTicks()) % 24000;

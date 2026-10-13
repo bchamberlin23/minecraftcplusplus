@@ -51,6 +51,8 @@ enum LayerFlags : u16 {
     Cape = 2048,      // CapeLayer (PlayerCapeModel): posed like the base model, the cape swinging
     DisplayBlock = 4096,  // a minecart's display block drawn as a model (the chest): under the display transform
     Dissolve = 8192,      // entityCutoutDissolve: scroll[] = the mask texture's atlas offset; alpha in the colour
+    Shoulder = 16384,     // ParrotOnShoulderLayer: scroll[0] = the side (+0.4 left, -0.4 right)
+    Stuck = 32768,        // StuckInBodyLayer: scroll[0] = the item's index, scroll[1] = 0 arrow (in cube) / 1 stinger
 };
 enum Special : u8 {
     SpNone, SpCow, SpPig, SpChicken, SpSheep, SpWolf, SpCat, SpHorse, SpLlama, SpRabbit, SpParrot, SpFox, SpAxolotl,
@@ -398,6 +400,9 @@ void EntityRenderer::buildDefs() {
     spinModel_ = M("spin_attack#main"), spinTex_ = T("trident/trident_riptide");
     capeModel_ = M("player#cape");
     chestModel_ = M("chest#main"), chestTex_ = T("chest/normal");
+    parrotModel_ = M("parrot#main"), earsModel_ = M("player#ears");
+    arrowModel_ = M("arrow#main"), arrowTex_ = T("projectiles/arrow");
+    stingerModel_ = M("bee_stinger#main"), stingerTex_ = T("bee/bee_stinger");
     u32 boxes = 0;
     std::string names;
     for (size_t i = 0; i < defs_.size(); ++i)
@@ -1508,6 +1513,29 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         capeOverArmor = chest >= 0 && items_ && !items_->itemLayers(chest, 0).empty();
         if (!wings) layers[layerCount++] = {capeModel_, e.cape, kWhite, u16(Cape | NoOverlay)};
     }
+    // AvatarRenderer's other player layers: deadmau5's ears, stuck arrows and bee stingers, parrots on the shoulders.
+    if (d.special == SpPlayer && !(e.sharedFlags & 0x20)) {
+        if (e.name == "deadmau5" && earsModel_ >= 0 && layerCount < 16 && layerCount > 0)  // Deadmau5EarsLayer: the skin
+            layers[layerCount++] = {earsModel_, layers[0].tex, kWhite, u16(Armor)};
+        for (int k = 0; k < e.arrowCount && arrowModel_ >= 0 && layerCount < 16; ++k) {
+            layers[layerCount] = {arrowModel_, arrowTex_, kWhite, u16(Stuck | NoOverlay)};
+            layers[layerCount++].scroll[0] = float(k);
+        }
+        for (int k = 0; k < e.stingerCount && stingerModel_ >= 0 && layerCount < 16; ++k) {
+            layers[layerCount] = {stingerModel_, stingerTex_, kWhite, u16(Stuck | NoOverlay)};
+            layers[layerCount].scroll[0] = float(k), layers[layerCount++].scroll[1] = 1;
+        }
+        static const char* kParrots[5] = {"parrot/parrot_red_blue", "parrot/parrot_blue", "parrot/parrot_green", "parrot/parrot_yellow_blue",
+                                          "parrot/parrot_grey"};
+        for (int side = 0; side < 2 && parrotModel_ >= 0; ++side) {
+            const int v = e.shoulderParrot[side];
+            if (v < 0 || v > 4 || layerCount >= 16) continue;
+            const int t = assets_.texture(std::string("entity/") + kParrots[v]);
+            if (t < 0) continue;
+            layers[layerCount] = {parrotModel_, t, kWhite, u16(Shoulder | NoOverlay)};
+            layers[layerCount++].scroll[0] = side == 0 ? 0.4f : -0.4f;
+        }
+    }
     // SpinAttackEffectLayer: the riptide swirl around a spinning player.
     if (d.special == SpPlayer && (e.livingFlags & 4) && spinModel_ >= 0 && spinTex_ >= 0 && layerCount < 16)
         layers[layerCount++] = {spinModel_, spinTex_, kWhite, SpinFx};
@@ -1896,6 +1924,59 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
                 cp.xRot = std::atan2(R[2][1], R[2][2]);
                 cp.zRot = std::atan2(R[1][0], R[0][0]);
             }
+        } else if (L.flags & Shoulder) {  // ParrotModel ON_SHOULDER: looking with the player, the tail swinging with its walk
+            layerRoot = mul(root, translate(L.scroll[0], s.crouching ? -1.3f : -1.5f, 0.0f));
+            const i16 head = m.part("head"), tail = m.part("tail"), lw = m.part("left_wing"), rw = m.part("right_wing");
+            if (head >= 0) poses_[size_t(head)].xRot = s.pitch * kDeg, poses_[size_t(head)].yRot = s.headYaw * kDeg;
+            if (tail >= 0) poses_[size_t(tail)].xRot += std::cos(s.walkPos * 0.6662f) * 0.3f * s.walkSpeed;
+            if (lw >= 0) poses_[size_t(lw)].zRot = -0.0873f;
+            if (rw >= 0) poses_[size_t(rw)].zRot = 0.0873f;
+        } else if ((L.flags & Stuck) && !baseMats_.empty()) {  // StuckInBodyLayer: a random cube of a random body part
+            const Model& bm = assets_.modelAt(layers[0].model);
+            std::vector<u32> bodyParts;
+            for (size_t i = 0; i < bm.parts.size() && i < baseMats_.size(); ++i)
+                if (bm.parts[i].quadCount) bodyParts.push_back(u32(i));
+            if (!bodyParts.empty()) {
+                const bool stinger = L.scroll[1] > 0.5f;
+                u64 seed = (u64(i64(e.id)) ^ 0x5DEECE66Dull) & ((1ull << 48) - 1);  // RandomSource(id)
+                auto next = [&](int bits) {
+                    seed = (seed * 0x5DEECE66Dull + 0xBull) & ((1ull << 48) - 1);
+                    return int(i64(seed) >> (48 - bits));
+                };
+                auto nextInt = [&](int bound) {
+                    if ((bound & -bound) == bound) return int((i64(bound) * i64(next(31))) >> 31);
+                    int bits, val;
+                    do bits = next(31), val = bits % bound;
+                    while (bits - val + (bound - 1) < 0);
+                    return val;
+                };
+                auto nextFloat = [&] { return float(next(24)) / float(1 << 24); };
+                u32 partIdx = 0;
+                float cube[6] = {}, mid[3] = {};
+                for (int k = 0; k <= int(L.scroll[0]); ++k) {
+                    partIdx = bodyParts[size_t(nextInt(int(bodyParts.size())))];
+                    const ModelPart& bp = bm.parts[partIdx];
+                    const int cubes = std::max(1, int(bp.quadCount / 6));
+                    const int ci = nextInt(cubes);
+                    const auto& quads = assets_.quads();
+                    cube[0] = cube[1] = cube[2] = 1e9f, cube[3] = cube[4] = cube[5] = -1e9f;
+                    for (u32 q = bp.quadFirst + u32(ci) * 6; q < std::min(bp.quadFirst + bp.quadCount, bp.quadFirst + u32(ci + 1) * 6); ++q)
+                        for (int vtx = 0; vtx < 4; ++vtx)
+                            for (int a = 0; a < 3; ++a)
+                                cube[a] = std::min(cube[a], quads[q].pos[vtx][a]), cube[3 + a] = std::max(cube[3 + a], quads[q].pos[vtx][a]);
+                    for (float& mv : mid) mv = nextFloat();
+                    if (stinger) {  // ON_SURFACE
+                        const int plane = nextInt(3);
+                        mid[plane] = mid[plane] > 0.5f ? 1.0f : 0.5f;
+                    }
+                }
+                M34 pr = *reinterpret_cast<const M34*>(&baseMats_[partIdx]);
+                pr = mul(pr, translate((cube[0] + (cube[3] - cube[0]) * mid[0]) / 16.0f, (cube[1] + (cube[4] - cube[1]) * mid[1]) / 16.0f,
+                                       (cube[2] + (cube[5] - cube[2]) * mid[2]) / 16.0f));
+                const float dx = -(mid[0] * 2 - 1), dy = -(mid[1] * 2 - 1), dz = -(mid[2] * 2 - 1);
+                const float yr = std::atan2(dx, dz) / kDeg, xr = std::atan2(dy, std::sqrt(dx * dx + dz * dz)) / kDeg;
+                layerRoot = mul(mul(pr, rotY((yr - 90.0f) * kDeg)), rotZ(xr * kDeg));
+            }
         } else if ((L.flags & Armor) && roleSet) {  // HumanoidModel.copyPropertiesTo: the parent's pose by part
             for (size_t i = 0; i < parts; ++i) {
                 const Role r = m.parts[i].role;
@@ -1932,6 +2013,7 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
             for (size_t i = 0; i < parts; ++i)
                 if (const Role r = m.parts[i].role; r != RoleNone)
                     roleMat[r] = *reinterpret_cast<const M34*>(&mats_[i]), roleMatSet |= 1ull << r;
+        if (li == 0) baseMats_.assign(mats_.begin(), mats_.begin() + ptrdiff_t(parts));  // the stuck items' anchors
         if (li == 0 && living && attachments_.size() < 4096) {  // ItemInHandLayer / CustomHeadLayer anchors
             Attachment a{};
             a.entity = &e == localPlayer_ ? kLocalPlayerId : e.id;

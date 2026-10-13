@@ -210,6 +210,10 @@ EntityWorld::EntityWorld(EntityAssets& assets, World& world, BlockRegistry& regi
         d.displayOffset = id({"DATA_ID_DISPLAY_OFFSET"});
         d.fuel = id({"DATA_ID_FUEL"});
         d.fuse = id({"DATA_FUSE_ID"});
+        d.shoulderL = id({"DATA_SHOULDER_PARROT_LEFT"});
+        d.shoulderR = id({"DATA_SHOULDER_PARROT_RIGHT"});
+        d.arrows = id({"DATA_ARROW_COUNT_ID"});
+        d.stingers = id({"DATA_STINGER_COUNT_ID"});
         d.lastOutput = id({"DATA_ID_LAST_OUTPUT"});
         d.attackTarget = id({"DATA_ID_ATTACK_TARGET"});
         d.profile = id({"DATA_PROFILE"});
@@ -1029,6 +1033,12 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
     }
     if (it == entities_.end()) {
         if (ev.type == EventType::EntityEvent && onUntrackedEntityEvent) onUntrackedEntityEvent(ev.id, ev.a);
+        if (ev.type == EventType::Data && ev.id == selfId && selfId != INT_MIN) {
+            if (self.type < 0 || self.info == nullptr) {
+                self.type = assets_.typeId("minecraft:player"), self.info = assets_.type(self.type), self.category = Category::Player;
+            }
+            applyData(self, &q.meta[ev.first], ev.count, q);
+        }
         return;
     }
     Entity& e = it->second;
@@ -1236,6 +1246,9 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
         else if (idx == d.displayOffset && v.serializer == 1) e.displayOffset = int(v.i);
         else if (idx == d.fuel && v.serializer == 8) e.furnaceFuel = v.i != 0;
         else if (idx == d.fuse && v.serializer == 1) e.fuse = int(v.i);
+        else if ((idx == d.shoulderL || idx == d.shoulderR) && v.serializer == 19) e.shoulderParrot[idx == d.shoulderR] = int(v.i) - 1;
+        else if (idx == d.arrows && v.serializer == 1) e.arrowCount = int(v.i);
+        else if (idx == d.stingers && v.serializer == 1) e.stingerCount = int(v.i);
         else if (idx == d.color) e.dyeColor = int(v.i);
         else if (idx == d.attachFace) e.attachFace = int(v.i);
         else if (idx == d.peek) e.peekRaw = int(v.i);

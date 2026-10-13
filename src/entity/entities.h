@@ -248,6 +248,8 @@ struct Entity {
     // Minecarts: DATA_ID_CUSTOM_DISPLAY_BLOCK (network block state, 0: the type's own), DATA_ID_DISPLAY_OFFSET
     // (INT_MIN: the type's default), DATA_ID_FUEL (furnace minecart: lit).
     int displayBlock = 0, displayOffset = INT_MIN;
+    int shoulderParrot[2] = {-1, -1};  // players: DATA_SHOULDER_PARROT_LEFT / RIGHT (Parrot.Variant id, -1 none)
+    int arrowCount = 0, stingerCount = 0;  // LivingEntity DATA_ARROW_COUNT_ID / DATA_STINGER_COUNT_ID
     bool furnaceFuel = false;
     int fuse = -1;  // primed TNT (DATA_FUSE_ID) and TNT minecarts (entity event 70: 80 ticks), counted down each tick
     float paddlePos[2] = {};  // AbstractBoat.paddlePositions (radians)
@@ -368,7 +370,7 @@ public:
            paddleLeft = -1, paddleRight = -1, chest = -1, color = -1, attachFace = -1, peek = -1, fireworksItem = -1,
            silent = 4, staysStill = -1, dangerous = -1, cloudRadius = -1, cloudWaiting = -1, cloudParticle = -1,
            commandName = -1, lastOutput = -1, attackTarget = -1, snifferState = -1, profile = -1, displayBlock = -1,
-           displayOffset = -1, fuel = -1, fuse = -1;
+           displayOffset = -1, fuel = -1, fuse = -1, shoulderL = -1, shoulderR = -1, arrows = -1, stingers = -1;
         // Display entities.
         i8 dStart = -1, dDuration = -1, dPosRot = -1, dTranslation = -1, dScale = -1, dLeft = -1, dRight = -1,
            dBillboard = -1, dBrightness = -1, dViewRange = -1, dWidth = -1, dHeight = -1, dBlock = -1, dItem = -1,
@@ -412,6 +414,10 @@ public:
     };
     std::vector<TransientBlock> transientBlocks;
     std::vector<double> mobAppearances;  // ElderGuardianParticle start times (nowSeconds), main thread
+    // Our own player (not a tracked entity): its synched data as the server sends it (selfId: the session's entity id,
+    // set by the owner); the avatar reads the stuck arrows / stingers and shoulder parrots from it.
+    int selfId = INT_MIN;
+    Entity self;
     // Particles of entities (set before attach): reading an encoded ParticleOptions (network thread) and spawning one.
     std::function<bool(net::Reader& r, std::string& raw)> readParticle;
     // The local player uses an entity (before the interact packet; main thread): true opens something client side

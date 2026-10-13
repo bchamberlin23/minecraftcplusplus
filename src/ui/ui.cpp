@@ -1103,6 +1103,12 @@ void Ui::State::runScript(double) {
                         m.slots[i].enchantments);
             if (!carried.empty()) LOG("script: carried = %d x %s", carried.count, items.name(carried.item).c_str());
             LOG("script: xp level %d, menu %s data %d %d %d %d", xpLevel, m.typeName.c_str(), m.data[0], m.data[1], m.data[2], m.data[3]);
+        } else if (st.verb == "selfstuck") {  // selfstuck <arrows> <stingers> <left parrot> <right parrot>: our avatar's layers
+            if (entities) {
+                entities->self.arrowCount = std::atoi(arg(0).c_str()), entities->self.stingerCount = std::atoi(arg(1).c_str());
+                entities->self.shoulderParrot[0] = a.size() > 2 ? std::atoi(arg(2).c_str()) : -1;
+                entities->self.shoulderParrot[1] = a.size() > 3 ? std::atoi(arg(3).c_str()) : -1;
+            }
         } else if (st.verb == "dragondeath") {  // dragondeath <ticks>: client-side dragon death time (render tests)
             if (entities)
                 for (auto& [id, e] : entities->entitiesMutable())
