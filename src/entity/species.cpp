@@ -201,7 +201,11 @@ void speciesEvent(Entity& e, int id) {
         case Sp::Arrow:
             break;
         case Sp::ArmorStand:
-            if (id == 32) e.sp.t[0] = e.age, e.sp.t[1] = 1;  // ArmorStand.lastHit (the wiggle)
+            if (id == 32) {  // ArmorStand.handleEntityEvent: the hit sound and lastHit (the wiggle)
+                e.sp.t[0] = e.age, e.sp.t[1] = 1;
+                if (audio::AudioSystem* a = e.silent ? nullptr : audio::instance())
+                    a->play("minecraft:entity.armor_stand.hit", audio::Category::Neutral, e.pos[0], e.pos[1], e.pos[2], 0.3f, 1.0f);
+            }
             break;
         default: break;
     }
