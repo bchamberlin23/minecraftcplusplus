@@ -108,7 +108,10 @@ disabled (reporting needs a Microsoft account). HUD order, creative inventory, t
 history) audited and fixed. Not ported: the chat screen's own narration (title, usage, "Message to send"); tab heads
 show in singleplayer though the local server is offline (deliberate); subtitles draw before the toasts, not after.
 Container clicks (drag on mouse moves, remainder count, highlightable slots), block breaking (redstone ore on the
-client, invisible blocks without particles) and view bobbing audited and fixed. Toasts follow ToastInstance now (the
+client, invisible blocks without particles), view bobbing, entity use (the hand loop) and picking, and the camera
+audited and fixed. Camera residuals while spectating an entity: its eye height is the type's constant (no pose /
+scale / easing), its hurt tilt and walk bob are not applied, and the FOV modifiers stay 1 (the game uses a spectated
+player's flying / speed / bow); the minecart camera branch is not implemented. Toasts follow ToastInstance now (the
 server pack download toast shows its progress). Toast residuals: no toasts
 for world access / chunk load or save /
 file drop / pack load failures or periodic notifications; friend toasts have no face (this port's friends have no
