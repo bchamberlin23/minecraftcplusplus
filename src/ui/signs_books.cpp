@@ -252,7 +252,11 @@ void signInput(UiState& s, const InputEvent& e) {
         const UiState::TextField before = sign.field;
         s.textFieldKey(sign.field, e);
         if (s.font.width(sign.field.value) > sign.maxWidth) sign.field = before;
-        sign.lines[sign.line] = sign.field.value;
+        if (sign.lines[sign.line] != sign.field.value) {  // setMessage: the sign in the world shows it at once
+            sign.lines[sign.line] = sign.field.value;
+            const std::array<std::string, 4> lines{sign.lines[0], sign.lines[1], sign.lines[2], sign.lines[3]};
+            be::BlockEntityRenderer::previewSign(sign.x, sign.y, sign.z, sign.slot == 1, &lines);
+        }
         return;
     }
     s.buttonsInput(e);

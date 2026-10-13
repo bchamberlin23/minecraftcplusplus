@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 // Block entities the game draws with its block entity renderers: chests (all materials, double halves, lid
 // animation), sign and hanging sign text, banners with their pattern layers, mob heads and player heads (default
 // skins), shulker boxes, bells, decorated pots with sherds, conduits, enchanting table and lectern books,
@@ -150,6 +151,10 @@ public:
     // nullptr when none is known).
     static const BlockEntityRenderer* instance();
     const Data* dataAt(int x, int y, int z) const;
+    // AbstractSignEditScreen.setMessage -> SignBlockEntity.setText: the editor's lines on the sign's side while typing
+    // (main thread); they stay until the block entity's data changes (the server's update after the editor closes).
+    // nullptr lines: dropped at once.
+    static void previewSign(int x, int y, int z, bool front, const std::array<std::string, 4>* lines);
     // The model quads of the block entity at (x, y, z) relative to its block origin (crumbling overlays while it is
     // being broken; no text, beams or portal effects). Empty when none is tracked there.
     void crackQuads(int x, int y, int z, std::vector<BeQuad>& out) const;
@@ -172,6 +177,13 @@ public:
     void shownItems(std::vector<ShownItem>& out) const;
 
 private:
+    struct SignPreview {
+        bool front = true;
+        std::array<std::string, 4> lines;
+        std::string nbt;  // the block entity's NBT the preview went over (a new one replaces the preview)
+        bool seen = false;
+    };
+    std::unordered_map<u64, SignPreview> signPreview_;  // previewSign
     struct BlockDef {
         Kind kind = Kind::None;
         bool wall = false;

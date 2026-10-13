@@ -189,6 +189,18 @@ BlockEntityRenderer::BlockEntityRenderer(World& world, BlockRegistry& registry, 
 
 const BlockEntityRenderer* BlockEntityRenderer::instance() { return gInstance; }
 
+void BlockEntityRenderer::previewSign(int x, int y, int z, bool front, const std::array<std::string, 4>* lines) {
+    if (!gInstance) return;
+    BlockEntityRenderer& r = *gInstance;
+    if (lines) {
+        SignPreview& p = r.signPreview_[posKey(x, y, z)];
+        p.front = front, p.lines = *lines;
+    } else if (!r.signPreview_.erase(posKey(x, y, z))) {
+        return;
+    }
+    if (auto it = r.sections_.find(sectionKey(x >> 4, y >> 4, z >> 4)); it != r.sections_.end()) it->second.dirty = true;
+}
+
 const BlockEntityRenderer::Data* BlockEntityRenderer::dataAt(int x, int y, int z) const {
     auto it = sections_.find(sectionKey(x >> 4, y >> 4, z >> 4));
     if (it == sections_.end()) return nullptr;
@@ -770,6 +782,17 @@ void BlockEntityRenderer::scanColumn(int cx, int cz, bool farOnly) {
             if (wantsData) {
                 Data data;
                 if (auto it = nbt.find(posKey(in.x, in.y, in.z)); it != nbt.end()) decode(*it->second, d, data);
+                if (auto p = signPreview_.find(posKey(in.x, in.y, in.z)); p != signPreview_.end()) {  // the editor's text
+                    const auto it = nbt.find(posKey(in.x, in.y, in.z));
+                    const std::string now = it != nbt.end() ? *it->second : std::string();
+                    if (!p->second.seen) p->second.nbt = now, p->second.seen = true;
+                    if (now != p->second.nbt) {
+                        signPreview_.erase(p);  // new data from the server: its text from now on
+                    } else {
+                        for (int i = 0; i < 4; ++i)
+                            (p->second.front ? data.front : data.back).lines[i] = ui::Text(p->second.lines[size_t(i)]);
+                    }
+                }
                 in.data = i32(sec.data.size());
                 sec.data.push_back(std::move(data));
             }
