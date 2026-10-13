@@ -59,7 +59,9 @@ rods, white smoke, light levels), the effects list beside the inventories and Hu
 row, off hand side, Now Playing, the light-level vignette), cursor shapes (requestCursor, Allow Cursor Changes), armour
 trims on worn armour (26.3 paletted trim textures) and the smithing table's armour stand preview, Quick Charge and
 enchantment value effects, use-animation arm poses, first-person hand details, sprint-hit sprint ending, bubble
-columns and gliding rules. ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
+columns and gliding rules, own hurt / death sounds, hitting fireballs / shulker bullets / wind charges and the ender
+dragon's parts (Entity.isPickable, getPickRadius), predicted entity interactions passing to item use,
+attack / use timing details, carrot / fungus on a stick boosts and vehicle fluid rules. ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
 switch (automated runs never change the display mode) and the LAN publish from World Options (it would open a
 listening socket).
 
