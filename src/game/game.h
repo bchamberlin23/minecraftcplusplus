@@ -101,6 +101,7 @@ public:
     // the crosshair and hotbar; onPickBlock replaces the local middle-click pick.
     bool inputSuspended = false, drawHud = true, handleEscape = true;
     float sensitivity = 0.0025f;  // mouse look, radians per count
+    bool smoothCamera = false;    // the cinematic camera (MouseHandler: SmoothDouble per axis)
     // Key bindings and control options (the UI's Settings, set every frame): Windows virtual keys, mouse buttons as
     // VK_LBUTTON (1) / VK_RBUTTON (2) / VK_MBUTTON (4)...; 0 is unbound. Defaults are the game's.
     struct Keys {
@@ -269,6 +270,19 @@ public:
     void buildOverlay();
 
 private:
+    struct SmoothDouble {  // util/SmoothDouble
+        double target = 0, remaining = 0, lastAmount = 0;
+        double next(double targetDelta, double time) {
+            target += targetDelta;
+            double delta = target - remaining;
+            const double newLast = lastAmount + (delta - lastAmount) * 0.5;
+            const double sign = delta > 0 ? 1 : delta < 0 ? -1 : 0;
+            if (sign * delta > sign * lastAmount) delta = newLast;
+            lastAmount = newLast;
+            remaining += delta * time;
+            return delta * time;
+        }
+    } smoothTurnX_, smoothTurnY_;
     PlayerInput readInput(Window& window);
     bool held(Window& window, int vk) const;  // a bound key / button is down while the mouse is captured
     void handleClicks(Window& window, double dt, int rightPresses, int middlePresses, int wheel);

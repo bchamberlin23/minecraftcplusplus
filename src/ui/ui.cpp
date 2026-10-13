@@ -1238,6 +1238,8 @@ void Ui::beginFrame(double dt) {
             s.dropSelected(s.window->keyDown(VK_CONTROL));
         } else if (s.isKey(Key::SwapOffhand, e)) {
             s.swapHands();
+        } else if (s.isKey(Key::SmoothCamera, e)) {  // Options.smoothCamera (not saved)
+            s.game->smoothCamera = !s.game->smoothCamera;
         }
     }
     s.game->inputSuspended = s.screen != Screen::None;

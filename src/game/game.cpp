@@ -178,8 +178,18 @@ void Game::frame(Window& w, double dt) {
     if (inputSuspended) mdx = mdy = 0, presses_ = {};
     if (invertMouseX) mdx = -mdx;
     if (invertMouseY) mdy = -mdy;
-    player_.yaw += mdx * sensitivity;
-    player_.pitch = std::clamp(player_.pitch + mdy * sensitivity, -1.55f, 1.55f);
+    if (!inputSuspended) {  // MouseHandler.turnPlayer
+        double dx, dy;
+        if (smoothCamera) {
+            dx = smoothTurnX_.next(mdx * sensitivity, dt), dy = smoothTurnY_.next(mdy * sensitivity, dt);
+        } else {
+            smoothTurnX_ = {}, smoothTurnY_ = {};
+            const float k = cameraMode == 0 && scoping() ? sensitivity / 8 : sensitivity;  // the spyglass: no x8
+            dx = mdx * k, dy = mdy * k;
+        }
+        player_.yaw += float(dx);
+        player_.pitch = std::clamp(player_.pitch + float(dy), -1.55f, 1.55f);
+    }
 
     if (presses(keys.perspective) % 2) cameraMode = (cameraMode + 1) % 3;
     const bool esc = w.keyDown(VK_ESCAPE);
