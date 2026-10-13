@@ -562,7 +562,7 @@ namespace {
 Target editorTarget(UiState& s, UiState::TextField& field, float x, float y, float w, float h) {
     Target t;
     t.field = &field;
-    t.originX = int(x + 3), t.innerW = int(w - 6);  // our fields' text inset (EditBox: x + 4, width - 8)
+    t.originX = int(x + 4), t.innerW = int(w - 8);  // EditBox.getScreenX(0) / getInnerWidth (bordered)
     t.textY = int(y + (h - 8) / 2);
     t.bordered = true, t.anchorBottom = false, t.commandsOnly = true, t.pastError = true;
     t.lineStart = 0, t.limit = 7, t.fill = 0x80000000u;
@@ -574,6 +574,22 @@ Target editorTarget(UiState& s, UiState::TextField& field, float x, float y, flo
 bool commandSuggestionsInput(UiState& s, UiState::TextField& field, float x, float y, float w, float h, const InputEvent& e) {
     useTarget(editorTarget(s, field, x, y, w, h));
     return suggestionsInput(s, e);
+}
+
+void commandFieldFormatter(UiState& s, UiState::TextField* field) {  // CommandSuggestions.formatChat on the field
+    s.formattedField = field;
+    if (!field) {
+        s.fieldFormatter = nullptr;
+        return;
+    }
+    UiState* sp = &s;
+    s.fieldFormatter = [sp](const std::string& visible, int offset, Text& out) {
+        if (tg.field != sp->formattedField) return false;  // its suggestions are not set up yet
+        updateParse(*sp);
+        if (!cx.haveParse) return false;
+        out = cmd::format(cx.parse, visible, offset);
+        return true;
+    };
 }
 
 void commandSuggestionsDraw(UiState& s, UiState::TextField& field, float x, float y, float w, float h, Canvas& c) {

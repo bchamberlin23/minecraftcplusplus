@@ -841,9 +841,9 @@ void Ui::State::drawTextField(Canvas& c, TextField& f, float x, float y, float w
     Style draft = colorStyle(0xAAAAAA);
     draft.italic = 1;
     if (&f == &chatInput && chatIsDraft) formatted = Text(visible, draft);  // ChatScreen.formatChat
-    float endX = &f == &chatInput && (chatIsDraft || (chatFormatter && chatFormatter(visible, f.scroll, formatted)))
-                     ? font.draw(c, formatted, x, y, color, shadow, true)
-                     : font.draw(c, visible, x, y, color, shadow, true);
+    const bool format = &f == &chatInput ? chatIsDraft || (chatFormatter && chatFormatter(visible, f.scroll, formatted))
+                                         : &f == formattedField && fieldFormatter && fieldFormatter(visible, f.scroll, formatted);
+    float endX = format ? font.draw(c, formatted, x, y, color, shadow, true) : font.draw(c, visible, x, y, color, shadow, true);
     const bool atEnd = f.cursor >= int(f.value.size());
     const float cursorX = cursorVisible ? x + float(font.width(visible.substr(0, size_t(curRel)))) : endX;
     if (blink && cursorVisible) {

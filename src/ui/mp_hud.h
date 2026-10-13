@@ -49,6 +49,7 @@ void chatExtDraw(UiState& s, Canvas& c);
 // text box; input first (true: consumed), drawing after the widgets.
 bool commandSuggestionsInput(UiState& s, UiState::TextField& field, float x, float y, float w, float h, const InputEvent& e);
 void commandSuggestionsDraw(UiState& s, UiState::TextField& field, float x, float y, float w, float h, Canvas& c);
+void commandFieldFormatter(UiState& s, UiState::TextField* field);  // the field's command colours (nullptr: off)
 // hud.cpp: the chat's geometry (scale, width, line spacing options): the style under a GUI point, and clicks on the
 // delayed-message line / the restricted prompt (true: handled).
 bool chatLineStyleAt(UiState& s, float mx, float my, Style& out);

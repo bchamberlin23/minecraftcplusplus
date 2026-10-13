@@ -179,6 +179,7 @@ void commandBuild(UiState& s) {
     for (Button& b : s.buttons)  // enableControls(false) until the block's data came (Cancel stays)
         if (&b != &s.buttons.back()) b.active = g.ready;
     setFields(s, {&g.command}, 0);
+    commandFieldFormatter(s, &g.command.text);
 }
 
 void commandDraw(UiState& s, Canvas& c) {
@@ -585,7 +586,10 @@ void testInstanceInput(UiState& s, const Window::InputEvent& e) {
     s.buttonsInput(e);
 }
 
-void closed(UiState& s) { setFields(s, {}, -1); }
+void closed(UiState& s) {
+    setFields(s, {}, -1);
+    commandFieldFormatter(s, nullptr);
+}
 
 const ScreenRegistrar kCommand({Screen::CommandBlockEdit, commandBuild, commandDraw, commandInput, closed});
 const ScreenRegistrar kMinecart({Screen::MinecartCommandEdit, commandBuild, commandDraw, commandInput, closed});

@@ -273,6 +273,9 @@ struct Ui::State {
     // EditBox.setFormatter for the chat input (chat_ext.cpp: command colouring): the visible text from `offset`;
     // false keeps the plain text.
     std::function<bool(const std::string& visible, int offset, Text& out)> chatFormatter;
+    // The same for one other text field (the command block editors' command: chat_ext.cpp).
+    TextField* formattedField = nullptr;
+    std::function<bool(const std::string& visible, int offset, Text& out)> fieldFormatter;
 
     // Screens
     Screen screen = Screen::None;
