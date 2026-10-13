@@ -685,6 +685,9 @@ void AudioSystem::tick() {
     }
     if (!haveGameSounds_) return;
     if (!world_ || info_.dimension.empty()) {  // getSituationalMusic without a player (no session): Musics.MENU
+        // no LocalPlayer: its ambient handlers are gone (the loops stop, the mood starts over with the next one)
+        for (Loop& l : loops_) engine_.stopHandle(l.handle);
+        loops_.clear(), loopEvent_ = -1, moodiness_ = 0;
         if (menuMusic_.event < 0 && ready()) menuMusic_ = MusicDef{bank_.eventId("music.menu"), 20, 600, true};
         if (menuMusic_.event >= 0) tickMusic(nullptr, false, false, 1.0f, &menuMusic_);
         return;
@@ -704,7 +707,14 @@ void AudioSystem::tick() {
     const AudioEnvironment* dim = game_.dimension(info_.dimension);
     const AudioEnvironment* bio = biome.empty() ? nullptr : game_.biome(biome);
     const AudioEnvironment* musicEnv = bio && bio->hasMusic ? bio : dim && dim->hasMusic ? dim : nullptr;
-    const AudioEnvironment* ambientEnv = bio && bio->hasAmbient ? bio : dim && dim->hasAmbient ? dim : nullptr;
+    // BiomeAmbientSoundsHandler: the ambient sounds at the player's position (the camera can be elsewhere in F5)
+    const AudioEnvironment* ambientBio = bio;
+    if (biomeSource_ && gameRef_) {
+        const Player& pl = gameRef_->player();
+        const std::string_view at = biomeSource_(int(std::floor(pl.pos[0])), int(std::floor(pl.pos[1])), int(std::floor(pl.pos[2])));
+        ambientBio = at.empty() ? nullptr : game_.biome(at);
+    }
+    const AudioEnvironment* ambientEnv = ambientBio && ambientBio->hasAmbient ? ambientBio : dim && dim->hasAmbient ? dim : nullptr;
     const float musicVolume = bio && bio->hasMusicVolume ? bio->musicVolume : dim && dim->hasMusicVolume ? dim->musicVolume : 1.0f;
     const MusicDef* situational = nullptr;
     if (bossMusic_ && info_.dimension == "minecraft:the_end") {  // Musics.END_BOSS
