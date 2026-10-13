@@ -88,9 +88,8 @@ listening socket).
   shader pipeline) is its own. The nausea overlay and vignette draw after the UI layer (they also tint the HUD).
 
 - **Block rendering audit, still open**: smooth lighting (cubes and models, one BlockModelLighter port) clamps its
-  lookups to the section's one-cell border (Java reads up to two cells beyond a face for light permeability). Fluids skip self-occlusion of waterlogged partial blocks (faces hidden inside them). Moving pistons and other block
-  displays draw a block's first variant without its offset (falling blocks pick theirs from the start position).
-- **Audit leftovers (2026-10-13)**: interpolation does not shift pending steps by locally predicted movement (AbstractInterpolationHandler.applyPredictedMovement), remote players' motion is set at once (RemotePlayer spreads it), passengers are placed at render time; widget tooltips use the default positioner (no MenuTooltipPositioner / BelowOrAboveWidgetTooltipPositioner); the chat's MODIFIED tag and RestrictionsScreen; shadow radius ignores the scale attribute; minecarts ignore the minecart_improvements flag; the world border wall has no depth write / bias.
+  lookups to the section's one-cell border (Java reads up to two cells beyond a face for light permeability). Fluids skip self-occlusion of waterlogged partial blocks (faces hidden inside them).
+- **Audit leftovers (2026-10-13)**: interpolation does not shift pending steps by locally predicted movement (AbstractInterpolationHandler.applyPredictedMovement), remote players' motion is set at once (RemotePlayer spreads it), passengers are placed at render time; widget tooltips use the default positioner (no MenuTooltipPositioner / BelowOrAboveWidgetTooltipPositioner); the chat's MODIFIED tag and RestrictionsScreen; minecarts ignore the minecart_improvements flag; the world border wall has no depth write / bias.
 - **VIS-06 residual**: glowing outlines under a shader pack (entities go through the pack's gbuffers there).
 - Test instance blocks: optional tests' failure beam is red, not orange (the test registry is not sent to clients);
   the error markers and game test highlights are drawn in the UI layer (no depth test).
@@ -118,6 +117,8 @@ listening socket).
 
 ## Gameplay / world
 
+- **Test commands in 26.3**: block states in NBT are strings (`{block_state:"minecraft:stone"}`); the old
+  `{Name:...}` compound is silently ignored (an air display).
 - **Placement prediction (game/placement.cpp) residual**: not predicted client-side (the server's block updates
   fix them a moment later): rails' shapes, tripwire, vines / glow lichen /
   multiface blocks, chorus / mushroom stems, big dripleaf, pointed dripstone, scaffolding distance, note block
