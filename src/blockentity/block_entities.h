@@ -78,6 +78,9 @@ public:
     ~BlockEntityRenderer() override;
     // The game's font for sign text (before create()).
     bool load(const fs::path& jar, const fs::path& minecraftDir);
+    // Each frame: the effective render distance (chunks: beacon beams are seen that far, BeaconRenderer.getViewDistance)
+    // and whether the player looks through a spyglass (the beam keeps its width, BeaconRenderer.submit).
+    void setView(int renderChunks, bool scoping) { renderChunks_ = renderChunks, scoping_ = scoping; }
     // Network: block entity data, chunk block entity lists and block events (before Client::start).
     void attach(net::Client& client);
     // Block events received so far, and the end of piston moves (main thread, before the session applies the block
@@ -236,7 +239,7 @@ private:
     BlockDef classify(u16 block) const;
     static bool ticking(const BlockDef& d);  // animates on its own tick (kept in anims_ while tracked)
     void updateTracking(double camX, double camY, double camZ);
-    void scanColumn(int cx, int cz);
+    void scanColumn(int cx, int cz, bool farOnly = false);
     void dropColumn(int cx, int cz);
     void decode(const std::string& nbt, const BlockDef& d, Data& out) const;
     void tick();
@@ -280,7 +283,9 @@ private:
     std::vector<u8> defKnown_;
 
     // Tracked chunk columns around the camera and their sections with block entities.
-    std::unordered_set<u64> columns_;
+    std::unordered_map<u64, bool> columns_;  // column -> far (beyond the 64 blocks: only beacons / gateways tracked)
+    int renderChunks_ = 12, trackedFar_ = 0;
+    bool scoping_ = false;
     std::unordered_map<u64, std::vector<u64>> columnSections_;  // column -> section keys
     std::unordered_map<u64, Section> sections_;
     int centerCx_ = INT32_MIN, centerCz_ = INT32_MIN;

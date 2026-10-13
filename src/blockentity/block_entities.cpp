@@ -702,7 +702,7 @@ u8 BlockEntityRenderer::sampleLight(int x, int y, int z) const {
     return world_.light(x >> 4, sy, z >> 4).at(x & 15, y & 15, z & 15);
 }
 
-void BlockEntityRenderer::scanColumn(int cx, int cz) {
+void BlockEntityRenderer::scanColumn(int cx, int cz, bool farOnly) {
     const u64 ck = World::chunkKey(cx, cz);
     std::vector<u64>& keys = columnSections_[ck];
     std::unordered_map<u64, Section> old;
@@ -716,16 +716,38 @@ void BlockEntityRenderer::scanColumn(int cx, int cz) {
         for (const auto& e : *list) nbt[posKey(e.x, e.y, e.z)] = &e.nbt;
     const World::Region* r = nullptr;
     const World::Column* col = world_.column(cx, cz, &r);
+    // Far columns: only the beacons and end gateways among the column's block entities (their beams are seen from
+    // further than the other block entities' 64 blocks).
+    std::vector<std::pair<int, u32>> farCells;  // section index, cell
+    if (farOnly && col)
+        if (const auto* list = world_.blockEntities(cx, cz))
+            for (const auto& entry : *list) {
+                const int k = (entry.y >> 4) - col->minY;
+                if (k < 0 || k >= col->count) continue;
+                const u32 i = u32((entry.y & 15) << 8 | (entry.z & 15) << 4 | (entry.x & 15));
+                const Kind kind = def(World::blockAt(*r, r->sections[col->first + k], i)).kind;
+                if (kind == Kind::Beacon || kind == Kind::EndGateway) farCells.push_back({k, i});
+            }
     for (int k = 0; col && k < col->count; ++k) {
         const World::Section& s = r->sections[col->first + k];
         if (!s.paletteSize) continue;
         bool any = false;
-        for (u32 p = 0; p < s.paletteSize && !any; ++p) any = def(r->palettes[s.paletteOffset + p]).kind != Kind::None;
+        if (farOnly) {
+            for (const auto& [fk, fi] : farCells) any |= fk == k;
+        } else {
+            for (u32 p = 0; p < s.paletteSize && !any; ++p) any = def(r->palettes[s.paletteOffset + p]).kind != Kind::None;
+        }
         if (!any) continue;
         const int sy = col->minY + k;
         Section sec;
         sec.cx = cx, sec.sy = sy, sec.cz = cz;
+        size_t next = 0;
         for (u32 i = 0; i < 4096; ++i) {
+            if (farOnly) {  // just this section's beam cells
+                while (next < farCells.size() && farCells[next].first != k) ++next;
+                if (next >= farCells.size()) break;
+                i = farCells[next++].second;
+            }
             const u16 id = World::blockAt(*r, s, i);
             const BlockDef& d = def(id);
             if (d.kind == Kind::None) continue;
@@ -802,28 +824,32 @@ void BlockEntityRenderer::updateTracking(double camX, double camY, double camZ) 
         std::sort(changes_.begin(), changes_.end());
         changes_.erase(std::unique(changes_.begin(), changes_.end()), changes_.end());
         for (u64 k : changes_)
-            if (columns_.count(k)) {
-                scanColumn(int(i32(k >> 32)), int(i32(u32(k))));
+            if (auto c = columns_.find(k); c != columns_.end()) {
+                scanColumn(int(i32(k >> 32)), int(i32(u32(k))), c->second);
                 changed = true;
             }
         changes_.clear();
     }
-    if (ccx != centerCx_ || ccz != centerCz_) {
-        centerCx_ = ccx, centerCz_ = ccz;
-        std::unordered_set<u64> want;
-        for (int dz = -kRadius; dz <= kRadius; ++dz)
-            for (int dx = -kRadius; dx <= kRadius; ++dx)
-                if (dx * dx + dz * dz <= (kRadius + 1) * (kRadius + 1)) want.insert(World::chunkKey(ccx + dx, ccz + dz));
+    const int farRadius = std::max(kRadius, renderChunks_ + 1);
+    if (ccx != centerCx_ || ccz != centerCz_ || farRadius != trackedFar_) {
+        centerCx_ = ccx, centerCz_ = ccz, trackedFar_ = farRadius;
+        std::unordered_map<u64, bool> want;  // column -> farCol
+        for (int dz = -farRadius; dz <= farRadius; ++dz)
+            for (int dx = -farRadius; dx <= farRadius; ++dx) {
+                const int d2 = dx * dx + dz * dz;
+                if (d2 <= (farRadius + 1) * (farRadius + 1)) want[World::chunkKey(ccx + dx, ccz + dz)] = d2 > (kRadius + 1) * (kRadius + 1);
+            }
         for (auto it = columns_.begin(); it != columns_.end();) {
-            if (!want.count(*it)) {
-                dropColumn(int(i32(*it >> 32)), int(i32(u32(*it))));
+            auto w = want.find(it->first);
+            if (w == want.end() || w->second != it->second) {  // gone, or between near and farCol
+                dropColumn(int(i32(it->first >> 32)), int(i32(u32(it->first))));
                 it = columns_.erase(it);
             } else {
                 ++it;
             }
         }
-        for (u64 k : want)
-            if (columns_.insert(k).second) scanColumn(int(i32(k >> 32)), int(i32(u32(k))));
+        for (const auto& [k, farCol] : want)
+            if (columns_.emplace(k, farCol).second) scanColumn(int(i32(k >> 32)), int(i32(u32(k))), farCol);
         changed = true;
     }
     if (changed) {
@@ -2222,7 +2248,7 @@ void BlockEntityRenderer::emitInstance(Emit& e, const Instance& in, const Data* 
             if (!data || !data->beam) return;
             const float animTime = float(gameTicks_ % 40) + pt;
             const double dx = cam_[0] - (in.x + 0.5), dz = cam_[2] - (in.z + 0.5);
-            const float radius = std::max(1.0f, float(std::sqrt(dx * dx + dz * dz)) / 96.0f);
+            const float radius = scoping_ ? 1.0f : std::max(1.0f, float(std::sqrt(dx * dx + dz * dz)) / 96.0f);
             emitBeam(e, base, t_.beaconBeam, 1.0f, animTime, 0, 2048, data->beam & 0xFFFFFF, 0.2f * radius, 0.25f * radius);
             break;
         }
@@ -2230,7 +2256,8 @@ void BlockEntityRenderer::emitInstance(Emit& e, const Instance& in, const Data* 
             if (!a || a->levels <= 0 || a->beam.empty()) return;
             const float animTime = float(gameTicks_ % 40) + pt;
             const double dx = cam_[0] - (in.x + 0.5), dz = cam_[2] - (in.z + 0.5);
-            const float radius = std::max(1.0f, float(std::sqrt(dx * dx + dz * dz)) / 96.0f);  // beamRadiusScale
+            // beamRadiusScale: widened with the distance, unless looking through a spyglass
+            const float radius = scoping_ ? 1.0f : std::max(1.0f, float(std::sqrt(dx * dx + dz * dz)) / 96.0f);
             int start = 0;
             for (size_t i = 0; i < a->beam.size(); ++i) {
                 const auto& [color, height] = a->beam[i];

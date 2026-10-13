@@ -1374,6 +1374,7 @@ int wmain(int argc, wchar_t** argv) {
         renderer.setFadeSeconds(float(ui.settings().chunkFade));  // Video Settings: Chunk Fade (chunkSectionFadeInTime)
         sky.update(cam, dt);
         entities.piglinsZombify = sky.piglinsZombify();
+        blockEntityRenderer.setView(std::min(ui.settings().renderDistance, opt.detail), game.scoping());
         ui.endFrame();
         if (haveReports) packs::updatePlayer(renderer, ui, game.selectedSlot(), reports, registry);  // held light
         renderer.upscalers().setMenuActive(ui.menuOpen());  // frame generation pauses in menus
