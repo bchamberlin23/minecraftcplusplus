@@ -580,7 +580,6 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
             p.lifetime = int(8.0 / (randf() * 0.8 + 0.2)) + 4;
             p.flags &= u8(~Physics);
             p.sizeMode = SizeFlame;
-            p.emissive = 15;
             if (t.kind == Kind::SmallFlame) p.quadSize *= 0.5f;
             randomSprite();
             break;
@@ -1042,7 +1041,7 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
                 return float(std::clamp(int(float((opt->color >> shift) & 255) * (0.875f + randf() * 0.25f)), 0, 255)) / 255.0f;
             };
             p.r = scaled(16), p.g = scaled(8), p.b = scaled(0);
-            p.emissive = 15;
+            p.emissive = 255;
             randomSprite();
             break;
         }
@@ -3709,15 +3708,16 @@ u32 Particles::build(GpuParticle* out, u32 max, const double cam[3], u32& opaque
         u32 light = p.light;
         if (kind == Kind::Firefly) {  // its own light only: block light by the fade
             light = u32(int(255.0f * fadeAmount(std::clamp((float(p.age) + pt) / float(p.lifetime), 0.0f, 1.0f), 0.1f, 0.3f)) >> 4);
-        } else if (kind == Kind::Glow) {  // LightCoordsUtil.addSmoothBlockEmission over the lifetime
+        } else if (kind == Kind::Glow || kind == Kind::Flame || kind == Kind::SmallFlame) {
+            // GlowParticle / FlameParticle: LightCoordsUtil.addSmoothBlockEmission over the lifetime
             const u32 add = u32(std::clamp((float(p.age) + pt) / float(p.lifetime), 0.0f, 1.0f) * 15.0f);
             light = (light & 0xF0) | std::min<u32>(15, (light & 15) + add);
         } else if (p.emissive == 255) light = 256;
         else if (p.emissive) light = (light & 0xF0) | std::max<u32>(light & 15, p.emissive);
         else if (types_[p.type].kind == Kind::Portal || types_[p.type].kind == Kind::Enchant) {
-            float b = s * s;
+            float b = s * s;  // addSmoothBlockEmission(light, (age / lifetime)^4)
             b *= b;
-            light = (light & 0xF0) | std::max<u32>(light & 15, u32(b * 15.0f));
+            light = (light & 0xF0) | std::min<u32>(15, (light & 15) + u32(b * 15.0f));
         }
         g.light = light;
         g.tex = ent::kTexItems;
