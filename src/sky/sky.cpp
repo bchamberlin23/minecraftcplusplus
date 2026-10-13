@@ -685,8 +685,9 @@ void Sky::update(const CameraState& cam, double dt) {
     // renderer adds the render distance's own (cylindrical) fog.
     const float renderDistance = float(renderDistance_ * 16);
     float envStart = 1e30f, envEnd = 1e30f, skyEnd = 1e30f;
-    // LevelRenderer.addSkyPass: no sky in lava or powder snow, or with blindness / darkness.
-    bool hideSky = fogType == FogType::Lava || fogType == FogType::PowderSnow || fx_.blindFog >= 0.0f || fx_.darkness;
+    // LevelRenderer.addSkyPass: no sky in lava or powder snow, with blindness / darkness, or under a boss bar's world fog
+    // (GameRenderer: shouldRenderSky = !shouldCreateBossFog).
+    bool hideSky = fogType == FogType::Lava || fogType == FogType::PowderSnow || fx_.blindFog >= 0.0f || fx_.darkness || bossFog_;
     if (fogType == FogType::Lava) {
         if (fx_.spectator) envStart = -8.0f, envEnd = renderDistance * 0.5f;
         else if (fx_.fireResistance) envStart = 0.0f, envEnd = 5.0f;

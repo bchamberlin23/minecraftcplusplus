@@ -3,6 +3,7 @@
 #include "audio/audio.h"
 #include "ui/debug_screen.h"
 #include "ui/gameplay_hud.h"
+#include "ui/mp_hud.h"
 #include "render/renderer.h"
 #include "ui/narrator.h"
 #include "ui/options_list.h"
@@ -145,11 +146,6 @@ void Ui::State::tickHud() {
         --toolHighlightTimer;
     }
     lastToolHighlight = selected;
-    if (audio::AudioSystem* a = audio::instance(); a && a->jukeboxSongs() != jukeboxSongsSeen) {  // Hud.setNowPlaying
-        jukeboxSongsSeen = a->jukeboxSongs();
-        const Text song = parseComponent(a->jukeboxDescription(), lang());
-        actionbar = translatable("record.nowPlaying", {song}, lang()), actionbarTime = 60, actionbarAnimated = true;
-    }
     {  // Hud.updateVignetteBrightness: the camera's light level, smoothed
         const CameraState cam = game->camera();
         const int x = int(std::floor(cam.x)), y = int(std::floor(cam.y)), z = int(std::floor(cam.z));
@@ -546,7 +542,12 @@ void Ui::State::drawHud(Canvas& c) {
             font.draw(c, name, float((gw - w) / 2), float(y), u32(alpha) << 24 | 0xFFFFFF, true);
         }
     }
+    // Hud.extractRenderState: boss bars (and the other modules' HUD parts), the sleep overlay, the sidebar, the action
+    // bar, the title, the chat.
+    for (const UiModule& m : uiModules())  // modules.h: boss bars, the spectator menu, debug markers
+        if (m.drawHud) m.drawHud(*this, c);
     drawSleepOverlay(*this, c);
+    drawScoreboardSidebar(*this, c);
     // Action bar.
     if (actionbarTime > 0) {
         const float t = float(actionbarTime) - partialTick;
@@ -602,8 +603,6 @@ void Ui::State::drawHud(Canvas& c) {
             c.pop();
         }
     }
-    for (const UiModule& m : uiModules())  // modules.h: boss bars, scoreboard...
-        if (m.drawHud) m.drawHud(*this, c);
     if (screen != Screen::Chat) drawChat(c, false);
     for (const UiModule& m : uiModules())  // over the chat: player list
         if (m.drawHudTop) m.drawHudTop(*this, c);

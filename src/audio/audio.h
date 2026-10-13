@@ -83,8 +83,6 @@ public:
     int nowPlayingShows() const { return nowPlayingShows_; }
     // Jukebox songs started (LevelEventHandler.playJukeboxSong -> Hud.setNowPlaying): a counter and the last song's
     // description (a text component as network NBT).
-    int jukeboxSongs() const { return jukeboxSongs_; }
-    const std::string& jukeboxDescription() const { return jukeboxDescription_; }
     int nowPlayingHides() const { return nowPlayingHides_; }
     // A sound the server named by Holder<SoundEvent>: registry id (>= 0), else the inline name.
     u32 playNetwork(int registryId, std::string_view name, Category category, const double pos[3], float volume, float pitch);
@@ -212,8 +210,6 @@ private:
     bool stopMusic_ = false, rerollMusicDelay_ = false;  // MusicManager.stopPlaying / setMinutesBetweenSongs (next tick)
     std::string musicSong_;
     int nowPlayingShows_ = 0, nowPlayingHides_ = 0;
-    int jukeboxSongs_ = 0;
-    std::string jukeboxDescription_;
     bool toastShown_ = false;
     int lastFile_ = -1;  // the file the last play() picked
     // BiomeAmbientSoundsHandler

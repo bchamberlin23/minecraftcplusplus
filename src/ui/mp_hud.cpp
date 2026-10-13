@@ -432,65 +432,6 @@ void drawBossBars(UiState& s, Canvas& c) {
     }
 }
 
-void drawSidebar(UiState& s, Canvas& c) {
-    // Hud.extractScoreboardSidebar: the player's team colour slot first, then the sidebar.
-    const Objective* obj = nullptr;
-    std::string objName;
-    const std::string& self = s.fe->cfg.playerName;
-    if (const Team* t = teamOf(self); t && t->color >= 0) {
-        obj = displayObjective(3 + t->color);
-        if (obj) objName = g.slots[3 + t->color];
-    }
-    if (!obj) obj = displayObjective(1), objName = g.slots[1];
-    if (!obj) return;
-    NumFmt sidebarDefault;
-    sidebarDefault.type = 1, sidebarDefault.style = colorStyle(0xFF5555);  // StyledFormat.SIDEBAR_DEFAULT (red)
-    struct Row {
-        std::string owner;
-        int value;
-        Text name, score;
-        int scoreWidth;
-    };
-    std::vector<Row> rows;
-    for (const auto& [owner, m] : g.scores) {
-        auto it = m.find(objName);
-        if (it == m.end() || owner.starts_with("#")) continue;  // PlayerScoreEntry.isHidden
-        rows.push_back({owner, it->second.value, {}, {}, 0});
-    }
-    // SCORE_DISPLAY_ORDER: value descending, then the owner case-insensitively.
-    auto lower = [](std::string v) {
-        for (char& ch : v) ch = char(std::tolower(u8(ch)));
-        return v;
-    };
-    std::sort(rows.begin(), rows.end(), [&](const Row& a, const Row& b) {
-        if (a.value != b.value) return a.value > b.value;
-        return lower(a.owner) < lower(b.owner);
-    });
-    if (rows.size() > 15) rows.resize(15);
-    const Text title = obj->display;
-    const int titleWidth = s.font.width(title);
-    int biggest = titleWidth;
-    const int spacer = s.font.width(": ");
-    for (Row& r : rows) {
-        const Score& sc = g.scores[r.owner][objName];
-        r.name = formatForTeam(teamOf(r.owner), sc.hasDisplay ? sc.display : Text(r.owner));
-        r.score = formatScore(sc, *obj, sidebarDefault);
-        r.scoreWidth = s.font.width(r.score);
-        biggest = std::max(biggest, s.font.width(r.name) + (r.scoreWidth > 0 ? spacer + r.scoreWidth : 0));
-    }
-    const int count = int(rows.size()), height = count * 9;
-    const int bottom = c.guiHeight() / 2 + height / 3;
-    const int left = c.guiWidth() - biggest - 3, right = c.guiWidth() - 3 + 2;
-    const int headerY = bottom - count * 9;
-    c.fill(float(left - 2), float(headerY - 9 - 1), float(right), float(headerY - 1), s.textBackground(0.4f));
-    c.fill(float(left - 2), float(headerY - 1), float(right), float(bottom), s.textBackground(0.3f));
-    s.font.draw(c, title, float(left + biggest / 2 - titleWidth / 2), float(headerY - 9), 0xFFFFFFFF, false);
-    for (int i = 0; i < count; ++i) {
-        const int y = bottom - (count - i) * 9;
-        s.font.draw(c, rows[size_t(i)].name, float(left), float(y), 0xFFFFFFFF, false);
-        s.font.draw(c, rows[size_t(i)].score, float(right - rows[size_t(i)].scoreWidth), float(y), 0xFFFFFFFF, false);
-    }
-}
 
 void drawTabHearts(UiState& s, Canvas& c, const std::string& key, int score, int left, int right, int y) {
     // PlayerTabOverlay.extractTablistHearts.
@@ -676,10 +617,7 @@ void drawPlayerList(UiState& s, Canvas& c) {
     }
 }
 
-void drawHud(UiState& s, Canvas& c) {
-    drawBossBars(s, c);
-    drawSidebar(s, c);
-}
+void drawHud(UiState& s, Canvas& c) { drawBossBars(s, c); }  // the sidebar: drawScoreboardSidebar, after the sleep overlay
 
 void drawHudTop(UiState& s, Canvas& c) { drawPlayerList(s, c); }
 
@@ -801,6 +739,67 @@ bool seesInvisible(const std::string& us, const std::string& them) {  // Entity.
     if (a == g.playerTeam.end() || b == g.playerTeam.end() || a->second != b->second) return false;
     auto t = g.teams.find(a->second);
     return t != g.teams.end() && (t->second.options & 2);
+}
+
+// Hud.extractScoreboardSidebar (hud.cpp draws it between the sleep overlay and the action bar).
+void drawScoreboardSidebar(UiState& s, Canvas& c) {
+    // Hud.extractScoreboardSidebar: the player's team colour slot first, then the sidebar.
+    const Objective* obj = nullptr;
+    std::string objName;
+    const std::string& self = s.fe->cfg.playerName;
+    if (const Team* t = teamOf(self); t && t->color >= 0) {
+        obj = displayObjective(3 + t->color);
+        if (obj) objName = g.slots[3 + t->color];
+    }
+    if (!obj) obj = displayObjective(1), objName = g.slots[1];
+    if (!obj) return;
+    NumFmt sidebarDefault;
+    sidebarDefault.type = 1, sidebarDefault.style = colorStyle(0xFF5555);  // StyledFormat.SIDEBAR_DEFAULT (red)
+    struct Row {
+        std::string owner;
+        int value;
+        Text name, score;
+        int scoreWidth;
+    };
+    std::vector<Row> rows;
+    for (const auto& [owner, m] : g.scores) {
+        auto it = m.find(objName);
+        if (it == m.end() || owner.starts_with("#")) continue;  // PlayerScoreEntry.isHidden
+        rows.push_back({owner, it->second.value, {}, {}, 0});
+    }
+    // SCORE_DISPLAY_ORDER: value descending, then the owner case-insensitively.
+    auto lower = [](std::string v) {
+        for (char& ch : v) ch = char(std::tolower(u8(ch)));
+        return v;
+    };
+    std::sort(rows.begin(), rows.end(), [&](const Row& a, const Row& b) {
+        if (a.value != b.value) return a.value > b.value;
+        return lower(a.owner) < lower(b.owner);
+    });
+    if (rows.size() > 15) rows.resize(15);
+    const Text title = obj->display;
+    const int titleWidth = s.font.width(title);
+    int biggest = titleWidth;
+    const int spacer = s.font.width(": ");
+    for (Row& r : rows) {
+        const Score& sc = g.scores[r.owner][objName];
+        r.name = formatForTeam(teamOf(r.owner), sc.hasDisplay ? sc.display : Text(r.owner));
+        r.score = formatScore(sc, *obj, sidebarDefault);
+        r.scoreWidth = s.font.width(r.score);
+        biggest = std::max(biggest, s.font.width(r.name) + (r.scoreWidth > 0 ? spacer + r.scoreWidth : 0));
+    }
+    const int count = int(rows.size()), height = count * 9;
+    const int bottom = c.guiHeight() / 2 + height / 3;
+    const int left = c.guiWidth() - biggest - 3, right = c.guiWidth() - 3 + 2;
+    const int headerY = bottom - count * 9;
+    c.fill(float(left - 2), float(headerY - 9 - 1), float(right), float(headerY - 1), s.textBackground(0.4f));
+    c.fill(float(left - 2), float(headerY - 1), float(right), float(bottom), s.textBackground(0.3f));
+    s.font.draw(c, title, float(left + biggest / 2 - titleWidth / 2), float(headerY - 9), 0xFFFFFFFF, false);
+    for (int i = 0; i < count; ++i) {
+        const int y = bottom - (count - i) * 9;
+        s.font.draw(c, rows[size_t(i)].name, float(left), float(y), 0xFFFFFFFF, false);
+        s.font.draw(c, rows[size_t(i)].score, float(right - rows[size_t(i)].scoreWidth), float(y), 0xFFFFFFFF, false);
+    }
 }
 
 }  // namespace ui

@@ -254,7 +254,6 @@ struct Ui::State {
     void scrollbarCursor(float x, float top, float h) {
         if (mouseX >= x && mouseX <= x + 6 && mouseY >= top && mouseY < top + h) requestCursor(leftDown ? CursorResizeNS : CursorPointingHand);
     }
-    int jukeboxSongsSeen = 0;           // audio's jukebox song counter (Hud.setNowPlaying)
     float vignetteBrightness = 1.0f;    // Hud.vignetteBrightness (smoothed darkness of the camera's light)
     int skyDarken = 0;                  // Level.getSkyDarken
     float ambientLight = 0;             // DimensionType.ambientLight
