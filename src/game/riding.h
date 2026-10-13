@@ -86,6 +86,10 @@ private:
     int jumpRidingTicks_ = 0;
     float jumpScale_ = 0, pendingJump_ = 0;
     int dashCooldown_ = 0;  // camel (55 ticks) / nautilus (40 ticks) after a dash
+    // ItemBasedSteering (pigs / striders): a boost starts when DATA_BOOST_TIME arrives (onSynced), lasting its value.
+    i64 boostSeen_ = 0;
+    int boostTime_ = 0;
+    bool boosting_ = false;
     // AbstractBoat state.
     enum class Status { InWater, UnderWater, UnderFlowingWater, OnLand, InAir };
     Status status_ = Status::InAir, oldStatus_ = Status::InAir;

@@ -63,6 +63,10 @@ void Riding::passengers(int vehicle, const std::vector<int>& ids, int self) {
         return;
     }
     const bool mounting = vehicle_ != vehicle;
+    if (mounting) {  // a boost from before does not carry over
+        if (const ent::Entity* v = entities_ ? entities_->entity(vehicle) : nullptr) boostSeen_ = ent::dataInt(*v, "DATA_BOOST_TIME");
+        boosting_ = false, boostTime_ = 0;
+    }
     vehicle_ = vehicle;
     seatIndex_ = int(it - ids.begin());
     passengerCount_ = int(ids.size());
@@ -251,6 +255,11 @@ void Riding::rideTick(const PlayerInput& in) {
 }
 
 void Riding::vehicleTick(ent::Entity& e) {
+    {  // ItemBasedSteering.onSynced / tickBoost
+        const i64 total = ent::dataInt(e, "DATA_BOOST_TIME");
+        if (total != boostSeen_) boostSeen_ = total, boosting_ = total > 0, boostTime_ = 0;
+        else if (boosting_ && boostTime_++ > total) boosting_ = false;
+    }
     std::shared_lock lock(gameplay_.world().mutex());
     if (kind_ == Kind::Boat) boatTick(e);
     else livingTick(e);
@@ -556,8 +565,10 @@ void Riding::livingTick(ent::Entity& e) {
     // getRiddenSpeed
     double speed = gameplay_.entityAttribute(vehicle_, "movement_speed", horse ? 0.225 : n == "pig" ? 0.25 : 0.175);
     if (isCamel(n) && input_.sprint && dashCooldown_ == 0) speed += 0.1;  // Camel.getRiddenSpeed
-    if (n == "pig") speed *= 0.225;
-    else if (n == "strider") speed *= 0.55;
+    // ItemBasedSteering.boostFactor: up to 2.15 over the boost (a carrot / warped fungus on a stick)
+    const double boost = boosting_ && boostSeen_ > 0 ? 1.0 + 1.15 * std::sin(double(float(boostTime_) / float(boostSeen_)) * kPi) : 1.0;
+    if (n == "pig") speed *= 0.225 * boost;
+    else if (n == "strider") speed *= (ent::dataInt(*entity(), "DATA_SUFFOCATING") != 0 ? 0.35 : 0.55) * boost;  // cold
     const double step = gameplay_.entityAttribute(vehicle_, "step_height", horse ? 1.0 : 0.6);
     const double gravity = gameplay_.entityAttribute(vehicle_, "gravity", 0.08);
     const ItemRules::EntityDims* dims = rules_.entity(typeName_);
