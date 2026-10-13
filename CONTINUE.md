@@ -41,7 +41,7 @@ listening socket).
 
 ## Screens
 
-- Command suggestions in the command block editor (CommandSuggestions; the chat has them).
+- The command block editor's field does not colour the command (CommandSuggestions.formatChat; the chat does).
 
 ## Gameplay / world
 
