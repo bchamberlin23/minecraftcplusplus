@@ -71,6 +71,9 @@ public:
         return true;
     }
     void setTitle(const std::string& title);
+    // Window.selectCursor (CursorTypes): 0 the arrow, 1 pointing hand, 2 I-beam, 3 resize N-S, 4 resize E-W,
+    // 5 resize all, 6 not allowed. Shown while the mouse is over the client area and not captured.
+    void selectCursor(int type);
     // The window's icon (Window.setIcon): RGBA pixels, `big` for the taskbar / Alt+Tab, else the title bar's.
     void setIcon(const unsigned char* rgba, int w, int h, bool big);
 
@@ -129,4 +132,5 @@ private:
         if (captured_ && vk > 0 && vk < 256) ++presses_[size_t(vk)];
     }
     void push(InputEvent::Type type, int code, bool down, bool repeat = false);
+    int cursor_ = 0;
 };

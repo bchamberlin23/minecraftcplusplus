@@ -558,7 +558,10 @@ void chatExtDraw(UiState& s, Canvas& c) {
     }
     // Hovered chat component: its hover event.
     Style st;
-    if (chatStyleAt(s, mx, my, st) && st.events && !st.events->hover.empty()) {
+    const bool styled = chatStyleAt(s, mx, my, st) && st.events;
+    if (styled && (!st.events->click.empty() || (!st.events->insertion.empty() && s.window->keyDown(VK_SHIFT))))
+        s.requestCursor(UiState::CursorPointingHand);  // a clickable component (or an insertion while Shift is down)
+    if (styled && !st.events->hover.empty()) {
         const std::vector<Text> lines = hoverLines(s, *st.events);
         if (!lines.empty()) s.drawTooltip(c, lines, mx, my);
     }

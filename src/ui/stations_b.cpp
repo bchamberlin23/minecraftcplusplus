@@ -106,7 +106,9 @@ void merchantDrawBg(State& s, Canvas& c, Menu& m, const Layout&, float left, flo
     // Offer buttons (Button.Plain).
     for (int i = 0; i < 7 && i < n; ++i) {
         const float bx = left + 5, by = top + 18 + float(i * 20);
-        blitSprite(c, s.sprites.sprite(inRect(s, bx, by, 88, 20) ? "widget/button_highlighted" : "widget/button"), bx, by, 88, 20);
+        const bool hover = inRect(s, bx, by, 88, 20);
+        if (hover) s.requestCursor(State::CursorPointingHand);  // TradeOfferButton (AbstractWidget.handleCursor)
+        blitSprite(c, s.sprites.sprite(hover ? "widget/button_highlighted" : "widget/button"), bx, by, 88, 20);
     }
     // Scroller.
     const int steps = n + 1 - 7;
@@ -116,6 +118,9 @@ void merchantDrawBg(State& s, Canvas& c, Menu& m, const Layout&, float left, flo
         int yOff = std::min(113, g.scrollOff * stepHeight);
         if (g.scrollOff == steps - 1) yOff = 113;
         blitSprite(c, s.sprites.sprite("container/villager/scroller"), left + 94, top + 18 + float(yOff), 6, 27);
+        const float sy = top + 18 + float(yOff);
+        if (s.mouseX >= left + 94 && s.mouseX < left + 100 && s.mouseY >= sy && s.mouseY <= sy + 27)
+            s.requestCursor(g.dragging ? State::CursorResizeNS : State::CursorPointingHand);
     } else {
         blitSprite(c, s.sprites.sprite("container/villager/scroller_disabled"), left + 94, top + 18, 6, 27);
     }
@@ -501,10 +506,13 @@ void crafterSetSlot(State& s, Menu& m, int slot, bool enabled) {
     audio::playUiClick();
 }
 void crafterDrawBg(State& s, Canvas& c, Menu& m, const Layout& l, float left, float top) {
-    for (int i = 0; i < 9; ++i)
+    for (int i = 0; i < 9; ++i) {
         if (crafterDisabled(m, i))
             blitSprite(c, s.sprites.sprite("container/crafter/disabled_slot"), left + float(l.slots[size_t(i)].x - 1),
                        top + float(l.slots[size_t(i)].y - 1), 18, 18);
+        const float x0 = left + float(l.slots[size_t(i)].x - 2), y0 = top + float(l.slots[size_t(i)].y - 2);  // CrafterScreen.extractSlot
+        if (s.mouseX > x0 && s.mouseY > y0 && s.mouseX < x0 + 19 && s.mouseY < y0 + 19) s.requestCursor(State::CursorPointingHand);
+    }
 }
 void crafterDrawTop(State& s, Canvas& c, Menu& m, const Layout&, float, float) {
     blitSprite(c, s.sprites.sprite(m.data[9] == 1 ? "container/crafter/powered_redstone" : "container/crafter/unpowered_redstone"),

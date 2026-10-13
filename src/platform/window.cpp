@@ -315,6 +315,25 @@ void Window::setMouseCaptured(bool captured) {
 
 void Window::setTitle(const std::string& title) { SetWindowTextA(hwnd_, title.c_str()); }
 
+namespace {
+HCURSOR cursorOf(int type) {
+    static const LPCWSTR kIds[7] = {IDC_ARROW, IDC_HAND, IDC_IBEAM, IDC_SIZENS, IDC_SIZEWE, IDC_SIZEALL, IDC_NO};
+    static HCURSOR loaded[7] = {};
+    const int t = type >= 0 && type < 7 ? type : 0;
+    if (!loaded[t]) loaded[t] = LoadCursorW(nullptr, kIds[t]);
+    return loaded[t];
+}
+}  // namespace
+
+void Window::selectCursor(int type) {
+    if (type == cursor_) return;
+    cursor_ = type;
+    POINT p;
+    RECT r;
+    if (!captured_ && GetCursorPos(&p) && ScreenToClient(hwnd_, &p) && GetClientRect(hwnd_, &r) && PtInRect(&r, p))
+        SetCursor(cursorOf(type));
+}
+
 void Window::setIcon(const unsigned char* rgba, int w, int h, bool big) {
     if (!hwnd_ || !rgba || w <= 0 || h <= 0) return;
     BITMAPV5HEADER bi{};  // a top-down 32-bit BGRA colour bitmap with alpha
@@ -362,6 +381,12 @@ int sidedKey(WPARAM wp, LPARAM lp) {
 LRESULT Window::handle(UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
         case WM_CLOSE: closed_ = true; return 0;
+        case WM_SETCURSOR:  // selectCursor's shape over the client area
+            if (LOWORD(lp) == HTCLIENT && !captured_) {
+                SetCursor(cursorOf(cursor_));
+                return TRUE;
+            }
+            break;
         case WM_SIZE:
             if (LOWORD(lp) && HIWORD(lp)) {
                 width_ = LOWORD(lp), height_ = HIWORD(lp);

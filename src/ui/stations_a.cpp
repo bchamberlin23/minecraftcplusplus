@@ -562,6 +562,7 @@ void enchantDrawBg(UiState& s, Canvas& c, Menu& m, const Layout&, float left, fl
         } else {
             if (inRect(s.mouseX, s.mouseY, lx, ly, 108, 19)) {
                 blitSprite(c, sp(s, "container/enchanting_table/enchantment_slot_highlighted"), lx, ly, 108, 19);
+                s.requestCursor(UiState::CursorPointingHand);
                 col = 0xFFFFFF80;
             } else {
                 blitSprite(c, sp(s, "container/enchanting_table/enchantment_slot"), lx, ly, 108, 19);

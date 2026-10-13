@@ -155,6 +155,7 @@ bool Settings::load() {
         else if (k == "invertXMouse") invertMouseX = v == "true";
         else if (k == "invertYMouse") invertMouseY = v == "true";
         else if (k == "discrete_mouse_scroll") discreteMouseScroll = v == "true";
+        else if (k == "allowCursorChanges") allowCursorChanges = v == "true";
         else if (k == "mouseWheelSensitivity") mouseWheelSensitivity = std::clamp(std::atof(v.c_str()), 0.01, 10.0);
         else if (k == "mainHand") mainHand = v == "left" ? 0 : 1;
         else if (k == "allowServerListing") allowServerListing = v == "true";
@@ -190,6 +191,7 @@ void Settings::save() const {
     f << "fullscreen:" << b(fullscreen) << "\ntoggleCrouch:" << b(toggleCrouch) << "\ntoggleSprint:" << b(toggleSprint)
       << "\nautoJump:" << b(autoJump) << "\nsprintWindow:" << sprintWindow << "\ninvertXMouse:" << b(invertMouseX) << "\ninvertYMouse:" << b(invertMouseY)
       << "\ndiscrete_mouse_scroll:" << b(discreteMouseScroll) << "\nmouseWheelSensitivity:" << mouseWheelSensitivity
+      << "\nallowCursorChanges:" << b(allowCursorChanges)
       << "\nmainHand:" << (mainHand == 0 ? "left" : "right") << "\nallowServerListing:" << b(allowServerListing)
       << "\npauseOnLostFocus:" << b(pauseOnLostFocus) << "\nadvancedItemTooltips:" << b(advancedItemTooltips) << "\n";
     if (!fullscreenResolution.empty()) f << "fullscreenResolution:" << fullscreenResolution << "\n";
@@ -1378,6 +1380,7 @@ void Ui::endFrame() {
         s.pass->glint[6] = float(16 * scale) * 2.0f;
     }
     s.sprites.tick(u64(s.guiTicks));  // animated GUI sprites and textures, item icons
+    s.pendingCursor = 0;  // GuiGraphicsExtractor.requestCursor: this frame's request
     s.icons.tick(u64(s.guiTicks));
     if (!s.fe->cfg.menu) drawScreenEffects(s, c);  // view_effects.cpp: in the 3D view, with or without the HUD
     const bool hud = !s.hudHidden && !s.fe->cfg.menu;  // the title screen has no HUD
@@ -1391,6 +1394,7 @@ void Ui::endFrame() {
     drawLoadingOverlay(s, c);  // loading_overlay.cpp
     for (const UiModule& m : uiModules())  // modules.h: toasts
         if (m.drawTop) m.drawTop(s, c);
+    if (s.window) s.window->selectCursor(s.settings.allowCursorChanges && s.screen != Screen::None ? s.pendingCursor : 0);  // applyCursor
 }
 
 }  // namespace ui

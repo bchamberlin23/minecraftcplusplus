@@ -613,7 +613,8 @@ void mouseBuild(UiState& s) {
                                 [p](float v) { p->settings.mouseWheelSensitivity = std::pow(10.0, double(int(std::lround(v * 300.0f)) - 200) / 100.0); });
     l.halves({std::move(sensitivity), std::move(wheel), onOffButton(s, "options.discrete_mouse_scroll", &s.settings.discreteMouseScroll),
               onOffButton(s, "options.invertMouseX", &s.settings.invertMouseX),
-              onOffButton(s, "options.invertMouseY", &s.settings.invertMouseY)});
+              onOffButton(s, "options.invertMouseY", &s.settings.invertMouseY),
+              onOffButton(s, "options.allowCursorChanges", &s.settings.allowCursorChanges, {}, "options.allowCursorChanges.tooltip")});
     l.footer();
 }
 

@@ -1082,9 +1082,9 @@ void drawDialog(UiState& s, Canvas& c, Instance& inst) {
                     ly += 9;
                 }
                 Style st;
-                if (hover && messageStyleAt(s, w, float(a.contentX), float(a.contentY), mx, my, st) && st.events &&
-                    st.events->hover == "show_text")
-                    tooltip = s.font.split(st.events->hoverText, std::max(s.guiW() / 2, 200));
+                const bool styled = hover && messageStyleAt(s, w, float(a.contentX), float(a.contentY), mx, my, st) && st.events;
+                if (styled && !st.events->click.empty()) s.requestCursor(UiState::CursorPointingHand);
+                if (styled && st.events->hover == "show_text") tooltip = s.font.split(st.events->hoverText, std::max(s.guiW() / 2, 200));
                 break;
             }
             case Widget::Item:

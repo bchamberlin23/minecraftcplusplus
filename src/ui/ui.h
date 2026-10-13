@@ -83,6 +83,7 @@ struct Settings {
     bool quitShortcuts = true, operatorItemsTab = false;
     int sprintWindow = 7;  // ticks a double-tapped forward key starts sprinting within (0: off)
     bool invertMouseX = false, invertMouseY = false, discreteMouseScroll = false;
+    bool allowCursorChanges = true;  // the screens' cursor shapes (Window.setAllowCursorChanges)
     double mouseWheelSensitivity = 1.0;  // 10^(-2..1) like Options.logMouse
     // Skin Customization (client_information): main hand 0 left 1 right, PlayerModelPart bits (cape 0 .. hat 6)
     int mainHand = 1;

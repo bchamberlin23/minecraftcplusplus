@@ -220,15 +220,19 @@ void stoneDrawBg(UiState& s, Canvas& c, Menu& m, const Layout&, float left, floa
     }
     blitSprite(c, sp(s, active ? "container/stonecutter/scroller" : "container/stonecutter/scroller_disabled"), left + 119,
                top + 15 + float(int(41.0f * stone.scrollOffs)), 12, 15);
+    if (inRect(s.mouseX, s.mouseY, left + 119, top + 15, 12, 54))
+        s.requestCursor(!active ? UiState::CursorNotAllowed : stone.scrolling ? UiState::CursorResizeNS : UiState::CursorPointingHand);
     if (!display) return;
     const float x = left + 52, y = top + 14;
     const int selected = m.data[0];
     for (int index = stone.startIndex; index < stone.startIndex + 12 && index < int(vis.size()); ++index) {
         const int pos = index - stone.startIndex;
         const float px = x + float(pos % 4 * 16), py = y + float(pos / 4 * 18 + 2);
+        const bool hover = inRect(s.mouseX, s.mouseY, px, py, 16, 18);
+        if (hover) s.requestCursor(UiState::CursorPointingHand);
         const char* sprite = index == selected ? "container/stonecutter/recipe_selected"
-                             : inRect(s.mouseX, s.mouseY, px, py, 16, 18) ? "container/stonecutter/recipe_highlighted"
-                                                                          : "container/stonecutter/recipe";
+                             : hover ? "container/stonecutter/recipe_highlighted"
+                                     : "container/stonecutter/recipe";
         blitSprite(c, sp(s, sprite), px, py - 1, 16, 18);
     }
     for (int index = stone.startIndex; index < stone.startIndex + 12 && index < int(vis.size()); ++index) {
@@ -487,6 +491,8 @@ void loomDrawBg(UiState& s, Canvas& c, Menu& m, const Layout& l, float left, flo
     }
     blitSprite(c, sp(s, active ? "container/loom/scroller" : "container/loom/scroller_disabled"), left + 119,
                top + 13 + float(int(41.0f * loom.scrollOffs)), 12, 15);
+    if (inRect(s.mouseX, s.mouseY, left + 119, top + 13, 12, 56))
+        s.requestCursor(!active ? UiState::CursorNotAllowed : loom.scrolling ? UiState::CursorResizeNS : UiState::CursorPointingHand);
     const ItemStack& result = m.slots[3];
     const bool hasMax = loomHasMax(s, m);
     if (!result.empty() && !hasMax) {
@@ -503,6 +509,7 @@ void loomDrawBg(UiState& s, Canvas& c, Menu& m, const Layout& l, float left, flo
             if (index >= int(sel.size())) return;
             const float px = left + 60 + float(col * 14), py = top + 13 + float(row * 14);
             const bool hl = inRect(s.mouseX, s.mouseY, px, py, 14, 14);
+            if (hl && index != selected) s.requestCursor(UiState::CursorPointingHand);
             blitSprite(c, sp(s, index == selected ? "container/loom/pattern_selected" : hl ? "container/loom/pattern_highlighted" : "container/loom/pattern"),
                        px, py, 14, 14);
             // extractBannerOnButton: gray 5 x 10 with the pattern mask (21 x 40 of 64 at v 1) over it.

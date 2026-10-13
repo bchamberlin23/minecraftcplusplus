@@ -453,6 +453,7 @@ void drawTab(UiState& s, Canvas& c, int t, float left, float top) {
     const std::string sp = std::string("container/creative_inventory/tab_") + (d.top ? "top_" : "bottom_") +
                            (sel ? "selected_" : "unselected_") + std::to_string(std::clamp(d.column, 0, 6) + 1);
     blitSprite(c, s.sprites.sprite(sp), x, y, 26, 32);
+    if (!sel && s.mouseX > x && s.mouseY > y && s.mouseX < x + 26 && s.mouseY < y + 32) s.requestCursor(UiState::CursorPointingHand);
     ItemStack icon;
     icon.item = s.items.id(d.icon), icon.count = 1;
     s.drawItem(c, icon, x + 13 - 8, y + 16 - 8 + (d.top ? 1 : -1), false);
@@ -543,9 +544,12 @@ void draw(UiState& s, Canvas& c) {
     blitTexture(c, s.sprites.texture(std::string("gui/container/creative_inventory/tab_") + tab().background), left, top, 0, 0,
                 float(kW), float(kH), 256, 256);
     if (tab().kind == TabKind::Search) s.drawTextField(c, s.search, left + 82, top + 6, 80, 0xFFFFFFFF, true, true);
-    if (tab().scrollBar)
+    if (tab().scrollBar) {
         blitSprite(c, s.sprites.sprite(canScroll() ? "container/creative_inventory/scroller" : "container/creative_inventory/scroller_disabled"),
                    left + 175, top + 18 + float(int(float(112 - 17) * g.scroll)), 12, 15);
+        if (mx >= left + 175 && my >= top + 18 && mx < left + 189 && my < top + 130)  // insideScrollbar
+            s.requestCursor(!canScroll() ? UiState::CursorNotAllowed : g.scrolling ? UiState::CursorResizeNS : UiState::CursorPointingHand);
+    }
     drawTab(s, c, g.selected, left, top);
     if (tab().kind == TabKind::Inventory) {
         PreviewEntity pe;

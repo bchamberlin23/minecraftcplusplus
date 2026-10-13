@@ -627,6 +627,8 @@ void Ui::State::drawButtons(Canvas& c) {
 void Ui::State::drawButton(Canvas& c, size_t i, bool hoverable) {
     Button& b = buttons[i];
     const bool hover = hoverable && mouseX >= b.x && mouseY >= b.y && mouseX < b.x + b.w && mouseY < b.y + b.h;
+    if (hover)  // AbstractWidget / AbstractSliderButton.handleCursor
+        requestCursor(!b.active ? CursorNotAllowed : b.slider && draggingSlider == int(i) ? CursorResizeEW : CursorPointingHand);
     if (b.slider) {  // AbstractSliderButton: the handle lights up under the mouse (an inactive one never)
         blitSprite(c, sprites.sprite("widget/slider"), b.x, b.y, b.w, b.h);
         const float hx = b.x + float(int(b.value * (b.w - 8)));

@@ -765,6 +765,7 @@ void viewDraw(UiState& s, Canvas& c) {
     s.drawButtons(c);
     // HoveredTextEffects.TOOLTIP_AND_CURSOR: a hovered event's tooltip (componentHoverEffect).
     Style st;
+    if (bookStyleAt(s, c, st) && st.events && !st.events->click.empty()) s.requestCursor(UiState::CursorPointingHand);
     if (bookStyleAt(s, c, st) && st.events)
         if (const std::vector<Text> lines = hoverLines(s, *st.events); !lines.empty()) s.drawTooltip(c, lines, s.mouseX, s.mouseY);
 }

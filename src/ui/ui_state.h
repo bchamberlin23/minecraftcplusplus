@@ -242,6 +242,10 @@ struct Ui::State {
     // "post_effects", "day_count"): their line, "" none (set by main).
     std::function<std::string(std::string_view what)> engineInfo;  // presses of Toggle Spectator Shader Effects (GameRenderer.toggleSpectatorPostEffect)
     int toolHighlightTimer = 0;
+    // GuiGraphicsExtractor.requestCursor: the cursor shape asked for this frame (Window.selectCursor's types).
+    enum Cursor { CursorDefault, CursorPointingHand, CursorIBeam, CursorResizeNS, CursorResizeEW, CursorResizeAll, CursorNotAllowed };
+    int pendingCursor = 0;
+    void requestCursor(int cursor) { pendingCursor = cursor; }
     int jukeboxSongsSeen = 0;           // audio's jukebox song counter (Hud.setNowPlaying)
     float vignetteBrightness = 1.0f;    // Hud.vignetteBrightness (smoothed darkness of the camera's light)
     int skyDarken = 0;                  // Level.getSkyDarken

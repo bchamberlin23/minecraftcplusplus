@@ -945,6 +945,7 @@ void Ui::State::textFieldMouseDown(TextField& f) {
 
 void Ui::State::drawTextField(Canvas& c, TextField& f, float x, float y, float w, u32 color, bool focused, bool shadow) {
     f.textX = x, f.textY = y, f.textW = w;
+    if (textFieldHit(f)) requestCursor(CursorIBeam);  // EditBox: an I-beam over the field
     if (dragField == &f) {  // EditBox.onDrag: the cursor follows the mouse while the left button is down
         if (leftDown) f.cursor = fieldPosAt(*this, f, mouseX);
         else dragField = nullptr;
