@@ -87,7 +87,10 @@ Then (2026-10-13, last): the advancements screen's init / tab / hover rules; toa
 sound caps, SystemToast wrapping, TutorialToast lines, 10 s toasts, the unsecure-server toast, hidden with the HUD);
 the server list as ServerSelectionList / ServerStatusPinger (address validation, hidden direct-join entries, lazy
 pings on five threads, the legacy ping fallback, the pinging / unreachable / incompatible / old / unknown states,
-LAN entries, Shift+arrow moves, F5) and ConnectScreen while joining. Tested against local mock status servers
+LAN entries, Shift+arrow moves, F5) and ConnectScreen while joining; the world list as LevelSummary / WorldOpenFlows
+(incompatible / conversion / file fixing / downgrade / experimental states and overlays, the backup questions, low
+disk space, an empty list opening Create World), OptimizeWorldScreen, the Message / Confirm screens as
+DisconnectedScreen / AlertScreen / ConfirmScreen, and tab list heads. Tested against local mock status servers
 (a Python script: modern, no-version, legacy-only, silent and closing servers).
 
 ## Protocol / networking
@@ -128,6 +131,11 @@ LAN entries, Shift+arrow moves, F5) and ConnectScreen while joining. Tested agai
   server shows its incompatible icon at once (Java keeps the last pinging frame until the list is rebuilt). The
   disconnect screen's "Open Report Directory" / "Report to Server" buttons come with client packet-error reports;
   this client logs malformed packets and goes on instead of disconnecting.
+- World list residuals: Delete moves the world to the Recycle Bin (Java deletes it) and Shift turns Play into this
+  port's View Only; the old customized-world question (Re-Create, pre-1.13 worlds) is missing; after file fixing the
+  server upgrades on start, without Java's "upgradeWorld.done / joinNow" confirmation; Optimize World shows one bar and
+  the total from the server's log (no per-dimension bars or converted / skipped counts); a failed backup's toast has
+  no reason line.
 - SystemToasts without a trigger here: PACK_LOAD_FAILURE, FILE_DROP_FAILURE, CHUNK_LOAD/SAVE_FAILURE (the server
   runs out of process), the demo overlay and the regional PeriodicNotificationManager.
 
