@@ -42,7 +42,8 @@ that were only stored (splash texts, auto suggestions, hidden LAN addresses, hid
 first-server Social Interactions toast, rotate with minecarts, startedCleanly), and the Mojang Studios loading
 overlay (start-up, F3 + T, server packs), block entity client ticks (spawner flames, trial spawner / vault
 particles and ambience, note block notes), team-formatted name tags with the below-name score, screenshot names /
-links, pick block on entities (Ctrl: with data) and the fuller F3 + B hitboxes. ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
+links, pick block on entities (Ctrl: with data), the fuller F3 + B hitboxes, the happy ghast harness goggles, F3 + Esc
+(pause without the menu) and the window icon. ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
 switch (automated runs never change the display mode) and the LAN publish from World Options (it would open a
 listening socket).
 
@@ -64,6 +65,9 @@ listening socket).
 ## Screens
 
 - The friends feature is this port's own; Java's FriendToast (Mojang's friend service) needs the Microsoft login.
+- Deliberate differences: the window title (an FPS / GPU line in game, not "Minecraft* 26.3 - Singleplayer"); the
+  level loading screen follows the server process's log, without LevelLoadingScreen's chunk map; no OutOfMemoryScreen
+  or crash-report text (crashes write a minidump to %LOCALAPPDATA%\minecraftCplusplus\crashes).
 - SystemToasts without a trigger here: PACK_LOAD_FAILURE, FILE_DROP_FAILURE, CHUNK_LOAD/SAVE_FAILURE (the server
   runs out of process), the demo overlay and the regional PeriodicNotificationManager.
 
