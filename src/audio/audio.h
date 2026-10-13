@@ -71,6 +71,7 @@ public:
     void setScreenMusic(std::string_view event);
     // BossHealthOverlay.shouldPlayMusic: in the End a boss bar asking for music plays Musics.END_BOSS (music.dragon).
     void setBossMusic(bool on) { bossMusic_ = on; }
+    void blockHitSound(u16 state, Category category, const double pos[3], float volume, float pitch);  // the state's hit sound as is
     // MusicManager: the Music Frequency option (0 default, 1 frequent, 2 constant); the song playing as a translation
     // key (getCurrentMusicTranslationKey: "music.game.sweden", "" none); counters of the now playing toast's show
     // requests (a song started audibly, or the music turned up while one plays silently) and hide requests.

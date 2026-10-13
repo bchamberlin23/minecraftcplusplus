@@ -2779,9 +2779,11 @@ void Visuals::Impl::mobTick(const Entity& e) {
             const double hx = e.pos[0] - std::sin(yaw) * 2.25, hz = e.pos[2] + std::cos(yaw) * 2.25;
             const int bx = int(std::floor(hx)), by = int(std::floor(e.pos[1] + 0.2)), bz = int(std::floor(hz));
             const u16 below = world.world().block(bx, by - 1, bz);
-            if (below)
+            if (below) {
                 for (int i = 0; i < 30; ++i)
                     particles->spawnBlock("block", world.registry().name(below), bx + 0.5, by + 0.5 - 0.65, bz + 0.5, 0, 0, 0);
+                if (a && e.age % 10 == 0) a->blockHitSound(below, audio::Category::Neutral, e.pos, 0.5f, 0.5f);
+            }
         } else if (e.snifferState == 4 && e.age % 20 == 0) {  // SEARCHING
             sound("minecraft:entity.sniffer.searching", audio::Category::Neutral, e.pos[0], e.pos[1], e.pos[2], 1.0f, 1.0f);
         }

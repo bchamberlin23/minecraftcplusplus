@@ -320,6 +320,13 @@ void AudioSystem::blockHit(int x, int y, int z) {
     play(t.hit, Category::Block, pos, (t.volume + 1.0f) / 8.0f, t.pitch * 0.5f, rng_.nextLong());
 }
 
+void AudioSystem::blockHitSound(u16 state, Category category, const double pos[3], float volume, float pitch) {
+    if (!ready() || !haveGameSounds_) return;
+    const BlockSound& b = blockSound(state);
+    if (b.air) return;
+    play(game_.type(b.type).hit, category, pos, volume, pitch, rng_.nextLong());
+}
+
 void AudioSystem::attachGame(Game& game, World& world, BlockRegistry& registry) {
     gameRef_ = &game;
     world_ = &world;
