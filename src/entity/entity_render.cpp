@@ -2021,9 +2021,14 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
             if (rw >= 0) poses_[size_t(rw)].zRot = 0.0873f;
         } else if ((L.flags & Stuck) && !baseMats_.empty()) {  // StuckInBodyLayer: a random cube of a random body part
             const Model& bm = assets_.modelAt(layers[0].model);
+            // PlayerModel.bodyParts: head, body, left arm, right arm, left leg, right leg (in this order)
             std::vector<u32> bodyParts;
-            for (size_t i = 0; i < bm.parts.size() && i < baseMats_.size(); ++i)
-                if (bm.parts[i].quadCount) bodyParts.push_back(u32(i));
+            for (const char* name : {"head", "body", "left_arm", "right_arm", "left_leg", "right_leg"})
+                for (size_t i = 0; i < bm.parts.size() && i < baseMats_.size(); ++i)
+                    if (bm.parts[i].name == name && bm.parts[i].quadCount) {
+                        bodyParts.push_back(u32(i));
+                        break;
+                    }
             if (!bodyParts.empty()) {
                 const bool stinger = L.scroll[1] > 0.5f;
                 u64 seed = (u64(i64(e.id)) ^ 0x5DEECE66Dull) & ((1ull << 48) - 1);  // RandomSource(id)

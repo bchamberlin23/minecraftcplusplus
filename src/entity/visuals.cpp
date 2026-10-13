@@ -2081,6 +2081,23 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
                 ic.owner.fishing = w.fishingSlot >= 0 && w.fishingSlot == (slot == 0 ? w.selectedSlot : 45);
                 ic.owner.selected = slot == 0;
             }
+            // PlayerItemInHandLayer.renderItemHeldToEye: a spyglass in use (not swinging) is drawn at the head, its
+            // pitch clamped to -30..90 degrees, translateToHead and 2.5 px to the side
+            const float swingNow = e->swingTime >= 0 ? (float(e->swingTime) + pt) / float(std::max(e->swingDuration, 1)) : 0.0f;
+            if (ic.owner.usingThis && swingNow < 1.0e-5f && (a.valid & 4) && models.itemName(item) == "minecraft:spyglass") {
+                const float pitchNow = e->prevPitch + (e->pitch - e->prevPitch) * pt;
+                Xf m;
+                std::memcpy(m.m, a.head, sizeof(m.m));
+                m = xfMul(m, xfRotX((std::clamp(pitchNow, -30.0f, 90.0f) - pitchNow) * kDeg));
+                m = xfMul(m, xfTranslate(0, -0.25f + a.headY, 0));
+                m = xfMul(m, xfRotY(180.0f * kDeg));
+                m = xfMul(m, xfScale(0.625f, -0.625f, -0.625f));
+                m = xfMul(m, xfTranslate((k == 1 ? -2.5f : 2.5f) / 16.0f, -0.0625f, 0));
+                L.begin((u64(u32(a.entity)) << 4 | 2) + 3 + k);
+                pushItem(L, models.mesh(stackOf(e->equipStack[slot], item, e->equipDye[slot]), contextOf(*e, ui::ItemDisplay::Head, pt)),
+                         Display::Head, m, a.light, (e->equipFoil >> slot) & 1);
+                continue;
+            }
             Xf m;
             std::memcpy(m.m, a.hand[k], sizeof(m.m));
             m = xfMul(m, xfRotX(-90.0f * kDeg));
