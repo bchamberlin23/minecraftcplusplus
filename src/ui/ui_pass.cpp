@@ -149,6 +149,8 @@ bool UiPass::create(Renderer& renderer) {
     rt.SrcBlend = D3D12_BLEND_ONE;  // BlendFunction.ADDITIVE (GUI_NAUSEA_OVERLAY)
     rt.DestBlend = D3D12_BLEND_ONE;
     if (!ok(device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&psoAdditive_)), "UI pipeline")) return false;
+    rt.SrcBlend = D3D12_BLEND_SRC_ALPHA;  // RenderPipelines.MOJANG_LOGO: SRC_ALPHA, ONE
+    if (!ok(device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&psoLogo_)), "UI pipeline")) return false;
 
     vertices_ = uploadBuffer(device, kVertexBytes * Renderer::kFrames);
     upload_ = uploadBuffer(device, kUploadBytes * Renderer::kFrames);
@@ -227,6 +229,7 @@ void UiPass::draw(const PassContext& ctx) {
                                    : blend == 2 ? psoGlint_.Get()
                                    : blend == 3 ? psoVignette_.Get()
                                    : blend == 4 ? psoAdditive_.Get()
+                                   : blend == 5 ? psoLogo_.Get()
                                                 : pso_.Get());
         }
         list->RSSetScissorRects(1, &r);

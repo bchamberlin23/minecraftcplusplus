@@ -8,6 +8,7 @@
 #include "assets/game_reports.h"
 #include "ui/frontend.h"
 #include "ui/item_ui.h"
+#include "ui/loading_overlay.h"
 #include "ui/signs_books.h"
 #include "entity/entities.h"
 #include "ui/block_editors.h"
@@ -586,6 +587,7 @@ bool Ui::init(const Init& in) {
     if (s.settings.fullscreen) s.window->setFullscreen(true);  // options.txt fullscreen
     s.initNativeMods();  // mods_screen.cpp
     frontEndInit(s);     // title.cpp: the title screen in menu mode
+    if (s.fe->cfg.menu) startLoadingOverlay(false);  // the start-up's Mojang Studios screen, fading out to the title
     return true;
 }
 
@@ -1323,6 +1325,7 @@ void Ui::endFrame() {
     if (s.screen != Screen::None) s.drawScreen(c);
     if (!s.fe->cfg.menu) s.drawSavingIndicator(c);
     narrator::frame(s);  // the widget under the mouse, when the narrator narrates the system
+    drawLoadingOverlay(s, c);  // loading_overlay.cpp
     for (const UiModule& m : uiModules())  // modules.h: toasts
         if (m.drawTop) m.drawTop(s, c);
 }

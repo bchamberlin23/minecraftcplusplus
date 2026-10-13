@@ -13,6 +13,7 @@
 #include "render/renderer.h"
 #include "ui/debug_screen.h"
 #include "ui/frontend.h"
+#include "ui/loading_overlay.h"
 #include "ui/modules.h"
 #include "ui/options_list.h"
 #include "ui/sprites.h"
@@ -729,7 +730,7 @@ bool debugScreenKey(UiState& s, const InputEvent& e) {
     if (s.isKey(Key::DebugLightmapTexture, e)) return chartToggle(g.lightmap, true), true;       // F3 + 4
     if (s.isKey(Key::DebugReloadResourcePacks, e)) {  // F3 + T
         feedback("debug.reload_resourcepacks.message");
-        if (s.fe->cfg.reloadResources) s.fe->cfg.reloadResources();
+        if (s.fe->cfg.reloadResources) startLoadingOverlay(true, s.fe->cfg.reloadResources);  // Minecraft.reloadResourcePacks
         return true;
     }
     if (s.isKey(Key::DebugDumpVersion, e)) {  // F3 + V: VersionCommand.dumpVersion

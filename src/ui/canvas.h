@@ -55,7 +55,7 @@ public:
         bool clip = false;
         // 0 alpha, 1 invert (one minus destination colour: crosshair), 2 glint (src * src + dst), 3 vignette
         // (dst * (1 - src): RenderPipelines.VIGNETTE; like invert, drawn onto the final image with a separate UI layer),
-        // 4 additive (src + dst: GUI_NAUSEA_OVERLAY; also onto the final image)
+        // 4 additive (src + dst: GUI_NAUSEA_OVERLAY; also onto the final image), 5 src * src alpha + dst (MOJANG_LOGO)
         u8 blend = 0;
         int scissor[4] = {0, 0, 0, 0};  // screen pixels x0 y0 x1 y1 when clip
     };
