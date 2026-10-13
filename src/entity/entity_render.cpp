@@ -2250,6 +2250,9 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         float alpha = appearanceAlpha_;
         if (living && (e.sharedFlags & 0x20)) {
             if (li == 0 && seeInvisible && seeInvisible(e)) alpha = 38.0f / 255.0f;
+            // LivingEntityRenderer.getRenderType: an invisible glowing body is drawn only into the outline (fully
+            // transparent here, which the outline pass's silhouette still picks up)
+            else if (li == 0 && outlineColor && outlineColor(e) >= 0) alpha = 0.0f;
             else if (li == 0 || !(L.flags & (Armor | Emissive | Elytra | Glint | Scroll | Stuck | Shoulder))) continue;
         }
         const TexRect& tr = assets_.rect(L.tex);
