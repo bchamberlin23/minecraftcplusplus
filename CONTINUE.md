@@ -89,7 +89,7 @@ listening socket).
 
 - **Block rendering audit, still open**: smooth lighting (cubes and models, one BlockModelLighter port) clamps its
   lookups to the section's one-cell border (Java reads up to two cells beyond a face for light permeability). Fluids skip self-occlusion of waterlogged partial blocks (faces hidden inside them).
-- **Audit leftovers (2026-10-13)**: interpolation does not shift pending steps by locally predicted movement (AbstractInterpolationHandler.applyPredictedMovement), remote players' motion is set at once (RemotePlayer spreads it), passengers are placed at render time; widget tooltips use the default positioner (no MenuTooltipPositioner / BelowOrAboveWidgetTooltipPositioner); the chat's MODIFIED tag and RestrictionsScreen; minecarts ignore the minecart_improvements flag.
+- **Audit leftovers (2026-10-13)**: interpolation does not shift pending steps by locally predicted movement (AbstractInterpolationHandler.applyPredictedMovement), remote players' motion is set at once (RemotePlayer spreads it), passengers are placed at render time; widget tooltips use the default positioner (no MenuTooltipPositioner / BelowOrAboveWidgetTooltipPositioner); the chat's MODIFIED tag and RestrictionsScreen. (Minecarts under minecart_improvements: NO_OP interpolation, untested without an experimental world.)
 - **VIS-06 residual**: glowing outlines under a shader pack (entities go through the pack's gbuffers there).
 - Test instance blocks: optional tests' failure beam is red, not orange (the test registry is not sent to clients);
   the error markers and game test highlights are drawn in the UI layer (no depth test).

@@ -895,6 +895,15 @@ void EntityWorld::startInterpolation(Entity& e, const Step* steps, u32 count, fl
     const double* end = count ? steps[count - 1].pos : nullptr;
     const bool stepped = e.category == Category::Living || e.category == Category::Player;
     // Displays: LinearInterpolationHandler over teleport_duration steps (0: placed at once).
+    // AbstractMinecart.createInterpolationHandler: with minecart_improvements (useExperimentalMovement) NO_OP, so the
+    // position and rotation are set at once (moveOrInterpolateTo); the carts move by their steps (MinecartSteps).
+    if (e.info && e.info->name.ends_with("minecart") && client_ && client_->hasFeature("minecraft:minecart_improvements")) {
+        if (end) std::copy(end, end + 3, e.pos);
+        if (hasRot) e.yaw = yaw, e.pitch = pitch;
+        e.stepCount = 0, e.remainingTicks = 0, e.linearRemaining = 0;
+        e.newMinecart = true;
+        return;
+    }
     const bool linear = e.category == Category::Vehicle ||
                         (e.info && (e.info->name == "minecraft:experience_orb" || e.info->name == "minecraft:fishing_bobber")) ||
                         (e.display.is && e.display.posRotDuration > 0);
