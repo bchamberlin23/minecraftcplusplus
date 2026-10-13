@@ -1130,6 +1130,51 @@ void drawWorldDebug(UiState& s, Canvas& c) {
 
 const UiModuleRegistrar kWorldDebug({.name = "debug_world", .drawHud = drawWorldDebug});
 
+// KeyboardHandler.tick: F3 + C held for ten seconds crashes the game on purpose; after a second it says so, then counts
+// down each second (Ctrl held at the end: Blaze3D.youJustLostTheGame, a native crash).
+struct CrashHold {
+    double start = -1, reported = 0;
+    int count = 0;
+} crashHold;
+
+void debugMessage(UiState& s, u32 color, const char* key, std::vector<Text> args) {  // decorateDebugComponent
+    Style prefix = colorStyle(color);
+    prefix.bold = 1;
+    Text t(s.res.translate("debug.prefix"), prefix);
+    t.append(" ");
+    t.append(translatable(key, std::move(args), s.lang()));
+    s.addChat(t);
+}
+
+void crashTick(UiState& s) {
+    const int modifier = s.settings.key(Key::DebugModifier), crash = s.settings.key(Key::DebugCrash);
+    const bool held = s.window && modifier && crash && s.window->keyDown(modifier) && s.window->keyDown(crash);
+    if (!held) {
+        crashHold.start = -1;
+        return;
+    }
+    if (crashHold.start < 0) {
+        crashHold = {s.clock, s.clock, 0};
+        return;
+    }
+    const double remaining = 10.0 - (s.clock - crashHold.start);
+    if (remaining < 0) {
+        LOG("crash: Manually triggered debug crash");
+        if (s.window->keyDown(VK_CONTROL)) *static_cast<volatile int*>(nullptr) = 0;  // youJustLostTheGame
+        RaiseException(0xE0000D0Cu, EXCEPTION_NONCONTINUABLE, 0, nullptr);
+    }
+    if (s.clock - crashHold.reported >= 1.0) {
+        if (crashHold.count == 0)
+            debugMessage(s, 0xFFFF55, "debug.crash.message", {s.keyLabel(modifier), s.keyLabel(crash)});
+        else
+            debugMessage(s, 0xFF5555, "debug.crash.warning", {Text(std::to_string(int(std::ceil(remaining))))});
+        crashHold.reported = s.clock;
+        ++crashHold.count;
+    }
+}
+
+const UiModuleRegistrar kCrash({.name = "debug_crash", .tick = crashTick});
+
 }  // namespace
 
 // --- the Debug Options screen (DebugOptionsScreen) ------------------------------------------------------------
