@@ -676,6 +676,11 @@ void handleClick(UiState& s, const ClickAction& c, const Target& after, bool con
         return setScreen(s, after);
     }
     if (c.action == "open_url") return clickUrl(s, c.value, after);  // the confirm screen returns to `after`
+    if (c.action == "open_file") {  // Util.getPlatform().openFile (client-made components only: screenshots)
+        const std::wstring w = widen(c.value);
+        ShellExecuteW(nullptr, L"open", w.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        return setScreen(s, after);
+    }
     if (c.action == "copy_to_clipboard") s.window->setClipboard(c.value);
     else if (c.action != "suggest_command") LOG("ui: don't know how to handle click event %s", c.action.c_str());
     if (s.screen != Screen::Chat || after.kind != Target::Plain || after.screen != Screen::Chat) setScreen(s, after);

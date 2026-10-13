@@ -209,6 +209,7 @@ Node parseNbt(NbtReader& r, u8 tag, int depth) {
             while (r.field(et, en)) {
                 if (en == "action" && et == TagString) {
                     (click ? n.click : n.hover) = r.str();
+                    if (click && n.click == "open_file") n.click.clear();  // ClickEvent.Action.OPEN_FILE: not allowed from servers
                 } else if (click && (en == "url" || en == "command" || en == "value" || en == "path") && et == TagString) {
                     n.clickValue = r.str();
                 } else if (click && en == "page" && et != TagCompound && et != TagList) {
@@ -321,6 +322,7 @@ Node parseJson(const nlohmann::json& j, int depth) {
     if (j.contains("click_event") && j["click_event"].is_object()) {
         const auto& e = j["click_event"];
         n.click = e.value("action", "");
+        if (n.click == "open_file") n.click.clear();  // never from data: only the client's own screenshot links
         for (const char* k : {"url", "command", "value", "path"})
             if (e.contains(k) && e[k].is_string()) n.clickValue = e[k].get<std::string>();
         if (e.contains("page") && e["page"].is_number_integer()) n.clickValue = std::to_string(e["page"].get<int>());

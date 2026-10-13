@@ -1258,13 +1258,20 @@ void Ui::beginFrame(double dt) {
             fs::create_directories(dir, ec);
             SYSTEMTIME t;
             GetLocalTime(&t);
-            char name[64];
-            std::snprintf(name, sizeof(name), "%04u-%02u-%02u_%02u.%02u.%02u.png", t.wYear, t.wMonth, t.wDay, t.wHour,
-                          t.wMinute, t.wSecond);
+            char stamp[48], name[64];
+            std::snprintf(stamp, sizeof(stamp), "%04u-%02u-%02u_%02u.%02u.%02u", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute,
+                          t.wSecond);
+            for (int count = 1;; ++count) {  // Screenshot.getFile: _2, _3... after a name already taken
+                std::snprintf(name, sizeof(name), count == 1 ? "%s.png" : "%s_%d.png", stamp, count);
+                if (!fs::exists(dir / name, ec)) break;
+            }
             s.shotPath = dir / name;
             s.shotPending = true;
-            Style link;
+            Style link;  // the underlined file name opening it (ClickEvent.OpenFile)
             link.underlined = 1;
+            auto events = std::make_shared<TextEvents>();
+            events->click = "open_file", events->clickValue = utf8(s.shotPath);
+            link.events = events;
             s.addChat(translatable("screenshot.success", {Text(name, link)}, s.lang()));
         } else if (s.isKey(Key::Inventory, e)) {
             s.openScreen(s.creative() ? Screen::Creative : Screen::Inventory);
