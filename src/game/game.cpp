@@ -136,7 +136,7 @@ CameraState Game::viewCamera() const {
     if (cameraMode == 2) c.yaw += float(kPi), c.pitch = -c.pitch;
     const double cp = std::cos(c.pitch);
     const double back[3] = {std::sin(c.yaw) * cp, std::sin(c.pitch), -std::cos(c.yaw) * cp};
-    double dist = 4.0;  // Camera.getMaxZoom: 8 rays from jittered eye positions
+    double dist = cameraDistance;  // Camera.getMaxZoom: 8 rays from jittered eye positions
     for (int i = 0; i < 8; ++i) {
         const double o[3] = {c.x + ((i & 1) * 2 - 1) * 0.1, c.y + (((i >> 1) & 1) * 2 - 1) * 0.1,
                              c.z + (((i >> 2) & 1) * 2 - 1) * 0.1};

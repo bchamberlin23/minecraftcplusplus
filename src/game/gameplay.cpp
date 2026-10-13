@@ -641,6 +641,14 @@ void Gameplay::frame() {
     a.movementEfficiency = attribute("movement_efficiency", 0.0);
     a.frictionModifier = attribute("friction_modifier", 1.0), a.airDragModifier = attribute("air_drag_modifier", 1.0);
     a.bounciness = attribute("bounciness", 0.0);
+    {  // Camera.setup's third-person distance: camera_distance x getScale, the player's or its mount's if larger
+        double dist = attribute("camera_distance", 4.0) * attribute("scale", 1.0);
+        if (auto it = entityAttributes_.find(game_->vehicleId); game_->vehicleId >= 0 && it != entityAttributes_.end()) {
+            auto value = [&](const char* k, double d) { auto f = it->second.find(k); return f != it->second.end() ? f->second : d; };
+            dist = std::max(dist, value("camera_distance", 4.0) * value("scale", 1.0));
+        }
+        game_->cameraDistance = dist;
+    }
     a.jumpBoost = effect("jump_boost"), a.slowFalling = effect("slow_falling"), a.levitation = effect("levitation");
     a.dolphinsGrace = effect("dolphins_grace");
     a.blind = effect("blindness") >= 0;

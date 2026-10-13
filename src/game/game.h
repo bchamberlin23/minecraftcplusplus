@@ -29,6 +29,7 @@ public:
     // F5 perspective: 0 first person, 1 third person back, 2 third person front. viewCamera() is the rendered
     // camera (Camera.setup: pulled back up to 4 blocks, stopped by blocks); camera() stays at the eyes.
     int cameraMode = 0;
+    double cameraDistance = 4.0;  // Camera.setup: camera_distance x scale (the larger of the player's and its mount's)
     CameraState viewCamera() const;
     // View override (UI: the lying-down camera while sleeping, Camera.setup); may adjust the camera. Runs for every
     // perspective, before the third-person pull-back.
