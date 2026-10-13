@@ -20,6 +20,7 @@ class BlockRegistry;
 class GameReports;
 namespace net {
 class Client;
+struct Reader;
 }
 namespace ui {
 class Items;
@@ -141,6 +142,10 @@ struct Entity {
     u8 mobFlags = 0;     // Mob: 1 no AI, 2 left handed, 4 aggressive
     bool noGravity = false, inGround = false;
     double accelerationPower = 0.1;  // AbstractHurtingProjectile (projectile_power); wind charges 0
+    // AreaEffectCloud: radius, waiting, the particle (encoded ParticleOptions; empty: entity_effect, white)
+    float cloudRadius = 3.0f;
+    bool cloudWaiting = false;
+    std::string cloudParticle;
     bool dangerous = false;          // WitherSkull DATA_DANGEROUS (the blue skull)
     int leashHolder = 0;             // Leashable: the holder's entity id (set_entity_link), 0 none
     int pose = 0;
@@ -322,7 +327,7 @@ public:
            damage = -1, mainGene = -1, hiddenGene = -1, mobFlags = -1, noGravity = 5, inGround = -1, rotation = -1,
            painting = -1, nameVisible = 3, livingFlags = -1, attachedTo = -1, sleepPos = -1, ticksFrozen = -1,
            paddleLeft = -1, paddleRight = -1, chest = -1, color = -1, attachFace = -1, peek = -1, fireworksItem = -1,
-           silent = 4, staysStill = -1, dangerous = -1;
+           silent = 4, staysStill = -1, dangerous = -1, cloudRadius = -1, cloudWaiting = -1, cloudParticle = -1;
         // Display entities.
         i8 dStart = -1, dDuration = -1, dPosRot = -1, dTranslation = -1, dScale = -1, dLeft = -1, dRight = -1,
            dBillboard = -1, dBrightness = -1, dViewRange = -1, dWidth = -1, dHeight = -1, dBlock = -1, dItem = -1,
@@ -363,6 +368,9 @@ public:
         u64 serial;  // the terrain's mesh serial when it arrived
     };
     std::vector<TransientBlock> transientBlocks;
+    // Particles of entities (set before attach): reading an encoded ParticleOptions (network thread) and spawning one.
+    std::function<bool(net::Reader& r, std::string& raw)> readParticle;
+    std::function<void(const std::string& raw, double x, double y, double z, double vx, double vy, double vz)> spawnParticle;
     std::function<u64()> meshSerial;
     std::function<u64(int, int, int)> sectionMeshSerial;
 

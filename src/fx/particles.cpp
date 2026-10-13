@@ -939,6 +939,23 @@ void Particles::spawn(std::string_view type, double x, double y, double z, doubl
     add(typeId(type), x, y, z, vx, vy, vz);
 }
 
+bool Particles::readEncoded(net::Reader& r, std::string& raw) const {
+    const u8* start = r.p;
+    const int type = r.varInt();
+    Options o;
+    if (!r.ok || type < 0 || size_t(type) >= types_.size() || !readOptions(&r, type, o)) return false;
+    raw.assign(reinterpret_cast<const char*>(start), size_t(r.p - start));
+    return true;
+}
+
+void Particles::spawnEncoded(const std::string& raw, double x, double y, double z, double vx, double vy, double vz) {
+    net::Reader r(reinterpret_cast<const u8*>(raw.data()), raw.size());
+    const int type = r.varInt();
+    Options o;
+    if (!r.ok || type < 0 || size_t(type) >= types_.size() || !readOptions(&r, type, o)) return;
+    add(type, x, y, z, vx, vy, vz, &o);
+}
+
 void Particles::fireworks(const double pos[3], const double vel[3], const std::string& component, bool sound) {
     // Fireworks.STREAM_CODEC: flight duration, then the FireworkExplosion list.
     Starter s{{pos[0], pos[1], pos[2]}, {vel[0], vel[1], vel[2]}};

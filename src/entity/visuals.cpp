@@ -392,6 +392,10 @@ bool Visuals::load(const fs::path& jar, const fs::path& minecraftDir, const Game
         item = stack.item;
         return ok;
     };
+    m.world.readParticle = [p = m.particles.get()](net::Reader& r, std::string& raw) { return p->readEncoded(r, raw); };
+    m.world.spawnParticle = [p = m.particles.get()](const std::string& raw, double x, double y, double z, double vx, double vy, double vz) {
+        p->spawnEncoded(raw, x, y, z, vx, vy, vz);
+    };
     m.world.onEntityEvent = [&m](const Entity& e, int event) {
         m.entityEffect(e, event, false);
         // FireworkRocketEntity.handleEntityEvent: 17 explodes

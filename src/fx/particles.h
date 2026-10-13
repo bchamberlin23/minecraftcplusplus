@@ -70,6 +70,10 @@ public:
     // BreakingItemParticle (ParticleTypes.ITEM): a shard of an item's texture (eating, items breaking).
     void itemShard(int item, double x, double y, double z, double xa, double ya, double za);
     void spawn(std::string_view type, double x, double y, double z, double vx, double vy, double vz);
+    // An encoded ParticleOptions (type id, then its options: an entity's synched particle): read past it keeping the
+    // bytes (network thread), and spawn one from such bytes (main thread, ClientLevel.addAlwaysVisibleParticle).
+    bool readEncoded(net::Reader& r, std::string& raw) const;
+    void spawnEncoded(const std::string& raw, double x, double y, double z, double vx, double vy, double vz);
     // ClientLevel.createFireworks: a firework's explosions (its encoded "fireworks" item component; empty: a poof).
     void fireworks(const double pos[3], const double vel[3], const std::string& component, bool sound);
 

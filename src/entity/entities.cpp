@@ -200,6 +200,9 @@ EntityWorld::EntityWorld(EntityAssets& assets, World& world, BlockRegistry& regi
         d.hurt = id({"DATA_ID_HURT"});
         d.hurtDir = id({"DATA_ID_HURTDIR"});
         d.dangerous = id({"DATA_DANGEROUS"});
+        d.cloudRadius = id({"DATA_RADIUS"});
+        d.cloudWaiting = id({"DATA_WAITING"});
+        d.cloudParticle = id({"DATA_PARTICLE"});
         d.damage = id({"DATA_ID_DAMAGE"});
         d.mainGene = id({"MAIN_GENE_ID", "DATA_MAIN_GENE_ID"});
         d.mobFlags = id({"DATA_MOB_FLAGS_ID"});
@@ -309,7 +312,8 @@ u16 EntityWorld::localBlock(int state) {
 namespace {
 
 // Parses set_entity_data values until the terminator, or until a value that cannot be skipped safely.
-void readEntityData(net::Reader& r, EventQueue& q, int entityEffect) {
+void readEntityData(net::Reader& r, EventQueue& q, int entityEffect,
+                    const std::function<bool(net::Reader& r, std::string& raw)>& readParticle) {
     for (;;) {
         const u8 index = r.u8v();
         if (!r.ok || index == 0xFF) return;
@@ -354,7 +358,19 @@ void readEntityData(net::Reader& r, EventQueue& q, int entityEffect) {
                 keep = false;
                 break;
             case 14: case 15: v.i = r.varInt(); break;  // (optional) block state
-            case 16: case 17: {  // particle(s): only argument-less and colour particles can be skipped
+            case 16:  // particle (the area effect cloud's): kept encoded when the particles can read it
+                if (readParticle) {
+                    std::string raw;
+                    if (readParticle(r, raw)) {
+                        q.strings.push_back(std::move(raw));
+                        v.str = i32(q.strings.size() - 1);
+                    } else {
+                        stop = true;
+                    }
+                    break;
+                }
+                [[fallthrough]];
+            case 17: {  // particles: only argument-less and colour particles can be skipped
                 const i32 n = v.serializer == 16 ? 1 : r.varInt();
                 for (i32 i = 0; i < n && r.ok && !stop; ++i) {
                     const i32 type = r.varInt();
@@ -508,12 +524,12 @@ void EntityWorld::attach(net::Client& client) {
         e.f[0] = unpackDegrees(i8(r.u8v()));
         if (r.ok) q.events.push_back(e);
     });
-    on("set_entity_data", [effect](net::Reader& r, EventQueue& q) {
+    on("set_entity_data", [this, effect](net::Reader& r, EventQueue& q) {
         Event e;
         e.type = EventType::Data;
         e.id = r.varInt();
         e.first = u32(q.meta.size());
-        readEntityData(r, q, effect);
+        readEntityData(r, q, effect, readParticle);
         e.count = u32(q.meta.size()) - e.first;
         if (e.count) q.events.push_back(e);
     });
@@ -998,6 +1014,9 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
         else if (idx == d.mobFlags) e.mobFlags = u8(v.i);
         else if (idx == d.noGravity) e.noGravity = v.i != 0;
         else if (idx == d.dangerous) e.dangerous = v.i != 0;
+        else if (idx == d.cloudRadius) e.cloudRadius = v.f[0];
+        else if (idx == d.cloudWaiting) e.cloudWaiting = v.i != 0;
+        else if (idx == d.cloudParticle && v.str >= 0 && size_t(v.str) < q.strings.size()) e.cloudParticle = q.strings[size_t(v.str)];
         else if (idx == d.inGround) e.inGround = v.i != 0;
         else if (idx == d.pose) e.pose = int(v.i);
         else if (idx == d.customName && v.str >= 0 && e.category != Category::Player) e.name = q.strings[size_t(v.str)];
@@ -1347,6 +1366,32 @@ void EntityWorld::tickEntity(Entity& e) {
         }
     }
 
+    if (e.info && e.info->name == "minecraft:area_effect_cloud" && spawnParticle) {  // AreaEffectCloud.clientTick
+        static std::mt19937 rng(0xC10D);
+        std::uniform_real_distribution<float> unit(0.0f, 1.0f);
+        if (!e.cloudWaiting || unit(rng) < 0.5f) {
+            std::string particle = e.cloudParticle;
+            std::string white;  // DEFAULT_PARTICLE: entity_effect, colour -1
+            {
+                net::Writer w;
+                w.varInt(entityEffectParticle_);
+                w.u32v(0xFFFFFFFFu);
+                white.assign(w.buf.begin(), w.buf.end());
+            }
+            if (particle.empty()) particle = white;
+            net::Reader pr(reinterpret_cast<const u8*>(particle.data()), particle.size());
+            const bool effect = pr.varInt() == entityEffectParticle_;
+            const int count = e.cloudWaiting ? 2 : int(std::ceil(kPi * e.cloudRadius * e.cloudRadius));
+            const float radius = e.cloudWaiting ? 0.2f : e.cloudRadius;
+            for (int i = 0; i < count; ++i) {
+                const float angle = unit(rng) * 2.0f * kPi, dist = std::sqrt(unit(rng)) * radius;
+                const double x = e.pos[0] + std::cos(angle) * dist, y = e.pos[1], z = e.pos[2] + std::sin(angle) * dist;
+                if (effect) spawnParticle(e.cloudWaiting && unit(rng) < 0.5f ? white : particle, x, y, z, 0, 0, 0);
+                else if (e.cloudWaiting) spawnParticle(particle, x, y, z, 0, 0, 0);
+                else spawnParticle(particle, x, y, z, (0.5 - unit(rng)) * 0.15, 0.01f, (0.5 - unit(rng)) * 0.15);
+            }
+        }
+    }
     // AbstractBoat.tick: the paddles turn pi/8 per tick while rowing (getRowingTime lerps from the previous step).
     for (int i = 0; i < 2; ++i) e.paddlePos[i] = e.paddle[i] ? e.paddlePos[i] + kPi / 8 : 0.0f;
     if (e.category != Category::Living && e.category != Category::Player) return tickSpecies(e, gameTime_, entities_);
