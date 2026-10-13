@@ -37,8 +37,6 @@ listening socket).
   dropped items (drawn by the visuals pass).
 - **VIS-07 residual**: profiles given only by name or id (ResolvableProfile.Dynamic: the client resolves them
   through Mojang's profile API) keep the default skin; the skin patch's cape / elytra textures are ignored.
-- **FX-05 residual**: the geysers' entity launch on the client (PotentSulfurBlockEntity.LAUNCH_ENTITY_TICKER: the
-  local player is lifted by the server's motion only).
 - **FX-07**: post-effect chains (creeper/spider/enderman spectator views etc.).
 
 ## Screens
