@@ -104,7 +104,9 @@ fixes (block speed while flying, underwater, crouch timing); component hashes fo
 Social interactions (row order, tooltip delay, hidden list per launch) and keys (global F2 / F11, F3 over screens,
 spectator drop / swap). Not ported: F3+L client profiling (no metrics recorder); the Ctrl+B narrator hotkey is only
 kept out of Chat and Language (no general "an EditBox has focus" query); the social screen's report button stays
-disabled (reporting needs a Microsoft account). Tested against local mock status servers
+disabled (reporting needs a Microsoft account). HUD order, creative inventory, tab list and chat (tags, restrictions,
+history) audited and fixed. Not ported: the chat screen's own narration (title, usage, "Message to send"); tab heads
+show in singleplayer though the local server is offline (deliberate); subtitles draw before the toasts, not after. Tested against local mock status servers
 (a Python script: modern, no-version, legacy-only, silent and closing servers).
 
 ## Protocol / networking
