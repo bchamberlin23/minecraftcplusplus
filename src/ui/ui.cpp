@@ -482,6 +482,7 @@ float Ui::fovRadians() const {  // Camera.calculateFov: the option scaled by the
     return s_->fovDeathOrFluid(float(s_->settings.fov) * m) * kPi / 180.0f;
 }
 
+bool Ui::onFire() const { return s_->onFire; }
 float Ui::handFovRadians() const { return s_->fovDeathOrFluid(70.0f) * kPi / 180.0f; }  // Camera.calculateHudFov
 bool Ui::hudHidden() const { return s_->hudHidden; }
 bool Ui::inBed() const { return s_->screen == Screen::InBed; }

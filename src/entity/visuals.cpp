@@ -256,6 +256,7 @@ struct Visuals::Impl {
     bool crackDraw = false;
     int crackRects[2][10] = {{-2, -2, -2, -2, -2, -2, -2, -2, -2, -2}, {-2, -2, -2, -2, -2, -2, -2, -2, -2, -2}};
     void buildCracks(const PassContext& ctx);
+    void buildFlames(const double cam[3], float pt);
     double lastTime = 0;
     float partial = 0;
     int glintRect = -1;
@@ -1705,7 +1706,7 @@ void Visuals::Impl::update() {
         // Pose: crouching 5, swimming / crawling 3, gliding 1 (net.minecraft.world.entity.Pose).
         e.pose = p.pose == Player::Pose::Crouching ? 5 : p.pose == Player::Pose::Swimming ? 3 : p.pose == Player::Pose::FallFlying ? 1
                  : p.pose == Player::Pose::SpinAttack ? 4 : 0;
-        e.sharedFlags = u8(p.pose == Player::Pose::FallFlying ? 0x80 : 0);
+        e.sharedFlags = u8((p.pose == Player::Pose::FallFlying ? 0x80 : 0) | (ui && ui->onFire() ? 0x01 : 0));
         e.ticksFrozen = ui ? ui->ticksFrozen() : 0;
         e.inWater = p.inWater;
         e.bedFacing = -1;
@@ -1809,6 +1810,50 @@ void Visuals::Impl::update() {
 
 // ---------------------------------------------------------------------------------------------------------
 // World stage: held / worn items, item frames, paintings, dropped items
+
+// EntityRenderDispatcher.submit / FlameFeatureRenderer: a burning entity (shared flag 0) gets stacked fire_0 / fire_1
+// quads turned with the camera's yaw, 1.4 x its width, block light 15 (entityCutoutCull on the block atlas).
+void Visuals::Impl::buildFlames(const double cam[3], float pt) {
+    static int fire[2] = {-2, -2};
+    if (fire[0] == -2) fire[0] = models.texture("block/fire_0"), fire[1] = models.texture("block/fire_1");
+    if (fire[0] < 0 || fire[1] < 0 || !game) return;
+    const CameraState c = game->viewCamera();
+    const float sy = std::sin(c.yaw), cy = std::cos(c.yaw);
+    const float right[3] = {-cy, 0, -sy}, back[3] = {sy, 0, -cy};  // camera right and towards the camera, horizontal
+    auto flame = [&](const Entity& e) {
+        float w, h;
+        entityBox(e, w, h);
+        if (w <= 0 || h <= 0) return;
+        double p[3];
+        for (int a = 0; a < 3; ++a) p[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt;
+        const float s = w * 1.4f;
+        float hh = h / s, r = 0.5f, yo = 0, zo = 0.3f - float(int(hh)) * 0.02f;
+        const u32 first = u32(dyn.size());
+        for (int ss = 0; hh > 0.0f && dyn.size() < kMaxDynamic; ++ss) {
+            const ItemModels::Rect& t = models.rect(fire[ss % 2]);
+            float u0 = t.u0, u1 = t.u0 + t.du;
+            const float v0 = t.v0, v1 = t.v0 + t.dv;
+            if (ss / 2 % 2 == 0) std::swap(u0, u1);
+            const float corner[4][2] = {{-r, -yo}, {r, -yo}, {r, 1.4f - yo}, {-r, 1.4f - yo}};
+            const float uv[4][2] = {{u1, v1}, {u0, v1}, {u0, v0}, {u1, v0}};
+            MeshQuad q{};
+            for (int k = 0; k < 4; ++k) {
+                for (int a = 0; a < 3; ++a) q.pos[k][a] = (right[a] * corner[k][0] + back[a] * zo) * s;
+                q.pos[k][1] = corner[k][1] * s;
+                q.uv[k][0] = uv[k][0], q.uv[k][1] = uv[k][1];
+            }
+            q.normal = packNormal(0, 1, 0), q.color = 0xFFFFFFFF, q.tex = kTexItems, q.flags = kQuadNoShade;
+            dyn.push_back(q);
+            hh -= 0.45f, yo -= 0.45f, r *= 0.9f, zo -= 0.03f;
+        }
+        const u32 light = (lightAt(p[0], p[1] + h * 0.5, p[2]) & ~15u) | 15u | 512u;  // LightCoordsUtil.withBlock(light, 15)
+        worldLists.cut.add(xfTranslate(float(p[0] - cam[0]), float(p[1] - cam[1]), float(p[2] - cam[2])), first, u32(dyn.size()) - first,
+                           light, 0xFFFFFFFF, 1);
+    };
+    for (const auto& [id, e] : world.entities())
+        if (e.info && (e.sharedFlags & 0x01) && !(e.sharedFlags & 0x20)) flame(e);  // on fire, not invisible
+    if (avatarReady && game->cameraMode != 0 && (avatar.sharedFlags & 0x01)) flame(avatar);
+}
 
 void Visuals::Impl::buildWorld(const PassContext& ctx) {
     const double cam[3] = {ctx.camX, ctx.camY, ctx.camZ};
@@ -2138,6 +2183,7 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
             }
         }
     }
+    buildFlames(cam, pt);  // world lock held (lightAt)
 }
 
 // ---------------------------------------------------------------------------------------------------------
