@@ -1840,8 +1840,13 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         root = mul(root, translate(0, lift - 1.501f, 0));
         if (e.hurtTime > 0 || e.deathTime > 0) overlay |= 77;  // OverlayTexture red: 30 %
 
-        s.walkPos = (e.walkPos - e.walkSpeed * (1.0f - pt)) * e.walkScale;
-        s.walkSpeed = std::min(e.walkSpeedOld + (e.walkSpeed - e.walkSpeedOld) * pt, 1.0f);
+        // LivingEntityRenderer.extractRenderState: no walk animation for a passenger or a dead entity
+        if (e.vehicle < 0 && e.deathTime <= 0 && !e.dying) {
+            s.walkPos = (e.walkPos - e.walkSpeed * (1.0f - pt)) * e.walkScale;
+            s.walkSpeed = std::min(e.walkSpeedOld + (e.walkSpeed - e.walkSpeedOld) * pt, 1.0f);
+        } else {
+            s.walkPos = s.walkSpeed = 0;
+        }
         float rel = headYaw - bodyYaw;
         rel = std::fmod(rel, 360.0f);
         if (rel >= 180) rel -= 360;
@@ -1949,6 +1954,7 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         s.standPose = e.standPose;
         s.peek = e.peekO + (e.peek - e.peekO) * pt;
         s.skinParts = e.category == Category::Player ? e.skinParts : 0x7F;
+        s.spectator = e.category == Category::Player && world_.isSpectator && world_.isSpectator(e);
     } else {
         root = mul(root, rotY((180.0f - yaw) * kDeg));
         root = mul(root, scale(-1, -1, 1));

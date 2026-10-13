@@ -310,6 +310,9 @@ u64 animate(Anim kind, const AnimState& s, const Model& model, PartPose* poses) 
             if (!(s.skinParts & 8)) hidden |= 1ull << RightSleeve;
             if (!(s.skinParts & 16)) hidden |= 1ull << LeftPants;
             if (!(s.skinParts & 32)) hidden |= 1ull << RightPants;
+            if (s.spectator)  // PlayerModel.setupAnim: !isSpectator shows the body, arms and legs (their outer layers too)
+                for (int part : {Body, RightArm, LeftArm, RightLeg, LeftLeg, Jacket, RightSleeve, LeftSleeve, RightPants, LeftPants})
+                    hidden |= 1ull << part;
             break;
         case Anim::Quadruped:
             head(P, s);
