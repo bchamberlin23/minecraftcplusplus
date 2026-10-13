@@ -12,6 +12,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <random>
 
 class GameReports;
 class Renderer;
@@ -102,6 +103,12 @@ private:
     void buildWeather(const CameraState& cam, const Value* attr, float rain);
     void buildClouds(const CameraState& cam, const Value* attr);
     void buildBorder(const CameraState& cam);
+    float endFlashIntensity(i64 tick);
+    void endFlash(Frame& f);
+    i64 endFlashSeed_ = INT64_MIN, endFlashTick_ = INT64_MIN, endFlashSoundAt_ = INT64_MIN;
+    int endFlashOffset_ = 0, endFlashDuration_ = 1;
+    float endFlashAngle_[2] = {};
+    std::mt19937_64 endFlashRng_{0xE4DF1A54};
 
     Environment env_;
     Renderer* renderer_ = nullptr;
@@ -173,7 +180,7 @@ struct Sky::Frame {
         float pos[3];
         float uv[2];
         u32 color;  // 0xAABBGGRR
-        u32 layer;  // texture: 0 sun, 1..8 moon phases, 100 end sky, 0xFFFF none
+        u32 layer;  // texture: 0 sun, 1..8 moon phases, 9 end flash, 100 end sky, 0xFFFF none
         u32 pad;
     };
     std::vector<Vertex> fan;       // sunrise / sunset fan (alpha blended)

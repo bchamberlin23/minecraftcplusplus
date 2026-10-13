@@ -3,6 +3,7 @@
 #include "ui/item_props.h"
 
 #include "assets/assets.h"
+#include "audio/audio.h"
 #include "assets/game_reports.h"
 #include "assets/asset_source.h"
 #include "game/world_border.h"
@@ -261,7 +262,19 @@ bool Sky::init(Renderer& renderer, World& world, BlockRegistry& registry, const 
     static const char* const kPhases[8] = {"full_moon", "waning_gibbous",  "third_quarter", "waning_crescent",
                                            "new_moon",  "waxing_crescent", "first_quarter", "waxing_gibbous"};
     for (int i = 0; i < 8; ++i) ok &= loadImage(zip, env + "celestial/moon/" + kPhases[i] + ".png", images.celestial[i + 1]);
-    for (const Image& im : images.celestial) ok &= im.w == images.celestial[0].w && im.h == images.celestial[0].h;
+    ok &= loadImage(zip, env + "celestial/end_flash.png", images.celestial[9]);
+    // One texture array: every image scaled (nearest) to the largest (the end flash is 64 x 64, the sun 32 x 32).
+    int cw = 0, ch = 0;
+    for (const Image& im : images.celestial) cw = std::max(cw, im.w), ch = std::max(ch, im.h);
+    for (Image& im : images.celestial) {
+        if (!ok || (im.w == cw && im.h == ch) || im.w <= 0 || im.h <= 0) continue;
+        Image out;
+        out.w = cw, out.h = ch, out.rgba.resize(size_t(cw) * ch * 4);
+        for (int y = 0; y < ch; ++y)
+            for (int x = 0; x < cw; ++x)
+                std::memcpy(&out.rgba[(size_t(y) * cw + x) * 4], &im.rgba[(size_t(y * im.h / ch) * im.w + x * im.w / cw) * 4], 4);
+        im = std::move(out);
+    }
     ok &= loadImage(zip, env + "end_sky.png", images.endSky) && loadImage(zip, env + "rain.png", images.rain) &&
           loadImage(zip, env + "snow.png", images.snow) &&
           loadImage(zip, "assets/minecraft/textures/misc/forcefield.png", images.forcefield);
@@ -833,7 +846,8 @@ void Sky::buildCelestial(const Value* a, float rain, bool) {
     Frame& f = *frame_;
     f.fan.clear(), f.additive.clear(), f.endSky.clear();
     f.starBrightness = 0;
-    if (f.skybox == Skybox::End) {  // SkyRenderer.buildEndSky
+    if (f.skybox == Skybox::End) {  // SkyRenderer.buildEndSky, then renderEndFlash
+        endFlash(f);
         for (int i = 0; i < 6; ++i) {
             Mat3 pose;
             if (i == 1) pose = rotX(kPi / 2);
@@ -901,6 +915,60 @@ void Sky::buildCelestial(const Value* a, float rain, bool) {
     f.starBrightness = a[int(Attr::StarBrightness)][0];
     const Mat3 stars = mul(tilt, mul(rotY(-kPi / 2), rotX(starAngle)));
     std::copy(stars.m, stars.m + 9, f.starRot);
+}
+
+// EndFlashState: one flash per 600 ticks of the dimension's clock, at a seeded offset, duration and direction.
+float Sky::endFlashIntensity(i64 tick) {
+    const i64 seed = tick / 600;
+    if (seed != endFlashSeed_) {  // calculateFlashParameters
+        wg::LegacyRandom r(seed);
+        r.nextFloat();
+        endFlashOffset_ = r.nextIntBetweenInclusive(0, 200);
+        endFlashDuration_ = r.nextIntBetweenInclusive(100, std::min(380, 600 - endFlashOffset_));
+        endFlashAngle_[0] = r.nextFloat() * 70.0f - 60.0f;    // xAngle in [-60, 10)
+        endFlashAngle_[1] = r.nextFloat() * 360.0f - 180.0f;  // yAngle in [-180, 180)
+        endFlashSeed_ = seed;
+    }
+    const i64 within = tick % 600;
+    return within >= endFlashOffset_ && within <= endFlashOffset_ + endFlashDuration_
+               ? std::sin(float(within - endFlashOffset_) * kPi / float(endFlashDuration_))
+               : 0.0f;
+}
+
+void Sky::endFlash(Frame& f) {
+    auto it = dimension_ ? clocks_.find(dimension_->clock) : clocks_.end();
+    const double clock = it != clocks_.end() ? it->second : 0.0;  // getDefaultClockTime: 0 without a clock
+    const i64 tick = i64(std::floor(clock));
+    const float pt = float(clock - double(tick));
+    // ClientLevel.tick: the flash sound (weather.end_flash) 30 ticks after a flash starts, from its direction.
+    if (endFlashTick_ != INT64_MIN && tick > endFlashTick_ && tick - endFlashTick_ < 40)
+        for (i64 t = endFlashTick_ + 1; t <= tick; ++t)
+            if (endFlashIntensity(t) > 0.0f && endFlashIntensity(t - 1) <= 0.0f) endFlashSoundAt_ = t + 30;
+    endFlashTick_ = tick;
+    const float old = endFlashIntensity(tick - 1), now = endFlashIntensity(tick);
+    const float xAngle = endFlashAngle_[0], yAngle = endFlashAngle_[1];
+    if (endFlashSoundAt_ != INT64_MIN && tick >= endFlashSoundAt_) {
+        endFlashSoundAt_ = INT64_MIN;
+        if (audio::AudioSystem* a = audio::instance(); a && a->ready()) {  // DirectionalSoundInstance: 10 blocks out
+            const float xr = xAngle * kPi / 180.0f, yr = -yAngle * kPi / 180.0f;
+            const double dir[3] = {std::sin(yr) * std::cos(xr) * 10.0, -std::sin(xr) * 10.0, std::cos(yr) * std::cos(xr) * 10.0};
+            a->play(a->eventId("minecraft:weather.end_flash"), audio::Category::Weather, dir, 1.0f, 1.0f, i64(endFlashRng_()), false, true);
+        }
+    }
+    const float intensity = old + (now - old) * pt;
+    if (intensity <= 1e-5f) return;
+    // renderEndFlash: Y by 180 - yAngle, X by -90 - xAngle, a 60-wide quad at height 100, coloured by the intensity.
+    const Mat3 m = mul(rotY((180.0f - yAngle) * kPi / 180.0f), rotX((-90.0f - xAngle) * kPi / 180.0f));
+    const float c[4][2] = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}}, uv[4][2] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+    const u32 color = packColor(intensity, intensity, intensity, intensity);
+    Frame::Vertex q[4];
+    for (int k = 0; k < 4; ++k) {
+        const float in[3] = {c[k][0] * 60.0f, 100.0f, c[k][1] * 60.0f};
+        float p[3];
+        m.apply(in, p);
+        q[k] = vertex(p, uv[k][0], uv[k][1], color, 9);
+    }
+    for (int k : {0, 1, 2, 2, 3, 0}) f.additive.push_back(q[k]);
 }
 
 void Sky::setOptions(const Options& o) {

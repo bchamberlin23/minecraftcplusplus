@@ -11,7 +11,7 @@ struct Image {
     std::vector<u8> rgba;
 };
 struct SkyImages {
-    Image celestial[9];  // sun, then the 8 moon phases (MoonPhase order); all the same size
+    Image celestial[10];  // sun, the 8 moon phases (MoonPhase order), the end flash; all the same size
     Image endSky, rain, snow, forcefield;
 };
 
@@ -50,7 +50,7 @@ private:
     ComPtr<ID3D12RootSignature> root_;
     ComPtr<ID3D12PipelineState> psoSky_, psoDarkDisc_, psoBlend_, psoAdd_, psoClouds_, psoWeather_, psoBorder_;
     ComPtr<ID3D12Resource> celestial_, endSky_, rain_, snow_, forcefield_, stars_, ring_, cloudFaces_, cloudStaging_;
-    ComPtr<ID3D12Resource> celestial2d_[9];        // shader packs: sun / moon phases as single textures
+    ComPtr<ID3D12Resource> celestial2d_[10];        // shader packs: sun / moon phases as single textures
     std::vector<Sky::Frame::Vertex> starsCpu_;
     ComPtr<ID3D12QueryHeap> queries_;
     ComPtr<ID3D12Resource> queryReadback_;

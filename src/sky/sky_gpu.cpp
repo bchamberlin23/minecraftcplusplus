@@ -102,11 +102,11 @@ bool SkyGpu::init(Renderer& renderer, SkyImages images, std::vector<Sky::Frame::
     ID3D12Device* device = renderer.device();
     descriptors_ = renderer.allocDescriptors(5);
     if (descriptors_ == UINT32_MAX) return ok(E_OUTOFMEMORY, "descriptor allocation");
-    for (u32 i = 0; i < 9; ++i) {  // shader packs bind single textures (the srv slot is overwritten below)
+    for (u32 i = 0; i < 10; ++i) {  // shader packs bind single textures (the srv slot is overwritten below)
         if (!createTexture(&images.celestial[i], 1, descriptors_, celestial2d_[i])) return false;
     }
     starsCpu_ = stars;
-    if (!createTexture(images.celestial, 9, descriptors_, celestial_) ||
+    if (!createTexture(images.celestial, 10, descriptors_, celestial_) ||
         !createTexture(&images.endSky, 1, descriptors_ + 1, endSky_) ||
         !createTexture(&images.rain, 1, descriptors_ + 2, rain_) || !createTexture(&images.snow, 1, descriptors_ + 3, snow_) ||
         !createTexture(&images.forcefield, 1, descriptors_ + 4, forcefield_))
@@ -310,6 +310,7 @@ void SkyGpu::drawSky(const PassContext& ctx) {
         }
     } else if (f.skybox == Skybox::End) {
         draw(psoBlend_.Get(), f.endSky, 0);
+        draw(psoAdd_.Get(), f.additive, 0);  // the end flash
     }
     list->EndQuery(queries_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, ctx.frame * 4 + 1);
 }
