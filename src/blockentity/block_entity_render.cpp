@@ -559,7 +559,10 @@ void BlockEntityRenderer::build(const PassContext& ctx) {
         float shadowMat[4][16];
         float endSky[4], endPortal[4];  // atlas rects
         float fogRender[4];             // the render distance fog: start, end
+        float outline[4];               // camera entity - camera (sign outlines' distance), w = 1: always shown
     } k{};
+    k.outline[0] = float(outlineFrom_[0] - ctx.camX), k.outline[1] = float(outlineFrom_[1] - ctx.camY);
+    k.outline[2] = float(outlineFrom_[2] - ctx.camZ), k.outline[3] = outlineAlways_ ? 1.0f : 0.0f;
     static_assert(sizeof(Constants) <= kConstBytes);
     std::memcpy(k.lightmap, ctx.lightmap, sizeof(k.lightmap));
     std::memcpy(k.viewProj, ctx.viewProj, sizeof(k.viewProj));

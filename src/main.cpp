@@ -1398,6 +1398,13 @@ int wmain(int argc, wchar_t** argv) {
         sky.update(cam, dt);
         entities.piglinsZombify = sky.piglinsZombify();
         blockEntityRenderer.setView(std::min(ui.settings().renderDistance, opt.detail), game.scoping());
+        {
+            const Player& pl = game.player();
+            const double t = game.partialTick();
+            const double feet[3] = {pl.prev[0] + (pl.pos[0] - pl.prev[0]) * t, pl.prev[1] + (pl.pos[1] - pl.prev[1]) * t,
+                                    pl.prev[2] + (pl.pos[2] - pl.prev[2]) * t};
+            blockEntityRenderer.setOutlineView(feet, game.scoping() && game.cameraMode == 0);
+        }
         ui.setSkyLight(sky.skyDarken(), session ? session->dimension().ambientLight : 0.0f);
         ui.endFrame();
         if (haveReports) packs::updatePlayer(renderer, ui, game.selectedSlot(), reports, registry);  // held light

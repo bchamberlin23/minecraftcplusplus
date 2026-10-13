@@ -81,6 +81,11 @@ public:
     // Each frame: the effective render distance (chunks: beacon beams are seen that far, BeaconRenderer.getViewDistance)
     // and whether the player looks through a spyglass (the beam keeps its width, BeaconRenderer.submit).
     void setView(int renderChunks, bool scoping) { renderChunks_ = renderChunks, scoping_ = scoping; }
+    // AbstractSignRenderer.isOutlineVisible: glowing text outlines within 16 blocks of the camera entity's position
+    // (its feet, world space), or always while scoping in first person.
+    void setOutlineView(const double cameraEntity[3], bool firstPersonScoping) {
+        std::copy(cameraEntity, cameraEntity + 3, outlineFrom_), outlineAlways_ = firstPersonScoping;
+    }
     // Network: block entity data, chunk block entity lists and block events (before Client::start).
     void attach(net::Client& client);
     // Block events received so far, and the end of piston moves (main thread, before the session applies the block
@@ -286,6 +291,8 @@ private:
     std::unordered_map<u64, bool> columns_;  // column -> far (beyond the 64 blocks: only beacons / gateways tracked)
     int renderChunks_ = 12, trackedFar_ = 0;
     bool scoping_ = false;
+    double outlineFrom_[3] = {};
+    bool outlineAlways_ = false;
     std::unordered_map<u64, std::vector<u64>> columnSections_;  // column -> section keys
     std::unordered_map<u64, Section> sections_;
     int centerCx_ = INT32_MIN, centerCz_ = INT32_MIN;

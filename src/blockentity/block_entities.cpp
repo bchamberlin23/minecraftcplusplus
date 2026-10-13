@@ -1993,6 +1993,10 @@ void BlockEntityRenderer::emitInstance(Emit& e, const Instance& in, const Data* 
                             q.color = forceColor ? ui::argbToAbgr(color) : c[0]->color;
                             q.light = ql;
                             q.tex = c[0]->mode == ui::ModeSolid ? kTexSolid : kTexFont;
+                            if (ql & 1024u) {  // the outline's distance test is from the sign block's centre
+                                const float centre[3] = {0.5f, 0.5f, 0.5f};
+                                xform(base, centre, q.pivot);
+                            }
                             e.out[1]->push_back(q);
                         }
                     };

@@ -17,6 +17,7 @@ cbuffer Frame : register(b0) {
     float4 gEndSky;          // atlas rects (u0, v0, du, dv) of environment/end_sky and entity/end_portal/end_portal
     float4 gEndPortal;
     float4 gFogRender;       // the render distance fog (cylindrical): x = start, y = end
+    float4 gOutline;         // camera entity - camera (sign outlines: within 16 blocks of it), w = 1: always shown
 };
 #include "fog.hlsli"
 #include "lightmap.hlsli"
@@ -135,9 +136,9 @@ VSOut BlockEntityVS(uint vid : SV_VertexID) {
     VSOut o;
     o.pos = mul(gViewProj, float4(rel, 1));
     o.prevClip = mul(gPrevViewProj, float4(prevRel, 1));
-    if (q.light & 1024) {  // glow ink outline: only within 16 blocks (decided per quad: all corners agree)
-        float3 c = q.pos[0] + origin;
-        if (dot(c, c) > 256.0) o.pos = float4(0, 0, 0, 1);  // degenerate: not rasterized
+    if (q.light & 1024) {  // glow ink outline: the sign's centre (pivot) within 16 blocks of the camera entity
+        float3 c = q.pivot + origin - gOutline.xyz;
+        if (gOutline.w < 0.5 && dot(c, c) >= 256.0) o.pos = float4(0, 0, 0, 1);  // degenerate: not rasterized
     }
     o.uv = q.uv[corner];
     o.tex = q.tex;
