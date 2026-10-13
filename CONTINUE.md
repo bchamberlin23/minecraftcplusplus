@@ -128,7 +128,8 @@ listening socket).
 - **One instance at a time:** take the lock with `mkdir %TEMP%\mcpp-game.lock` and remove it after.
 - **Headless test runs:** use `--script` / `MCPP_HEADLESS=1` with `--shaders off` and a scratch `--saves-dir`.
 - **Never write to the real `%APPDATA%\.minecraft`.**
-- **Local data:** back up and restore `%LOCALAPPDATA%\minecraftCplusplus\options.txt` and `audio_settings.txt`
+- **Local data:** back up and restore `%LOCALAPPDATA%\minecraftCplusplus\options.txt`, `audio_settings.txt` and
+  `command_history.txt` (scripted `/commands` are persisted there; delete it after a run if it did not exist before)
   around runs. Never touch its `friends\` folder.
 - **No perf numbers** while other game instances run.
 - **Processes:** only kill PIDs you started.
