@@ -205,6 +205,10 @@ EntityWorld::EntityWorld(EntityAssets& assets, World& world, BlockRegistry& regi
         d.cloudWaiting = id({"DATA_WAITING"});
         d.cloudParticle = id({"DATA_PARTICLE"});
         d.commandName = id({"DATA_ID_COMMAND_NAME"});
+        d.displayBlock = id({"DATA_ID_CUSTOM_DISPLAY_BLOCK"});
+        d.displayOffset = id({"DATA_ID_DISPLAY_OFFSET"});
+        d.fuel = id({"DATA_ID_FUEL"});
+        d.fuse = id({"DATA_FUSE_ID"});
         d.lastOutput = id({"DATA_ID_LAST_OUTPUT"});
         d.attackTarget = id({"DATA_ID_ATTACK_TARGET"});
         d.profile = id({"DATA_PROFILE"});
@@ -1096,6 +1100,7 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
         case EventType::EntityEvent:
             if (ev.a == 3 && e.category == Category::Living) e.dying = true;  // death
             if (ev.a == 2 && (e.kineticHitTicks < 0 || e.kineticHitTicks > 10)) e.kineticHitTicks = 0;  // KINETIC_HIT
+            if (ev.a == 70 && e.info && e.info->name == "minecraft:tnt_minecart") e.fuse = 80;  // MinecartTNT.primeFuse
             speciesEvent(e, ev.a);
             if (onEntityEvent) onEntityEvent(e, ev.a);
             break;
@@ -1204,6 +1209,10 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
         else if (idx == d.paddleLeft && v.serializer == 8) { if (e.id != localControl_) e.paddle[0] = v.i != 0; }
         else if (idx == d.paddleRight && v.serializer == 8) { if (e.id != localControl_) e.paddle[1] = v.i != 0; }
         else if (idx == d.chest && v.serializer == 8) e.hasChest = v.i != 0;
+        else if (idx == d.displayBlock && v.serializer == 15) e.displayBlock = int(v.i);
+        else if (idx == d.displayOffset && v.serializer == 1) e.displayOffset = int(v.i);
+        else if (idx == d.fuel && v.serializer == 8) e.furnaceFuel = v.i != 0;
+        else if (idx == d.fuse && v.serializer == 1) e.fuse = int(v.i);
         else if (idx == d.color) e.dyeColor = int(v.i);
         else if (idx == d.attachFace) e.attachFace = int(v.i);
         else if (idx == d.peek) e.peekRaw = int(v.i);
@@ -1387,6 +1396,7 @@ void EntityWorld::tickEntity(Entity& e) {
         return;
     }
     ++e.age;
+    if (e.fuse > 0 && e.info && (e.info->name == "minecraft:tnt" || e.info->name == "minecraft:tnt_minecart")) --e.fuse;  // PrimedTnt / MinecartTNT.tick
     if (e.attackTarget != 0 && e.attackTime < (e.info && e.info->name == "minecraft:elder_guardian" ? 60 : 80))
         ++e.attackTime;  // Guardian.aiStep (client): clientSideAttackTime up to getAttackDuration
     if (e.display.is) {  // Display.tick (client side)

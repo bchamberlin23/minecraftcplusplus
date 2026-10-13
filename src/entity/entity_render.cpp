@@ -49,6 +49,7 @@ enum LayerFlags : u16 {
     NoOverlay = 512,  // OverlayTexture.NO_OVERLAY (no hurt tint)
     SpinFx = 1024,    // the riptide swirl (SpinAttackEffectLayer)
     Cape = 2048,      // CapeLayer (PlayerCapeModel): posed like the base model, the cape swinging
+    DisplayBlock = 4096,  // a minecart's display block drawn as a model (the chest): under the display transform
 };
 enum Special : u8 {
     SpNone, SpCow, SpPig, SpChicken, SpSheep, SpWolf, SpCat, SpHorse, SpLlama, SpRabbit, SpParrot, SpFox, SpAxolotl,
@@ -395,6 +396,7 @@ void EntityRenderer::buildDefs() {
     elytraModel_ = M("elytra#main"), elytraBabyModel_ = M("elytra_baby#main");
     spinModel_ = M("spin_attack#main"), spinTex_ = T("trident/trident_riptide");
     capeModel_ = M("player#cape");
+    chestModel_ = M("chest#main"), chestTex_ = T("chest/normal");
     u32 boxes = 0;
     std::string names;
     for (size_t i = 0; i < defs_.size(); ++i)
@@ -1524,6 +1526,7 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         root = mul(root, rotZ(-pitch * kDeg));
         const float hurt = float(e.vehicleHurt) - pt;
         if (hurt > 0) root = mul(root, rotX(std::sin(hurt) * hurt * std::max(e.vehicleDamage - pt, 0.0f) / 10.0f * float(e.vehicleHurtDir) * kDeg));
+        minecartContents(e, pt, *reinterpret_cast<const Mat34*>(&root), light, layers, layerCount);
         root = mul(root, scale(-1, -1, 1));
     } else if (d.special == SpCushion) {  // CushionRenderer.submit: facing the yaw's direction, upside down
         const float facing = std::floor(yaw / 90.0f + 0.5f) * 90.0f;  // Direction.fromYRot(...).toYRot()
@@ -1814,7 +1817,7 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         hidden_.assign(parts, 0);
         for (size_t i = 0; i < parts; ++i) poses_[i] = m.parts[i].pose;
         u64 hiddenRoles = 0;
-        M34 layerRoot = root;
+        M34 layerRoot = (L.flags & DisplayBlock) ? *reinterpret_cast<const M34*>(&displayRoot_) : root;
         if (d.special == SpBoat) {  // BoatModel / RaftModel.animatePaddle from AbstractBoat.getRowingTime
             for (size_t i = 0; i < parts; ++i) {
                 const bool left = m.parts[i].name == "left_paddle";
@@ -2497,6 +2500,63 @@ void EntityRenderer::emitBlock(u16 block, const Mat34& mm, u32 light, u32 overla
     }
 }
 
+// TntRenderer.getSwellAmount / isLit (fuse: ticks left, partial).
+float EntityRenderer::tntSwell(float fuse) {
+    float g = std::clamp(1.0f - fuse / 10.0f, 0.0f, 1.0f);
+    g *= g, g *= g;
+    return g * 0.3f;
+}
+bool EntityRenderer::tntLit(float fuse) { return fuse >= 0 && int(fuse / 5.0f) % 2 == 0; }
+
+// AbstractMinecartRenderer.submit: the display block (the type's own or DATA_ID_CUSTOM_DISPLAY_BLOCK) at 0.75 scale,
+// raised by the display offset; root: the cart's pose before the model's flip. A chest goes in as a model layer.
+void EntityRenderer::minecartContents(const Entity& e, float pt, const Mat34& rootIn, u32 light, Layer* layers, int& layerCount) {
+    const M34& root = *reinterpret_cast<const M34*>(&rootIn);
+    BlockRegistry& reg = world_.registry();
+    const std::string& type = e.info ? e.info->name : std::string();
+    std::string state;
+    int offset = 6;  // AbstractMinecart.getDefaultDisplayOffset
+    if (type == "minecraft:chest_minecart") state = "minecraft:chest[facing=north]", offset = 8;
+    else if (type == "minecraft:furnace_minecart") state = e.furnaceFuel ? "minecraft:furnace[facing=north,lit=true]" : "minecraft:furnace[facing=north,lit=false]";
+    else if (type == "minecraft:tnt_minecart") state = "minecraft:tnt";
+    else if (type == "minecraft:hopper_minecart") state = "minecraft:hopper", offset = 1;
+    else if (type == "minecraft:spawner_minecart") state = "minecraft:spawner";
+    else if (type == "minecraft:command_block_minecart") state = "minecraft:command_block";
+    u16 block = 0;
+    if (e.displayBlock > 0) block = world_.localBlock(e.displayBlock);
+    else if (!state.empty()) {
+        auto it = displayStates_.find(state);
+        if (it == displayStates_.end()) it = displayStates_.emplace(state, reg.idFor(world_.reports().complete(state))).first;
+        block = it->second;
+    }
+    if (e.displayOffset != INT_MIN) offset = e.displayOffset;
+    if (!block) return;
+    M34 m = mul(root, scale(0.75f, 0.75f, 0.75f));
+    m = mul(m, translate(-0.5f, float(offset - 8) / 16.0f, 0.5f));
+    m = mul(m, rotY(90.0f * kDeg));
+    u32 overlay = 0;
+    if (type == "minecraft:tnt_minecart" && e.displayBlock <= 0) {  // TntMinecartRenderer.submitMinecartContents
+        const float fuse = e.fuse > -1 ? float(e.fuse) - pt + 1.0f : -1.0f;
+        if (fuse > -1 && fuse < 10) {
+            const float swell = tntSwell(fuse);
+            m = mul(mul(m, translate(-swell * 0.5f, 0, -swell * 0.5f)), scale(1 + swell, 1 + swell, 1 + swell));
+        }
+        if (tntLit(fuse)) overlay = 191u << 8;
+    }
+    const std::string& name = reg.name(block);
+    const bool chest = name.starts_with("minecraft:chest") || name.starts_with("minecraft:trapped_chest");
+    if (chest && chestModel_ >= 0 && chestTex_ >= 0 && layerCount < 16) {  // ChestRenderer's model, facing as the state
+        const std::string_view facing = reg.property(block, "facing");
+        const float yRot = facing == "south" ? 0.0f : facing == "west" ? 90.0f : facing == "east" ? 270.0f : 180.0f;
+        m = mul(m, translate(0.5f, 0, 0.5f));
+        m = mul(mul(m, rotY(-yRot * kDeg)), translate(-0.5f, 0, -0.5f));
+        displayRoot_ = *reinterpret_cast<const Mat34*>(&m);
+        layers[layerCount++] = {chestModel_, chestTex_, kWhite, u16(DisplayBlock | NoOverlay)};
+        return;
+    }
+    emitBlock(block, *reinterpret_cast<const Mat34*>(&m), light, overlay);
+}
+
 void EntityRenderer::freeEntity(const Entity& e, const TypeDef& d, float pt, const double cam[3], u32 light,
                                 const float* camRight) {
     double p[3];
@@ -2515,7 +2575,13 @@ void EntityRenderer::freeEntity(const Entity& e, const TypeDef& d, float pt, con
         const u16 block = !d.block.empty() ? d.blockId : world_.localBlock(e.blockState);
         if (!block) return;
         M34 m = translate(float(p[0]) - 0.5f, float(p[1]), float(p[2]) - 0.5f);
-        emitBlock(block, *reinterpret_cast<const Mat34*>(&m), light, 0);
+        u32 overlay = 0;
+        if (!d.block.empty()) {  // TntRenderer: swells over its last 10 ticks, flashes white every 5
+            const float fuse = float(e.fuse) - pt + 1.0f, s = 1.0f + tntSwell(fuse);
+            m = mul(mul(translate(float(p[0]), float(p[1]) + 0.5f, float(p[2])), scale(s, s, s)), translate(-0.5f, -0.5f, -0.5f));
+            if (tntLit(fuse)) overlay = 191u << 8;  // OverlayTexture.u(1): 75% white
+        }
+        emitBlock(block, *reinterpret_cast<const Mat34*>(&m), light, overlay);
         return;
     }
     if (d.kind == Kind::Sprite) {

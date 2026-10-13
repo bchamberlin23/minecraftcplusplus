@@ -153,6 +153,11 @@ private:
     int model(const char* layer) const;  // model layer ("creeper#armor"), cached by literal
     void freeEntity(const Entity& e, const TypeDef& d, float pt, const double cam[3], u32 light, const float* camRight);
     void emitBlock(u16 block, const Mat34& m, u32 light, u32 overlay);
+    void minecartContents(const Entity& e, float pt, const Mat34& root, u32 light, Layer* layers, int& layerCount);
+    static float tntSwell(float fuse);
+    static bool tntLit(float fuse);
+    Mat34 displayRoot_{};                                    // the DisplayBlock layer's root (minecartContents)
+    std::unordered_map<std::string, u16> displayStates_;     // minecart display block states by key
     void emitFree(const float pos[4][3], const float uv[4][2], const float n[3], u32 tex, u32 color, u32 light,
                   u32 overlay);
     void build(const PassContext& ctx);   // CPU: cull, pose, upload (draw or prepare)
@@ -236,6 +241,7 @@ private:
     int elytraModel_ = -1, elytraBabyModel_ = -1;
     int spinModel_ = -1, spinTex_ = -1;  // SpinAttackEffectLayer (riptide)
     int capeModel_ = -1;                 // CapeLayer
+    int chestModel_ = -1, chestTex_ = -1;  // chest minecarts: the chest's special block model
 
     // Shader packs (PassContext::pack): vanilla-style vertices per entity for the pack's gbuffers_entities programs.
     PackSink* pack_ = nullptr;
