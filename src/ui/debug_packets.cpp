@@ -15,8 +15,12 @@
 #include "ui/modules.h"
 #include "ui/toasts.h"
 #include "world/nbt.h"
+#include "world/nbt_dom.h"
+#include "world/world.h"
 
 #include <algorithm>
+#include <array>
+#include <shared_mutex>
 #include <charconv>
 #include <cmath>
 #include <functional>
@@ -227,9 +231,41 @@ void query(UiState& s, const char* packet, const net::Writer& body, std::functio
 
 // --- GameTest highlights --------------------------------------------------------------------------------------------
 
+// TestInstanceBlockEntity.getErrorMarkers: the errors of the test instance blocks around (their "errors" data).
+std::vector<std::pair<std::array<int, 3>, Text>> testErrors(UiState& s, const CameraState& cam) {
+    std::vector<std::pair<std::array<int, 3>, Text>> out;
+    if (!s.world || !s.registry) return out;
+    const int ccx = int(std::floor(cam.x)) >> 4, ccz = int(std::floor(cam.z)) >> 4;
+    std::shared_lock lock(s.world->mutex());
+    for (int cz = ccz - 6; cz <= ccz + 6; ++cz)
+        for (int cx = ccx - 6; cx <= ccx + 6; ++cx) {
+            const auto* list = s.world->blockEntities(cx, cz);
+            if (!list) continue;
+            for (const World::BlockEntityNbt& be : *list) {
+                if (!s.registry->name(s.world->block(be.x, be.y, be.z)).starts_with("minecraft:test_instance_block")) continue;
+                NbtValue nbt;
+                if (!nbtReadNetwork(reinterpret_cast<const u8*>(be.nbt.data()), be.nbt.size(), nbt)) continue;
+                NbtValue* errors = nbt.find("errors");
+                if (!errors || errors->type != TagList) continue;
+                for (NbtValue& e : errors->items) {
+                    const NbtValue* pos = e.find("pos");
+                    NbtValue* text = e.find("text");
+                    if (!pos || pos->type != TagIntArray || pos->ints.size() != 3 || !text) continue;
+                    std::vector<u8> raw;
+                    nbtWriteNetwork(*text, raw);
+                    out.push_back({{pos->ints[0], pos->ints[1], pos->ints[2]},
+                                   parseComponent(std::string_view(reinterpret_cast<const char*>(raw.data()), raw.size()), s.lang())});
+                }
+            }
+        }
+    return out;
+}
+
 void drawMarkers(UiState& s, Canvas& c) {
     std::erase_if(g.markers, [&](const auto& m) { return s.clock > m.second.until; });
-    if (g.markers.empty() || !s.game) return;
+    if (!s.game) return;
+    const std::vector<std::pair<std::array<int, 3>, Text>> errors = testErrors(s, s.game->viewCamera());
+    if (g.markers.empty() && errors.empty()) return;
     const CameraState cam = s.game->viewCamera();
     const float cp = std::cos(cam.pitch), sp = std::sin(cam.pitch), cy = std::cos(cam.yaw), sy = std::sin(cam.yaw);
     float fwd[3] = {-sy * cp, -sp, cy * cp}, right[3] = {-cy, 0, -sy}, up[3] = {-sy * sp, cp, cy * sp};
@@ -251,8 +287,7 @@ void drawMarkers(UiState& s, Canvas& c) {
     };
     static const int kFaces[6][4] = {{0, 1, 3, 2}, {4, 6, 7, 5}, {0, 4, 5, 1}, {2, 3, 7, 6}, {0, 2, 6, 4}, {1, 5, 7, 3}};
     const float uv[4][2] = {};
-    for (const auto& [pos, m] : g.markers) {
-        const auto [bx, by, bz] = pos;
+    auto box = [&](int bx, int by, int bz, u32 color, const Text& text) {
         float corners[8][2];
         bool visible = true;
         for (int k = 0; k < 8 && visible; ++k)  // the block grown by PADDING 0.02
@@ -262,14 +297,17 @@ void drawMarkers(UiState& s, Canvas& c) {
             for (const auto& f : kFaces) {
                 const float xy[4][2] = {{corners[f[0]][0], corners[f[0]][1]}, {corners[f[1]][0], corners[f[1]][1]},
                                         {corners[f[2]][0], corners[f[2]][1]}, {corners[f[3]][0], corners[f[3]][1]}};
-                c.quad4(xy, uv, 0x6000FF00, ModeSolid);  // Marker colour 1610678016
+                c.quad4(xy, uv, color, ModeSolid);
             }
         float at[2];
-        if (!m.text.empty() && project(bx + 0.5, by + 1.2, bz + 0.5, at)) {  // billboard text, scale 0.16, on top
-            const Text text(m.text);
+        if (!text.empty() && project(bx + 0.5, by + 1.2, bz + 0.5, at))  // billboard text, scale 0.16, on top
             s.drawText(c, text, at[0] - float(s.font.width(text)) / 2, at[1] - 4, 0xFFFFFFFF, false);
-        }
+    };
+    for (const auto& [pos, m] : g.markers) {
+        const auto [bx, by, bz] = pos;
+        box(bx, by, bz, 0x6000FF00, Text(m.text));  // Marker colour 1610678016
     }
+    for (const auto& [pos, text] : errors) box(pos[0], pos[1], pos[2], 0x5FFF0000, text);  // TestInstanceRenderer: 0.375 red
 }
 
 // --- module ---------------------------------------------------------------------------------------------------------

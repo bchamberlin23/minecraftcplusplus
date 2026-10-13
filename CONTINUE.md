@@ -38,8 +38,8 @@ listening socket).
 ## Visuals / effects
 
 - **VIS-06 residual**: glowing outlines under a shader pack (entities go through the pack's gbuffers there).
-- Test instance blocks: the error markers (red boxes with their text) are not drawn; optional tests' failure beam is red,
-  not orange (the test registry is not sent to clients).
+- Test instance blocks: optional tests' failure beam is red, not orange (the test registry is not sent to clients);
+  the error markers and game test highlights are drawn in the UI layer (no depth test).
 
 ## Screens
 
