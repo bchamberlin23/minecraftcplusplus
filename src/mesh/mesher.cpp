@@ -466,7 +466,7 @@ void meshGrid(const u16* ids, const u8* light, const BlockRegistry& registry, bo
                             } else if (light && bc.emission) {
                                 sky = ((lq >> 4) * 16) * 0x01010101u;
                                 block = (std::max(lq & 15, u32(bc.emission)) * 16) * 0x01010101u;
-                            } else if (light && bc.layer != LayerTranslucent && smooth) {
+                            } else if (light && smooth && !bc.fluid && bc.modelAo) {
                                 // Smooth lighting: each corner averages the four cells in front of it (dark solid
                                 // cells take the centre's light) and darkens by the solid cells beside it; a corner
                                 // behind two solid sides counts as solid itself.

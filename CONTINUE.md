@@ -87,7 +87,7 @@ listening socket).
 - **Improved Transparency** (video option) is stored but not read; this engine's translucency path (OIT under the
   shader pipeline) is its own. The nausea overlay and vignette draw after the UI layer (they also tint the HUD).
 
-- **Block rendering audit, still open**: translucent cubes skip ambient occlusion; cube faces use this port's own
+- **Block rendering audit, still open**: cube faces use this port's own
   smooth lighting (equivalent to BlockModelLighter for full faces, without its light-permeability lookups two cells
   out); model smooth lighting clamps its lookups to the section's one-cell border. Fluids skip self-occlusion of waterlogged partial blocks (faces hidden inside them). Falling blocks / moving pistons
   draw a block's first variant without its offset.
