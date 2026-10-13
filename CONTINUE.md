@@ -20,7 +20,8 @@ bubble columns), terrain textures with shaders off (a min-LOD clamp bug), the 26
 menu / HUD / spectate click (PLAY-08), glowing entity outlines and capes (VIS-06), profile
 skins for players / mannequins / the player list (VIS-07, NET-17), the Social Interactions screen, trail / sulfur / geyser
 particles and the potent sulfur client effects (FX-05), command suggestions and colours in the command block
-editors, the spectated entities' post effects (FX-07), experimental minecart movement (NET-15). ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
+editors, the spectated entities' post effects (FX-07), experimental minecart movement (NET-15), name / id
+only profiles through Mojang's profile service and the skin patch's cape / elytra. ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
 switch (automated runs never change the display mode) and the LAN publish from World Options (it would open a
 listening socket).
 
@@ -35,8 +36,6 @@ listening socket).
 
 - **VIS-06 residual**: glowing outlines under a shader pack (entities go through the pack's gbuffers there) and of
   dropped items (drawn by the visuals pass).
-- **VIS-07 residual**: profiles given only by name or id (ResolvableProfile.Dynamic: the client resolves them
-  through Mojang's profile API) keep the default skin; the skin patch's cape / elytra textures are ignored.
 
 ## Screens
 
