@@ -626,7 +626,7 @@ void mouseBuild(UiState& s) {
                                       [p](float v) { p->settings.sensitivity = v; });
     // mouseWheelSensitivity: IntRange(-200, 100) through logMouse (10^(v / 100)), shown with two decimals.
     Button wheel = rangeSlider(
-        s, -200, 100, [p] { return int(std::lround(std::log10(p->settings.mouseWheelSensitivity) * 100.0)); },  // unlogMouse
+        s, -200, 100, [p] { return int(std::floor(std::log10(p->settings.mouseWheelSensitivity) * 100.0)); },  // unlogMouse
         [p](int v) { p->settings.mouseWheelSensitivity = std::pow(10.0, double(v) / 100.0); },             // logMouse
         [p] {
             char buf[16];
@@ -699,11 +699,13 @@ void keyBindsBuild(UiState& s) {
         change.labelFn = [p, i] {  // updateChangeButtonMessage
             Text key = p->keyLabel(p->settings.keys[i]);
             const bool collides = !collisions(*p, i).empty();
-            if (kb.selected == int(i)) {
+            if (kb.selected == int(i)) {  // "> " message (the collision's brackets too) in white, underlined, " <"
                 Style under = colorStyle(0xFFFFFF);
                 under.underlined = 1;
                 Text t("> ", colorStyle(0xFFFF55));
+                if (collides) t.append("[ ", under);
                 t.append(key.withStyle(under));
+                if (collides) t.append(" ]", under);
                 t.append(" <", colorStyle(0xFFFF55));
                 return t;
             }

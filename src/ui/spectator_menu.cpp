@@ -24,6 +24,7 @@ struct Item {
     Text teamName;                      // Team
     int teamColor = -1;
     std::vector<PlayerInfoView> members;  // Team (non-spectators), PlayerCategory (the players listed)
+    std::vector<Item> teams;              // TeamCategory: its teams, built with the root when the menu opens
 };
 struct Category {
     const char* prompt;
@@ -66,6 +67,8 @@ std::vector<PlayerInfoView> listedPlayers() {
     return v;
 }
 
+Category teamsCategory();
+
 Category rootCategory() {  // RootSpectatorMenuCategory: built when the menu opens
     Category c{"spectatorMenu.root.prompt", {}};
     Item players{Kind::PlayerCategory};
@@ -73,6 +76,7 @@ Category rootCategory() {  // RootSpectatorMenuCategory: built when the menu ope
     std::erase_if(players.members, [](const PlayerInfoView& p) { return p.gameMode == 3; });
     c.items.push_back(std::move(players));
     Item teams{Kind::TeamCategory};
+    teams.teams = teamsCategory().items;  // TeleportToTeamMenuCategory: its teams as the menu opens
     c.items.push_back(std::move(teams));
     return c;
 }
@@ -99,6 +103,7 @@ bool enabled(const Item& i) {
         case Kind::Empty:
         case Kind::ScrollRightDisabled: return false;
         case Kind::PlayerCategory: return !i.members.empty();
+        case Kind::TeamCategory: return !i.teams.empty();  // TeleportToTeamMenuCategory.isEnabled
         case Kind::Player: {  // the player's game mode now
             PlayerInfoView now;
             return findPlayerInfo(i.player.uuid, now) && now.gameMode != 3;
@@ -153,7 +158,7 @@ void use(UiState& s, const Item& i) {  // SpectatorMenuItem.selectItem
         case Kind::ScrollLeft: --g.page; break;
         case Kind::ScrollRight: ++g.page; break;
         case Kind::PlayerCategory: selectCategory(playersCategory(i.members)); break;
-        case Kind::TeamCategory: selectCategory(teamsCategory()); break;
+        case Kind::TeamCategory: selectCategory(Category{"spectatorMenu.team_teleport.prompt", i.teams}); break;
         case Kind::Team: selectCategory(playersCategory(i.members)); break;
         case Kind::Player:
             if (s.client && i.player.uuid.size() == 16) {  // ServerboundTeleportToEntityPacket
@@ -246,7 +251,7 @@ void drawHud(UiState& s, Canvas& c) {
             c.translate(x + 2, iy + 2);
             c.scaleBy(1.5f);
             blitTexture(c, skin, 0, 0, 8, 8, 8, 8, 64, 64, color);
-            if (p.showHat) blitTexture(c, skin, 0, 0, 40, 8, 8, 8, 64, 64, color);
+            blitTexture(c, skin, 0, 0, 40, 8, 8, 8, 64, 64, color);  // PlayerFaceExtractor: the hat layer always
             c.pop();
         };
         switch (i.kind) {
