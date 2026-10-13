@@ -237,7 +237,7 @@ void buildCredits(UiState& s) {
     button(top, "credits_and_attribution.button.credits", [sp] { openWinScreen(*sp, false); }, 210);
     button(top + 28, "credits_and_attribution.button.attribution", [sp] { confirmLink(*sp, "https://aka.ms/MinecraftJavaAttribution"); }, 210);
     button(top + 56, "credits_and_attribution.button.licenses", [sp] { confirmLink(*sp, "https://aka.ms/MinecraftJavaLicenses"); }, 210);
-    button(float(H - kFooterH + (kFooterH - 20) / 2), "gui.done", [sp] { sp->openScreen(Screen::Options); }, 200);
+    button(float(H - kFooterH + (kFooterH - 20) / 2), "gui.done", [sp] { sp->openScreen(sp->optionsParent); }, 200);
 }
 
 void drawCredits(UiState& s, Canvas& c) {
@@ -250,7 +250,7 @@ void drawCredits(UiState& s, Canvas& c) {
 }
 
 void inputCredits(UiState& s, const InputEvent& e) {
-    if (e.type == InputEvent::Key && e.down && e.code == VK_ESCAPE) return s.openScreen(Screen::Options);
+    if (e.type == InputEvent::Key && e.down && e.code == VK_ESCAPE) return s.openScreen(s.optionsParent);
     s.buttonsInput(e);
 }
 

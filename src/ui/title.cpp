@@ -2,6 +2,8 @@
 // switching instances (each world and the title screen are their own process, platform/launch.h).
 #include "ui/frontend.h"
 
+#include "audio/audio.h"
+
 #include <chrono>
 #include <cmath>
 #include <ctime>
@@ -376,10 +378,28 @@ void buildTitle(State& s) {
     const int y = H / 4 + 48;
     addButton(s, x, float(y), 200, tr(s, "menu.singleplayer"), [p] { openWorlds(*p); });
     addButton(s, x, float(y + 24), 200, tr(s, "menu.multiplayer"), [p] { openServers(*p); });
-    addButton(s, x, float(y + 48), 98, Text("Mods & Packs"), [p] { p->openScreen(Screen::Mods); });
-    addButton(s, float(W / 2 + 2), float(y + 48), 98, Text(), [p] { openFriendsScreen(*p); }).labelFn = friendsButtonLabel;
-    addButton(s, x, float(y + 84), 98, tr(s, "menu.options"), [p] { p->openScreen(Screen::Options); });
-    addButton(s, float(W / 2 + 2), float(y + 84), 98, tr(s, "menu.quit"), [p] { p->quit = true; });
+    // Realms (menu.online) needs a Microsoft account: its place opens the mods and packs instead.
+    addButton(s, x, float(y + 48), 200, Text("Mods & Packs"), [p] { p->openScreen(Screen::Mods); });
+    // CommonButtons.friends / language / accessibility: three icon buttons centred under them.
+    auto icon = [&](int i, const char* sprite, const char* key, const char* tooltip, std::function<void()> fn) -> Button& {
+        Button& b = addButton(s, float(W / 2 - (3 * 20 + 2 * 4) / 2 + i * 24), float(y + 72), 20, tr(s, key), std::move(fn));
+        b.icon = sprite, b.iconW = b.iconH = 15, b.iconOnly = true;
+        b.tooltip = [p, tooltip] { return Text(p->res.translate(tooltip)); };
+        return b;
+    };
+    icon(0, "friends/friends", "gui.friends.open", "gui.friends.open.tooltip", [p] { openFriendsScreen(*p); }).badge = [] {
+        return friendsPendingRequests();
+    };
+    icon(1, "icon/language", "options.language", "options.language.tooltip", [p] {
+        p->openScreen(Screen::Language);
+        p->optionsParent = Screen::Title;
+    });
+    icon(2, "icon/accessibility", "options.accessibility", "options.accessibility.tooltip", [p] {
+        p->openScreen(Screen::Accessibility);
+        p->optionsParent = Screen::Title;
+    });
+    addButton(s, x, float(y + 96), 98, tr(s, "menu.options"), [p] { p->openScreen(Screen::Options); });
+    addButton(s, float(W / 2 + 2), float(y + 96), 98, tr(s, "menu.quit"), [p] { p->quit = true; });
     s.fe->onBack = nullptr;
 }
 
@@ -402,6 +422,15 @@ void drawTitle(State& s, Canvas& c) {
         c.pop();
     }
     s.drawText(c, Text("Minecraft " + f.cfg.version + " (minecraftCplusplus)"), 2, float(H - 10), 0xFFFFFFFF, true);
+    // PlainTextButton: the copyright line, underlined while hovered, opens Credits and Attribution.
+    Text credits(s.res.translate("title.credits"));
+    const int cw = s.font.width(credits);
+    if (s.mouseX >= W - cw - 2 && s.mouseX < W - 2 && s.mouseY >= H - 10 && s.mouseY < H) {
+        Style underlined;
+        underlined.underlined = 1;
+        credits = credits.withStyle(underlined);
+    }
+    s.drawText(c, credits, float(W - cw - 2), float(H - 10), 0xFFFFFFFF, true);
     s.drawButtons(c);
 }
 
@@ -461,6 +490,15 @@ void Ui::State::frontEndInput(const Window::InputEvent& e) {
     if (screen == Screen::Servers) return serversInput(*this, e);
     if (screen == Screen::CreateWorld) return createWorldInput(*this, e);
     if (screen == Screen::EditWorld) return editWorldInput(*this, e);
+    if (screen == Screen::Title && e.type == E::Button && e.down && e.code == 0) {  // the credits line (PlainTextButton)
+        const int W = guiW(), H = guiH(), cw = font.width(Text(res.translate("title.credits")));
+        if (mouseX >= W - cw - 2 && mouseX < W - 2 && mouseY >= H - 10 && mouseY < H) {
+            audio::playUiClick();
+            openScreen(Screen::CreditsAttribution);
+            optionsParent = Screen::Title;
+            return;
+        }
+    }
     if (fieldsInput(*this, e)) return;
     buttonsInput(e);
 }

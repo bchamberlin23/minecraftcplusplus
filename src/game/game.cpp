@@ -186,7 +186,7 @@ void Game::frame(Window& w, double dt) {
     if (handleEscape && esc && !escWasDown_) w.setMouseCaptured(false);
     escWasDown_ = esc;
     for (int i = 0; i < 9; ++i)
-        if (presses(keys.hotbar[i])) selected_ = i;
+        if (presses(keys.hotbar[i]) && !(spectatorInput && spectatorInput(0, i))) selected_ = i;
     const PlayerInput input = inputSuspended ? PlayerInput{} : readInput(w);
     const Window::MouseEvents ev = w.takeMouseEvents();
     if (inputSuspended) pendingAttacks_ = 0;
@@ -292,7 +292,7 @@ void Game::handleClicks(Window& w, double dt, int rightPresses, int middlePresse
         scrollAccum_ += scroll;
         const int steps = int(scrollAccum_);
         scrollAccum_ -= steps;
-        selected_ = ((selected_ - steps) % 9 + 9) % 9;
+        if (steps && !(spectatorInput && spectatorInput(1, steps))) selected_ = ((selected_ - steps) % 9 + 9) % 9;
     }
     const bool rightHeld = toggleUse ? useToggled_ : held(w, keys.use);
     repeatTimer_ -= dt;
@@ -301,6 +301,7 @@ void Game::handleClicks(Window& w, double dt, int rightPresses, int middlePresse
     // Held: Minecraft.handleKeybinds repeats startUseItem every 4 ticks (rightClickDelay), not while an item is in use.
     const bool doPlace = (ev.right > 0 || (rightHeld && repeatTimer_ <= 0 && !use.active)) && !dig_.active && !handsBusy;
     if (doPlace) repeatTimer_ = ev.right > 0 ? 0.3 : 0.2;
+    if (ev.middle && spectatorInput && spectatorInput(2, 0)) ev.middle = 0;
     if (ev.middle && target_.hit) {
         if (onPickBlock) onPickBlock(target_.x, target_.y, target_.z);
         else hotbar_[selected_] = world_.block(target_.x, target_.y, target_.z);

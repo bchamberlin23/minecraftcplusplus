@@ -114,6 +114,9 @@ public:
     // Singleplayer pause (Minecraft.isPaused): the client does not tick (no movement, no input, no digging).
     bool paused = false;
     std::function<void(int x, int y, int z)> onPickBlock;
+    // Spectators: the hotbar keys (what 0, value the slot), the wheel (1, notches) and the pick block key (2) go to the
+    // spectator menu (SpectatorGui) instead; true: taken.
+    std::function<bool(int what, int value)> spectatorInput;
     // Right click on a block that reacts to use (containers, doors...): true sends the use to the server as is
     // instead of placing the held block.
     std::function<bool(int x, int y, int z)> onInteract;
