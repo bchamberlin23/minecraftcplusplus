@@ -100,7 +100,11 @@ death message's hover / links; books (lengths, truncation, lectern click events,
 preview in the world; the recipe book (narrow windows, overlay, resets, id searches, ghosts, toast list); station
 screens (tooltips while carrying, stonecutter / loom clicks, the merchant's active offer, mount slots); movement
 fixes (block speed while flying, underwater, crouch timing); component hashes for container clicks; movement sounds
-(emission gating, fall sounds by block, honey slides). Fall sounds do not model the pointed dripstone's fallOn. Tested against local mock status servers
+(emission gating, fall sounds by block, honey slides). Fall sounds do not model the pointed dripstone's fallOn.
+Social interactions (row order, tooltip delay, hidden list per launch) and keys (global F2 / F11, F3 over screens,
+spectator drop / swap). Not ported: F3+L client profiling (no metrics recorder); the Ctrl+B narrator hotkey is only
+kept out of Chat and Language (no general "an EditBox has focus" query); the social screen's report button stays
+disabled (reporting needs a Microsoft account). Tested against local mock status servers
 (a Python script: modern, no-version, legacy-only, silent and closing servers).
 
 ## Protocol / networking
