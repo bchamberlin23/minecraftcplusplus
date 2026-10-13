@@ -395,8 +395,10 @@ struct Ui::State {
     void drawChat(Canvas& c, bool focused);
     // playerSlot: the player inventory menu slot the stack is (item model properties compare stack identity: the
     // selected stack, the stack in use); -1 none.
+    // pop: ItemStack.popTime - partialTick (> 0: the item squeezed like Hud.extractSlot, its decorations not).
     void drawItem(Canvas& c, const ItemStack& s, float x, float y, bool decorations = true, const char* countOverride = nullptr,
-                  int playerSlot = -1);
+                  int playerSlot = -1, float pop = 0);
+    int popTime[46] = {};  // ItemStack.popTime of the player inventory menu's slots (hotbar stacks that grew)
     void drawTooltip(Canvas& c, const std::vector<Text>& lines, float x, float y, const TooltipImage* image = nullptr);
     void drawText(Canvas& c, const Text& t, float x, float y, u32 color, bool shadow) { font.draw(c, t, x, y, color, shadow); }
     void drawCentered(Canvas& c, const Text& t, float cx, float y, u32 color, bool shadow = true) {

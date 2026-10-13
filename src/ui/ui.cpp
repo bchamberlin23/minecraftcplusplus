@@ -890,6 +890,10 @@ void Ui::registerHandlers(net::Client& client) {
             Menu* m = id == 0 ? &s->inventory : s->container && s->container->containerId == id ? s->container.get() : nullptr;
             if (!m || slot < 0) return;
             m->stateId = state;
+            if (id == 0 && slot >= 36 && slot <= 44) {  // handleContainerSetSlot: a hotbar stack that appeared / grew pops
+                const ItemStack* last = size_t(slot) < m->slots.size() ? &m->slots[size_t(slot)] : nullptr;
+                s->popTime[slot] = !st.empty() && (!last || last->empty() || last->count < st.count) ? 5 : 0;
+            }
             if (size_t(slot) >= m->slots.size()) m->slots.resize(size_t(slot) + 1);
             m->slots[size_t(slot)] = st;
             s->mirrorPlayerSlots(id == 0);  // one Inventory behind both menus

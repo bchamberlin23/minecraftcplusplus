@@ -117,6 +117,8 @@ void Ui::State::drawEffectsInInventory(Canvas& c, Screen self, int leftPos, int 
 
 void Ui::State::tickHud() {
     ++guiTicks;
+    for (int& p : popTime)  // ItemStack.inventoryTick
+        if (p > 0) --p;
     lastAutosaveIndicator = autosaveIndicator;
     autosaveIndicator += 0.2f * ((serverSaving ? 1.0f : 0.0f) - autosaveIndicator);
     if (screen == Screen::Pause && rendersNowPlayingToast()) tickNowPlayingNotes(*this);  // PauseScreen.tick
@@ -194,7 +196,7 @@ void Ui::State::tickHud() {
 // --- items --------------------------------------------------------------------------------------------------
 
 void Ui::State::drawItem(Canvas& c, const ItemStack& s, float x, float y, bool decorations, const char* countOverride,
-                         int playerSlot) {
+                         int playerSlot, float pop) {
     if (s.empty()) return;
     // The item model context: GUI, the local player as the owner and what its state says about this stack (the game
     // compares stack identity: the player inventory slot it is).
@@ -215,6 +217,13 @@ void Ui::State::drawItem(Canvas& c, const ItemStack& s, float x, float y, bool d
         ctx.owner.cooldown = w.cooldown ? w.cooldown(s) : 0.0f;
     }
     float uv[4];
+    if (pop > 0) {  // Hud.extractSlot: squeezed about (x + 8, y + 12) while it pops in
+        const float squeeze = 1.0f + pop / 5.0f;
+        c.push();
+        c.translate(x + 8, y + 12);
+        c.scaleBy(1.0f / squeeze, (squeeze + 1.0f) / 2.0f);
+        c.translate(-(x + 8), -(y + 12));
+    }
     if (icons.icon(s, uv, &ctx)) {
         c.quad(x, y, x + 16, y + 16, uv[0], uv[1], uv[2], uv[3], kWhite, ModeIcon);
         if (items.foil(s)) {  // enchantment glint (the Glint Strength)
@@ -223,8 +232,9 @@ void Ui::State::drawItem(Canvas& c, const ItemStack& s, float x, float y, bool d
             c.setBlend(0);
         }
     }
+    if (pop > 0) c.pop();
     if (!decorations) return;
-    // GuiGraphics.itemDecorations: durability bar, then the count.
+    // GuiGraphics.itemDecorations: durability bar, cooldown, then the count.
     const int md = items.maxDamage(s);
     int barWidth = 0;
     u32 barColor = 0;
@@ -237,16 +247,16 @@ void Ui::State::drawItem(Canvas& c, const ItemStack& s, float x, float y, bool d
         c.fill(x + 2, y + 13, x + 15, y + 15, 0xFF000000);
         c.fill(x + 2, y + 13, x + 2 + float(barWidth), y + 14, barColor);
     }
-    if (s.count != 1 || countOverride) {
-        const std::string n = countOverride ? countOverride : std::to_string(s.count);
-        font.draw(c, n, x + 19 - 2 - float(font.width(n)), y + 6 + 3, kWhite, true);
-    }
     if (game) {  // GuiGraphics.itemCooldown: the remaining part of the cooldown as a white sweep from the top
         const float cooldown = game->cooldownPercent(items.cooldownGroup(s), game->partialTick());
         if (cooldown > 0.0f) {
             const float top = y + std::floor(16.0f * (1.0f - cooldown)), bottom = top + std::ceil(16.0f * cooldown);
             c.fill(x, top, x + 16, bottom, 0x7FFFFFFF);
         }
+    }
+    if (s.count != 1 || countOverride) {  // the count last (over the cooldown)
+        const std::string n = countOverride ? countOverride : std::to_string(s.count);
+        font.draw(c, n, x + 19 - 2 - float(font.width(n)), y + 6 + 3, kWhite, true);
     }
 }
 
@@ -336,8 +346,10 @@ void Ui::State::drawHud(Canvas& c) {
             if (offhandLeft) blitSprite(c, sprites.sprite("hud/hotbar_offhand_left"), float(center - 91 - 29), H - 23, 29, 24);
             else blitSprite(c, sprites.sprite("hud/hotbar_offhand_right"), float(center + 91), H - 23, 29, 24);
         }
+        const float pt = game ? game->partialTick() : 0.0f;
         for (int i = 0; i < 9; ++i)
-            drawItem(c, inventory.slots[size_t(36 + i)], float(center - 90 + i * 20 + 2), H - 16 - 3, true, nullptr, 36 + i);
+            drawItem(c, inventory.slots[size_t(36 + i)], float(center - 90 + i * 20 + 2), H - 16 - 3, true, nullptr, 36 + i,
+                     float(popTime[36 + i]) - pt);
         if (!offhand.empty()) drawItem(c, offhand, float(offhandLeft ? center - 91 - 26 : center + 91 + 10), H - 16 - 3, true, nullptr, 45);
         drawHotbarAttackIndicator(*this, c);  // gameplay_hud.cpp
     }
