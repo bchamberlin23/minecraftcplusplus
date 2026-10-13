@@ -204,7 +204,7 @@ public:
     double eyeHeight() const {
         return (pose == Pose::Standing ? kEyeHeight : pose == Pose::Crouching ? kSneakEyeHeight : 0.4) * scale;
     }
-    bool underWater() const { return wasEyeInWater && inWater; }  // Entity.isUnderWater
+    bool underWater() const { return wasEyeInWater; }  // LocalPlayer.isUnderWater: wasUnderwater (the eyes alone)
     bool onClimbable(const Physics& physics) const;  // LivingEntity.onClimbable
 
 private:

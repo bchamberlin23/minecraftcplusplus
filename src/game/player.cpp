@@ -636,7 +636,8 @@ void Player::move(const Physics& physics, double dx, double dy, double dz, bool 
     }
     // Entity.getBlockSpeedFactor (LivingEntity: towards 1 by movement_efficiency): the block at the feet, else the one
     // below (soul sand, honey); water and bubble columns keep their own.
-    const float f = blockSpeedFactor(physics);
+    // (Player: 1 while flying or gliding)
+    const float f = flying || fallFlying ? 1.0f : blockSpeedFactor(physics);
     vel[0] *= f, vel[2] *= f;
 }
 
@@ -986,7 +987,7 @@ void Player::travel(const Physics& physics, const PlayerInput& input, bool jumpi
             if (attr.dolphinsGrace >= 0) slowDown = 0.96f;
             moveRelative(input, speed);
             move(physics, vel[0], vel[1], vel[2]);
-            if (horizontalCollision && climbing) vel[1] = 0.2;
+            if (horizontalCollision && onClimbable(physics)) vel[1] = 0.2;  // onClimbable after the move
             vel[0] *= slowDown, vel[1] *= double(0.8f), vel[2] *= slowDown;
             fluidFalling(falling);
         } else {
@@ -1071,7 +1072,8 @@ void Player::tick(const Physics& physics, const PlayerInput& rawInput) {
     if (sprintTriggerTime_ > 0) --sprintTriggerTime_;
     const bool wasJumping = wasJumping_, wasShift = wasShift_, hadForwardImpulse = hadForwardImpulse_;
     // crouching: the sneak key (or no room to stand) with room to crouch, not flying or swimming.
-    sneaking = !flying && !swimming && fits(physics, Pose::Crouching) && (rawInput.sneak || (!asleep && !fits(physics, Pose::Standing)));
+    // (isShiftKeyDown: the keys as the last tick read them; input.tick comes after this)
+    sneaking = !flying && !swimming && fits(physics, Pose::Crouching) && (lastInput.sneak || (!asleep && !fits(physics, Pose::Standing)));
     PlayerInput input = rawInput;
     lastInput = rawInput;
     bool wasAutoJump = false;
