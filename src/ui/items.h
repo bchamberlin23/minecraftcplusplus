@@ -189,7 +189,8 @@ public:
     // Protocol. Item stacks: ItemStack.OPTIONAL_STREAM_CODEC / OPTIONAL_UNTRUSTED (delimited components).
     bool read(net::Reader& r, ItemStack& out) const;
     void write(net::Writer& w, const ItemStack& s, bool delimited) const;
-    void writeHashed(net::Writer& w, const ItemStack& s) const;  // HashedStack (component hashes unknown: 0)
+    void writeHashed(net::Writer& w, const ItemStack& s) const;  // HashedStack (HashOps CRC32C per component)
+    bool componentHash(const ItemStack::Component& c, u32& out) const;  // false: not reproduced (sent as 0)
     bool readTemplate(net::Reader& r, ItemStack& out) const;     // ItemStackTemplate (item, count, patch)
 
 private:

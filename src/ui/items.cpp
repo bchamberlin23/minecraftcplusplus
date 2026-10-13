@@ -4,7 +4,11 @@
 #include "net/client.h"
 #include "ui/resources.h"
 
+#include <array>
+#include <cstring>
 #include <unordered_set>
+
+#include "world/nbt_dom.h"
 
 namespace ui {
 
@@ -596,6 +600,172 @@ void Items::write(net::Writer& w, const ItemStack& s, bool delimited) const {
     for (int t : s.removed) w.varInt(t);
 }
 
+// --- HashOps (CRC32C over a tagged encoding of the component's codec value) ------------------------------------------
+namespace {
+
+u32 crc32c(const std::vector<u8>& data) {
+    static const auto table = [] {
+        std::array<u32, 256> t{};
+        for (u32 i = 0; i < 256; ++i) {
+            u32 c = i;
+            for (int k = 0; k < 8; ++k) c = c & 1 ? 0x82F63B78u ^ (c >> 1) : c >> 1;
+            t[i] = c;
+        }
+        return t;
+    }();
+    u32 c = 0xFFFFFFFFu;
+    for (u8 b : data) c = table[(c ^ b) & 0xFF] ^ (c >> 8);
+    return c ^ 0xFFFFFFFFu;
+}
+void le(std::vector<u8>& b, u64 v, int bytes) {
+    for (int i = 0; i < bytes; ++i) b.push_back(u8(v >> (8 * i)));
+}
+u32 hTagged(u8 tag, u64 v, int bytes) {
+    std::vector<u8> b{tag};
+    le(b, v, bytes);
+    return crc32c(b);
+}
+u32 hInt(i32 v) { return hTagged(8, u32(v), 4); }
+u32 hBool(bool v) { return crc32c({13, u8(v ? 1 : 0)}); }
+u32 hString(const std::string& utf8) {  // [12] + the UTF-16 length + the UTF-16 units (putUnencodedChars)
+    std::u16string u;
+    for (size_t i = 0; i < utf8.size();) {
+        const u32 cp = nextCodepoint(utf8, i);
+        if (cp > 0xFFFF) u.push_back(char16_t(0xD800 + ((cp - 0x10000) >> 10))), u.push_back(char16_t(0xDC00 + ((cp - 0x10000) & 0x3FF)));
+        else u.push_back(char16_t(cp));
+    }
+    std::vector<u8> b{12};
+    le(b, u.size(), 4);
+    for (char16_t ch : u) le(b, ch, 2);
+    return crc32c(b);
+}
+u32 hList(const std::vector<u32>& xs) {
+    std::vector<u8> b{4};
+    for (u32 x : xs) le(b, x, 4);
+    b.push_back(5);
+    return crc32c(b);
+}
+u32 hMap(std::vector<std::pair<u32, u32>> kv) {  // entries by key hash, then value hash (padToLong: unsigned)
+    std::sort(kv.begin(), kv.end());
+    std::vector<u8> b{2};
+    for (auto [k, v] : kv) le(b, k, 4), le(b, v, 4);
+    b.push_back(3);
+    return crc32c(b);
+}
+// An NBT value as its codec wrote it through NbtOps: booleans became bytes (the text style flags), mixed lists wrap
+// their elements in {"": ...} compounds.
+u32 hNbt(const NbtValue& v, std::string_view key, bool text = true) {
+    static const std::string_view kBools[] = {"bold", "italic", "underlined", "strikethrough", "obfuscated", "interpret"};
+    switch (v.type) {
+        case TagByte:
+            if (text && std::find(std::begin(kBools), std::end(kBools), key) != std::end(kBools)) return hBool(v.i != 0);
+            return crc32c({6, u8(v.i)});
+        case TagShort: return hTagged(7, u16(v.i), 2);
+        case TagInt: return hInt(i32(v.i));
+        case TagLong: return hTagged(9, u64(v.i), 8);
+        case TagFloat: {
+            const float f = float(v.d);
+            u32 bits;
+            std::memcpy(&bits, &f, 4);
+            return hTagged(10, bits, 4);
+        }
+        case TagDouble: {
+            u64 bits;
+            std::memcpy(&bits, &v.d, 8);
+            return hTagged(11, bits, 8);
+        }
+        case TagString: return hString(v.s);
+        case TagByteArray: {
+            std::vector<u8> b{14};
+            b.insert(b.end(), v.bytes.begin(), v.bytes.end());
+            b.push_back(15);
+            return crc32c(b);
+        }
+        case TagIntArray: {
+            std::vector<u8> b{16};
+            for (i32 x : v.ints) le(b, u32(x), 4);
+            b.push_back(17);
+            return crc32c(b);
+        }
+        case TagLongArray: {
+            std::vector<u8> b{18};
+            for (i64 x : v.longs) le(b, u64(x), 8);
+            b.push_back(19);
+            return crc32c(b);
+        }
+        case TagList: {
+            std::vector<u32> xs;
+            for (const NbtValue& e : v.items)
+                xs.push_back(text && e.type == TagCompound && e.names.size() == 1 && e.names[0].empty() ? hNbt(e.items[0], "", text)
+                                                                                                      : hNbt(e, "", text));
+            return hList(xs);
+        }
+        case TagCompound: {
+            std::vector<std::pair<u32, u32>> kv;
+            for (size_t k = 0; k < v.items.size(); ++k) kv.emplace_back(hString(v.names[k]), hNbt(v.items[k], v.names[k], text));
+            return hMap(std::move(kv));
+        }
+        default: return crc32c({1});
+    }
+}
+
+}  // namespace
+
+// ClientPacketListener.decoratedHashOpsGenerator: the component's value through its codec into HashOps; false for the
+// components not reproduced here (their hash stays 0 and the server resyncs the slot).
+bool Items::componentHash(const ItemStack::Component& c, u32& out) const {
+    const std::string n = componentName(c.type);
+    net::Reader r(reinterpret_cast<const u8*>(c.data.data()), c.data.size());
+    auto textNbt = [&](NbtValue& v) {
+        const std::string_view raw = r.nbt();
+        return r.ok && nbtReadNetwork(reinterpret_cast<const u8*>(raw.data()), raw.size(), v);
+    };
+    if (n == "damage" || n == "max_damage" || n == "repair_cost" || n == "max_stack_size" || n == "map_id" ||
+        n == "ominous_bottle_amplifier")
+        out = hInt(r.varInt());
+    else if (n == "dyed_color" || n == "map_color")
+        out = hInt(r.i32v());
+    else if (n == "enchantment_glint_override")
+        out = hBool(r.boolean());
+    else if (n == "unbreakable" || n == "creative_slot_lock" || n == "glider" || n == "intangible_projectile")
+        out = crc32c({2, 3});  // Unit: an empty map
+    else if (n == "rarity") {
+        static const char* kRarity[] = {"common", "uncommon", "rare", "epic"};
+        const i32 id = r.varInt();
+        if (id < 0 || id > 3) return false;
+        out = hString(kRarity[id]);
+    } else if (n == "custom_name" || n == "item_name") {
+        NbtValue v;
+        if (!textNbt(v)) return false;
+        out = hNbt(v, "");
+    } else if (n == "custom_data") {  // the CompoundTag itself (NBT types as they are)
+        NbtValue v;
+        if (!textNbt(v)) return false;
+        out = hNbt(v, "", false);
+    } else if (n == "lore") {
+        std::vector<u32> lines;
+        const i32 cnt = r.varInt();
+        for (i32 i = 0; i < cnt && r.ok; ++i) {
+            NbtValue v;
+            if (!textNbt(v)) return false;
+            lines.push_back(hNbt(v, ""));
+        }
+        out = hList(lines);
+    } else if (n == "enchantments" || n == "stored_enchantments") {  // {"minecraft:sharpness": 3, ...}
+        std::vector<std::pair<u32, u32>> kv;
+        const i32 cnt = r.varInt();
+        for (i32 i = 0; i < cnt && r.ok; ++i) {
+            const int id = r.varInt(), level = r.varInt();
+            if (id < 0 || size_t(id) >= enchantments_.size()) return false;
+            kv.emplace_back(hString(enchantments_[size_t(id)].id), hInt(level));
+        }
+        out = hMap(std::move(kv));
+    } else {
+        return false;
+    }
+    return r.ok && r.p == r.end;
+}
+
 void Items::writeHashed(net::Writer& w, const ItemStack& s) const {
     w.boolean(!s.empty());
     if (s.empty()) return;
@@ -604,7 +774,9 @@ void Items::writeHashed(net::Writer& w, const ItemStack& s) const {
     w.varInt(i32(s.added.size()));
     for (const auto& c : s.added) {
         w.varInt(c.type);
-        w.u32v(0);  // the component's hash (HashOps): not computed; the server resyncs mismatches
+        u32 h = 0;
+        if (!componentHash(c, h)) h = 0;  // unknown: the server resyncs the slot
+        w.u32v(h);
     }
     w.varInt(i32(s.removed.size()));
     for (int t : s.removed) w.varInt(t);
