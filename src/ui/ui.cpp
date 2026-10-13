@@ -1481,7 +1481,8 @@ void Ui::endFrame() {
     s.pendingCursor = 0;  // GuiGraphicsExtractor.requestCursor: this frame's request
     s.icons.tick(u64(s.guiTicks));
     if (!s.fe->cfg.menu) drawScreenEffects(s, c);  // view_effects.cpp: in the 3D view, with or without the HUD
-    const bool hud = !s.hudHidden && !s.fe->cfg.menu;  // the title screen has no HUD
+    // the title screen has no HUD, nor the level loading screen (Hud.extractRenderState)
+    const bool hud = !s.hudHidden && !s.fe->cfg.menu && s.screen != Screen::LevelLoading;
     if (hud) s.drawHud(c);
     else if (!s.fe->cfg.menu) drawSleepOverlay(s, c);  // Hud.extractSleepOverlay: also with the HUD hidden
     if (hud) s.drawModHud(c);  // native mods

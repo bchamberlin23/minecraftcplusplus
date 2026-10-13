@@ -17,6 +17,10 @@ namespace net {
 
 class Session {
 public:
+    // ClientPacketListener's LevelLoadTracker: the new level is not ready yet (the loading screen shows for a respawn)
+    bool levelLoading() const { return loadState_ != 0; }
+    bool levelLoadingRespawn() const { return loadRespawn_; }
+    int levelLoadingReason() const { return loadReason_; }  // LevelLoadingScreen.Reason: 0 other, 1 nether, 2 end
     bool tracksChunk(int cx, int cz) const { return chunks_.count(World::chunkKey(cx, cz)) != 0; }  // loaded by the server
     Session(Client& client, World& world, BlockRegistry& registry, const GameReports& reports);
 
@@ -88,6 +92,11 @@ private:
     int positionReminder_ = 0;  // LocalPlayer.positionReminder
     bool lastOnGround_ = false, lastHorizontal_ = false;
     bool haveServerPos_ = false, loadedSent_ = false;
+    // LevelLoadTracker: 1 waiting for the server's chunks (LEVEL_CHUNKS_LOAD_START), 2 for the player's chunk, 0 ready
+    // (or 30 s passed); the reason for the loading screen (0 other, 1 nether portal, 2 end portal) and a respawn's
+    int loadState_ = 0, loadReason_ = 0;
+    bool loadRespawn_ = false;
+    double loadTimeout_ = 0;
     double levelStart_ = 0;
     int sentSlot_ = -1;
     int sentInput_ = 0;  // ServerboundPlayerInputPacket flags last sent

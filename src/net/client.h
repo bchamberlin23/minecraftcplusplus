@@ -70,6 +70,7 @@ struct AbilitiesEvent {
     bool flying = false, mayFly = false, instabuild = false;
     float flyingSpeed = 0.05f, walkingSpeed = 0.1f;
 };
+struct LevelLoadStartEvent {};  // game event 13 LEVEL_CHUNKS_LOAD_START: the level's chunks are coming
 struct GameModeEvent {
     int mode = 0;  // 0 survival, 1 creative, 2 adventure, 3 spectator
 };
@@ -90,7 +91,8 @@ struct DisconnectEvent {
 // start_configuration: the server takes the player out of the level (reconfiguration); a new login follows.
 struct ReconfigureEvent {};
 using Event = std::variant<JoinEvent, ChunkEvent, ForgetEvent, BlocksEvent, LightEvent, TeleportEvent, AckEvent,
-                           AbilitiesEvent, GameModeEvent, HeldSlotEvent, DisconnectEvent, BiomesEvent, ReconfigureEvent>;
+                           AbilitiesEvent, GameModeEvent, HeldSlotEvent, DisconnectEvent, BiomesEvent, ReconfigureEvent,
+                           LevelLoadStartEvent>;
 
 // Requests of the configuration / play phases that the main thread answers (Client::pollCommon): server resource
 // packs, the code of conduct, chat reset, transfers, reconfiguration.

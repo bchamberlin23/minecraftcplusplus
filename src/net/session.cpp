@@ -65,6 +65,7 @@ bool Session::join(double timeoutSeconds, PlayerStart& start, Dimension& dimensi
                 previousGameMode_ = j->previousGameMode;
                 portalCooldown_ = j->portalCooldown;
                 instabuild_ = gameMode_ == 1;
+                loadState_ = 1, loadReason_ = 0, loadRespawn_ = false, loadTimeout_ = nowSeconds() + 30.0;  // startClientLoad
                 continue;
             }
             if (auto* t = std::get_if<TeleportEvent>(&e); t && joined && !haveServerPos_) {
@@ -166,7 +167,18 @@ void Session::frame(double dt) {
         std::copy(serverPos_, serverPos_ + 3, p.prev);
         std::fill(p.vel, p.vel + 3, 0.0);
     }
-    if (loaded && haveServerPos_ && !loadedSent_) {
+    // LevelLoadTracker.WaitingForPlayerChunk: ready with the player's chunk (here: its column, at the server's
+    // position), outside the build height, as a spectator or dead, or after 30 s; then ServerboundPlayerLoadedPacket.
+    if (loadState_ == 2) {
+        const double camY = game_->camera().y;
+        const bool outside = camY < dimension_.minY || camY >= dimension_.minY + dimension_.height;
+        const bool timedOut = nowSeconds() > loadTimeout_;
+        if (timedOut) LOG("net: timed out while waiting for the client to load chunks, letting the player into the world anyway");
+        if (timedOut || outside || gameMode_ == 3 || game_->dead || (loaded && haveServerPos_)) loadState_ = 0;
+    } else if (loadState_ == 1 && nowSeconds() > loadTimeout_) {
+        loadState_ = 0;  // no LEVEL_CHUNKS_LOAD_START in 30 s
+    }
+    if (loadState_ == 0 && !loadedSent_) {
         client_.sendPlayerLoaded();
         loadedSent_ = true;
         if (levelStart_ > 0)
@@ -199,7 +211,17 @@ void Session::handle(Event& e) {
         acknowledge(a->sequence);
     } else if (auto* t = std::get_if<TeleportEvent>(&e)) {
         teleport(*t);
+    } else if (std::holds_alternative<LevelLoadStartEvent>(e)) {  // LevelLoadTracker.loadingPacketsReceived
+        if (loadState_ == 1) loadState_ = 2;
     } else if (auto* j = std::get_if<JoinEvent>(&e)) {  // respawn or re-login: a new level
+        // ClientPacketListener.determineLevelLoadingReason: a dead player OTHER, else the nether or the end on either side
+        const std::string& from = dimension_.name;
+        const std::string& to = j->dimension.name;
+        loadReason_ = game_->dead                                                       ? 0
+                      : from == "minecraft:the_nether" || to == "minecraft:the_nether" ? 1
+                      : from == "minecraft:the_end" || to == "minecraft:the_end"       ? 2
+                                                                                        : 0;
+        loadState_ = 1, loadRespawn_ = j->respawn, loadTimeout_ = nowSeconds() + 30.0;  // startWaitingForNewLevel
         if (j->dimension.name != dimension_.name || !keepForgotten_)
             clearWorld();  // another dimension: nothing of the old one may stay
         else

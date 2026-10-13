@@ -750,6 +750,7 @@ bool Client::handlePlay(const std::string& name, Reader& r, bool& handled) {
         const u8 event = r.u8v();
         const float param = r.f32();
         if (event == 3) push(GameModeEvent{int(param)});
+        else if (event == 13) push(LevelLoadStartEvent{});
     } else if (name == "set_held_slot") {
         push(HeldSlotEvent{r.varInt()});
     } else if (name == "set_chunk_cache_radius") {
