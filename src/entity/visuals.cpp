@@ -27,6 +27,7 @@
 #include "ParticleVS.h"
 #include "VisualsCutoutMvPS.h"
 #include "VisualsCutoutPS.h"
+#include "VisualsOutlinePS.h"
 #include "VisualsShadowPS.h"
 #include "VisualsShadowVS.h"
 #include "VisualsGlintPS.h"
@@ -45,7 +46,7 @@ constexpr float kDeg = kPi / 180.0f;
 // Per-frame upload slice: three constant buffers, instances, dynamic quads, particles, staging for copies.
 constexpr u32 kMaxInstances = 1 << 14, kMaxDynamic = 1 << 15, kMaxParticles = 16384;
 constexpr u64 kCbBytes = 1024;
-constexpr u64 kInstOffset = kCbBytes * 3;
+constexpr u64 kInstOffset = kCbBytes * 4;  // frame constants: world, HUD stage, hand, outline (no jitter)
 constexpr u64 kDynOffset = kInstOffset + u64(kMaxInstances) * 128;
 constexpr u64 kParticleOffset = kDynOffset + u64(kMaxDynamic) * sizeof(MeshQuad);
 constexpr u64 kStageOffset = (kParticleOffset + u64(kMaxParticles) * sizeof(fx::GpuParticle) + 511) & ~u64(511);
@@ -174,6 +175,7 @@ struct Visuals::Impl {
     // Block cracks: multiplied into the colour; with the shader pipeline alpha blended into the entity layer.
     ComPtr<ID3D12PipelineState> psoCrumble, psoCrumbleMv;
     ComPtr<ID3D12PipelineState> psoAdd;  // BlendFunction.LIGHTNING: src alpha + dst (lightning bolts)
+    ComPtr<ID3D12PipelineState> psoOutline;  // silhouettes into the entity outline target (no depth)
     ComPtr<ID3D12Resource> store, upload, itemTex, fontTex;
     u8* mapped = nullptr;
     u32 descTable = UINT32_MAX;  // items, font
@@ -187,6 +189,7 @@ struct Visuals::Impl {
     u32 instUsed = 0, dynUsed = 0;
     std::vector<MeshQuad> dyn;
     Lists worldLists, hudLists, shadowLists;  // shadowLists: casters outside the view (shadow maps only)
+    std::vector<std::pair<u32, Lists>> glowLists;  // glowing frames / paintings / items by outline colour (0xRRGGBB)
     u64 updatedFrame = ~u64(0), preparedFrame = ~u64(0), handWorldFrame = ~u64(0);
     // Shader pipeline: particles are built in the World stage, where the opaque ones are drawn into the lit entity
     // layer (in the late LDR layer they were vanilla-lit and came out far too dark next to the HDR-lit terrain).
@@ -303,7 +306,9 @@ struct Visuals::Impl {
     double frameMs = 0, frameParticleMs = 0;
     void report() const;
 
-    Impl(Visuals& v, EntityWorld& w, EntityRenderer& r) : self(v), world(w), er(r), assets(w.assets()) {}
+    Impl(Visuals& v, EntityWorld& w, EntityRenderer& r) : self(v), world(w), er(r), assets(w.assets()) {
+        er.outlineExtra = [this](const PassContext& ctx) { drawOutline(ctx); };
+    }
     ~Impl() { report(); }
     Stats& stats() { return self.stats_; }
 
@@ -319,6 +324,7 @@ struct Visuals::Impl {
     void drawShadow(const ShadowContext& sc);
     void bindCommon(const PassContext& ctx);
     void drawList(const PassContext& ctx, ID3D12PipelineState* pso, const List& l, int cb);
+    void drawOutline(const PassContext& ctx);
 
     // --- CPU ---------------------------------------------------------------------------------------------
     void update();
@@ -779,6 +785,7 @@ bool Visuals::Impl::createGpu(Renderer& r) {
             d.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
         }
         d.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+        if (targets == 4) d.NumRenderTargets = 1, d.DSVFormat = DXGI_FORMAT_UNKNOWN;  // the outline target, no depth
         d.SampleDesc.Count = 1;
         return check(device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&out)), "CreateGraphicsPipelineState");
     };
@@ -797,7 +804,8 @@ bool Visuals::Impl::createGpu(Renderer& r) {
         !pso(SH(VisualsVS), SH(VisualsCrumblingPS), Alpha, true, false, psoCrumbleMv, 3) ||
         !pso(SH(VisualsVS), SH(VisualsTranslucentPS), Add, true, false, psoAdd) ||
         !pso(SH(ParticleVS), SH(ParticleCutoutMvPS), Opaque, true, true, psoPartCutMv, 2) ||
-        !pso(SH(VisualsShadowVS), SH(VisualsShadowPS), Opaque, true, true, psoShadow, 0))
+        !pso(SH(VisualsShadowVS), SH(VisualsShadowPS), Opaque, true, true, psoShadow, 0) ||
+        !pso(SH(VisualsVS), SH(VisualsOutlinePS), Opaque, false, false, psoOutline, 4))
         return false;
 #undef SH
     auto buffer = [&](u64 size, D3D12_HEAP_TYPE heap, D3D12_RESOURCE_STATES state, ComPtr<ID3D12Resource>& out) {
@@ -976,6 +984,7 @@ void Visuals::Impl::prepareWorld(const PassContext& ctx) {
     preparedFrame = frameCounter;
     frameCam[0] = ctx.camX, frameCam[1] = ctx.camY, frameCam[2] = ctx.camZ;
     worldLists.clear(), shadowLists.clear(), cracks.clear();
+    glowLists.clear();
     buildWorld(ctx);
     buildCracks(ctx);
     const bool handInWorld = ctx.shading && ctx.prevViewProj;
@@ -987,6 +996,10 @@ void Visuals::Impl::prepareWorld(const PassContext& ctx) {
     uploadPending(ctx);
     writeCb(0, ctx, ctx.viewProj, ctx.shading, false);
     worldDraw[0] = flush(worldLists.cut), worldDraw[1] = flush(worldLists.tr), worldDraw[2] = flush(worldLists.glint);
+    bool glow = false;
+    for (auto& [color, gl] : glowLists) glow |= flush(gl.cut) | flush(gl.tr);
+    if (glow) writeCb(3, ctx, ctx.viewProjNoJitter ? ctx.viewProjNoJitter : ctx.viewProj, false, false);
+    er.outlineExtraActive = glow;
     crackDraw = flush(cracks);
     shadowDraw[0] = flush(shadowLists.cut), shadowDraw[1] = flush(shadowLists.tr);
     if (handInWorld && !(hudLists.cut.v.empty() && hudLists.tr.v.empty())) {
@@ -1074,6 +1087,22 @@ void Visuals::Impl::bindCommon(const PassContext& ctx) {
     list->SetGraphicsRootDescriptorTable(7, renderer->gpuDescriptor(er.atlasDescriptor()));
     list->SetGraphicsRootDescriptorTable(8, ctx.blockTextures);
     list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+}
+
+// EntityRenderer's outline pass: the glowing frames / paintings / items as silhouettes in their outline colour.
+void Visuals::Impl::drawOutline(const PassContext& ctx) {
+    if (preparedFrame != frameCounter) return;
+    bindCommon(ctx);
+    for (const auto& [color, gl] : glowLists)
+        for (const List* l : {&gl.cut, &gl.tr}) {
+            if (!l->quads) continue;
+            const D3D12_GPU_VIRTUAL_ADDRESS va = upload->GetGPUVirtualAddress() + u64(ctx.frame) * kFrameBytes;
+            ctx.list->SetGraphicsRootConstantBufferView(0, va + kCbBytes * 3);
+            const u32 c[4] = {l->base, u32(l->v.size()), color, 0};
+            ctx.list->SetPipelineState(psoOutline.Get());
+            ctx.list->SetGraphicsRoot32BitConstants(1, 4, c, 0);
+            ctx.list->DrawInstanced(l->quads * 6, 1, 0, 0);
+        }
 }
 
 void Visuals::Impl::drawList(const PassContext& ctx, ID3D12PipelineState* pso, const List& l, int cb) {
@@ -1842,7 +1871,20 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
     static const int itemDisplayType = assets.typeId("minecraft:item_display");
     float camYaw, camPitch;
     cameraAngles(ctx, camYaw, camPitch);
+    struct GlowCopy {  // what an entity pushed into the World lists, copied to its outline colour's lists afterwards
+        Impl& m;
+        int color;
+        size_t cut, tr;
+        ~GlowCopy() {
+            if (color < 0) return;
+            auto it = std::find_if(m.glowLists.begin(), m.glowLists.end(), [&](const auto& g) { return g.first == u32(color); });
+            if (it == m.glowLists.end()) it = m.glowLists.insert(m.glowLists.end(), {u32(color), Lists{}});
+            for (size_t i = cut; i < m.worldLists.cut.v.size(); ++i) it->second.cut.v.push_back(m.worldLists.cut.v[i]), it->second.cut.keys.push_back(0);
+            for (size_t i = tr; i < m.worldLists.tr.v.size(); ++i) it->second.tr.v.push_back(m.worldLists.tr.v[i]), it->second.tr.keys.push_back(0);
+        }
+    };
     for (const auto& [id, e] : entities) {
+        const GlowCopy glowCopy{*this, er.outlineColor && !ctx.pack ? er.outlineColor(e) : -1, worldLists.cut.v.size(), worldLists.tr.v.size()};
         if (e.type == itemDisplayType && e.itemId >= 0) {  // DisplayRenderer.ItemDisplayRenderer
             double p[3];
             for (int a = 0; a < 3; ++a) p[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt - cam[a];

@@ -75,6 +75,10 @@ public:
     // (Minecraft.shouldEntityAppearGlowing, Entity.getTeamColor), -1 otherwise.
     RenderPass& outlinePass() { return outlinePass_; }
     std::function<int(const Entity&)> outlineColor;
+    // Silhouettes drawn elsewhere (the visuals pass: item frames, paintings, dropped items), into the bound outline
+    // target; outlineExtraActive: there are some this frame.
+    std::function<void(const PassContext&)> outlineExtra;
+    bool outlineExtraActive = false;
 
     enum class Kind : u8 { None, Mob, Item, Block, Sprite, Box };
     struct LayerDef {

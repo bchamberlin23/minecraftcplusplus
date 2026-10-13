@@ -200,6 +200,12 @@ float4 shade(VSOut i, float minAlpha, bool translucent) {
 
 float4 VisualsCutoutPS(VSOut i) : SV_Target { return shade(i, 0.1, false); }
 
+// The entity outline target (OutlineBufferSource): the silhouette in the outline colour (gMode: 0xRRGGBB).
+float4 VisualsOutlinePS(VSOut i) : SV_Target {
+    clip(sampleTex(i).a * i.tint.a - 0.1);
+    return float4(float((gMode >> 16) & 255u), float((gMode >> 8) & 255u), float(gMode & 255u), 255.0) / 255.0;
+}
+
 // Shader pipeline with a motion target: previous UV - current UV (deferred.hlsl MotionCS convention).
 struct MvOut {
     float4 color : SV_Target0;

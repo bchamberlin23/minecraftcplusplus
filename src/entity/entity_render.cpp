@@ -906,7 +906,7 @@ bool EntityRenderer::createOutline(Renderer& r) {
 void EntityRenderer::drawOutline(const PassContext& ctx) {
     ++outlineFrame_;
     std::erase_if(outlineRetired_, [&](const auto& r) { return outlineFrame_ > r.first + Renderer::kFrames + 1; });
-    if (glowing_.empty() || !built_ || !postSig_ || !ctx.colorRtv.ptr || !ctx.width || !ctx.height) return;
+    if ((glowing_.empty() && !outlineExtraActive) || !built_ || !postSig_ || !ctx.colorRtv.ptr || !ctx.width || !ctx.height) return;
     ID3D12Device* device = renderer_->device();
     ID3D12GraphicsCommandList* list = ctx.list;
     const u32 w = ctx.width, h = ctx.height;
@@ -995,6 +995,7 @@ void EntityRenderer::drawOutline(const PassContext& ctx) {
             list->DrawInstanced(count * 6, 1, 0, 0);
         }
     }
+    if (outlineExtraActive && outlineExtra) outlineExtra(ctx);
 
     // post_effect/entity_outline: entity_sobel, the horizontal and vertical box blur, then the blit over the frame.
     list->SetGraphicsRootSignature(postSig_.Get());
