@@ -344,6 +344,7 @@ void draw(UiState& s, Canvas& c) {
         const int barY = std::max(top, int(g.scroll[t]) * (bottom - top - barH) / maxScroll(s, t) + top);
         blitSprite(c, s.sprites.sprite("widget/scroller_background"), float(barX), float(top), 6, float(bottom - top));
         blitSprite(c, s.sprites.sprite("widget/scroller"), float(barX), float(barY), 6, float(barH));
+        s.scrollbarCursor(float(barX), float(top), float(bottom - top));
     }
     s.drawButtons(c);
     if (hoveredTab >= 0 && g.received && !tabActive(hoveredTab)) tooltip = Text(s.res.translate("gui.stats.none_found")), hasTooltip = true;

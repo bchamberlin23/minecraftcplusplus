@@ -493,6 +493,7 @@ bool suggestionsDraw(UiState& s, Canvas& c) {
     const bool moved = mx != cx.lastMx || my != cx.lastMy;
     cx.lastMx = mx, cx.lastMy = my;
     if (cx.visible && !cx.list.empty()) {  // SuggestionsList.extractRenderState
+        if (mx >= cx.x && my >= cx.y && mx < cx.x + cx.w && my < cx.y + cx.h) s.requestCursor(UiState::CursorPointingHand);
         const int n = int(cx.list.size()), limit = std::min(n, tg.limit);
         const bool prev = cx.offset > 0, next = n > cx.offset + limit;
         if (prev || next) {

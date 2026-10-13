@@ -123,6 +123,7 @@ void draw(UiState& s, Canvas& c) {
         const float y = std::max(top, float(int(g.scroll) * int(h - bar) / int(maxScroll(s))) + top);
         blitSprite(c, s.sprites.sprite("widget/scroller_background"), sx, top, 6, h);
         blitSprite(c, s.sprites.sprite("widget/scroller"), sx, y, 6, bar);
+        s.scrollbarCursor(sx, top, h);
     }
     // Footer: the warning, then Font Settings... and Done.
     s.drawCentered(c, Text(s.res.translate("options.languageAccuracyWarning")), float(W / 2),

@@ -1130,6 +1130,7 @@ void drawDialog(UiState& s, Canvas& c, Instance& inst) {
             }
             case Widget::MultiEdit:
                 drawMulti(s, c, inst.inputs[size_t(w.input)], x, y, float(w.w), float(w.h), inst.focus == w.input);
+                if (mx >= x && my >= y && mx < x + float(w.w) && my < y + float(w.h)) s.requestCursor(UiState::CursorIBeam);
                 break;
         }
     }
@@ -1140,6 +1141,7 @@ void drawDialog(UiState& s, Canvas& c, Instance& inst) {
         const int barY = ms <= 0 ? a.y : std::max(a.y, int(inst.scroll) * (a.h - barH) / int(ms) + a.y);
         blitSprite(c, s.sprites.sprite("widget/scroller_background"), float(a.x + a.w - 6), float(a.y), 6, float(a.h));
         blitSprite(c, s.sprites.sprite("widget/scroller"), float(a.x + a.w - 6), float(barY), 6, float(barH));
+        s.scrollbarCursor(float(a.x + a.w - 6), float(a.y), float(a.h));
     }
     for (const Widget& w : inst.fixed) {
         const bool hover = inside(mx, my, float(w.x), float(w.y), float(w.w), float(w.h));

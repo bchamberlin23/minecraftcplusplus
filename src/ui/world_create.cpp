@@ -406,6 +406,7 @@ void drawListFrame(State& s, Canvas& c, const ListArea& l) {
         const float bar = std::max(32.0f, h * h / (h + ms)), by = l.top + (h - bar) * std::clamp(g.scroll, 0.0f, ms) / ms;
         blitSprite(c, s.sprites.sprite("widget/scroller_background"), x, l.top, 6, h);
         blitSprite(c, s.sprites.sprite("widget/scroller"), x, by, 6, bar);
+        s.scrollbarCursor(x, l.top, h);
     }
 }
 void drawSelection(Canvas& c, const ListArea& l, int i) {  // AbstractSelectionList.renderSelection

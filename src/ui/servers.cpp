@@ -423,6 +423,7 @@ void drawServers(State& s, Canvas& c) {
         const float bar = std::max(32.0f, h * h / (h + ms)), by = top + (h - bar) * f.serverScroll / ms;
         blitSprite(c, s.sprites.sprite("widget/scroller_background"), x, top, 6, h);
         blitSprite(c, s.sprites.sprite("widget/scroller"), x, by, 6, bar);
+        s.scrollbarCursor(x, top, h);
     }
     s.drawButtons(c);
     if (!tooltip.empty()) s.drawTooltip(c, tooltip, s.mouseX, s.mouseY);

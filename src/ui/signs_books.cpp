@@ -646,6 +646,10 @@ void editDraw(UiState& s, Canvas& c) {
         else mlSeek(s, edit.field, editFieldLeft(W), kEditFieldTop, s.mouseX, s.mouseY, true);
     }
     mlDraw(s, c, edit.field, editFieldLeft(W), kEditFieldTop, true);
+    {  // MultiLineEditBox at ((W - 114) / 2 - 8, 28), 122 x 134: an I-beam over it
+        const float bx = float((W - 114) / 2 - 8);
+        if (s.mouseX >= bx && s.mouseY >= 28 && s.mouseX < bx + 122 && s.mouseY < 28 + 134) s.requestCursor(UiState::CursorIBeam);
+    }
     drawPageButton(s, c, true);
     if (edit.page > 0) drawPageButton(s, c, false);
     s.drawButtons(c);

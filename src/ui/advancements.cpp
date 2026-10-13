@@ -519,6 +519,10 @@ void draw(UiState& s, Canvas& c) {
     }
     if (!s.leftDown) g.dragging = g.scrolling = false;
     g.lastMouse[0] = mx, g.lastMouse[1] = my;
+    if (g.scrolling && t) {  // AdvancementsScreen: the axes the tab scrolls along
+        const bool h = t->maxX - t->minX > kInW, v = t->maxY - t->minY > kInH;
+        if (h || v) s.requestCursor(h && v ? UiState::CursorResizeAll : h ? UiState::CursorResizeEW : UiState::CursorResizeNS);
+    }
     // Inside.
     const int inX = left + 9, inY = top + 18;
     if (!t) {
@@ -557,6 +561,8 @@ void draw(UiState& s, Canvas& c) {
             const char* pos = p.i == 0 ? kFirst[p.type] : p.i == kMax[p.type] - 1 ? kLast[p.type] : "middle";
             const std::string sp = std::string("advancements/tab_") + kKind[p.type] + "_" + pos + (tb.root == g.selected ? "_selected" : "");
             blitSprite(c, s.sprites.sprite(sp), float(left + x), float(top + y), float(w), float(h));
+            if (tb.root != g.selected && mx > left + x && my > top + y && mx < left + x + w && my < top + y + h)
+                s.requestCursor(UiState::CursorPointingHand);  // AdvancementTab.extractTab
         }
         for (const Tab& tb : g.tabs) {
             const TabPlace p = place(tb.index);

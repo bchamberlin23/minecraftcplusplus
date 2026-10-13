@@ -202,6 +202,7 @@ void draw(UiState& s, Canvas& c) {
             const float bar = std::max(32.0f, h * h / (h + ms)), by = top + (h - bar) * g.scroll / ms;
             blitSprite(c, s.sprites.sprite("widget/scroller_background"), x, top, 6, h);
             blitSprite(c, s.sprites.sprite("widget/scroller"), x, by, 6, bar);
+            s.scrollbarCursor(x, top, h);
         }
     } else {  // the empty text (gray)
         const char* key = !g.filter.empty() ? "gui.socialInteractions.search_empty"

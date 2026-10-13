@@ -366,6 +366,7 @@ void draw(UiState& s, Canvas& c) {
         const float sx = float(W / 2 + kGridW / 2 + 8 + 2);
         blitSprite(c, s.sprites.sprite("widget/scroller_background"), sx, top, 6, h);
         blitSprite(c, s.sprites.sprite("widget/scroller"), sx, top + (h - bar) * g.scroll / maxScroll(s), 6, bar);
+        s.scrollbarCursor(sx, top, h);
     }
     s.drawButton(c, s.buttons.size() - 2);
     s.drawButton(c, s.buttons.size() - 1);
@@ -622,6 +623,7 @@ void rulesDraw(UiState& s, Canvas& c) {
             const float sx = left + width + 6 + 2;
             blitSprite(c, s.sprites.sprite("widget/scroller_background"), sx, top, 6, h);
             blitSprite(c, s.sprites.sprite("widget/scroller"), sx, top + (h - bar) * r.scroll / maxRuleScroll(s), 6, bar);
+            s.scrollbarCursor(sx, top, h);
         }
     }
     drawFields(s, c);

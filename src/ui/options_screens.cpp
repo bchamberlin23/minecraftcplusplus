@@ -207,6 +207,7 @@ void drawOptionsList(UiState& s, Canvas& c, const std::function<void(Canvas&, fl
         const float y = std::max(top, float(int(g.scroll) * int(h - bar) / int(maxScroll(s))) + top);
         blitSprite(c, s.sprites.sprite("widget/scroller_background"), scrollBarX(s), top, 6, h);
         blitSprite(c, s.sprites.sprite("widget/scroller"), scrollBarX(s), y, 6, bar);
+        s.scrollbarCursor(scrollBarX(s), top, h);
     }
     // Header: the title centred (a second line 2 below it when there is one), footer buttons.
     const float titleY = g.subtitle.empty() ? float((kHeaderH - 9) / 2) : float((kHeaderH - 20) / 2);
