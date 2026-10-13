@@ -2020,8 +2020,19 @@ bool EntityWorld::click(const double eye[3], const double dir[3], bool attack, b
         if (client_ && client_->alive()) client_->sendPlay("punch", net::Writer{});
         return true;
     }
-    if (attack) this->attack(p.id);
-    else if (use) this->use(p.id, p.hit, sneaking);
+    lastUsePassed = false;
+    if (attack) {
+        this->attack(p.id);
+    } else if (use) {  // Minecraft.startUseItem: each hand's interaction (packet first), until one consumes
+        this->use(p.id, p.hit, sneaking, 0);
+        const Entity* e = entity(p.id);
+        int r = e && interactionResult ? interactionResult(*e, 0) : 1;
+        if (r == -1) {  // an empty main hand passes (its item use too): the off hand's interaction
+            this->use(p.id, p.hit, sneaking, 1);
+            r = e && interactionResult ? interactionResult(*e, 1) : 1;
+        }
+        lastUsePassed = r != 1;
+    }
     return true;
 }
 
@@ -2067,12 +2078,12 @@ bool EntityWorld::attack(int id) {
     return ok;
 }
 
-bool EntityWorld::use(int id, const double hit[3], bool sneaking) {
+bool EntityWorld::use(int id, const double hit[3], bool sneaking, int hand) {
     if (!client_ || !client_->alive()) return false;
-    if (auto it = entities_.find(id); it != entities_.end() && onUse) onUse(it->second);
+    if (auto it = entities_.find(id); it != entities_.end() && onUse && hand == 0) onUse(it->second);
     net::Writer w;
     w.varInt(id);
-    w.varInt(0);  // main hand
+    w.varInt(hand);  // InteractionHand
     writeLpVec3(w, hit);
     w.boolean(sneaking);
     return client_->sendPlay("interact", w);

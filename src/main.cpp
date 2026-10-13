@@ -957,6 +957,8 @@ int wmain(int argc, wchar_t** argv) {
         };
     // Player.attack on the client: entities whose hurtClient succeeds (vehicles, frames, paintings, knots, crystals,
     // cushions) take a sprinting full-strength hit's knockback, which slows the player (0.6) and ends the sprint.
+    game.entityUsePassed = [&] { return entities.lastUsePassed; };
+    entities.interactionResult = [&](const ent::Entity& e, int hand) { return gameplay.entityInteraction(e, hand); };
     entities.isSpectator = [](const ent::Entity& e) {
         ui::PlayerInfoView v;
         return ui::findPlayerInfo(std::string(reinterpret_cast<const char*>(e.uuid), 16), v) && v.gameMode == 3;

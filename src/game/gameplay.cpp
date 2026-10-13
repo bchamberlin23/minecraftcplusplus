@@ -821,6 +821,65 @@ int Gameplay::componentType(const char* name) {
 // The stack's use as Item.getUseAnimation / getUseDuration, Consumable and UseEffects see it: the item's defaults
 // (component reports and the item classes) with the stack's own patch of consumable, food, blocks_attacks,
 // kinetic_weapon and use_effects.
+// Player.interactOn as the client predicts it: Entity.interact (riding, trading, feeding, milking, shearing, leashing,
+// equipping...) then ItemStack.interactLivingEntity (name tags, dyes, saddles...). 1 consumes, 0 passes, -1 an empty
+// hand (passes). An approximation by entity type and held item; spectators pass.
+int Gameplay::entityInteraction(const ent::Entity& e, int hand) {
+    if (!e.info || !game_) return 1;
+    if (game_->gameMode == 3) return 0;
+    const ui::ItemStack* held = hand == 0 ? mainHand() : offHand();
+    const std::string item = held && !held->empty() ? std::string(shortName(itemName(held->item))) : std::string();
+    const std::string n(shortName(e.info->name));
+    const bool sneaking = game_->player().sneaking, empty = item.empty();
+    auto pass = [&] { return empty ? -1 : 0; };
+    auto inTag = [&](const char* tag) {
+        if (empty || !ui_) return false;
+        const std::vector<int>* t = ui_->items().tag("minecraft:item", tag);
+        return t && std::find(t->begin(), t->end(), held->item) != t->end();
+    };
+    // Vehicles and decorations (Entity.interact overrides).
+    if (n.ends_with("_boat") || n.ends_with("_raft") || n == "boat") return n.find("chest") != std::string::npos || !sneaking ? 1 : pass();
+    if (n.ends_with("minecart")) {
+        if (n == "chest_minecart" || n == "hopper_minecart" || n == "command_block_minecart") return 1;
+        if (n == "furnace_minecart") return inTag("minecraft:furnace_minecart_fuel") ? 1 : pass();
+        if (n == "tnt_minecart") return item == "flint_and_steel" || item == "fire_charge" ? 1 : pass();
+        return !sneaking ? 1 : pass();
+    }
+    if (n == "item_frame" || n == "glow_item_frame") return e.itemId >= 0 || !empty ? 1 : pass();
+    if (n == "interaction" || n == "leash_knot") return 1;
+    if (n == "armor_stand") return !empty || e.equipment[0] >= 0 || e.equipment[1] >= 0 || e.equipment[2] >= 0 || e.equipment[3] >= 0 ||
+                                           e.equipment[4] >= 0 || e.equipment[5] >= 0 ? 1 : pass();
+    if (e.category != ent::Category::Living) return pass();
+    // Mob.checkAndHandleImportantInteractions / Leashable: leads, spawn eggs of the same type, name tags.
+    if (item == "lead" || item == n + "_spawn_egg") return 1;
+    if (item == "name_tag" && held->hasCustomName) return 1;
+    // Mob.mobInteract by type.
+    if (n == "villager" || n == "wandering_trader") return item == "villager_spawn_egg" ? pass() : 1;
+    const bool horse = n == "horse" || n == "donkey" || n == "mule" || n == "skeleton_horse" || n == "zombie_horse" || n == "camel" ||
+                       n == "camel_husk" || n == "llama" || n == "trader_llama";
+    if (horse && !e.baby) return 1;  // riding, the inventory, feeding, equipping
+    if ((n == "pig" || n == "strider") && !e.baby && e.equipment[7] >= 0 && !sneaking) return 1;  // ride the saddled pig
+    if (n == "happy_ghast" && !e.baby && e.equipment[6] >= 0 && !sneaking) return 1;  // ride the harnessed ghast
+    if (n == "allay") return 1;
+    if ((n == "wolf" || n == "cat" || n == "parrot" || n == "nautilus") && e.tame) return 1;  // sitting, healing, dyeing
+    if ((n == "cow" || n == "goat" || n == "mooshroom") && item == "bucket" && !e.baby) return 1;
+    if (n == "mooshroom" && (item == "bowl" || item == "shears") && !e.baby) return 1;
+    if (n == "sheep" && item == "shears" && !e.baby && !(e.wool & 0x10)) return 1;
+    if (n == "sheep" && item.ends_with("_dye") && !(e.wool & 0x10)) return 1;
+    if ((n == "snow_golem" || n == "bogged") && item == "shears") return 1;
+    if (n == "creeper" && (item == "flint_and_steel" || item == "fire_charge")) return 1;
+    if (n == "iron_golem" && item == "iron_ingot") return 1;
+    if (n == "armadillo" && item == "brush") return 1;
+    if (item == "water_bucket" && (n == "axolotl" || n == "tadpole" || n == "cod" || n == "salmon" || n == "pufferfish" || n == "tropical_fish"))
+        return 1;
+    // Animal.mobInteract: its food (the <type>_food item tag) feeds, breeds or grows it; saddles / body armour equip.
+    if (inTag(("minecraft:" + n + "_food").c_str())) return 1;
+    if (!empty && held && (item == "saddle" || item.ends_with("_horse_armor") || item.ends_with("_carpet") || item == "wolf_armor" ||
+                           item.ends_with("_harness")))
+        return 1;
+    return pass();
+}
+
 // Player.playSound for our own hurt / death: at the player, PLAYERS, volume 1, pitch 1 +- 0.2 (the server excepts us).
 void Gameplay::playOwnVoice(const char* sound) {
     audio::AudioSystem* a = audio::instance();

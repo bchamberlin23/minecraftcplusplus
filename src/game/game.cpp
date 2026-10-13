@@ -329,7 +329,16 @@ void Game::handleClicks(Window& w, double dt, int rightPresses, int middlePresse
     }
     if (doPlace && onEntityClick && onEntityClick(false, ev.right > 0, blockDistance_)) {
         repeatTimer_ = 0.3;
-        if (ev.right > 0 && !usingItem_) startUseItem(true);  // the interaction passed: the held items' turn
+        if (ev.right > 0 && entityUsePassed && !entityUsePassed()) {  // consumed (InteractionResult.SUCCESS): a swing
+            if (onSwing) {
+                const int attackSwing = swingTicks;
+                swingTicks = useSwingTicksOf[0];
+                onSwing(0, useSwingTypeOf[0]);
+                swingTicks = attackSwing;
+            }
+        } else if (ev.right > 0 && !usingItem_) {
+            startUseItem(true);  // the interactions passed: the held items' turn
+        }
         return;
     }
     // Minecraft.startUseItem: a press, or every 4 ticks while held (eating the next piece of food), unless an item is

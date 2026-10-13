@@ -36,11 +36,13 @@ struct ItemStack;
 }  // namespace ui
 namespace ent {
 class EntityWorld;
+struct Entity;
 }
 class Riding;
 
 class Gameplay {
 public:
+    int entityInteraction(const ent::Entity& e, int hand);  // EntityWorld::interactionResult
     Gameplay(World& world, BlockRegistry& registry, const GameReports& reports);
     ~Gameplay();
     // Block hardness / tags (cached Java dump) and item components (the data generator's reports); any thread.

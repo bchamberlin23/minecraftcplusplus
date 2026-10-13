@@ -304,7 +304,7 @@ public:
     PickResult pick(const double origin[3], const double dir[3], double maxDistance) const;
     // Sends attack (attack + punch) or use (interact) for an entity; false if not connected.
     bool attack(int id);
-    bool use(int id, const double hit[3], bool sneaking);
+    bool use(int id, const double hit[3], bool sneaking, int hand = 0);
     // MultiPlayerGameMode.spectate / spectatorNoAction: ServerboundSpectatorActionPacket with the entity under the
     // crosshair (closer than blockDistance, < 0: no block), or none.
     // Minecraft.pickBlockOrEntity on an entity: ServerboundPickItemFromEntityPacket (Ctrl: include its data). False
@@ -432,6 +432,10 @@ public:
     // The local player uses an entity (before the interact packet; main thread): true opens something client side
     // (the command block minecart's editor) and the packet is still sent.
     std::function<void(const Entity& e)> onUse;
+    // Player.interactOn on the client (Entity.interact, then ItemStack.interactLivingEntity): 1 when the held item's
+    // interaction with the entity consumes the click, 0 when it passes, -1 when the hand is empty (and passes).
+    std::function<int(const Entity& e, int hand)> interactionResult;
+    bool lastUsePassed = false;  // the last click's interactions all passed: the held items' turn (Minecraft.startUseItem)
     // A player in spectator mode (the player list): not pickable.
     std::function<bool(const Entity& e)> isSpectator;
     // The local player attacked an entity (after the packets): Player.attack's client-side part.
