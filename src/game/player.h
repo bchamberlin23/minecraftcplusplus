@@ -32,7 +32,9 @@ class Physics {
 public:
     Physics(const World& world, const BlockRegistry& registry) : world_(world), registry_(registry) {}
     void collisionBoxes(const AABB& area, std::vector<AABB>& out) const;
-    RayHit raycast(const double origin[3], const double dir[3], double maxDistance) const;
+    // Block hit along a ray against the outline shapes (ClipContext.Block.OUTLINE), or with `visual` against the
+    // visual shapes (VISUAL: the third-person camera).
+    RayHit raycast(const double origin[3], const double dir[3], double maxDistance, bool visual = false) const;
     bool inFluid(const AABB& box) const;
     bool inLava(const AABB& box) const;
     bool containsLiquid(const AABB& box) const;  // any cell the box touches holds a fluid
@@ -102,6 +104,7 @@ public:
 private:
     const World& world_;
     const BlockRegistry& registry_;
+    mutable std::vector<u8> visual_;   // registry id -> getVisualShape: 1 collision, 2 outline, 3 none, 4 full block
     mutable std::vector<u8> special_;  // registry id -> 1 none, 2 scaffolding, 3 powder snow (0 unresolved)
     u8 specialKind(u16 id) const;
     mutable std::vector<u16> fluids_;  // registry id -> 0x8000 | type << 8 | source 0x40 | falling 0x20 | amount

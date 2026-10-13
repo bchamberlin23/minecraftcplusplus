@@ -340,7 +340,7 @@ float Physics::slipperiness(int x, int y, int z) const {
 }
 
 // Amanatides-Woo voxel walk, testing each cell's selection boxes with a slab test.
-RayHit Physics::raycast(const double o[3], const double d[3], double maxDistance) const {
+RayHit Physics::raycast(const double o[3], const double d[3], double maxDistance, bool visual) const {
     RayHit best;
     const BlockInfo* infos = registry_.infos();
     int cell[3] = {int(std::floor(o[0])), int(std::floor(o[1])), int(std::floor(o[2]))};
@@ -360,8 +360,30 @@ RayHit Physics::raycast(const double o[3], const double d[3], double maxDistance
         float off[3];  // the shapes move with BlockState.getOffset (flowers, grass...)
         BlockRegistry::offset(b, cell[0], cell[2], off);
         const double at[3] = {cell[0] + off[0], cell[1] + off[1], cell[2] + off[2]};
-        for (u32 k = 0; k < b.selectionCount; ++k) {
-            const Box& s = registry_.box(b.selectionFirst + k);
+        u32 first = b.selectionFirst, count = b.selectionCount;
+        bool fullBlock = false;
+        if (visual) {  // BlockBehaviour.getVisualShape: the collision shape, with its block overrides
+            const u16 id = world_.block(cell[0], cell[1], cell[2]);
+            if (visual_.size() <= id) visual_.resize(size_t(id) + 1, 0);
+            u8& kind = visual_[id];
+            if (!kind) {
+                const std::string& n = registry_.name(id);
+                const std::string_view s = std::string_view(n).substr(0, n.find('['));
+                kind = s == "minecraft:glass" || s.ends_with("_stained_glass") || s == "minecraft:tinted_glass" ||
+                               s.ends_with("copper_grate") || s.ends_with("_bars") || s.ends_with("glass_pane") ||
+                               s == "minecraft:powder_snow"
+                           ? 3  // TransparentBlock, IronBarsBlock, PowderSnowBlock: none
+                       : s.ends_with("_fence") || s == "minecraft:snow" ? 2  // FenceBlock, SnowLayerBlock: the outline
+                       : s == "minecraft:mud" || s == "minecraft:soul_sand" ? 4  // MudBlock, SoulSandBlock: a full block
+                                                                            : 1;
+            }
+            if (kind == 1) first = b.collisionFirst, count = b.collisionCount;
+            else if (kind == 3) count = 0;
+            else if (kind == 4) fullBlock = true, count = 1;
+        }
+        static const Box kFullBlock{{0, 0, 0}, {1, 1, 1}};
+        for (u32 k = 0; k < count; ++k) {
+            const Box& s = fullBlock ? kFullBlock : registry_.box(first + k);
             bool inside = true;
             for (int a = 0; a < 3; ++a) inside = inside && test[a] > at[a] + s.min[a] && test[a] < at[a] + s.max[a];
             if (inside) {

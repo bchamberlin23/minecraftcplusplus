@@ -142,7 +142,7 @@ CameraState Game::viewCamera() const {
     for (int i = 0; i < 8; ++i) {
         const double o[3] = {c.x + ((i & 1) * 2 - 1) * 0.1, c.y + (((i >> 1) & 1) * 2 - 1) * 0.1,
                              c.z + (((i >> 2) & 1) * 2 - 1) * 0.1};
-        const RayHit h = physics_.raycast(o, back, dist);
+        const RayHit h = physics_.raycast(o, back, dist, true);  // ClipContext.Block.VISUAL
         if (!h.hit) continue;
         const double dx = h.point[0] - c.x, dy = h.point[1] - c.y, dz = h.point[2] - c.z;
         dist = std::min(dist, std::sqrt(dx * dx + dy * dy + dz * dz));
