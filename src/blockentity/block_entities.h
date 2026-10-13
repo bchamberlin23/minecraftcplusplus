@@ -74,6 +74,13 @@ enum class Kind : u8 {
 
 class BlockEntityRenderer : public RenderPass {
 public:
+    // ShulkerBoxBlockEntity.moveCollidedEntities: the lid's sweep of an opening box this tick (min xyz, max xyz) and the
+    // direction it opens to (0 down .. 5 east); entities in it are moved by its size + 0.01 that way.
+    struct ShulkerPush {
+        double box[6];
+        int dir;
+    };
+    const std::vector<ShulkerPush>& shulkerPushes() const { return shulkerPushes_; }
     BlockEntityRenderer(World& world, BlockRegistry& registry, const GameReports& reports, const ent::EntityAssets& assets,
                         const ent::EntityRenderer& entityRenderer);
     ~BlockEntityRenderer() override;
@@ -317,6 +324,7 @@ private:
     std::vector<u64> sectionOrder_;  // for the round-robin light refresh
 
     std::unordered_map<u64, Anim> anims_;  // by block position
+    std::vector<ShulkerPush> shulkerPushes_;
     std::vector<Moving> moving_;
     bool shading_ = false;  // the last build drew for the shader pipeline
     const ItemRules* rules_ = nullptr;

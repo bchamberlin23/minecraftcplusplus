@@ -926,6 +926,20 @@ int wmain(int argc, wchar_t** argv) {
     std::string lastDimension;  // temporal history (TAA / upscalers / frame generation) resets on dimension change
     audio.attachGame(game, world, registry);
     if (haveEntities) visuals.setPlayer(game, ui, opt.name, [&] { return session ? session->gameMode() : 1; });
+    if (haveEntities) {  // ShulkerBoxBlockEntity.moveCollidedEntities: an opening lid moves the player along
+        game.blockEntityTick = [prev = std::move(game.blockEntityTick), &blockEntityRenderer, &game](Player& p) {
+            if (prev) prev(p);
+            if (p.noClip) return;
+            static const int kStep[6][3] = {{0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}};
+            for (const be::BlockEntityRenderer::ShulkerPush& s : blockEntityRenderer.shulkerPushes()) {
+                const AABB b{{s.box[0], s.box[1], s.box[2]}, {s.box[3], s.box[4], s.box[5]}};
+                if (!b.intersects(p.box())) continue;
+                double d[3];
+                for (int a = 0; a < 3; ++a) d[a] = (s.box[a + 3] - s.box[a] + 0.01) * kStep[s.dir][a];
+                p.moveByShulkerBox(game.physics(), d[0], d[1], d[2]);
+            }
+        };
+    }
     gameplayTask.get();
     if (haveEntities) {
         gameplay.setEntities(&entities);

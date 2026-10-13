@@ -1042,6 +1042,7 @@ bool BlockEntityRenderer::isDynamic(const Instance& in, const BlockDef& d) const
 
 void BlockEntityRenderer::tick() {
     ++gameTicks_;
+    shulkerPushes_.clear();
     auto rnd = [&](int n) {
         random_ ^= random_ << 13, random_ ^= random_ >> 17, random_ ^= random_ << 5;
         return int(random_ % u32(n));
@@ -1061,6 +1062,16 @@ void BlockEntityRenderer::tick() {
                 if (!a.shouldOpen && a.open > 0) a.open = std::max(a.open - 0.1f, 0.0f);
                 else if (a.shouldOpen && a.open < 1) a.open = std::min(a.open + 0.1f, 1.0f);
                 keep = a.shouldOpen || a.open > 0 || a.oOpen > 0;
+                if (d.kind == Kind::Shulker && a.open > a.oOpen) {  // OPENING: Shulker.getProgressDeltaAabb(1, facing, old, new)
+                    const int dir = std::clamp(int(d.facing), 0, 5), axis = dir < 2 ? 1 : dir < 4 ? 2 : 0;
+                    const bool positive = dir == 1 || dir == 3 || dir == 5;
+                    const double lo = a.oOpen, hi = a.open;
+                    double box[6] = {x + 0.0, double(y), z + 0.0, x + 1.0, y + 1.0, z + 1.0};
+                    const double base = axis == 1 ? double(y) : axis == 0 ? double(x) : double(z);
+                    if (positive) box[axis] = base + 1.0 + lo, box[axis + 3] = base + 1.0 + hi;
+                    else box[axis] = base - hi, box[axis + 3] = base - lo;
+                    shulkerPushes_.push_back({{box[0], box[1], box[2], box[3], box[4], box[5]}, dir});
+                }
                 break;
             case Kind::Bell:
                 if (a.shakeDir >= 0 && ++a.bellTicks >= 50) a.shakeDir = -1, a.bellTicks = 0;

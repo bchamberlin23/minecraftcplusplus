@@ -195,6 +195,8 @@ public:
     // PistonMovingBlockEntity.tick for the moving blocks around the player: moveCollidedEntities (pushes, slime
     // blocks launch), moveStuckEntities (honey drags along), then the progress; before the player's own tick.
     void tickPistons(Physics& physics);
+    // Entity.move(MoverType.SHULKER_BOX): an opening shulker box's lid moves the player (with collisions)
+    void moveByShulkerBox(const Physics& physics, double dx, double dy, double dz) { move(physics, dx, dy, dz); }
     // Riptide: TridentItem.releaseUsing on the client (push along the look, spin for 20 ticks, a hop off the ground).
     void riptide(const Physics& physics, float strength);
     // LivingEntity.getDimensions: the pose's dimensions scaled by getScale (the scale attribute).
