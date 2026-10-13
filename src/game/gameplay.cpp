@@ -546,6 +546,11 @@ void Gameplay::setPlayer(Game& game, ui::Ui& ui) {
     game.predictItemUse = [this](int hand, const RayHit* target) { return predictItemUse(hand, target); };
     game.predictUseOn = [this](int hand, const RayHit& hit) { return predictUseOn(hand, hit); };
     game.handHasItem = [this](int hand) { return (hand == 0 ? mainHand() : offHand()) != nullptr; };
+    game.handInTag = [this](int hand, const char* tag) {
+        const ui::ItemStack* s = hand == 0 ? mainHand() : offHand();
+        const std::vector<int>* t = s && ui_ ? ui_->items().tag("minecraft:item", tag) : nullptr;
+        return t && std::find(t->begin(), t->end(), s->item) != t->end();
+    };
     game.handOnCooldown = [this](int hand) { return onCooldown(hand == 0 ? mainHand() : offHand()); };
     game.predictRelease = [this] { releaseUse(); };
     game.onStabEffects = [this] {  // PiercingWeapon.makeSound

@@ -135,6 +135,7 @@ public:
     // Right click on a block that reacts to use (containers, doors...): true sends the use to the server as is
     // instead of placing the held block.
     std::function<bool(int x, int y, int z)> onInteract;
+    std::function<bool(int hand, const char* tag)> handInTag;  // the hand's item is in the item tag
     // Multiplayer: every attack press (Minecraft.startAttack sends ServerboundPunchPacket: the arm swing others see,
     // attack cooldown), a right press that did not place a block or use one (the held item is used: food, bows,
     // buckets...), and the use key released after that (bows, eating stop).

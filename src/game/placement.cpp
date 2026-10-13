@@ -6,6 +6,7 @@
 #include <cmath>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 
 namespace place {
 namespace {
@@ -122,6 +123,26 @@ std::string nameOf(const Context& c, u16 id) { return std::string(baseOf(c.reg.n
 u16 with(const Context& c, u16 id, std::string_view key, std::string_view value) {
     return c.reg.property(id, key).empty() ? id : c.reg.withProperty(id, key, value);
 }
+// BlockState.instrument (BlockBehaviour.Properties.instrument): HARP unless the table says otherwise.
+std::string_view instrumentOf(const Context& c, u16 id) {
+    static const std::unordered_map<std::string_view, std::string_view> table = {
+#include "game/note_instruments.inc"
+    };
+    const auto it = table.find(baseOf(c.reg.name(id)));
+    return it == table.end() ? std::string_view("harp") : it->second;
+}
+bool worksAboveNoteBlock(std::string_view i) {  // NoteBlockInstrument.Type MOB_HEAD / CUSTOM
+    return i == "zombie" || i == "skeleton" || i == "creeper" || i == "dragon" || i == "wither_skeleton" || i == "piglin" ||
+           i == "custom_head";
+}
+// NoteBlock.setInstrument: a head above, else the block below (a head there counts as harp)
+std::string_view noteInstrument(const Context& c, const int p[3]) {
+    const std::string_view above = instrumentOf(c, at(c, p, kUp));
+    if (worksAboveNoteBlock(above)) return above;
+    const std::string_view below = instrumentOf(c, at(c, p, kDown));
+    return worksAboveNoteBlock(below) ? std::string_view("harp") : below;
+}
+
 int intProp(const Context& c, u16 id, std::string_view key) {
     const std::string_view v = c.reg.property(id, key);
     return v.empty() ? 0 : std::atoi(std::string(v).c_str());
@@ -607,6 +628,10 @@ Result placementStateImpl(const Context& c, u16 held, const int pos[3], bool rep
         r.state = with(c, with(c, held, "shape", eastWest ? "east_west" : "north_south"), "waterlogged", water ? "true" : "false");
         return r;
     }
+    if (n == "minecraft:note_block") {  // NoteBlock.getStateForPlacement
+        r.state = with(c, held, "instrument", noteInstrument(c, pos));
+        return r;
+    }
     if (n == "minecraft:cocoa") {  // CocoaBlock.getStateForPlacement: the first horizontal look direction it survives in
         for (int d : nearestLookingDirections(c, replaceClicked)) {
             if (!horizontal(d)) continue;
@@ -913,6 +938,8 @@ void neighbourShapes(const Context& c, int x, int y, int z, u16 old, std::vector
             updated = wireUpdate(c, nb, q, opposite(d));
         } else if (nn == "minecraft:brown_mushroom_block" || nn == "minecraft:red_mushroom_block" || nn == "minecraft:mushroom_stem") {
             if (selfName == nn) updated = with(c, nb, kName[opposite(d)], "false");  // HugeMushroomBlock.updateShape
+        } else if (nn == "minecraft:note_block" && !horizontal(d)) {  // NoteBlock.updateShape: from above / below
+            updated = with(c, nb, "instrument", noteInstrument(c, q));
         } else if (nn == "minecraft:chorus_plant") {  // ChorusPlantBlock.updateShape (while it survives)
             const int toUs = opposite(d);
             const bool connect = selfName == nn || selfName == "minecraft:chorus_flower" || (toUs == kDown && selfName == "minecraft:end_stone");

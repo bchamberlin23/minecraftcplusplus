@@ -412,7 +412,10 @@ int Game::useItemOn(int hand) {
     if (gameMode == 3) return send(kUseConsume);
     auto has = [&](int h) { return handHasItem ? handHasItem(h) : (h == 0 && hotbar_[selected_] != 0); };
     const bool suppressUsingBlock = player_.lastInput.sneak && (has(0) || has(1));  // isSecondaryUseActive
-    if (!suppressUsingBlock && onInteract && onInteract(target_.x, target_.y, target_.z)) return send(kUseConsume);
+    // NoteBlock.useItemOn: a head (#noteblock_top_instruments) on the top face goes on to the item's own use
+    const bool headOnNoteBlock = target_.face == 1 && handInTag && handInTag(hand, "minecraft:noteblock_top_instruments") &&
+                                 registry_.name(world_.block(target_.x, target_.y, target_.z)).starts_with("minecraft:note_block[");
+    if (!suppressUsingBlock && !headOnNoteBlock && onInteract && onInteract(target_.x, target_.y, target_.z)) return send(kUseConsume);
     const u16 held = hand == 0 ? hotbar_[selected_] : offhandBlock_;
     if (!has(hand) || (handOnCooldown && handOnCooldown(hand))) return send(kUsePass);
     if (!held) return send(predictUseOn ? predictUseOn(hand, target_) : kUsePass);  // not a block: Item.useOn
