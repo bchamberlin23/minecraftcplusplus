@@ -60,6 +60,7 @@ public:
 
     struct Stats {
         u32 voices = 0, streams = 0, dropped = 0, stolen = 0, decoded = 0;
+        u64 cachedBytes = 0;  // decoded sounds kept (never evicted)
         double decodeMs = 0;
     };
     Stats stats() const;

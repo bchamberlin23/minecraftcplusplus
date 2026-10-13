@@ -451,6 +451,7 @@ void Engine::run() {
         p = {out, u32(frames), channels, rate, false};
         std::lock_guard lock(mutex_);
         m.stats.decoded++;
+        m.stats.cachedBytes += u64(frames) * u64(channels) * 2;
         m.stats.decodeMs += t.ms();
         return &p;
     };

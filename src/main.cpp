@@ -965,6 +965,20 @@ int wmain(int argc, wchar_t** argv) {
         const int team = ui::teamColor(member);
         return team >= 0 && team < 16 ? int(ui::kLegacyColors[team]) : 0xFFFFFF;
     };
+    // F3 entries the UI cannot see (debug_screen.cpp).
+    ui.setEngineInfo([&](std::string_view what) -> std::string {
+        char buf[160];
+        if (what == "particles") return "P: " + std::to_string(haveEntities ? visuals.stats().particles : 0u);
+        if (what == "entities" && haveEntities) {
+            const auto& st = entityRenderer.stats();
+            std::snprintf(buf, sizeof(buf), "E: %u/%u, quads %u", st.drawn, st.entities, st.quads);
+            return buf;
+        }
+        if (what == "sound_mood") return audio.ready() ? audio.channelDebug() : std::string();
+        if (what == "sound_cache") return audio.ready() ? audio.cacheDebug() : std::string();
+        if (what == "day_count") return session ? "Day #" + std::to_string(i64(sky.dayTicks() / 24000.0)) : std::string();
+        return {};
+    });
     game.onSpectatorAttack = [&](double blockDistance) {
         if (!session || !haveEntities) return;
         const CameraState c = game.camera();

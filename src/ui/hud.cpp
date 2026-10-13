@@ -58,8 +58,6 @@ void backdrop(UiState& s, Canvas& c, float x, float y, int width, u32 textColor)
     c.fill(x - 2, y - 2, x + float(width) + 2, y + 9 + 2, withAlpha(0, float(alphaOf(bg)) * float(alphaOf(textColor)) / (255.0f * 255.0f)));
 }
 
-const char* kDirNames[4] = {"south", "west", "north", "east"};
-const char* kTowards[4] = {"Towards positive Z", "Towards negative X", "Towards negative Z", "Towards positive X"};
 }  // namespace
 
 // --- per tick -----------------------------------------------------------------------------------------------
@@ -859,102 +857,6 @@ void Ui::State::drawTextField(Canvas& c, TextField& f, float x, float y, float w
         c.setInvert(false);
     }
     (void)endX;
-}
-
-// --- F3 -----------------------------------------------------------------------------------------------------
-
-void Ui::State::drawDebug(Canvas& c) {
-    const CameraState cam = game->camera();
-    const Player& p = game->player();
-    std::vector<std::string> left, right;
-    char buf[512];
-    auto add = [&](std::vector<std::string>& v, const char* fmt, auto... args) {
-        std::snprintf(buf, sizeof(buf), fmt, args...);
-        v.emplace_back(buf);
-    };
-    add(left, "minecraftCplusplus (26.3%s)", online() ? ", multiplayer" : ", local world");
-    const RenderStats& rs = renderer->stats();
-    add(left, "%d fps T: %.1f ms frame, GPU %.2f ms", int(fps + 0.5), frameMs, rs.gpuMs);
-    const TerrainStats& ts = terrain->stats();
-    add(left, "C: %zu/%zu sections, %zu nodes, %u draws", ts.detailResident, ts.detailPending, ts.active,
-        rs.commands[0] + rs.commands[1] + rs.commands[2] + rs.commands[3]);
-    add(left, "F: %zu/%zu far regions, %.0f/%.0f MB", ts.farRegions, ts.farPending,
-        double(renderer->arenaBytesUsed()) / (1 << 20), double(renderer->arenaBytesTotal()) / (1 << 20));
-    static const char* const kDifficulty[4] = {"peaceful", "easy", "normal", "hard"};
-    if (session)
-        add(left, "Server: game mode %d, entity %d, %s%s", gameMode(), session->entityId(), kDifficulty[difficulty & 3],
-            difficultyLocked ? " (locked)" : "");
-    // Reduced debug info (the server's gamerule): only the entries DebugScreenEntry.isAllowed keeps, no positions.
-    if (!reducedDebugInfo) {
-        left.emplace_back("");
-        add(left, "XYZ: %.3f / %.5f / %.3f", p.pos[0], p.pos[1], p.pos[2]);
-        const int bx = int(std::floor(p.pos[0])), by = int(std::floor(p.pos[1])), bz = int(std::floor(p.pos[2]));
-        add(left, "Block: %d %d %d [%d %d %d]", bx, by, bz, bx & 15, by & 15, bz & 15);
-        add(left, "Chunk: %d %d %d [%d %d in r.%d.%d.mca]", bx >> 4, by >> 4, bz >> 4, (bx >> 4) & 31, (bz >> 4) & 31, bx >> 9, bz >> 9);
-        float yaw = std::fmod(p.yaw * 180.0f / 3.14159265f, 360.0f);
-        if (yaw >= 180) yaw -= 360;
-        if (yaw < -180) yaw += 360;
-        const int dir = int(std::floor(yaw / 90.0f + 0.5f)) & 3;
-        add(left, "Facing: %s (%s) (%.1f / %.1f)", kDirNames[dir], kTowards[dir], yaw, p.pitch * 180.0f / 3.14159265f);
-        {
-            std::shared_lock lock(world->mutex());
-            const int ey = int(std::floor(cam.y));
-            const World::LightView lv = world->light(bx >> 4, ey >> 4, bz >> 4);
-            const u8 l = lv.at(bx & 15, ey & 15, bz & 15);
-            add(left, "Light: %d (%d sky, %d block)", std::max(l >> 4, l & 15), l >> 4, l & 15);
-        }
-        if (biomeLookup) add(left, "Biome: %s", biomeLookup(bx, int(std::floor(cam.y)), bz).c_str());
-        add(left, "%s%s", p.flying ? "Flying" : p.inWater ? "Swimming" : p.onGround ? "On ground" : "Airborne",
-            p.sneaking ? ", sneaking" : "");
-    }
-
-    MEMORYSTATUSEX mem{sizeof(mem)};
-    GlobalMemoryStatusEx(&mem);
-    PROCESS_MEMORY_COUNTERS_EX pmc{};
-    K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc), sizeof(pmc));
-    add(right, "C++20 MSVC %d 64bit", _MSC_VER);
-    add(right, "Mem: %.0f%% %llu/%lluMB", 100.0 * double(pmc.PrivateUsage) / double(mem.ullTotalPhys),
-        (unsigned long long)(pmc.PrivateUsage >> 20), (unsigned long long)(mem.ullTotalPhys >> 20));
-    add(right, "Working set: %lluMB", (unsigned long long)(pmc.WorkingSetSize >> 20));
-    add(right, "CPU: %u threads", std::thread::hardware_concurrency());
-    right.emplace_back("");
-    add(right, "Display: %ux%u (%s)", renderer->width(), renderer->height(), renderer->adapterName().c_str());
-    add(right, "Direct3D 12, GUI scale %d", c.scale());
-    const RayHit& t = game->target();
-    if (t.hit && !reducedDebugInfo) {
-        right.emplace_back("");
-        add(right, "\xC2\xA7nTargeted Block: %d, %d, %d", t.x, t.y, t.z);
-        const std::string& state = registry->name(world->block(t.x, t.y, t.z));
-        const size_t b = state.find('[');
-        right.push_back(state.substr(0, b));
-        if (b != std::string::npos) {
-            std::string props = state.substr(b + 1, state.size() - b - 2);
-            size_t start = 0;
-            while (start < props.size()) {
-                size_t comma = props.find(',', start);
-                if (comma == std::string::npos) comma = props.size();
-                std::string kv = props.substr(start, comma - start);
-                const size_t eq = kv.find('=');
-                std::string value = kv.substr(eq + 1);
-                if (value == "true") value = "\xC2\xA7" "atrue";
-                else if (value == "false") value = "\xC2\xA7" "cfalse";
-                right.push_back(kv.substr(0, eq) + ": " + value);
-                start = comma + 1;
-            }
-        }
-    }
-    auto lines = [&](const std::vector<std::string>& v, bool alignRight) {
-        for (size_t i = 0; i < v.size(); ++i) {
-            if (v[i].empty()) continue;
-            const int w = font.width(v[i]);
-            const float top = float(2 + 9 * int(i));
-            const float x = alignRight ? float(c.guiWidth() - 2 - w) : 2.0f;
-            c.fill(x - 1, top - 1, x + float(w) + 1, top + 9 - 1, 0x90505050);
-            font.draw(c, v[i], x, top, 0xFFE0E0E0, false);
-        }
-    };
-    lines(left, false);
-    lines(right, true);
 }
 
 }  // namespace ui

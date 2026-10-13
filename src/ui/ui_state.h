@@ -131,6 +131,7 @@ enum class Screen {
     WorldOptions, InWorldGameRules, Restrictions,  // world_options.cpp
     CommandBlockEdit, MinecartCommandEdit, JigsawEdit, StructureEdit, TestBlockEdit, TestInstanceEdit,  // block_editors.cpp
     SocialInteractions,  // social_screen.cpp
+    DebugOptions,        // debug_screen.cpp
     // Front end (frontend.h)
     Title, Worlds, CreateWorld, EditWorld, Confirm, Servers, EditServer, DirectConnect, Loading, Message
 };
@@ -232,7 +233,10 @@ struct Ui::State {
     int titleTime = 0, titleFadeIn = 10, titleStay = 70, titleFadeOut = 20;
     int actionbarTime = 0;
     bool actionbarAnimated = false;  // Hud.setNowPlaying: the overlay message's colour cycles
-    int spectatorEffectToggles = 0;  // presses of Toggle Spectator Shader Effects (GameRenderer.toggleSpectatorPostEffect)
+    int spectatorEffectToggles = 0;
+    // Engine numbers for F3 entries the UI cannot see ("particles", "entities", "sound_mood", "sound_cache",
+    // "post_effects", "day_count"): their line, "" none (set by main).
+    std::function<std::string(std::string_view what)> engineInfo;  // presses of Toggle Spectator Shader Effects (GameRenderer.toggleSpectatorPostEffect)
     int toolHighlightTimer = 0;
     ItemStack lastToolHighlight;
     int lastSelected = -1;
@@ -360,7 +364,6 @@ struct Ui::State {
     void drawSavingIndicator(Canvas& c);  // Hud.extractSavingIndicator
     bool rendersNowPlayingToast() const;
     void drawChat(Canvas& c, bool focused);
-    void drawDebug(Canvas& c);
     // playerSlot: the player inventory menu slot the stack is (item model properties compare stack identity: the
     // selected stack, the stack in use); -1 none.
     void drawItem(Canvas& c, const ItemStack& s, float x, float y, bool decorations = true, const char* countOverride = nullptr,

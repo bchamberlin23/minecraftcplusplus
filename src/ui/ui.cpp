@@ -11,6 +11,7 @@
 #include "ui/signs_books.h"
 #include "entity/entities.h"
 #include "ui/block_editors.h"
+#include "ui/debug_screen.h"
 #include "ui/dialogs.h"
 #include "ui/gameplay_hud.h"
 #include "ui/narrator.h"
@@ -536,6 +537,7 @@ bool Ui::init(const Init& in) {
     };
     in.game->extraLines = [this](std::vector<LineVertex>& lines, const CameraState& cam, float w, float h) {
         operatorBoxes(*s_, lines, cam, w, h);  // block_editors.cpp
+        debugLines(*s_, lines, cam, w, h);     // debug_screen.cpp: chunk borders, hitboxes
     };
     in.game->onInteract = [this](int x, int y, int z) {
         State& st = *s_;
@@ -971,6 +973,7 @@ void Ui::setItemModels(ent::ItemModels* models) {
 
 int Ui::ticksFrozen() const { return s_->ticksFrozen; }
 int Ui::spectatorEffectToggles() const { return s_->spectatorEffectToggles; }
+void Ui::setEngineInfo(std::function<std::string(std::string_view)> fn) { s_->engineInfo = std::move(fn); }
 
 const Items& Ui::items() const { return s_->items; }
 
@@ -1276,7 +1279,7 @@ void Ui::endFrame() {
     const bool hud = !s.hudHidden && !s.fe->cfg.menu;  // the title screen has no HUD
     if (hud) s.drawHud(c);
     if (hud) s.drawModHud(c);  // native mods
-    if (s.debug) s.drawDebug(c);
+    drawDebugScreen(s, c);  // debug_screen.cpp (always-on entries show without F3)
     if (s.screen != Screen::None) s.drawScreen(c);
     if (!s.fe->cfg.menu) s.drawSavingIndicator(c);
     narrator::frame(s);  // the widget under the mouse, when the narrator narrates the system

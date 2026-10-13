@@ -153,6 +153,11 @@ public:
     void poll(std::vector<Event>& out);  // appends pending events
     bool alive() const { return alive_; }
     ClientStats stats() const;
+    // Packets and bytes (uncompressed) received / sent so far (F3: tx / rx rates, the bandwidth chart).
+    struct Traffic {
+        u64 packetsIn = 0, packetsOut = 0, bytesIn = 0, bytesOut = 0;
+    };
+    Traffic traffic() const { return {packetsIn_.load(), packetsOut_.load(), bytesIn_.load(), bytesOut_.load()}; }
 
     // Play phase (main thread); ignored in other phases.
     void sendAcceptTeleport(int id, const double pos[3], float yaw, float pitch);
@@ -260,7 +265,8 @@ private:
     std::atomic<int> phase_{Login};
     std::atomic<int> viewDistance_{0}, simulationDistance_{0}, viewCenter_[2] = {0, 0};
     mutable std::mutex mutex_;  // events_, stats_
-    std::mutex sendMutex_;  // phase check + send are atomic w.r.t. phase changes
+    std::mutex sendMutex_;
+    std::atomic<u64> packetsIn_{0}, packetsOut_{0}, bytesIn_{0}, bytesOut_{0};  // phase check + send are atomic w.r.t. phase changes
     std::mutex dispatchMutex_;  // held while a packet is handled (pauseDispatch)
     std::vector<Event> events_;
     std::unordered_map<std::string, std::vector<PacketHandler>> playHandlers_;

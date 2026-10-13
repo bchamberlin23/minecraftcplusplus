@@ -61,7 +61,12 @@ public:
     // Options.getEffectiveRenderDistance (chunks): what the fog formulas are given (sky fog colour, the sky end,
     // blindness / darkness / spectator fog).
     void setRenderDistance(int chunks) { renderDistance_ = std::max(2, chunks); }
-    int skyDarken() const { return skyDarken_; }  // Level.getSkyDarken: 15 - the sky light level (0 day, 11 night)
+    int skyDarken() const { return skyDarken_; }
+    // The overworld clock's total ticks (else the first clock's; 0 none): F3's day count.
+    double dayTicks() const {
+        if (auto it = clocks_.find("minecraft:overworld"); it != clocks_.end()) return it->second;
+        return clocks_.empty() ? 0.0 : clocks_.begin()->second;
+    }  // Level.getSkyDarken: 15 - the sky light level (0 day, 11 night)
     // The level's world border, before update(): its wall (WorldBorderRenderer) is drawn after the weather when the
     // camera is within renderDistance blocks of it. nullptr: none.
     void setWorldBorder(const WorldBorder* border, float partialTick, float renderDistance) {

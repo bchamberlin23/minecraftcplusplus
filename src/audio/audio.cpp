@@ -254,6 +254,21 @@ u32 AudioSystem::playUi(std::string_view event, float pitch, float volume) {
     return play(bank_.eventId(event), Category::Ui, zero, volume, pitch, rng_.nextLong(), false, true);
 }
 
+std::string AudioSystem::channelDebug() const {
+    const Engine::Stats st = engine_.stats();
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), "Sounds: %u/%d + %u/%d (Mood %d%%)", st.voices - st.streams, Engine::kStaticVoices, st.streams,
+                  Engine::kStreamingVoices, int(std::round(moodiness_ * 100.0f)));
+    return buf;
+}
+
+std::string AudioSystem::cacheDebug() const {
+    const Engine::Stats st = engine_.stats();
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "Sound cache: %u buffers, %llu MiB", st.decoded, (unsigned long long)(st.cachedBytes >> 20));
+    return buf;
+}
+
 void AudioSystem::stop(u32 handle) {
     if (handle) engine_.stopHandle(handle);
 }

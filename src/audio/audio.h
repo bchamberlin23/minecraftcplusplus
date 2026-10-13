@@ -99,6 +99,9 @@ public:
     float volume(Category c) const { return volumes_[int(c)]; }
     void setVolume(Category c, float v);
 
+    // F3: SoundEngine.getChannelDebugString with the ambient mood (DebugEntrySoundMood), and the sound cache.
+    std::string channelDebug() const;
+    std::string cacheDebug() const;
     void mark(const char* label) { engine_.mark(label); }  // debug capture log
     double captureTime() const;                            // seconds since the capture started
     const GameSounds& gameSounds() const { return game_; }

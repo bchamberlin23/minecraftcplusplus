@@ -4,6 +4,7 @@
 // alone toggling the debug overlay on release (KeyboardHandler; all with the bound debug keys).
 #include "assets/assets.h"
 #include "audio/audio.h"
+#include "ui/debug_screen.h"
 #include "ui/ui_state.h"
 #include "world/world.h"
 
@@ -153,6 +154,8 @@ void tick(UiState& s) {
     }
 }
 
+}  // namespace
+
 // KeyboardHandler.debugFeedbackTranslated: "[Debug]:" in bold yellow, then the message.
 void debugFeedback(UiState& s, const char* key) {
     Style prefix = colorStyle(0xFFFF55);
@@ -161,6 +164,8 @@ void debugFeedback(UiState& s, const char* key) {
     t.append(" " + s.res.translate(key));
     s.addChat(t);
 }
+
+namespace {
 
 bool worldKey(UiState& s, const InputEvent& e) {
     if (e.type != InputEvent::Key || e.repeat) return false;
@@ -214,6 +219,10 @@ bool worldKey(UiState& s, const InputEvent& e) {
         sw.usedAsModifier = true;
         s.chatLines.clear();
         s.chatMessages.clear();
+        return true;
+    }
+    if (debugScreenKey(s, e)) {  // debug_screen.cpp: the other combinations
+        sw.usedAsModifier = true;
         return true;
     }
     return false;

@@ -85,6 +85,7 @@ const Field kFields[] = {
     {"autoSuggestions", &S::autoSuggestions},
     {"hideMatchedNames", &S::hideMatchedNames},
     {"reducedDebugInfo", &S::reducedDebugInfo},
+    {"debugGuiScale", &S::debugGuiScale, -1, 1000000},
     {"onlyShowSecureChat", &S::onlyShowSecureChat},
     {"saveChatDrafts", &S::saveChatDrafts},
     {"chatOpacity", &S::chatOpacity, 0.0, 1.0},

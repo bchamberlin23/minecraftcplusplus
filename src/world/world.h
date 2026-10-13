@@ -100,6 +100,7 @@ public:
     const Section* anySection(int cx, int sy, int cz, const Region** outRegion) const;
     const Column* column(int cx, int cz, const Region** outRegion) const;
     const std::vector<std::unique_ptr<Region>>& regions() const { return regions_; }
+    size_t blockEntityChunks() const { return blockEntities_.size(); }  // chunks with block entity data (F3)
     int minSectionY() const { return minSy_; }  // vertical build range in sections
     int maxSectionY() const { return maxSy_; }
     bool loaded(int x, int z) const { return column(x >> 4, z >> 4, nullptr) != nullptr; }

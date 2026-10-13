@@ -157,6 +157,7 @@ bool Client::sendRaw(Phase phase, const char* name, const Writer& body) {
     Writer w;
     w.varInt(it->second);
     w.buf.insert(w.buf.end(), body.buf.begin(), body.buf.end());
+    ++packetsOut_, bytesOut_ += w.buf.size();
     return connection_.send(w.buf);
 }
 
@@ -205,6 +206,7 @@ void Client::run() {
     std::string reason = "connection closed";
     std::vector<u8> packet;
     while (!quit_ && connection_.read(packet)) {
+        ++packetsIn_, bytesIn_ += packet.size();
         Reader r(packet.data(), packet.size());
         const int id = r.varInt();
         const Phase phase = Phase(phase_.load());
