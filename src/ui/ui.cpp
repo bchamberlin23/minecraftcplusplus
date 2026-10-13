@@ -220,6 +220,7 @@ void Ui::State::applyControls() {  // the key bindings and control options the g
     k.sprint = settings.key(Key::Sprint), k.attack = settings.key(Key::Attack), k.use = settings.key(Key::Use);
     k.pickItem = settings.key(Key::PickItem), k.perspective = settings.key(Key::TogglePerspective);
     for (int i = 0; i < 9; ++i) k.hotbar[i] = settings.key(Key(int(Key::Hotbar1) + i));
+    k.debugModifier = settings.key(Key::DebugModifier);
     game->toggleCrouch = settings.toggleCrouch, game->toggleSprint = settings.toggleSprint;
     game->toggleAttack = settings.toggleAttack, game->toggleUse = settings.toggleUse;
     game->invertMouseX = settings.invertMouseX, game->invertMouseY = settings.invertMouseY;

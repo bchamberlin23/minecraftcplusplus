@@ -185,8 +185,9 @@ void Game::frame(Window& w, double dt) {
     const bool esc = w.keyDown(VK_ESCAPE);
     if (handleEscape && esc && !escWasDown_) w.setMouseCaptured(false);
     escWasDown_ = esc;
+    const bool debugHeld = keys.debugModifier && w.keyDown(keys.debugModifier);  // F3 + 1..4 are charts
     for (int i = 0; i < 9; ++i)
-        if (presses(keys.hotbar[i]) && !(spectatorInput && spectatorInput(0, i))) selected_ = i;
+        if (presses(keys.hotbar[i]) && !debugHeld && !(spectatorInput && spectatorInput(0, i))) selected_ = i;
     const PlayerInput input = inputSuspended ? PlayerInput{} : readInput(w);
     const Window::MouseEvents ev = w.takeMouseEvents();
     if (inputSuspended) pendingAttacks_ = 0;

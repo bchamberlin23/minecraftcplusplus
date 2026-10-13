@@ -25,6 +25,7 @@
 #include <json/json.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <fstream>
 #include <map>
@@ -551,12 +552,16 @@ std::string keyHint(UiState& s, Key k) {  // DebugScreenOverlay.formatKeybind
 
 }  // namespace
 
+void drawDebugCharts(UiState& s, Canvas& c, int W, int H);
+void recordFrameTime(double ms);
+
 bool debugEntryEnabled(UiState& s, std::string_view id) {
     const int i = indexOf(id);
     return i >= 0 && enabled(s, size_t(i));
 }
 
 void drawDebugScreen(UiState& s, Canvas& c) {
+    recordFrameTime(s.frameMs);  // Minecraft: the frame time logger
     if (s.hudHidden && s.screen == Screen::None) return;
     if (s.screen == Screen::DebugOptions) return;  // drawn behind its blur by the screen
     Displayer d;
@@ -628,6 +633,7 @@ void drawDebugScreen(UiState& s, Canvas& c) {
     };
     lines(left, true);
     lines(right, false);
+    drawDebugCharts(s, c, width, scale > 0 && scale < standard ? int(s.window->height()) / scale : c.guiHeight());
     c.pop();
 }
 
@@ -701,6 +707,191 @@ bool debugScreenKey(UiState& s, const InputEvent& e) {
 }
 
 bool debugChart(int which) { return which == 0 ? g.fpsCharts : which == 1 ? g.networkCharts : which == 2 ? g.profilerChart : g.lightmap; }
+
+// --- the charts (debugchart/*): samples, the subscription to the server's tick times, pings ------------------------
+
+namespace {
+
+struct Ring {  // LocalSampleLogger(240): oldest first
+    std::vector<std::array<double, 4>> v;
+    size_t head = 0;
+    void push(std::array<double, 4> x) {
+        if (v.size() < 240) v.push_back(x);
+        else v[head] = x, head = (head + 1) % 240;
+    }
+    size_t size() const { return v.size(); }
+    const std::array<double, 4>& get(size_t i) const { return v[(head + i) % v.size()]; }
+};
+struct Charts {
+    Ring frames, ticks, pings, bandwidth;
+    u64 lastBytes = 0;
+    bool subscribed = false;
+} gc;
+
+u32 lerpArgb(float f, u32 a, u32 b) {  // ARGB.srgbLerp
+    u32 out = 0;
+    for (int sh = 0; sh < 32; sh += 8) out |= u32(float((a >> sh) & 255) + (float((b >> sh) & 255) - float((a >> sh) & 255)) * f + 0.5f) << sh;
+    return out;
+}
+u32 sampleColor(double v, double min, u32 minC, double mid, u32 midC, double max, u32 maxC) {  // AbstractDebugChart.getSampleColor
+    v = std::clamp(v, min, max);
+    return v < mid ? lerpArgb(float((v - min) / (mid - min)), minC, midC) : lerpArgb(float((v - mid) / (max - mid)), midC, maxC);
+}
+
+void shadeText(UiState& s, Canvas& c, const std::string& t, float x, float y) {  // extractStringWithShade
+    c.fill(x, y, x + float(s.font.width(t)) + 1, y + 9, 0x90505050);
+    s.font.draw(c, t, x + 1, y + 1, 0xFFE0E0E0, false);
+}
+
+// AbstractDebugChart.extractRenderState: the background, one bar a sample, the frame, min / avg / max.
+template <class Value, class Bar, class Label, class Extra>
+void chart(UiState& s, Canvas& c, const Ring& r, int left, int width, int bottom, Value value, Bar bar, Label text, Extra extra) {
+    c.fill(float(left), float(bottom - 60), float(left + width), float(bottom), 0x90505050);
+    const size_t start = size_t(std::max(0, 240 - (width - 2)));
+    double mn = 1e300, mx = -1e300, avg = 0;
+    size_t n = 0;
+    for (size_t i = start; i < r.size(); ++i, ++n) {
+        const double v = value(r.get(i));
+        mn = std::min(mn, v), mx = std::max(mx, v), avg += v;
+        bar(r.get(i), left + int(n) + 1);
+    }
+    c.fill(float(left), float(bottom - 60), float(left + width), float(bottom - 59), 0xFFFFFFFF);
+    c.fill(float(left), float(bottom - 1), float(left + width), float(bottom), 0xFFFFFFFF);
+    c.fill(float(left), float(bottom - 60), float(left + 1), float(bottom), 0xFFFFFFFF);
+    c.fill(float(left + width - 1), float(bottom - 60), float(left + width), float(bottom), 0xFFFFFFFF);
+    if (n) {
+        const std::string a = text(mn) + " min", b = text(avg / double(n)) + " avg", m = text(mx) + " max";
+        s.font.draw(c, a, float(left + 2), float(bottom - 69), 0xFFE0E0E0, false);
+        s.font.draw(c, b, float(left + width / 2 - s.font.width(b) / 2), float(bottom - 69), 0xFFE0E0E0, false);
+        s.font.draw(c, m, float(left + width - s.font.width(m) - 2), float(bottom - 69), 0xFFE0E0E0, false);
+    }
+    extra();
+}
+
+}  // namespace
+
+void recordFrameTime(double ms) { gc.frames.push({ms * 1e6, 0, 0, 0}); }
+
+void drawDebugCharts(UiState& s, Canvas& c, int W, int H) {
+    const int maxWidth = W / 2;
+    const int width = std::min(240 + 2, maxWidth);
+    auto vbar = [&](int x, int h, int bottom, u32 color) { c.fill(float(x), float(bottom - h), float(x + 1), float(bottom), color); };
+    if (s.debug && g.fpsCharts) {
+        chart(s, c, gc.frames, 0, width, H, [](const auto& v) { return v[0]; },
+              [&](const auto& v, int x) { vbar(x, int(std::round(v[0] / 1e6 * 60.0 / 33.333333333333336)), H, sampleColor(v[0] / 1e6, 0, 0xFF00FF00, 28, 0xFFFFFF00, 56, 0xFFFF0000)); },
+              [](double ns) { return fmt("%d ms", int(std::round(ns / 1e6))); },
+              [&] {
+                  shadeText(s, c, "30 fps", 1, float(H - 60 + 1));
+                  shadeText(s, c, "60 fps", 1, float(H - 30 + 1));
+                  c.fill(0, float(H - 30), float(width), float(H - 29), 0xFFFFFFFF);
+                  const u32 limit = s.settings.video.fpsLimit;
+                  if (limit > 0 && limit <= 250) {
+                      const int h = int(std::round(1000.0 / limit * 60.0 / 33.333333333333336));
+                      c.fill(0, float(H - h - 1), float(width), float(H - h), 0xFF00FFFF);
+                  }
+              });
+        if (gc.ticks.size()) {  // TpsDebugChart: the tick's parts stacked (idle left out), coloured by the target
+            const double mspt = s.entities && s.entities->tickRate.rate > 0 ? 1000.0 / s.entities->tickRate.rate : 50.0;
+            const int left = W - width;
+            chart(s, c, gc.ticks, left, width, H, [](const auto& v) { return v[0] - v[3]; },
+                  [&](const auto& v, int x) {
+                      const double total = (v[0] - v[3]) / 1e6;
+                      vbar(x, int(std::round(total * 60.0 / mspt)), H, sampleColor(total, mspt, 0xFF00FF00, mspt * 1.125, 0xFFFFFF00, mspt * 1.25, 0xFFFF0000));
+                      int y = H;
+                      const double parts[3] = {v[1] / 1e6, v[2] / 1e6, std::max(0.0, total - v[1] / 1e6 - v[2] / 1e6)};
+                      const u32 colors[3] = {0xFF991111, 0xFFBA995F, 0xFF5F0E8C};
+                      for (int k = 0; k < 3; ++k) {
+                          const int h = int(std::round(parts[k] * 60.0 / mspt));
+                          c.fill(float(x), float(y - h), float(x + 1), float(y), colors[k]);
+                          y -= h;
+                      }
+                  },
+                  [](double ns) { return fmt("%d ms", int(std::round(ns / 1e6))); },
+                  [&] { shadeText(s, c, fmt("%.1f tps", 1000.0 / mspt), float(left + 1), float(H - 60 + 1)); });
+        }
+    }
+    if (s.debug && g.networkCharts && s.online()) {
+        if (!s.fe->cfg.singleplayer)  // BandwidthDebugChart (not for the local server)
+            chart(s, c, gc.bandwidth, 0, width, H, [](const auto& v) { return v[0] * 20; },
+                  [&](const auto& v, int x) {
+                      const double bps = v[0] * 20;
+                      vbar(x, int(std::round(std::log(bps + 1) * 60.0 / std::log(1048576.0))), H, sampleColor(bps, 0, 0xFF00FFFF, 8192, 0xFFA0A0FF, 1.048576e7, 0xFFFF0000));
+                  },
+                  [](double bps) {
+                      return bps >= 1048576 ? fmt("%.1f MiB/s", bps / 1048576) : bps >= 1024 ? fmt("%.1f KiB/s", bps / 1024) : fmt("%d B/s", int(bps));
+                  },
+                  [&] {
+                      for (double ref : {64.0, 1024.0, 16384.0, 1048576.0}) {
+                          const int h = int(std::round(std::log(ref + 1) * 60.0 / std::log(1048576.0)));
+                          c.fill(0, float(H - h - 1), float(width), float(H - h), 0xFFFFFFFF);
+                          shadeText(s, c, ref >= 1048576 ? "1.0 MiB/s" : ref >= 1024 ? fmt("%d KiB/s", int(ref / 1024)) : fmt("%d B/s", int(ref)), 1, float(H - h - 9));
+                      }
+                  });
+        chart(s, c, gc.pings, W - width, width, H, [](const auto& v) { return v[0]; },  // PingDebugChart
+              [&](const auto& v, int x) { vbar(x, int(std::round(v[0] * 60.0 / 500.0)), H, sampleColor(v[0], 0, 0xFF00FF00, 250, 0xFFFFFF00, 500, 0xFFFF0000)); },
+              [](double ms) { return fmt("%d ms", int(std::round(ms))); }, [&] { shadeText(s, c, "500 ms", float(W - width + 1), float(H - 60 + 1)); });
+    }
+}
+
+namespace {
+
+void chartHandlers(UiState& s, net::Client& client) {
+    UiState* sp = &s;
+    client.onPlayPeek("debug_sample", [sp](net::Reader& r) {  // ClientboundDebugSamplePacket: the server's tick times
+        const i32 n = r.varInt();
+        std::array<double, 4> v{};
+        for (i32 i = 0; i < n && r.ok; ++i) {
+            const double x = double(r.i64v());
+            if (i < 4) v[size_t(i)] = x;
+        }
+        const int type = r.varInt();
+        if (r.ok && type == 0) sp->post([v] { gc.ticks.push(v); });
+    });
+    client.onPlayPeek("pong_response", [sp](net::Reader& r) {  // PingDebugMonitor.onPongReceived
+        const i64 sent = r.i64v();
+        if (r.ok) sp->post([sent] { gc.pings.push({double(i64(GetTickCount64()) - sent), 0, 0, 0}); });
+    });
+}
+
+void chartTick(UiState& s) {
+    if (!s.online()) {
+        gc = Charts{};
+        return;
+    }
+    if (s.debug && g.networkCharts) {  // PingDebugMonitor.tick, BandwidthDebugMonitor.tick
+        net::Writer w;
+        w.u64v(u64(GetTickCount64()));
+        s.client->sendPlay("ping_request", w);
+        const u64 bytes = s.client->traffic().bytesIn;
+        if (gc.lastBytes) gc.bandwidth.push({double(bytes - gc.lastBytes), 0, 0, 0});
+        gc.lastBytes = bytes;
+    } else {
+        gc.lastBytes = 0;
+    }
+    // ClientDebugSubscriber: the dedicated server's tick times while the fps chart shows (operators get them)
+    const bool want = s.debug && g.fpsCharts;
+    if (want != gc.subscribed) {
+        gc.subscribed = want;
+        int id = -1;
+        if (s.reports) {
+            const nlohmann::json& reg = s.reports->registries();
+            if (reg.contains("minecraft:debug_subscription") && reg["minecraft:debug_subscription"].contains("entries") &&
+                reg["minecraft:debug_subscription"]["entries"].contains("minecraft:dedicated_server_tick_time"))
+                id = reg["minecraft:debug_subscription"]["entries"]["minecraft:dedicated_server_tick_time"].value("protocol_id", -1);
+        }
+        net::Writer w;
+        w.varInt(want && id >= 0 ? 1 : 0);
+        if (want && id >= 0) w.varInt(id);
+        s.client->sendPlay("debug_subscription_request", w);
+        if (!want) gc.ticks = Ring{};
+    }
+}
+
+void chartAttached(UiState&) { gc = Charts{}; }
+
+const UiModuleRegistrar kCharts({.name = "debug_charts", .registerHandlers = chartHandlers, .attached = chartAttached, .tick = chartTick});
+
+}  // namespace
 
 // --- the debug renderers (DebugRenderer): chunk borders, entity hitboxes ------------------------------------------
 

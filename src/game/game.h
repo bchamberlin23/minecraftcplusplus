@@ -107,6 +107,7 @@ public:
         int forward = 'W', left = 'A', back = 'S', right = 'D', jump = 0x20, sneak = 0xA0, sprint = 0xA2;  // Space, LShift, LCtrl
         int attack = 1, use = 2, pickItem = 4, perspective = 0x74;                                           // mouse, F5
         int hotbar[9] = {'1', '2', '3', '4', '5', '6', '7', '8', '9'};
+        int debugModifier = 0x72;  // F3: while held its combinations take the keys (KeyboardHandler.handleDebugKeys)
     } keys;
     bool toggleCrouch = false, toggleSprint = false, toggleAttack = false, toggleUse = false;  // ToggleKeyMapping: a press switches the key on / off
     bool invertMouseX = false, invertMouseY = false, discreteScroll = false;
