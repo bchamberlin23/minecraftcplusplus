@@ -2605,6 +2605,21 @@ void Visuals::predictUse(const Entity& e) {
             a->play("minecraft:item.dye.use", audio::Category::Player, e.pos[0], e.pos[1], e.pos[2], 1.0f, 1.0f);
         return;
     }
+    if (held == "bucket" && !e.baby && a && (n == "minecraft:cow" || n == "minecraft:mooshroom" || n == "minecraft:goat")) {
+        // AbstractCow / Goat.mobInteract: player.playSound(the milking sound) at the player
+        const char* sound = n != "minecraft:goat" ? "minecraft:entity.cow.milk"
+                            : dataInt(e, "DATA_IS_SCREAMING_GOAT") ? "minecraft:entity.goat.screaming.milk"
+                                                                    : "minecraft:entity.goat.milk";
+        const double* p = m.game->player().pos;
+        a->play(sound, audio::Category::Player, p[0], p[1], p[2], 1.0f, 1.0f);
+        return;
+    }
+    if (n == "minecraft:creeper" && (held == "flint_and_steel" || held == "fire_charge") && a) {  // Creeper.mobInteract
+        std::uniform_real_distribution<float> u(0.8f, 1.2f);
+        a->play(held == "fire_charge" ? "minecraft:item.firecharge.use" : "minecraft:item.flintandsteel.use", audio::Category::Hostile,
+                e.pos[0], e.pos[1], e.pos[2], 1.0f, u(m.fxRandom));
+        return;
+    }
     if (n == "minecraft:allay" && a) {  // Allay.mobInteract: duplicating, giving, taking (the user's own sounds)
         if (dataInt(e, "DATA_DANCING") && held == "amethyst_shard" && dataInt(e, "DATA_CAN_DUPLICATE"))
             a->play("minecraft:block.amethyst_block.chime", audio::Category::Neutral, e.pos[0], e.pos[1], e.pos[2], 2.0f, 1.0f);
