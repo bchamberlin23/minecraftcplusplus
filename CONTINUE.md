@@ -88,6 +88,9 @@ listening socket).
   new one); the window title (an FPS / GPU line in game, not "Minecraft* 26.3 - Singleplayer"); the
   level loading screen follows the server process's log, without LevelLoadingScreen's chunk map; no OutOfMemoryScreen
   or crash-report text (crashes write a minidump to %LOCALAPPDATA%\minecraftCplusplus\crashes).
+- Video options of the engine's own: Max Framerate steps follow display refresh rates (30 .. 360, Unlimited) instead
+  of 10 .. 260; Render Distance reaches the detail distance (beyond 32); Graphics API is a fixed Direct3D 12 label;
+  Simulation Distance has a tooltip about applying on the next world load (the server is a separate process).
 - SystemToasts without a trigger here: PACK_LOAD_FAILURE, FILE_DROP_FAILURE, CHUNK_LOAD/SAVE_FAILURE (the server
   runs out of process), the demo overlay and the regional PeriodicNotificationManager.
 
