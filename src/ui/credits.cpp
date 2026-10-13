@@ -53,9 +53,9 @@ std::string readText(const char* path) {
     return std::string(bytes.begin(), bytes.end());
 }
 
-void add(UiState& s, const Text& t, bool centered) {
-    if (centered) {
-        g.lines.push_back(t), g.centered.push_back(true);
+void add(UiState& s, const Text& t, bool centered, bool wrap = false) {  // addCreditsLine; the poem's lines wrap at 256
+    if (!wrap) {
+        g.lines.push_back(t), g.centered.push_back(centered);
         return;
     }
     for (const Text& l : s.font.split(t, 256)) g.lines.push_back(l), g.centered.push_back(false);
@@ -78,7 +78,7 @@ void addPoem(UiState& s, const char* path, const std::string& player) {
         for (size_t at; (at = line.find(kObfuscate)) != std::string::npos;)
             line = line.substr(0, at) + "\xC2\xA7" "f\xC2\xA7" "k" + std::string("XXXXXXXX").substr(0, size_t(random.nextInt(4) + 3)) +
                    line.substr(at + kObfuscate.size());
-        add(s, Text(line), false);
+        add(s, Text(line), false, true);
         empty();
     }
     for (int i = 0; i < 8; ++i) empty();
@@ -166,9 +166,13 @@ void draw(UiState& s, Canvas& c) {
         tileTexture(c, s.sprites.texture("gui/menu_background"), 0, 0, float(W), float(H), 32, g.scroll * 0.5f, 0xFFFFFFFF);
     }
     // The lines under the logo, scrolling up; the last one stops in the middle of the screen.
-    const double dt = g.lastClock < 0 ? 0.0 : std::min(s.clock - g.lastClock, 0.25);
+    const double dt = g.lastClock < 0 ? 0.0 : s.clock - g.lastClock;
     g.lastClock = s.clock;
     g.scroll = std::max(0.0f, g.scroll + float(dt) * 20.0f * g.speed);  // scrollSpeed per tick
+    // RenderPipelines.VIGNETTE (dst * (1 - src)) before the text, which goes over it
+    c.setBlend(3);
+    blitTexture(c, s.sprites.texture("misc/credits_vignette"), 0, 0, 0, 0, float(W), float(H), W, H);  // stretched
+    c.setBlend(0);
     const float logoX = float(W / 2 - 128), logoY = float(H + 50);
     float yOffs = -g.scroll;
     c.push();
@@ -188,10 +192,6 @@ void draw(UiState& s, Canvas& c) {
         yPos += 12;
     }
     c.pop();
-    // RenderPipelines.VIGNETTE: dst * (1 - src).
-    c.setBlend(3);
-    blitTexture(c, s.sprites.texture("misc/credits_vignette"), 0, 0, 0, 0, float(W), float(H), W, H);  // stretched
-    c.setBlend(0);
     if (g.scroll > float(g.total + H + H + 24)) finish(s);
 }
 
@@ -200,7 +200,8 @@ void input(UiState& s, const InputEvent& e) {
     if (e.type != E::Key) return;
     if (e.code == VK_ESCAPE && e.down) return finish(s);  // WinScreen.onClose
     if (e.code == VK_SPACE) g.space = e.down;
-    else if (e.code == VK_CONTROL || e.code == VK_LCONTROL || e.code == VK_RCONTROL) g.modifiers = e.down ? 1 : 0;
+    else if (e.code == VK_CONTROL || e.code == VK_LCONTROL || e.code == VK_RCONTROL)  // each Control key held counts
+        g.modifiers = (GetKeyState(VK_LCONTROL) < 0 ? 1 : 0) + (GetKeyState(VK_RCONTROL) < 0 ? 1 : 0);
     else if (e.code == VK_UP) g.up = e.down;
     else return;
     updateSpeed();

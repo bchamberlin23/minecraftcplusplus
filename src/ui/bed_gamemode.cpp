@@ -282,7 +282,7 @@ void bedDraw(UiState& s, Canvas& c) {
     const int W = c.guiWidth(), H = c.guiHeight();
     s.drawChat(c, true);
     c.fill(2, float(H - 14), float(W - 2), float(H - 2), withAlpha(0, 0.5f));
-    s.drawTextField(c, s.chatInput, 4, float(H - 12 + 2), float(W - 8), 0xFFE0E0E0, true, true);
+    s.drawTextField(c, s.chatInput, 4, float(H - 12), float(W - 4), 0xFFE0E0E0, true, true);  // ChatScreen's EditBox
     s.drawButtons(c);
 }
 
