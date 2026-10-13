@@ -26,9 +26,22 @@ public:
     bool focused() const { return GetForegroundWindow() == hwnd_; }
     bool iconified() const { return IsIconic(hwnd_) != 0; }
     u64 lastInputMs() const { return lastInputMs_; }  // GetTickCount64 of the last key / mouse input (onInputReceived)
-    // Borderless fullscreen on the monitor the window is on (Window.setFullscreen); off restores the window.
+    // Fullscreen on the monitor the window is on (Window.setFullscreen); off restores the window. Borderless unless
+    // exclusive fullscreen is set: then the monitor switches to the preferred video mode (or stays in its current one)
+    // while the window is in front, and back to the desktop's when it loses the focus (the window minimizes).
     void setFullscreen(bool on);
     bool fullscreen() const { return fullscreen_; }
+    struct VideoMode {  // com.mojang.blaze3d.platform.VideoMode
+        int width = 0, height = 0, redBits = 8, greenBits = 8, blueBits = 8;
+        float refreshRate = 0;
+        bool operator==(const VideoMode&) const = default;
+    };
+    std::vector<VideoMode> videoModes() const;  // Monitor.videoModes of the window's monitor: largest first
+    void setExclusiveFullscreen(bool exclusive);
+    void setPreferredVideoMode(const VideoMode* mode);  // null: the monitor's current mode
+    void changeFullscreenVideoMode();  // Window.changeFullscreenVideoMode: apply a changed preferred mode
+    // The client area's size (Options.overrideWidth / overrideHeight), windowed only.
+    void setClientSize(int width, int height);
     void setMouseCaptured(bool captured);
     void setQuitShortcuts(bool on) { quitShortcuts_ = on; }  // Window.setQuitShortcuts: off, Alt+F4 does not close
     bool mouseCaptured() const { return captured_; }
@@ -102,6 +115,11 @@ private:
     std::array<u16, 256> presses_{};
     bool fullscreen_ = false;
     WINDOWPLACEMENT windowed_{};  // where the window was before fullscreen
+    bool exclusive_ = false, modeChanged_ = false, modeDirty_ = false;  // modeChanged_: the display mode is ours now
+    VideoMode preferred_{};
+    void applyFullscreenRect();
+    bool applyExclusiveMode();
+    void restoreDesktopMode();
     void press(int vk) {
         if (captured_ && vk > 0 && vk < 256) ++presses_[size_t(vk)];
     }

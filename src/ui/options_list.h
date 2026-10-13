@@ -42,6 +42,9 @@ Button onOffButton(UiState& s, const char* captionKey, bool* value, std::functio
 Button sliderButton(float value, std::function<Text()> label, std::function<void(float)> slide);
 Button screenButton(UiState& s, const char* labelKey, Screen target, bool active = true);
 Button narratorButton(UiState& s);  // Options.narrator (Not Available without a voice)
+// VideoMode.read / write: the fullscreenResolution option's JSON ({"width":..,"height":..,"red_bits":..,...}).
+bool parseVideoMode(const std::string& json, Window::VideoMode& out);
+std::string writeVideoMode(const Window::VideoMode& m);
 std::vector<Text> tooltipLines(UiState& s, const Text& text);  // split at new lines and 170 pixels
 // OptionInstance widgets on a Settings field (each change saves options.txt, then runs `changed`):
 std::function<Text()> tooltipKey(UiState& s, const char* key);  // a constant translated tooltip

@@ -75,6 +75,9 @@ struct Settings {
     int attackIndicator = 1;   // AttackIndicatorStatus id: 0 off, 1 crosshair, 2 hotbar (options.txt attackIndicator)
     std::array<int, kKeyCount> keys = defaultKeys();  // key_<name>
     bool fullscreen = false;
+    bool exclusiveFullscreen = false;   // Exclusive Fullscreen
+    std::string fullscreenResolution;   // the preferred exclusive mode as VideoMode JSON ("" the monitor's current)
+    int overrideWidth = 0, overrideHeight = 0;  // the window's size at start (both > 0)
     // Controls / Mouse Settings
     bool toggleCrouch = false, toggleSprint = false, toggleAttack = false, toggleUse = false, autoJump = false;
     bool quitShortcuts = true, operatorItemsTab = false;

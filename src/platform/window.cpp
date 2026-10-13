@@ -2,6 +2,8 @@
 
 #include <dwmapi.h>
 
+#include <algorithm>
+
 #pragma comment(lib, "dwmapi.lib")
 
 bool Window::create(const wchar_t* title, int width, int height, const Placement* placement, bool cloaked) {
@@ -91,21 +93,122 @@ bool Window::keyDown(int vk) const {
     return GetForegroundWindow() == hwnd_ && (GetAsyncKeyState(vk) & 0x8000);
 }
 
+namespace {
+std::wstring monitorDevice(HWND hwnd) {
+    MONITORINFOEXW mi{};
+    mi.cbSize = sizeof(mi);
+    GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi);
+    return mi.szDevice;
+}
+}  // namespace
+
+// SDL_GetFullscreenDisplayModes on Windows: the device's 32-bit modes (8 bits a channel), once each, sorted by width,
+// height and refresh rate, largest first.
+std::vector<Window::VideoMode> Window::videoModes() const {
+    std::vector<VideoMode> out;
+    if (!hwnd_) return out;
+    const std::wstring device = monitorDevice(hwnd_);
+    DEVMODEW dm{};
+    dm.dmSize = sizeof(dm);
+    for (DWORD i = 0; EnumDisplaySettingsW(device.c_str(), i, &dm); ++i) {
+        if (dm.dmBitsPerPel != 32) continue;
+        VideoMode m;
+        m.width = int(dm.dmPelsWidth), m.height = int(dm.dmPelsHeight), m.refreshRate = float(dm.dmDisplayFrequency);
+        if (std::find(out.begin(), out.end(), m) == out.end()) out.push_back(m);
+    }
+    std::sort(out.begin(), out.end(), [](const VideoMode& a, const VideoMode& b) {
+        if (a.width != b.width) return a.width > b.width;
+        if (a.height != b.height) return a.height > b.height;
+        return a.refreshRate > b.refreshRate;
+    });
+    return out;
+}
+
+// Window.applyExclusiveFullscreen: Monitor.getPreferredVideoMode (the preferred mode if the monitor has it, else its
+// current one) through ChangeDisplaySettingsEx, like SDL's exclusive fullscreen on Windows.
+bool Window::applyExclusiveMode() {
+    if (headless_) return false;  // automated runs never change the owner's display mode
+    const std::wstring device = monitorDevice(hwnd_);
+    const std::vector<VideoMode> modes = videoModes();
+    const bool have = preferred_.width > 0 && std::find(modes.begin(), modes.end(), preferred_) != modes.end();
+    if (!have) {  // the current mode: nothing to switch
+        restoreDesktopMode();
+        return true;
+    }
+    DEVMODEW dm{};
+    dm.dmSize = sizeof(dm);
+    dm.dmPelsWidth = DWORD(preferred_.width), dm.dmPelsHeight = DWORD(preferred_.height);
+    dm.dmDisplayFrequency = DWORD(preferred_.refreshRate), dm.dmBitsPerPel = 32;
+    dm.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY | DM_BITSPERPEL;
+    if (ChangeDisplaySettingsExW(device.c_str(), &dm, nullptr, CDS_FULLSCREEN, nullptr) != DISP_CHANGE_SUCCESSFUL) {
+        LOG("window: no exclusive fullscreen mode %dx%d@%g, borderless instead", preferred_.width, preferred_.height,
+            double(preferred_.refreshRate));
+        return false;
+    }
+    modeChanged_ = true;
+    return true;
+}
+
+void Window::restoreDesktopMode() {
+    if (!modeChanged_) return;
+    ChangeDisplaySettingsExW(monitorDevice(hwnd_).c_str(), nullptr, nullptr, 0, nullptr);
+    modeChanged_ = false;
+}
+
+void Window::applyFullscreenRect() {
+    MONITORINFO mi{};
+    mi.cbSize = sizeof(mi);
+    GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &mi);
+    SetWindowPos(hwnd_, exclusive_ && !headless_ ? HWND_TOPMOST : HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top,
+                 mi.rcMonitor.right - mi.rcMonitor.left, mi.rcMonitor.bottom - mi.rcMonitor.top,
+                 SWP_FRAMECHANGED | SWP_NOOWNERZORDER | SWP_SHOWWINDOW);
+}
+
+void Window::setExclusiveFullscreen(bool exclusive) {
+    if (exclusive == exclusive_) return;
+    exclusive_ = exclusive;
+    if (!fullscreen_ || !hwnd_) return;
+    if (exclusive_) applyExclusiveMode();
+    else restoreDesktopMode(), SetWindowPos(hwnd_, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+    applyFullscreenRect();
+}
+
+void Window::setPreferredVideoMode(const VideoMode* mode) {
+    const VideoMode m = mode ? *mode : VideoMode{};
+    if (!(m == preferred_)) preferred_ = m, modeDirty_ = true;
+}
+
+void Window::changeFullscreenVideoMode() {
+    if (!fullscreen_ || !modeDirty_ || !hwnd_) return;
+    modeDirty_ = false;
+    if (exclusive_) {
+        applyExclusiveMode();
+        applyFullscreenRect();
+    }
+}
+
+void Window::setClientSize(int width, int height) {
+    if (fullscreen_ || !hwnd_ || width <= 0 || height <= 0) return;
+    RECT r{0, 0, width, height};
+    AdjustWindowRect(&r, DWORD(GetWindowLongPtrW(hwnd_, GWL_STYLE)), FALSE);
+    SetWindowPos(hwnd_, nullptr, 0, 0, r.right - r.left, r.bottom - r.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOOWNERZORDER);
+}
+
 void Window::setFullscreen(bool on) {
     if (on == fullscreen_ || !hwnd_) return;
+    modeDirty_ = false;
     if (on) {
         windowed_.length = sizeof(windowed_);
         GetWindowPlacement(hwnd_, &windowed_);
-        MONITORINFO mi{};
-        mi.cbSize = sizeof(mi);
-        GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &mi);
         SetWindowLongPtrW(hwnd_, GWL_STYLE, WS_POPUP | WS_VISIBLE);
         fullscreen_ = true;
-        SetWindowPos(hwnd_, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right - mi.rcMonitor.left,
-                     mi.rcMonitor.bottom - mi.rcMonitor.top, SWP_FRAMECHANGED | SWP_NOOWNERZORDER | SWP_SHOWWINDOW);
+        if (exclusive_) applyExclusiveMode();
+        applyFullscreenRect();
     } else {
+        restoreDesktopMode();
         SetWindowLongPtrW(hwnd_, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_VISIBLE);
         fullscreen_ = false;
+        SetWindowPos(hwnd_, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOOWNERZORDER);
         SetWindowPlacement(hwnd_, &windowed_);
         SetWindowPos(hwnd_, nullptr, 0, 0, 0, 0,
                      SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_SHOWWINDOW);
@@ -296,6 +399,17 @@ LRESULT Window::handle(UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_KILLFOCUS: setMouseCaptured(false); return 0;
+        case WM_ACTIVATE:  // exclusive fullscreen: the desktop's mode while another window is in front (SDL minimizes)
+            if (fullscreen_ && exclusive_ && !headless_) {
+                if (LOWORD(wp) == WA_INACTIVE && modeChanged_) {
+                    restoreDesktopMode();
+                    ShowWindow(hwnd_, SW_MINIMIZE);
+                } else if (LOWORD(wp) != WA_INACTIVE && !modeChanged_ && !HIWORD(wp)) {
+                    applyExclusiveMode();
+                    applyFullscreenRect();
+                }
+            }
+            break;
         case WM_INPUT: {
             RAWINPUT raw;
             UINT size = sizeof(raw);

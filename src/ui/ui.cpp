@@ -3,6 +3,7 @@
 #include "ui/item_props.h"
 
 #include "assets/assets.h"
+#include "platform/launch.h"
 #include "audio/audio.h"
 #include "assets/game_reports.h"
 #include "ui/frontend.h"
@@ -105,6 +106,7 @@ bool Settings::load() {
         else if (k == "bobView") bobView = v == "true";
         else if (k == "attackIndicator") attackIndicator = ((std::atoi(v.c_str()) % 3) + 3) % 3;  // ByIdMap WRAP
         else if (k == "fullscreen") fullscreen = v == "true";
+        else if (k == "fullscreenResolution") fullscreenResolution = v;
         else if (k == "toggleCrouch") toggleCrouch = v == "true";
         else if (k == "toggleSprint") toggleSprint = v == "true";
         else if (k == "autoJump") autoJump = v == "true";
@@ -149,6 +151,7 @@ void Settings::save() const {
       << "\ndiscrete_mouse_scroll:" << b(discreteMouseScroll) << "\nmouseWheelSensitivity:" << mouseWheelSensitivity
       << "\nmainHand:" << (mainHand == 0 ? "left" : "right") << "\nallowServerListing:" << b(allowServerListing)
       << "\npauseOnLostFocus:" << b(pauseOnLostFocus) << "\nadvancedItemTooltips:" << b(advancedItemTooltips) << "\n";
+    if (!fullscreenResolution.empty()) f << "fullscreenResolution:" << fullscreenResolution << "\n";
     for (int i = 0; i < 7; ++i) f << "modelPart_" << kModelParts[i] << ":" << b(modelParts & (1 << i)) << "\n";
     for (size_t i = 0; i < kKeyCount; ++i) f << "key_" << keyDef(Key(i)).name << ":" << keyName(keys[i]) << "\n";
     saveExtra(f);
@@ -238,6 +241,7 @@ int Ui::State::guiScale() const {
 
 void Ui::State::openScreen(Screen s) {
     const bool wasNone = screen == Screen::None;
+    if (screen == Screen::Video && s != Screen::Video) window->changeFullscreenVideoMode();  // VideoSettingsScreen.onClose
     if (screen == Screen::Chat && s != Screen::Chat) leaveChat();
     if (screen != s)
         if (const ScreenDef* d = screenDef(screen); d && d->closed) d->closed(*this);
@@ -551,6 +555,14 @@ bool Ui::init(const Init& in) {
     // (kept as saved: a launch with a smaller --detail must not overwrite the player's choice)
     if (!s.settings.loaded) s.settings.renderDistance = in.detailChunks;
     in.terrain->setDetailRadius(float(std::min(s.settings.renderDistance, in.detailChunks)) * 16.0f);
+    // Minecraft: the override size for the window, the exclusive fullscreen mode, then options.txt fullscreen.
+    if (s.settings.overrideWidth > 0 && s.settings.overrideHeight > 0 && !launch::placement())
+        s.window->setClientSize(s.settings.overrideWidth, s.settings.overrideHeight);
+    s.window->setExclusiveFullscreen(s.settings.exclusiveFullscreen);
+    {
+        Window::VideoMode mode;
+        if (parseVideoMode(s.settings.fullscreenResolution, mode)) s.window->setPreferredVideoMode(&mode);
+    }
     if (s.settings.fullscreen) s.window->setFullscreen(true);  // options.txt fullscreen
     s.initNativeMods();  // mods_screen.cpp
     frontEndInit(s);     // title.cpp: the title screen in menu mode

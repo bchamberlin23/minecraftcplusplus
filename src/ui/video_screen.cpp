@@ -12,6 +12,8 @@
 #include "world/terrain.h"
 
 #include <cmath>
+#include <json/json.hpp>
+#include <memory>
 
 namespace ui {
 
@@ -90,17 +92,68 @@ Button qualityOnOff(UiState& s, const char* key, bool* v, const char* tooltip = 
     return onOffButton(s, key, v, [p] { custom(*p); }, tooltip);
 }
 
+}  // namespace
+
+bool parseVideoMode(const std::string& json, Window::VideoMode& out) {
+    if (json.empty()) return false;
+    const nlohmann::json j = nlohmann::json::parse(json, nullptr, false);
+    if (!j.is_object()) return false;
+    try {
+        out.width = j.at("width").get<int>(), out.height = j.at("height").get<int>();
+        out.redBits = j.at("red_bits").get<int>(), out.greenBits = j.at("green_bits").get<int>(), out.blueBits = j.at("blue_bits").get<int>();
+        out.refreshRate = j.at("refresh_rate").get<float>();
+    } catch (const std::exception&) {
+        return false;
+    }
+    return true;
+}
+
+std::string writeVideoMode(const Window::VideoMode& m) {  // Gson: floats with a fraction (60.0)
+    char rate[32];
+    if (m.refreshRate == std::rint(m.refreshRate)) std::snprintf(rate, sizeof(rate), "%d.0", int(m.refreshRate));
+    else std::snprintf(rate, sizeof(rate), "%g", double(m.refreshRate));
+    return "{\"width\":" + std::to_string(m.width) + ",\"height\":" + std::to_string(m.height) + ",\"red_bits\":" +
+           std::to_string(m.redBits) + ",\"green_bits\":" + std::to_string(m.greenBits) + ",\"blue_bits\":" +
+           std::to_string(m.blueBits) + ",\"refresh_rate\":" + rate + "}";
+}
+
+namespace {
+
 void videoBuild(UiState& s) {
     OptionsList l(s, Text(s.res.translate("options.videoTitle")), Screen::Options);
     UiState* p = &s;
     Settings& o = s.settings;
-    const auto unavailable = [] { return Text("Not available in minecraftCplusplus yet"); };
     l.header(Text(s.res.translate("options.video.display.header")));
-    {  // Exclusive Fullscreen Mode: the window is borderless fullscreen only
-        Button mode;
-        mode.label = optionLabel(s, "options.fullscreen.exclusive.mode", Text(s.res.translate("options.fullscreen.current")));
-        mode.active = false;
-        mode.tooltip = unavailable;
+    {  // Exclusive Fullscreen Mode: IntRange(-1, modes - 1) over the monitor's video modes, -1 its current one
+        const std::vector<Window::VideoMode> modes = s.window->videoModes();
+        int initial = -1;
+        Window::VideoMode pref;
+        if (parseVideoMode(o.fullscreenResolution, pref))
+            if (auto it = std::find(modes.begin(), modes.end(), pref); it != modes.end()) initial = int(it - modes.begin());
+        const int n = int(modes.size());
+        auto label = [p, modes](int value) {
+            if (modes.empty()) return Text(p->res.translate("options.fullscreen.unavailable"));
+            if (value < 0) return optionLabel(*p, "options.fullscreen.exclusive.mode", Text(p->res.translate("options.fullscreen.current")));
+            const Window::VideoMode& m = modes[size_t(value)];
+            char rate[32];  // VideoMode.refreshRateLabel
+            if (m.refreshRate == std::rint(m.refreshRate)) std::snprintf(rate, sizeof(rate), "%d", int(m.refreshRate));
+            else std::snprintf(rate, sizeof(rate), "%.2f", double(m.refreshRate));
+            return optionLabel(*p, "options.fullscreen.exclusive.mode",
+                               translatable("options.fullscreen.entry", {Text(std::to_string(m.width)), Text(std::to_string(m.height)), Text(rate),
+                                                                         Text(std::to_string(m.redBits + m.greenBits + m.blueBits))},
+                                            p->lang()));
+        };
+        auto current = std::make_shared<int>(initial);
+        Button mode = sliderButton(n ? float(initial + 1) / float(n) : 0.0f, [label, current] { return label(*current); },
+                                   [p, modes, n, current](float v) {
+                                       const int value = n ? int(std::lround(v * float(n))) - 1 : -1;
+                                       if (value == *current) return;
+                                       *current = value;
+                                       p->settings.fullscreenResolution = value < 0 ? std::string() : writeVideoMode(modes[size_t(value)]);
+                                       p->window->setPreferredVideoMode(value < 0 ? nullptr : &modes[size_t(value)]);
+                                   });
+        mode.active = n > 0;
+        mode.tooltip = [p] { return Text(p->res.translate("options.fullscreen.exclusive.mode.tooltip")); };
         l.big(std::move(mode));
     }
     std::vector<Button> display;
@@ -159,10 +212,11 @@ void videoBuild(UiState& s) {
         [p] { return optionLabel(*p, "options.fullscreen", Text(p->res.translate(p->window->fullscreen() ? "options.on" : "options.off"))); },
         [p] { p->toggleFullscreen(); }));
     {
-        Button exclusive;
-        exclusive.label = optionLabel(s, "options.exclusiveFullscreen", Text(s.res.translate("options.off")));
-        exclusive.active = false;
-        exclusive.tooltip = unavailable;
+        Button exclusive = onOffButton(s, "options.exclusiveFullscreen", &o.exclusiveFullscreen,
+                                       [p] { p->window->setExclusiveFullscreen(p->settings.exclusiveFullscreen); });
+        exclusive.tooltip = [p] {
+            return Text(p->res.translate(p->settings.exclusiveFullscreen ? "options.exclusiveFullscreen.on.tooltip" : "options.exclusiveFullscreen.off.tooltip"));
+        };
         display.push_back(std::move(exclusive));
     }
     display.push_back(unitSlider(s, &o.gamma, [p] {  // Brightness: Moody .. Default .. Bright
