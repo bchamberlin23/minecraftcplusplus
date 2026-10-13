@@ -62,7 +62,8 @@ public:
     // first block the ray meets (within max(blockReach, entityReach)) and within entityReach. The ranges are the
     // block_interaction_range / entity_interaction_range attributes (gameplay layer); creative's until then.
     double blockReach = 5.0, entityReach = 5.0;
-    double pickBlockDistance() const { return blockDistance_; }  // that first block's distance, < 0: none
+    double pickBlockDistance() const { return blockDistance_; }
+    double eyeHeightLerp() const { return eyeHeightOld_ + (eyeHeight_ - eyeHeightOld_) * alpha_; }  // Camera's eye height  // that first block's distance, < 0: none
     // The level's world border (ClientLevel.getWorldBorder): collisions, block targeting, the wall and the vignette.
     WorldBorder border;
     // The level's tick rate manager (gameplay layer): the client tick length follows a slower server rate; frozen,

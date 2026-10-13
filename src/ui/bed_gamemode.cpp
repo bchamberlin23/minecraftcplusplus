@@ -117,12 +117,12 @@ void attached(UiState& s) {
     sw.lastMode = sw.previousMode = -1, sw.joinSerial = -1;
 }
 
-// Camera.setup for a sleeping entity: at the bed (setPosToBed + the sleeping eye height 0.2), facing the bed's
-// orientation reversed, level, then moved 0.15 up.
+// Camera.setup for a sleeping entity: at the bed (setPosToBed + the eye height easing to the sleeping 0.2), facing the
+// bed's orientation reversed, level, then moved 0.15 up.
 void sleepingCamera(UiState& s, CameraState& c) {
     if (!bed.sleeping) return;
     if (s.game->cameraMode != 0) {  // detached: from the sleeping eyes (0.2 above the bed) along the player's look
-        c.x = bed.pos[0] + 0.5, c.y = bed.pos[1] + 0.6875 + 0.2, c.z = bed.pos[2] + 0.5;
+        c.x = bed.pos[0] + 0.5, c.y = bed.pos[1] + 0.6875 + s.game->eyeHeightLerp(), c.z = bed.pos[2] + 0.5;
         return;
     }
     const std::string& state = s.registry->name(s.world->block(bed.pos[0], bed.pos[1], bed.pos[2]));
@@ -131,7 +131,7 @@ void sleepingCamera(UiState& s, CameraState& c) {
     else if (state.find("facing=north") != std::string::npos) bedYaw = 180;
     else if (state.find("facing=east") != std::string::npos) bedYaw = 270;
     const bool isBed = state.find("_bed") != std::string::npos;
-    c.x = bed.pos[0] + 0.5, c.y = bed.pos[1] + 0.6875 + 0.2 + 0.15, c.z = bed.pos[2] + 0.5;
+    c.x = bed.pos[0] + 0.5, c.y = bed.pos[1] + 0.6875 + s.game->eyeHeightLerp() + 0.15, c.z = bed.pos[2] + 0.5;
     c.yaw = (isBed ? bedYaw - 180.0f : 0.0f) * kPi / 180.0f;
     c.pitch = 0;
 }

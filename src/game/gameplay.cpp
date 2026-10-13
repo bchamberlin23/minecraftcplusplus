@@ -683,6 +683,13 @@ void Gameplay::frame() {
     game_->player().scale = std::clamp(attribute("scale", 1.0), 0.0625, 16.0);  // LivingEntity.getScale
     {  // Camera.setup's third-person distance: camera_distance x getScale, the player's or its mount's if larger
         double dist = attribute("camera_distance", 4.0) * attribute("scale", 1.0);
+        if (auto it = entityAttributes_.find(game_->cameraEntity); game_->cameraEntity >= 0 && it != entityAttributes_.end()) {
+            // spectating a living entity: its own (with the default 4 for what the server did not send)
+            auto value = [&](const char* k, double d) { auto f = it->second.find(k); return f != it->second.end() ? f->second : d; };
+            dist = value("camera_distance", 4.0) * value("scale", 1.0);
+        } else if (game_->cameraEntity >= 0) {
+            dist = 4.0;
+        }
         if (auto it = entityAttributes_.find(game_->vehicleId); game_->vehicleId >= 0 && it != entityAttributes_.end()) {
             auto value = [&](const char* k, double d) { auto f = it->second.find(k); return f != it->second.end() ? f->second : d; };
             dist = std::max(dist, value("camera_distance", 4.0) * value("scale", 1.0));
