@@ -41,6 +41,7 @@
 #include "worldgen/structures.h"
 #include "world/world.h"
 
+#include <stb/stb_image.h>
 #include <algorithm>
 #include <deque>
 #include <future>
@@ -599,6 +600,16 @@ int wmain(int argc, wchar_t** argv) {
     if (!window.create(L"minecraftCplusplus", opt.width, opt.height, launch::placement(), launch::handoffChild())) {
         LOG("error: cannot create window");
         return 1;
+    }
+    // Minecraft: window.setIcon(the vanilla resources, IconSet.RELEASE): icons/icon_<n>.png from the asset index.
+    for (const auto& [file, big] : {std::pair{"assets/icons/icon_48x48.png", true}, std::pair{"assets/icons/icon_16x16.png", false}}) {
+        std::vector<u8> bytes;
+        if (!AssetSource::client(jar).read(file, bytes)) continue;
+        int w, h, n;
+        if (u8* img = stbi_load_from_memory(bytes.data(), int(bytes.size()), &w, &h, &n, 4)) {
+            window.setIcon(img, w, h, big);
+            stbi_image_free(img);
+        }
     }
     Renderer renderer;
     if (!renderer.init(window.hwnd(), window.width(), window.height(), opt.debug, opt.vsync)) return 1;

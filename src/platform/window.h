@@ -71,6 +71,8 @@ public:
         return true;
     }
     void setTitle(const std::string& title);
+    // The window's icon (Window.setIcon): RGBA pixels, `big` for the taskbar / Alt+Tab, else the title bar's.
+    void setIcon(const unsigned char* rgba, int w, int h, bool big);
 
     // UI input, queued in order: key presses / releases, typed characters, mouse buttons and wheel with the cursor.
     struct InputEvent {

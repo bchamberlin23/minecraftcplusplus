@@ -315,6 +315,29 @@ void Window::setMouseCaptured(bool captured) {
 
 void Window::setTitle(const std::string& title) { SetWindowTextA(hwnd_, title.c_str()); }
 
+void Window::setIcon(const unsigned char* rgba, int w, int h, bool big) {
+    if (!hwnd_ || !rgba || w <= 0 || h <= 0) return;
+    BITMAPV5HEADER bi{};  // a top-down 32-bit BGRA colour bitmap with alpha
+    bi.bV5Size = sizeof(bi), bi.bV5Width = w, bi.bV5Height = -h, bi.bV5Planes = 1, bi.bV5BitCount = 32;
+    bi.bV5Compression = BI_BITFIELDS;
+    bi.bV5RedMask = 0x00FF0000, bi.bV5GreenMask = 0x0000FF00, bi.bV5BlueMask = 0x000000FF, bi.bV5AlphaMask = 0xFF000000;
+    void* bits = nullptr;
+    HDC dc = GetDC(nullptr);
+    HBITMAP color = CreateDIBSection(dc, reinterpret_cast<BITMAPINFO*>(&bi), DIB_RGB_COLORS, &bits, nullptr, 0);
+    ReleaseDC(nullptr, dc);
+    if (!color || !bits) return;
+    auto* out = static_cast<unsigned char*>(bits);
+    for (int i = 0; i < w * h; ++i)
+        out[i * 4] = rgba[i * 4 + 2], out[i * 4 + 1] = rgba[i * 4 + 1], out[i * 4 + 2] = rgba[i * 4], out[i * 4 + 3] = rgba[i * 4 + 3];
+    HBITMAP mask = CreateBitmap(w, h, 1, 1, nullptr);
+    ICONINFO ii{TRUE, 0, 0, mask, color};
+    HICON icon = CreateIconIndirect(&ii);
+    DeleteObject(mask), DeleteObject(color);
+    if (!icon) return;
+    if (HICON old = reinterpret_cast<HICON>(SendMessageW(hwnd_, WM_SETICON, big ? ICON_BIG : ICON_SMALL, reinterpret_cast<LPARAM>(icon))))
+        DestroyIcon(old);
+}
+
 LRESULT CALLBACK Window::proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (msg == WM_NCCREATE) {
         auto* cs = reinterpret_cast<CREATESTRUCTW*>(lp);
