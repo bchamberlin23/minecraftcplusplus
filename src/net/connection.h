@@ -35,6 +35,7 @@ public:
     // Takes effect for bytes after the current packet in both directions.
     void setCipher(std::unique_ptr<StreamCipher> cipher);
     u64 bytesReceived() const { return received_; }
+    bool timedOut() const { return timedOut_; }  // the last read failed on the 30 s read timeout
 
 private:
     bool fill();  // reads more bytes into the receive buffer
@@ -49,6 +50,7 @@ private:
     size_t rpos_ = 0, rend_ = 0;
     std::vector<u8> frame_;
     std::atomic<u64> received_{0};
+    bool timedOut_ = false;
 };
 
 }  // namespace net

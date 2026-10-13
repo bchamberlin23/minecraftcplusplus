@@ -84,6 +84,8 @@ bool Connection::open(const std::string& host, u16 port, std::string& error) {
     }
     BOOL noDelay = TRUE;  // small movement packets every tick
     setsockopt(s, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&noDelay), sizeof(noDelay));
+    DWORD timeoutMs = 30000;  // Connection's ReadTimeoutHandler(30): nothing for 30 s is a timeout
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
     socket_ = s;
     return true;
 }
@@ -110,7 +112,10 @@ bool Connection::fill() {
     }
     if (rend_ == rbuf_.size()) rbuf_.resize(rbuf_.size() * 2);
     const int n = recv(SOCKET(socket_), reinterpret_cast<char*>(rbuf_.data() + rend_), int(rbuf_.size() - rend_), 0);
-    if (n <= 0) return false;
+    if (n <= 0) {
+        if (n < 0 && WSAGetLastError() == WSAETIMEDOUT) timedOut_ = true;
+        return false;
+    }
     if (cipher_) cipher_->decrypt(rbuf_.data() + rend_, size_t(n));
     rend_ += size_t(n);
     received_ += u64(n);

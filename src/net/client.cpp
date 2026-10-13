@@ -203,7 +203,7 @@ void Client::run() {
     hello.bytes(uuid, 16);
     send(Login, "hello", hello);
 
-    std::string reason = "connection closed";
+    std::string reason = "disconnect.endOfStream";  // Connection.channelInactive (translated by the disconnect screen)
     std::vector<u8> packet;
     while (!quit_ && connection_.read(packet)) {
         ++packetsIn_, bytesIn_ += packet.size();
@@ -233,6 +233,7 @@ void Client::run() {
         }
         diagnose(phase, name, handled, size, readLeft_, readOverran_);
     }
+    if (connection_.timedOut() && !reason.empty()) reason = "disconnect.timeout";  // ReadTimeoutException
     connection_.close();
     alive_ = false;
     if (!quit_ && !reason.empty() && !disconnected_) push(DisconnectEvent{reason});

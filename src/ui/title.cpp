@@ -629,6 +629,7 @@ void Ui::State::frontEndFrame() {
         const bool multiplayer = !f.cfg.singleplayer;
         std::string reason = session->disconnectReason();
         if (reason.empty()) reason = res.translate("disconnect.endOfStream");
+        else if (reason == "disconnect.endOfStream" || reason == "disconnect.timeout") reason = res.translate(reason);
         LOG("ui: disconnected: %s", reason.c_str());
         clearToasts();  // Hud.onDisconnected: ToastManager.clear
         showMessage(*this, Text(res.translate("disconnect.lost")), Text(reason),
