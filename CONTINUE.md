@@ -12,39 +12,34 @@ All options in the old table now apply (sky options, panorama speed, damage tilt
 lines, toggle attack / use, quit shortcuts, operator tab, inactivity FPS limit, autosave indicator, music frequency
 and toast, subtitles, onboarding screen, chunk update priority, exclusive fullscreen and the override size). Also:
 leash ropes and fishing lines, hurting projectile motion (`projectile_power`), the 26.3 pause menu, World Options,
-in-world game rules (NET-13) and Restrictions. Untested on real hardware: the exclusive fullscreen display-mode
+in-world game rules (NET-13) and Restrictions, waypoints and the locator bar (NET-07), `server_data`,
+`add_transient_block`, camera overlays from the equippable component (ITEM-03), the operator block editors
+(ITEM-09) with structure / test boxes (VIS-13), area effect cloud particles (VIS-04), all level events and
+jukebox songs (FX-06). ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
 switch (automated runs never change the display mode) and the LAN publish from World Options (it would open a
 listening socket).
 
 ## Protocol / networking
 
-- **NET-07**: waypoints and the locator bar (`waypoint` packet plus the HUD bar).
 - **NET-15**: `move_minecart_along_track` (experimental minecarts).
-- `server_data` (the server list entry's motd / icon), `add_transient_block` (LevelExtractor transient blocks).
 - **NET-16**: debug subscriptions.
 - **NET-17**: metadata profile serializer (`src/entity/entities.cpp` ~384).
 
 ## Items / UI
 
-- **ITEM-03**: equippable component (slot, sounds, model, camera overlay).
-- **ITEM-08**: attribute modifier tooltip lines.
-- **ITEM-09**: editors for command blocks, jigsaws, structure blocks and test blocks.
-- **ITEM-10**: the operator items creative tab.
 
 ## Visuals / effects
 
-- **VIS-04**: area-effect-cloud particles.
 - **VIS-06**: glowing outlines, capes.
 - **VIS-07 / VIS-14**: profile skins and custom player heads.
-- **VIS-13**: structure and test block bounding boxes.
-- **FX-02**: `map_color` tint.
 - **FX-05**: trail particle params, sulfur/gas particles.
-- **FX-06**: remaining `level_event` types.
 - **FX-07**: post-effect chains (creeper/spider/enderman spectator views etc.).
 - **FX-10**: minecart rolling, elytra wind and underwater ambient sounds.
 
 ## Screens
 
+- Command suggestions in the command block editor (CommandSuggestions; the chat has them).
+- The structure block itself looked untextured in a test (check its block model / texture).
 - SocialInteractionsScreen (hide players' chat; the pause menu's Player Reporting icon is disabled meanwhile).
 - Compare TitleScreen with 26.3 (its icon buttons).
 
