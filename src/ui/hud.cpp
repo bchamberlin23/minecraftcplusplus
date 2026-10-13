@@ -801,7 +801,7 @@ void Ui::State::drawChat(Canvas& c, bool focused) {
     if (!chatQueue.empty())  // "[+n pending lines]": clicking it shows the next one (QUEUE_EXPAND_ID)
         font.draw(c, translatable("chat.queue", {Text(std::to_string(chatQueue.size()))}, lang()), 0, float(chatBottom + 9 - 8),
                   withAlpha(0xFFFFFF, 0.5f * textOpacity), true);
-    if (restricted) {  // ChatScreen with restrictions: the red, underlined prompt (opens Chat Settings)
+    if (restricted) {  // ChatScreen with restrictions: the red, underlined prompt (opens the Restrictions screen)
         Style st = colorStyle(0xFF5555);
         st.underlined = 1;
         font.draw(c, Text(res.translate("chat_screen.restricted"), st), 0, float(lineAboveMessagesY + entryHeight - entryBottomToMessageY - 1),
@@ -822,7 +822,7 @@ void Ui::State::drawChat(Canvas& c, bool focused) {
 }
 
 // Chat clicks below / above the lines: the queue line shows the next waiting message, the restricted prompt opens
-// Chat Settings. true when handled.
+// the Restrictions screen. true when handled.
 bool chatSpecialClick(UiState& s, float mx, float my) {
     const float scale = float(std::max(0.01, s.settings.chatScale));
     const int chatBottom = int(std::floor(float(s.guiH() - 40) / scale));
@@ -839,8 +839,9 @@ bool chatSpecialClick(UiState& s, float mx, float my) {
         const int entryHeight = int(9.0 * (s.settings.chatLineSpacing + 1.0));
         int count = std::min(int(s.chatLines.size()) - s.chatScroll, s.chatLinesPerPage());
         const int top = chatBottom - (std::max(count, 0) + 1) * entryHeight;
-        if (y >= float(top) && y < float(top + entryHeight)) {
-            s.openScreen(Screen::ChatOptions);
+        if (y >= float(top) && y < float(top + entryHeight)) {  // GO_TO_RESTRICTIONS_SCREEN
+            s.restrictionsParent = Screen::Chat;
+            s.openScreen(Screen::Restrictions);
             return true;
         }
     }

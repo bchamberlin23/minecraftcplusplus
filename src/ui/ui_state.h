@@ -229,6 +229,7 @@ struct Ui::State {
     // Where the Options sub-screens (Sounds, Accessibility, Language) go back to: the Options screen, or the
     // accessibility onboarding screen that opened them.
     Screen optionsParent = Screen::Options;
+    Screen restrictionsParent = Screen::WorldOptions;  // RestrictionsScreen.previousScreen (the chat or world options)
     // Hud.tickAutosaveIndicator: the local server saving (MinecraftServer.isCurrentlySaving), eased in and out.
     bool serverSaving = false;
     int xpDisplayStart = INT_MIN;  // LocalPlayer.experienceDisplayStartTick (gui ticks): the progress last changed

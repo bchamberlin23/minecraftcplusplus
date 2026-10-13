@@ -253,7 +253,7 @@ void build(UiState& s) {
             rules.active = !hc && commandsOn;
             const char* rt = hc ? "editGamerule.inGame.disabled.hardcore.tooltip" : commandsOn ? nullptr : "editGamerule.inGame.disabled.tooltip";
             if (rt) rules.tooltip = [p, rt] { return tooltipText(*p, rt); };
-            addButton(s, left, row(20), 150, tr(s, "restrictions_screen.button"), [p] { p->openScreen(Screen::Restrictions); });
+            addButton(s, left, row(20), 150, tr(s, "restrictions_screen.button"), [p] { p->restrictionsParent = Screen::WorldOptions, p->openScreen(Screen::Restrictions); });
         }
     }
     if (host(s)) {
@@ -262,7 +262,7 @@ void build(UiState& s) {
         rules.active = !hc && commandsOn;
         const char* rt = hc ? "editGamerule.inGame.disabled.hardcore.tooltip" : commandsOn ? nullptr : "editGamerule.inGame.disabled.tooltip";
         if (rt) rules.tooltip = [p, rt] { return tooltipText(*p, rt); };
-        addButton(s, left + 158, ry, 150, tr(s, "restrictions_screen.button"), [p] { p->openScreen(Screen::Restrictions); });
+        addButton(s, left + 158, ry, 150, tr(s, "restrictions_screen.button"), [p] { p->restrictionsParent = Screen::WorldOptions, p->openScreen(Screen::Restrictions); });
         // The multiplayer part
         y += 8 - 4 + 16;  // the next section: spacing 8 and the cells' padding
         g_headers.push_back({"options.worldOptions.multiplayer.title", row(17)});
@@ -671,6 +671,11 @@ std::vector<Restriction> restrictions(UiState& s) {
     return {};
 }
 
+void restrictionsBack(UiState& s) {  // onClose: the screen it was opened from
+    if (s.restrictionsParent == Screen::Chat) s.openChat(false);
+    else s.openScreen(s.restrictionsParent);
+}
+
 void restrictionsBuild(UiState& s) {
     UiState* p = &s;
     s.buttons.clear();
@@ -683,7 +688,7 @@ void restrictionsBuild(UiState& s) {
             y += 20;
         }
     }
-    addButton(s, float(W / 2 - 100), float(H - 27), 200, tr(s, "gui.done"), [p] { p->openScreen(Screen::WorldOptions); });
+    addButton(s, float(W / 2 - 100), float(H - 27), 200, tr(s, "gui.done"), [p] { restrictionsBack(*p); });
 }
 
 void restrictionsDraw(UiState& s, Canvas& c) {
@@ -717,7 +722,7 @@ void restrictionsDraw(UiState& s, Canvas& c) {
 
 void restrictionsInput(UiState& s, const Window::InputEvent& e) {
     using E = Window::InputEvent;
-    if (e.type == E::Key && e.down && e.code == VK_ESCAPE) return s.openScreen(Screen::WorldOptions);
+    if (e.type == E::Key && e.down && e.code == VK_ESCAPE) return restrictionsBack(s);
     s.buttonsInput(e);
 }
 
