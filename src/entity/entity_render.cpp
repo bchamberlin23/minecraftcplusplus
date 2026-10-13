@@ -341,6 +341,7 @@ void EntityRenderer::buildDefs() {
             const std::string dir = chest ? "chest_boat" : "boat";
             mob(Anim::None, dir + "/" + wood + "#main", dir + "/" + wood);
             d.special = SpBoat;
+            d.waterPatch = !n.ends_with("_raft");  // RaftRenderer has none
         } else if (n.ends_with("minecart")) {
             mob(Anim::None, n + "#main", "minecart/minecart");
             d.special = SpMinecart;
@@ -405,6 +406,7 @@ void EntityRenderer::buildDefs() {
     spinModel_ = M("spin_attack#main"), spinTex_ = T("trident/trident_riptide");
     capeModel_ = M("player#cape");
     chestModel_ = M("chest#main"), chestTex_ = T("chest/normal");
+    waterPatchModel_ = M("boat#water_patch");
     parrotModel_ = M("parrot#main"), earsModel_ = M("player#ears");
     arrowModel_ = M("arrow#main"), arrowTex_ = T("projectiles/arrow");
     stingerModel_ = M("bee_stinger#main"), stingerTex_ = T("bee/bee_stinger");
@@ -722,7 +724,7 @@ bool EntityRenderer::create(Renderer& r) {
     // targets: 1 colour; 2 colour + motion (written); 3 colour + motion (kept); 0 shadow map (depth only)
     // additive: BlendFunction.ADDITIVE (energy swirl: creeper charge, wither armour)
     auto pso = [&](const void* vs, size_t vsSize, const void* ps, size_t psSize, bool blend, D3D12_CULL_MODE cull,
-                   ComPtr<ID3D12PipelineState>& out, int targets = 1, bool additive = false) {
+                   ComPtr<ID3D12PipelineState>& out, int targets = 1, bool additive = false, bool depthOnly = false) {
         D3D12_GRAPHICS_PIPELINE_STATE_DESC d{};
         d.pRootSignature = rootSig_.Get();
         d.VS = {vs, vsSize};
@@ -770,6 +772,10 @@ bool EntityRenderer::create(Renderer& r) {
             d.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
             d.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
         }
+        if (depthOnly) {  // RenderPipelines.WATER_MASK: depth written, no colour
+            for (int t = 0; t < 2; ++t) d.BlendState.RenderTarget[t].RenderTargetWriteMask = 0;
+            d.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+        }
         d.DSVFormat = DXGI_FORMAT_D32_FLOAT;
         d.SampleDesc.Count = 1;
         return check(device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&out)), "CreateGraphicsPipelineState");
@@ -786,6 +792,8 @@ bool EntityRenderer::create(Renderer& r) {
         !pso(SH(EntityModelVS), SH(EntityGlintPS), true, noCull, psoGlintMv_, 3) ||
         !pso(SH(EntityModelVS), SH(EntityTranslucentPS), true, noCull, psoAdditive_, 1, true) ||
         !pso(SH(EntityModelVS), SH(EntityTranslucentPS), true, noCull, psoAdditiveMv_, 3, true) ||
+        !pso(SH(EntityModelVS), nullptr, 0, false, back, psoWaterMask_, 1, false, true) ||
+        !pso(SH(EntityModelVS), nullptr, 0, false, back, psoWaterMaskMv_, 2, false, true) ||
         !pso(SH(EntityFreeVS), SH(EntityTranslucentPS), true, noCull, psoBlob_) ||
         !pso(SH(EntityFreeVS), SH(EntityTranslucentPS), true, noCull, psoBlobMv_, 3) ||
         !pso(SH(EntityShadowVS), SH(EntityShadowPS), false, noCull, psoShadow_, 0) ||
@@ -1509,6 +1517,14 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
     if (d.kind == Kind::Mob) layerCount = resolve(e, d, layers);
     if (!layerCount) return false;
     layerCount = speciesLayers(e, d, pt, layers, layerCount, 16);
+    if (d.waterPatch && waterPatchModel_ >= 0 && layerCount < 16 && !pack_ && !shadowOnly_) {  // unless isUnderWater
+        const World& world = world_.world();
+        const int x = int(std::floor(e.pos[0])), y = int(std::floor(e.pos[1] + e.info->eye)), z = int(std::floor(e.pos[2]));
+        const u16 at = y >= world.minSectionY() * 16 && y < (world.maxSectionY() + 1) * 16 ? world.block(x, y, z) : 0;
+        const BlockInfo& b = world_.registry().infos()[at];
+        if (!(b.waterlogged || (b.fluid && world_.registry().name(at).find("water") != std::string::npos)))
+            layers[layerCount++] = {waterPatchModel_, layers[0].tex, kWhite, u16(NoOverlay)};
+    }
     if (e.category == Category::Living || e.category == Category::Player)
         layerCount += equipmentLayers(e, d, layers + layerCount, 16 - layerCount);
     // CapeLayer: the profile's cape unless invisible, hidden in the skin options or under an elytra (WINGS layer).
@@ -2223,7 +2239,9 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
             const ModelPart& part = m.parts[i];
             for (u32 q = part.quadFirst; q < part.quadFirst + part.quadCount; ++q) {
                 if ((L.flags & Glint) && !shadowOnly_) glint_.push_back(q), glint_.push_back(instId);
-                if (L.flags & Additive) {
+                if (L.model == waterPatchModel_) {
+                    mask_.push_back(q), mask_.push_back(instId);
+                } else if (L.flags & Additive) {
                     if (!shadowOnly_) additive_.push_back(q), additive_.push_back(instId);
                 } else if (translucent) {
                     translucent_.push_back(q);
@@ -2899,6 +2917,7 @@ void EntityRenderer::build(const PassContext& ctx) {
     translucent_.clear();
     additive_.clear();
     glint_.clear();
+    mask_.clear();
     blobs_.clear();
     ++buildFrame_;
 
@@ -3172,6 +3191,10 @@ void EntityRenderer::build(const PassContext& ctx) {
     const u32 glints = std::min<u32>(u32(glint_.size() / 2), kMaxRefs - refCount_);
     std::memcpy(refs + u64(refCount_) * 2, glint_.data(), u64(glints) * 8);
     refCount_ += glints;
+    maskRefs_ = refCount_;
+    const u32 masks = std::min<u32>(u32(mask_.size() / 2), kMaxRefs - refCount_);
+    std::memcpy(refs + u64(refCount_) * 2, mask_.data(), u64(masks) * 8);
+    refCount_ += masks;
 
     // Frame constants.
     struct Constants {
@@ -3262,11 +3285,12 @@ void EntityRenderer::record(const PassContext& ctx) {
     }
     drawRange((mv ? psoCutoutMv_ : psoCutout_).Get(), 0, camCutout_);
     drawRange((mv ? psoFreeMv_ : psoFree_).Get(), 0, camFree_);
+    drawRange((mv ? psoWaterMaskMv_ : psoWaterMask_).Get(), maskRefs_, refCount_ - maskRefs_);
     drawRange((mv ? psoBlobMv_ : psoBlob_).Get(), blobFirst_, blobCount_);
     drawRange((mv ? psoTranslucentMv_ : psoTranslucent_).Get(), cutoutRefs_, camTranslucent_);
     drawRange((mv ? psoAdditiveMv_ : psoAdditive_).Get(), additiveRefs_, glintRefs_ - additiveRefs_);
     if (assets_.texture("misc/enchanted_glint_armor") >= 0)
-        drawRange((mv ? psoGlintMv_ : psoGlint_).Get(), glintRefs_, refCount_ - glintRefs_);
+        drawRange((mv ? psoGlintMv_ : psoGlint_).Get(), glintRefs_, maskRefs_ - glintRefs_);
     if (mv) list->OMSetRenderTargets(1, &ctx.colorRtv, FALSE, &ctx.dsv);
 }
 

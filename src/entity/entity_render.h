@@ -102,6 +102,7 @@ public:
         int sprite = -1;         // atlas texture of thrown items / sprites
         float spriteScale = 0.5f;
         u8 blockLight = 0;       // the renderer's getBlockLightLevel: 1 always 15, 2 + 7 (XP orbs), 3 glow squid
+        bool waterPatch = false; // BoatRenderer: the water mask over the hull
         std::string block;       // block drawn by Kind::Block when there is no block state
         mutable u16 blockId = 0;
     };
@@ -179,6 +180,7 @@ private:
     // Shader pipeline: with a motion target (PassContext::motionRtv) and shadow casters (depth only).
     ComPtr<ID3D12PipelineState> psoCutoutMv_, psoTranslucentMv_, psoFreeMv_, psoGlintMv_, psoShadow_, psoShadowFree_;
     ComPtr<ID3D12PipelineState> psoBlob_, psoBlobMv_;  // entity shadows (RenderTypes.entityShadow)
+    ComPtr<ID3D12PipelineState> psoWaterMask_, psoWaterMaskMv_;  // boat water patches: depth only
     ComPtr<ID3D12Resource> quads_, atlas_, upload_;
     u8* mapped_ = nullptr;
     u32 atlasDescriptor_ = 0;
@@ -191,6 +193,7 @@ private:
     std::vector<u8> hidden_;
     std::vector<u32> translucent_;      // instance ids drawn after the cutout pass
     std::vector<u32> glint_;            // (quad, instance) of enchanted armour, drawn last with the glint
+    std::vector<u32> mask_;             // (quad, instance) of water masks, drawn depth only after the cutout pass
     std::vector<u32> additive_;         // (quad, instance) of additive layers (energy swirl), after the translucent ones
     std::vector<i32> itemBlocks_;      // item id -> block id (0: not a block), -1 unresolved
     struct CachedLayers {
@@ -212,7 +215,7 @@ private:
 
     // Last build: reference ranges. Refs: [cutout: camera | shadow only][translucent: camera | shadow only][glint].
     bool prepared_ = false, built_ = false, shadowOnly_ = false;
-    u32 cutoutRefs_ = 0, glintRefs_ = 0, additiveRefs_ = 0, camCutout_ = 0, camTranslucent_ = 0, camFree_ = 0;
+    u32 cutoutRefs_ = 0, glintRefs_ = 0, maskRefs_ = 0, additiveRefs_ = 0, camCutout_ = 0, camTranslucent_ = 0, camFree_ = 0;
     // Entity shadows: the drawn entities' (position, radius, strength), their quads in the free range below.
     struct BlobShadow {
         double pos[3];
@@ -254,6 +257,7 @@ private:
     int spinModel_ = -1, spinTex_ = -1;  // SpinAttackEffectLayer (riptide)
     int capeModel_ = -1;                 // CapeLayer
     int chestModel_ = -1, chestTex_ = -1;  // chest minecarts: the chest's special block model
+    int waterPatchModel_ = -1;             // boat#water_patch (RenderTypes.waterMask: depth only, hides the water)
     int parrotModel_ = -1, earsModel_ = -1, arrowModel_ = -1, arrowTex_ = -1, stingerModel_ = -1, stingerTex_ = -1;  // player layers
     std::vector<Mat34> baseMats_;  // the current entity's base layer part matrices (StuckInBodyLayer anchors)
 
