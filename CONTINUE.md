@@ -53,7 +53,10 @@ overrides (blazes, vexes, fireballs, XP orbs, glow squids), the shulker bullet h
 cycle, translucent), block-attached entities kept on their block (frames / paintings / leash knots, with real pick
 boxes), item frame name tags, the renderers' name tag rules (holograms, team name tag visibility), no block outline
 behind an entity, the text background opacity on name tags, the dropped item copy seeds, the boat water patch and
-bubble-column rocking, display entity shadows and hidden falling blocks inside their block. ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
+bubble-column rocking, display entity shadows and hidden falling blocks inside their block, wolf armour cracks,
+piglin / hoglin conversion shaking, beacon beams to the render distance, particle fixes (clouds, snowflakes, end
+rods, white smoke, light levels), the effects list beside the inventories and Hud.java details (frozen hearts, air
+row, off hand side, Now Playing, the light-level vignette). ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
 switch (automated runs never change the display mode) and the LAN publish from World Options (it would open a
 listening socket).
 
