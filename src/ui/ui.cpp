@@ -141,7 +141,7 @@ bool Settings::load() {
         else if (k == "sharpness") video.sharpness = std::clamp(float(std::atof(v.c_str())), 0.f, 1.f);
         else if (k == "frameGeneration") video.parseFrameGen(v);
         else if (k == "lowLatency") VideoSettings::parseLowLatency(v, video.lowLatency);
-        else if (k == "vsync") video.vsync = v == "true";
+        else if (k == "enableVsync" || k == "vsync") video.vsync = v == "true";  // Options: enableVsync
         else if (k == "maxFps") video.fpsLimit = u32(std::clamp(std::atoi(v.c_str()), 0, 1000));
         else if (k == "shaderPack") shaderPack = v;
         else if (k == "bobView") bobView = v == "true";
@@ -184,7 +184,7 @@ void Settings::save() const {
       << "\nupscaler:" << VideoSettings::upscalerKey(video.upscaler)
       << "\nupscaleQuality:" << VideoSettings::qualityKey(video.quality) << "\nsharpness:" << video.sharpness
       << "\nframeGeneration:" << video.frameGenKey() << "\nlowLatency:" << VideoSettings::lowLatencyKey(video.lowLatency)
-      << "\nvsync:" << (video.vsync ? "true" : "false") << "\nmaxFps:" << video.fpsLimit << "\n";
+      << "\nenableVsync:" << (video.vsync ? "true" : "false") << "\nmaxFps:" << video.fpsLimit << "\n";
     f << "shaderPack:" << shaderPack << "\n";
     f << "bobView:" << (bobView ? "true" : "false") << "\nattackIndicator:" << attackIndicator << "\n";
     auto b = [](bool v) { return v ? "true" : "false"; };

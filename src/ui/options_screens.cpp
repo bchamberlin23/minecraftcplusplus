@@ -569,7 +569,7 @@ Button holdToggleButton(UiState& s, const char* keyName, bool* toggle) {  // Opt
 
 Button sprintWindowSlider(UiState& s) {  // Options.sprintWindow: IntRange(0, 10), 0 shows Off
     UiState* p = &s;
-    return sliderButton(float(s.settings.sprintWindow) / 10.0f,
+    Button b = sliderButton(float(s.settings.sprintWindow) / 10.0f,
                         [p] {
                             const int v = p->settings.sprintWindow;
                             return optionLabel(*p, "options.sprintWindow",
@@ -577,6 +577,8 @@ Button sprintWindowSlider(UiState& s) {  // Options.sprintWindow: IntRange(0, 10
                                                       : translatable("options.value", {Text(std::to_string(v))}, p->lang()));
                         },
                         [p](float v) { p->settings.sprintWindow = int(std::lround(v * 10.0f)); });
+    b.tooltip = tooltipKey(s, "options.sprintWindow.tooltip");
+    return b;
 }
 
 void controlsBuild(UiState& s) {
@@ -866,7 +868,7 @@ void accessibilityBuild(UiState& s) {
                                [p](int x) { p->settings.notificationDisplayTime = x / 10.0; },
                                [p] {
                                    char buf[16];
-                                   std::snprintf(buf, sizeof(buf), "%g", p->settings.notificationDisplayTime);
+                                   std::snprintf(buf, sizeof(buf), "%.1f", p->settings.notificationDisplayTime);  // Double.toString
                                    return optionLabel(*p, "options.notifications.display_time",
                                                       Text(formatJava(p->res.translate("options.multiplier"), {buf})));
                                });
