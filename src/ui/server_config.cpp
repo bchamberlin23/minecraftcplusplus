@@ -11,6 +11,7 @@
 #include "net/client.h"
 #include "net/session.h"
 #include "ui/frontend.h"
+#include "ui/loading_overlay.h"
 #include "ui/modules.h"
 #include "ui/toasts.h"
 
@@ -346,6 +347,7 @@ bool applyPacks(State& s, const std::vector<Pack*>& load) {
     src.truncate(g.basePacks);
     for (auto& p : opened) src.add(std::move(p));
     LOG("packs: %zu server pack(s) over the game's assets; reloading", opened.size());
+    startLoadingOverlay(true);  // Minecraft.reloadResourcePacks (the reload itself runs right here)
     s.res.open(s.fe->cfg.jar, s.fe->cfg.minecraftDir);  // language
     s.sprites.reload();
     s.icons.reload();
