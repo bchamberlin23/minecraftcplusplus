@@ -1225,6 +1225,19 @@ void Visuals::Impl::heldStack(int slot, int& item, i32& dye, bool& foil) const {
 
 // CampfireRenderer (FIXED), ShelfRenderer (ON_SHELF, the model's bounding box aligned), VaultRenderer and
 // BrushableBlockRenderer items with their whole stacks, and SkullBlockRenderer player heads with their profile's skin.
+namespace {
+// ItemEntityRenderer.submitMultipleFromCount: the copies' offsets come from a LegacyRandomSource seeded with
+// ItemClusterRenderState.getSeedForItemStack (the item's id plus its damage); next() is nextFloat() * 2 - 1.
+struct ClusterRandom {
+    u64 seed;
+    explicit ClusterRandom(i64 s) : seed((u64(s) ^ 0x5DEECE66Dull) & ((1ull << 48) - 1)) {}
+    float next() {
+        seed = (seed * 0x5DEECE66Dull + 0xBull) & ((1ull << 48) - 1);
+        return float(seed >> 24) / float(1 << 24) * 2.0f - 1.0f;
+    }
+};
+}  // namespace
+
 void Visuals::Impl::buildBlockEntityItems(const double cam[3]) {
     const be::BlockEntityRenderer* ber = be::BlockEntityRenderer::instance();
     if (!ber || !items) return;
@@ -1266,11 +1279,8 @@ void Visuals::Impl::buildBlockEntityItems(const double cam[3]) {
         }
         // VaultRenderer: ItemEntityRenderer.renderMultipleFromCount (copies by the stack's count, like dropped items).
         const int amount = st.count > 48 ? 5 : st.count > 32 ? 4 : st.count > 16 ? 3 : st.count > 1 ? 2 : 1;
-        u32 rng = u32(st.item) * 2654435761u + 7;
-        auto rnd = [&] {
-            rng = rng * 1664525u + 1013904223u;
-            return float(rng >> 8) / float(1 << 24) * 2.0f - 1.0f;
-        };
+        ClusterRandom random(i64(st.item) + st.damage);
+        auto rnd = [&] { return random.next(); };
         if (mesh.groundDepth > 0.0625f) {
             pushItem(worldLists, mesh, d, m, si.light, foil);
             for (int i = 1; i < amount; ++i)
@@ -2329,11 +2339,8 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
         }
         const int c = e.itemCount;
         const int amount = c > 48 ? 5 : c > 32 ? 4 : c > 16 ? 3 : c > 1 ? 2 : 1;
-        u32 rng = u32(e.itemId) * 2654435761u + 7;
-        auto rnd = [&] {
-            rng = rng * 1664525u + 1013904223u;
-            return float(rng >> 8) / float(1 << 24) * 2.0f - 1.0f;
-        };
+        ClusterRandom random(i64(e.itemId) + (e.itemStack ? e.itemStack->damage : 0));
+        auto rnd = [&] { return random.next(); };
         if (mesh.groundDepth > 0.0625f) {
             pushItem(L, mesh, Display::Ground, m, light, e.itemFoil);
             for (int i = 1; i < amount; ++i)
