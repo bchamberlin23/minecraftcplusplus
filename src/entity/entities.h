@@ -303,6 +303,7 @@ public:
     bool spectate(const double eye[3], const double dir[3], double blockDistance, double reach);
 
     const std::unordered_map<int, Entity>& entities() const { return entities_; }
+    std::unordered_map<int, Entity>& entitiesMutable() { return entities_; }  // test scripts
     Entity* entity(int id) {
         auto it = entities_.find(id);
         return it == entities_.end() ? nullptr : &it->second;

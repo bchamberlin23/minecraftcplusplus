@@ -128,8 +128,10 @@ VSOut EntityModelVS(uint vid : SV_VertexID) {
     float3 rel = float3(dot(m.r0, p), dot(m.r1, p), dot(m.r2, p));
     float3 n = normalize(float3(dot(m.r0.xyz, q.normal), dot(m.r1.xyz, q.normal), dot(m.r2.xyz, q.normal)) + 1e-6);
     float2 uv = inst.uvRect.xy + q.uv[corner] * inst.uvRect.zw;
-    bool scrolled = (inst.light & 1024) != 0;
-    VSOut o = finish(rel, n, uv, 0xFFFFFFFF, inst.color, inst.light, scrolled ? 0 : inst.overlay);
+    bool scrolled = (inst.light & 1024) != 0, dissolve = (inst.light & 2048) != 0;
+    VSOut o = finish(rel, n, uv, 0xFFFFFFFF, inst.color, inst.light, scrolled || dissolve ? 0 : inst.overlay);
+    if (dissolve)  // the dissolve mask's atlas offset (two signed 16-bit fractions)
+        o.rect = float4(float(int(inst.overlay << 16) >> 16), float(int(inst.overlay) >> 16), 0, 0) / 32767.0;
     o.rawUv = q.uv[corner];
     if (scrolled) {
         o.rawUv += float2((inst.overlay >> 16) & 255, inst.overlay >> 24) / 256.0;
@@ -185,10 +187,17 @@ void EntityShadowPS(ShadowOut i) {
     clip(a * i.alpha - 0.5);
 }
 
+// entityCutoutDissolve: the mask's alpha above the vertex alpha discards; then the colour is opaque.
+float4 dissolveTint(VSOut i) {
+    if (!(i.lightBits & 2048)) return i.tint;
+    clip(i.tint.a - gAtlas.SampleLevel(gPoint, i.uv + i.rect.xy, 0).a);
+    return float4(i.tint.rgb, 1);
+}
+
 float4 shade(VSOut i, float minAlpha) {
     float4 t = i.layer == 0xFFFFFFFF ? gAtlas.SampleLevel(gPoint, atlasUv(i), 0)
                                      : gBlocks.Sample(gBlockSampler, float3(i.uv, float(i.layer & 0xFFFF)));
-    float4 c = t * i.tint;
+    float4 c = t * dissolveTint(i);
     clip(c.a - minAlpha);
     c.rgb = lerp(c.rgb, i.overlay.rgb, i.overlay.a);  // OverlayTexture: mix(overlay, colour, overlay alpha)
     c.rgb *= i.light;
@@ -203,7 +212,7 @@ float4 shade(VSOut i, float minAlpha) {
 float4 shadePipeline(VSOut i, float minAlpha, bool translucent) {
     float4 t = i.layer == 0xFFFFFFFF ? gAtlas.SampleLevel(gPoint, atlasUv(i), 0)
                                      : gBlocks.Sample(gBlockSampler, float3(i.uv, float(i.layer & 0xFFFF)));
-    float4 c = t * i.tint;
+    float4 c = t * dissolveTint(i);
     clip(c.a - minAlpha);
     c.rgb = lerp(c.rgb, i.overlay.rgb, i.overlay.a);
     bool bright = (i.lightBits & 256) != 0;

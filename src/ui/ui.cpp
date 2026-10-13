@@ -1103,6 +1103,10 @@ void Ui::State::runScript(double) {
                         m.slots[i].enchantments);
             if (!carried.empty()) LOG("script: carried = %d x %s", carried.count, items.name(carried.item).c_str());
             LOG("script: xp level %d, menu %s data %d %d %d %d", xpLevel, m.typeName.c_str(), m.data[0], m.data[1], m.data[2], m.data[3]);
+        } else if (st.verb == "dragondeath") {  // dragondeath <ticks>: client-side dragon death time (render tests)
+            if (entities)
+                for (auto& [id, e] : entities->entitiesMutable())
+                    if (e.info && e.info->name == "minecraft:ender_dragon") e.sp.t[1] = std::atoi(arg(0).c_str()), e.health = 0;
         } else if (st.verb == "mobappearance") {  // the elder guardian curse's appearance, as from game event 10
             if (entities) entities->mobAppearances.push_back(nowSeconds());
         } else if (st.verb == "drop") {  // drop <path>...: files dropped on the window

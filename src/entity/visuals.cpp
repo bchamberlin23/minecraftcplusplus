@@ -2205,6 +2205,7 @@ struct JavaRandom {
         seed = (seed * 0x5DEECE66Dull + 0xBull) & ((1ull << 48) - 1);
         return int(i64(seed) >> (48 - bits));
     }
+    float nextFloat() { return float(next(24)) / float(1 << 24); }
     int nextInt(int bound) {
         if ((bound & -bound) == bound) return int((i64(bound) * i64(next(31))) >> 31);
         int bits, val;
@@ -2271,6 +2272,64 @@ void Visuals::Impl::buildBolts(const PassContext& ctx) {
         double p[3];
         for (int a = 0; a < 3; ++a) p[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt - cam[a];
         bolts.add(xfTranslate(float(p[0]), float(p[1]), float(p[2])), first, u32(dyn.size()) - first, 256u | 512u, 0xFFFFFFFF, 1);
+    }
+    // EnderDragonRenderer.submitRays: a dying dragon's light rays (dragon_rays: additive, white at the centre fading to
+    // transparent magenta; the triangles drawn here as slices with stepped colours).
+    static const int dragonType = assets.typeId("minecraft:ender_dragon");
+    for (const auto& [id, e] : world.entities()) {
+        if (e.type != dragonType || e.sp.t[1] <= 0) continue;
+        const float deathTime = (float(e.sp.t[1]) + pt) / 200.0f;
+        auto sample = [&](int delay, float out[2]) {  // DragonFlightHistory.get (dead: no interpolation)
+            const int head = std::max(e.sp.historyPos, 0);
+            const float* y = e.sp.history[(head - delay - 1) & 63];
+            out[0] = y[0], out[1] = y[1];
+        };
+        float h7[2], h5[2], h10[2];
+        sample(7, h7), sample(5, h5), sample(10, h10);
+        Xf pose = xfRotY(-h7[1] * kDeg);
+        pose = xfMul(pose, xfRotX((h5[0] - h10[0]) * 10.0f * kDeg));
+        pose = xfMul(pose, xfTranslate(0, 0, 1));
+        pose = xfMul(pose, xfScale(-1, -1, 1));
+        pose = xfMul(pose, xfTranslate(0, -1.501f, 0));
+        pose = xfMul(pose, xfTranslate(0, -1, -2));
+        const float overDrive = std::min(deathTime > 0.8f ? (deathTime - 0.8f) / 0.2f : 0.0f, 1.0f);
+        const float inner[4] = {1, 1, 1, 1.0f - overDrive}, outer[4] = {1, 0, 1, 0};
+        JavaRandom r(432);
+        const int rays = int(std::floor((deathTime + deathTime * deathTime) / 2.0f * 60.0f));
+        const u32 first = u32(dyn.size());
+        auto apply = [](const Xf& m, const float v[3], float out[3]) {
+            for (int k = 0; k < 3; ++k) out[k] = m.m[k * 4] * v[0] + m.m[k * 4 + 1] * v[1] + m.m[k * 4 + 2] * v[2] + m.m[k * 4 + 3];
+        };
+        constexpr float kHalfSqrt3 = 0.8660254f;
+        for (int i = 0; i < rays && dyn.size() + 12 <= kMaxDynamic; ++i) {
+            const float a = r.nextFloat() * 6.2831853f, b = r.nextFloat() * 6.2831853f, c = r.nextFloat() * 6.2831853f;
+            const float d = r.nextFloat() * 6.2831853f, f = r.nextFloat() * 6.2831853f, g = r.nextFloat() * 6.2831853f + deathTime * 1.5707963f;
+            pose = xfMul(pose, xfMul(xfMul(xfRotX(a), xfRotY(b)), xfMul(xfRotZ(c), xfMul(xfMul(xfRotX(d), xfRotY(f)), xfRotZ(g)))));
+            const float length = r.nextFloat() * 20.0f + 5.0f + overDrive * 10.0f, width = r.nextFloat() * 2.0f + 1.0f + overDrive * 2.0f;
+            const float L[3] = {-kHalfSqrt3 * width, length, -0.5f * width}, Rr[3] = {kHalfSqrt3 * width, length, -0.5f * width},
+                        B[3] = {0.0f, length, width};
+            const float* tris[3][2] = {{L, Rr}, {Rr, B}, {B, L}};
+            for (const auto& tri : tris)
+                for (int s = 0; s < 4; ++s) {
+                    const float t0 = float(s) / 4.0f, t1 = float(s + 1) / 4.0f, tm = (t0 + t1) * 0.5f;
+                    float v[4][3];
+                    const float pts[4][3] = {{tri[0][0] * t0, tri[0][1] * t0, tri[0][2] * t0}, {tri[0][0] * t1, tri[0][1] * t1, tri[0][2] * t1},
+                                             {tri[1][0] * t1, tri[1][1] * t1, tri[1][2] * t1}, {tri[1][0] * t0, tri[1][1] * t0, tri[1][2] * t0}};
+                    for (int k = 0; k < 4; ++k) apply(pose, pts[k], v[k]);
+                    MeshQuad q{};
+                    std::memcpy(q.pos, v, sizeof(v));
+                    u32 col = 0;
+                    for (int k = 0; k < 4; ++k) {
+                        const float ch = inner[k] + (outer[k] - inner[k]) * tm;
+                        col |= u32(std::clamp(ch, 0.0f, 1.0f) * 255.0f + 0.5f) << (k == 3 ? 24 : k * 8);  // 0xAABBGGRR
+                    }
+                    q.color = col, q.normal = packNormal(0, 1, 0), q.tex = kTexSolid, q.flags = kQuadNoShade;
+                    dyn.push_back(q);
+                }
+        }
+        double p[3];
+        for (int k = 0; k < 3; ++k) p[k] = e.prevPos[k] + (e.pos[k] - e.prevPos[k]) * pt - cam[k];
+        if (u32(dyn.size()) > first) bolts.add(xfTranslate(float(p[0]), float(p[1]), float(p[2])), first, u32(dyn.size()) - first, 256u | 512u, 0xFFFFFFFF, 1);
     }
     if (frameCounter % 64 == 0)  // forget removed bolts
         for (auto it = boltStates.begin(); it != boltStates.end();)

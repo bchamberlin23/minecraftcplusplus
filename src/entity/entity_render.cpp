@@ -50,6 +50,7 @@ enum LayerFlags : u16 {
     SpinFx = 1024,    // the riptide swirl (SpinAttackEffectLayer)
     Cape = 2048,      // CapeLayer (PlayerCapeModel): posed like the base model, the cape swinging
     DisplayBlock = 4096,  // a minecart's display block drawn as a model (the chest): under the display transform
+    Dissolve = 8192,      // entityCutoutDissolve: scroll[] = the mask texture's atlas offset; alpha in the colour
 };
 enum Special : u8 {
     SpNone, SpCow, SpPig, SpChicken, SpSheep, SpWolf, SpCat, SpHorse, SpLlama, SpRabbit, SpParrot, SpFox, SpAxolotl,
@@ -1323,7 +1324,17 @@ int EntityRenderer::speciesLayers(const Entity& e, const TypeDef& d, float pt, L
             }
             break;
         }
-        case Anim::Dragon:  // EnderDragonRenderer: the eyes
+        case Anim::Dragon:  // EnderDragonRenderer: the eyes; dying, the body dissolves (dragon_exploding as the mask)
+            if (e.sp.t[1] > 0) {
+                const int mask = tex("enderdragon/dragon_exploding");
+                if (mask >= 0 && L[0].tex >= 0) {
+                    const TexRect& a = assets_.rect(L[0].tex), &b = assets_.rect(mask);
+                    const float alpha = std::clamp(1.0f - (float(e.sp.t[1]) + pt) / 200.0f, 0.0f, 1.0f);
+                    L[0].color = u32(alpha * 255.0f) << 24 | 0xFFFFFF;
+                    L[0].flags |= Dissolve | NoOverlay;
+                    L[0].scroll[0] = b.u0 - a.u0, L[0].scroll[1] = b.v0 - a.v0;
+                }
+            }
             add(L[0].model, tex("enderdragon/dragon_eyes"), kWhite, Emissive | Translucent | NoOverlay);
             break;
         default: break;
@@ -2056,6 +2067,11 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         const u32 layerColor = appearanceAlpha_ >= 0 ? u32(appearanceAlpha_ * 255.0f) << 24 | (L.color & 0xFFFFFF) : L.color;
         GpuInstance inst{base, layerColor, (L.flags & Emissive) ? (light | 256u) : light, (L.flags & NoOverlay) || appearanceAlpha_ >= 0 ? 0u : overlay,
                          {tr.u0, tr.v0, tr.du, tr.dv}};
+        if (L.flags & Dissolve) {  // the mask's atlas offset, as two signed 16-bit fractions
+            auto q = [](float v) { return u32(u16(i16(std::clamp(v, -1.0f, 1.0f) * 32767.0f))); };
+            inst.light |= 2048u;
+            inst.overlay = q(L.scroll[0]) | q(L.scroll[1]) << 16;
+        }
         if (L.flags & Scroll) {  // RenderTypes.energySwirl / breezeWind: the texture offset (bits 16..31, 1/256 steps)
             auto frac256 = [](float v) { return u32(int(std::floor((v - std::floor(v)) * 256.0f)) & 255); };
             inst.light |= 1024u | 512u;  // scrolled, NO_CARDINAL_LIGHTING
