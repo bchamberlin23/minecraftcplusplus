@@ -101,6 +101,33 @@ StructuredBuffer<uint4> mcppQuads : register(t0, space1);
 static const float3 kMcppNormal[6] = {
     float3(0, -1, 0), float3(0, 1, 0), float3(0, 0, -1), float3(0, 0, 1), float3(-1, 0, 0), float3(1, 0, 0)};
 
+// Fluid quads (geo bit 30; see common.hlsli fluidCorner, duplicated here for the pack compiler).
+bool mcppFluidQuad(uint4 q) { return ((q.x >> 30) & 1u) != 0; }
+float mcppFluidHeight(uint4 q, uint i) { return float((q.z >> (i * 8)) & 0xFF) / 240.0; }
+void mcppFluidCorner(uint4 q, uint face, float a, float b, inout float3 p, out float2 st) {
+    float cellY = float((q.x >> 4) & 15);
+    if (face == 1) {
+        p.y = cellY + mcppFluidHeight(q, uint(a) + 2u * uint(b)) - 0.001;
+        uint ang = (q.y >> 12) & 0xFF;
+        if (ang == 255u) {
+            st = float2(a, b);
+        } else {
+            float angle = float(ang) / 255.0 * 6.28318530718;
+            float s = sin(angle) * 0.25, c = cos(angle) * 0.25;
+            st = float2(0.5 + (a > 0.5 ? c : -c) + (b > 0.5 ? s : -s), 0.5 + (b > 0.5 ? c : -c) + (a > 0.5 ? -s : s));
+        }
+    } else if (face == 0) {
+        p.y += 0.001;
+        st = float2(a, b);
+    } else {
+        float h = mcppFluidHeight(q, uint(a));
+        if (b > 0.5) p.y = cellY + h;
+        if (face == 2) p.z += 0.001; else if (face == 3) p.z -= 0.001; else if (face == 4) p.x += 0.001; else p.x -= 0.001;
+        bool flip = face == 3 || face == 4;
+        st = float2((flip ? 1.0 - a : a) * 0.5, b > 0.5 ? (1.0 - h) * 0.5 : 0.5);
+    }
+}
+
 // Section-local position (blocks) and block-unit UV of corner c (same convention as terrain.hlsl pullCube).
 void mcppCubeCorner(uint4 q, uint corner, int level, out float3 p, out float2 st) {
     uint face = (q.x >> 20) & 7;
@@ -125,6 +152,7 @@ void mcppCubeCorner(uint4 q, uint corner, int level, out float3 p, out float2 st
     }
     uint rot = (q.x >> 23) & 3;
     st = rot == 0 ? uv : rot == 1 ? float2(uv.y, -uv.x) : rot == 2 ? -uv : float2(-uv.y, uv.x);
+    if (mcppFluidQuad(q)) mcppFluidCorner(q, face, a, b, p, st);
 }
 
 McppVertex mcppPull(uint vid) {
@@ -158,10 +186,11 @@ McppVertex mcppPull(uint vid) {
     v.midTex = float4(tile.xy + 0.5 * tile.zw, 0, 1);
 
     uint colorIndex = ((q.y >> 20) << 4) | ((q.x >> 25) & 15);
-    float ao = 1.0 - 0.2 * float((q.y >> (12 + corner * 2)) & 3);
+    float ao = mcppFluidQuad(q) ? 1.0 : 1.0 - 0.2 * float((q.y >> (12 + corner * 2)) & 3);
     float3 tint = mcppTint(colorIndex);
     v.color = mcppAtlas.w > 0.5 ? float4(tint, ao) : float4(tint * ao, 1);
     float sky = float((q.z >> (corner * 8)) & 0xFF), block = float((q.w >> (corner * 8)) & 0xFF);
+    if (mcppFluidQuad(q)) sky = float((q.w >> 4) & 15) * 16.0, block = float(q.w & 15) * 16.0;
     v.uv1 = float4(block, sky, 0, 1);
 
     uint4 info = mcppLayerInfo(layer);

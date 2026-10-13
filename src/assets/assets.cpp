@@ -560,6 +560,10 @@ BlockRegistry::BlockRegistry() : impl_(std::make_unique<Impl>()) {}
 BlockRegistry::~BlockRegistry() = default;
 
 u32 BlockRegistry::textureCount() const { return impl_->texCount; }
+u16 BlockRegistry::textureLayer(std::string_view name) const {
+    auto it = impl_->texIndex.find(std::string(name));
+    return it == impl_->texIndex.end() ? 0 : it->second;
+}
 
 bool BlockRegistry::textureRemap(u64 tick, std::vector<u32>& remap) const {
     const Impl& im = *impl_;

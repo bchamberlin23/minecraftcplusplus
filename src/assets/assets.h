@@ -100,6 +100,7 @@ public:
     // holding that texture's current frame (identity for static textures). False if nothing is animated.
     bool textureRemap(u64 tick, std::vector<u32>& remap) const;
     std::vector<std::string> textureNames() const;  // by texture layer ("block/stone"); layer 0 = missing
+    u16 textureLayer(std::string_view name) const;   // "block/water_flow" -> its layer (0: missing)
     const std::vector<u8>& texturePixels() const;  // textureCount() * kTexLayerBytes
 
 private:

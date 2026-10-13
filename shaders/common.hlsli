@@ -148,3 +148,35 @@ float4 shadePixel(VSOut i) {
     c.rgb = lerp(c.rgb * i.color, gFogColor.rgb, i.fog);
     return c;
 }
+
+// ---- Fluid quads (geo bit 30; FluidRenderer, see mesher.h) -------------------------------------------------
+// One block face: the top's corner heights (sky word bytes by a + 2b, 1/240 block) or a side's two top heights (bytes
+// 0 / 1 by a), the block's light (block word: sky << 4 | block), the top's flow angle (tex bits 12..19, 255: still).
+bool isFluidQuad(uint4 q) { return ((q.x >> 30) & 1u) != 0; }
+float fluidHeightByte(uint4 q, uint i) { return float((q.z >> (i * 8)) & 0xFF) / 240.0; }
+// Corner (a, b) of a fluid face (geometric, after the front-facing swap): its height and texture coordinates.
+void fluidCorner(uint4 q, uint face, float a, float b, inout float3 p, out float2 st) {
+    float cellY = float((q.x >> 4) & 15);
+    if (face == 1) {  // the top: four heights; still (u, v) = (a, b) or the flow texture turned to the flow
+        p.y = cellY + fluidHeightByte(q, uint(a) + 2u * uint(b)) - 0.001;
+        uint ang = (q.y >> 12) & 0xFF;
+        if (ang == 255u) {
+            st = float2(a, b);
+        } else {
+            float angle = float(ang) / 255.0 * 6.28318530718;
+            float s = sin(angle) * 0.25, c = cos(angle) * 0.25;
+            st = float2(0.5 + (a > 0.5 ? c : -c) + (b > 0.5 ? s : -s), 0.5 + (b > 0.5 ? c : -c) + (a > 0.5 ? -s : s));
+        }
+    } else if (face == 0) {
+        p.y += 0.001;
+        st = float2(a, b);
+    } else {  // sides: half the flowing texture, down from (1 - height) / 2
+        float h = fluidHeightByte(q, uint(a));
+        if (b > 0.5) p.y = cellY + h;
+        if (face == 2) p.z += 0.001; else if (face == 3) p.z -= 0.001; else if (face == 4) p.x += 0.001; else p.x -= 0.001;
+        bool flip = face == 3 || face == 4;
+        st = float2((flip ? 1.0 - a : a) * 0.5, b > 0.5 ? (1.0 - h) * 0.5 : 0.5);
+    }
+}
+float fluidSky(uint4 q) { return float((q.w >> 4) & 15); }
+float fluidBlock(uint4 q) { return float(q.w & 15); }

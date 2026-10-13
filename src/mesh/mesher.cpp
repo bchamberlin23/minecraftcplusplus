@@ -165,6 +165,146 @@ void setMeshOptions(const MeshOptions& o) {
 
 MeshOptions meshOptions() { return {gSmoothLighting.load(), gCutoutLeaves.load()}; }
 
+namespace {
+// A cell's fluid (FluidState): 0 none, else type (1 water, 2 lava) | amount (1..8) << 2 | falling << 6. Waterlogged
+// blocks hold a water source; LiquidBlock level 0 is the source, 1..7 flowing (amount 8 - level), 8.. falling.
+u8 fluidCode(const BlockRegistry& registry, u16 id) {
+    thread_local std::vector<i16> cache;
+    if (cache.size() <= id) cache.resize(size_t(id) + 1, -1);
+    i16& c = cache[id];
+    if (c >= 0) return u8(c);
+    const BlockInfo& b = registry.infos()[id];
+    u8 code = 0;
+    if (b.fluid) {
+        const bool lava = registry.name(id).find("lava") != std::string::npos;
+        const std::string_view lv = registry.property(id, "level");
+        const int level = lv.empty() ? 0 : std::atoi(std::string(lv).c_str());
+        const int amount = level == 0 || level >= 8 ? 8 : 8 - level;
+        code = u8((lava ? 2 : 1) | (amount << 2) | (level >= 8 ? 64 : 0));
+    } else if (b.waterlogged) {
+        code = u8(1 | (8 << 2));
+    }
+    c = code;
+    return code;
+}
+}  // namespace
+
+// FluidRenderer.tesselate: each fluid cell's faces with the corner heights averaged from its neighbours, the top
+// textured by its flow (FlowingFluid.getFlow), the sides by the flowing texture (the overlay against glass / leaves).
+static void fluidFaces(const u16* ids, const u8* light, const BlockRegistry& registry, const ColumnColors* colors,
+                std::vector<CubeQuad>* buckets) {
+    const BlockInfo* infos = registry.infos();
+    static const u16 waterStill = registry.textureLayer("block/water_still"), waterFlow = registry.textureLayer("block/water_flow"),
+                     waterOverlay = registry.textureLayer("block/water_overlay"), lavaStill = registry.textureLayer("block/lava_still"),
+                     lavaFlow = registry.textureLayer("block/lava_flow");
+    auto code = [&](int p) { return fluidCode(registry, ids[p]); };
+    auto type = [&](int p) { return code(p) & 3; };
+    auto amount = [&](int p) { return float((code(p) >> 2) & 15) / 9.0f; };  // getOwnHeight
+    auto solid = [&](int p) { return infos[ids[p]].collisionCount > 0 && !infos[ids[p]].fluid; };  // BlockState.isSolid
+    for (int y = 0; y < 16; ++y)
+        for (int z = 0; z < 16; ++z)
+            for (int x = 0; x < 16; ++x) {
+                const int p = padIndex(x, y, z);
+                const int t = type(p);
+                if (!t) continue;
+                auto same = [&](int q) { return type(q) == t; };
+                auto height = [&](int q) {  // getHeight: 1 under the same fluid, the own height, else 0 / -1 (solid)
+                    if (same(q)) return same(q + kStrideY) ? 1.0f : amount(q);
+                    return solid(q) ? -1.0f : 0.0f;
+                };
+                const int up = p + kStrideY, down = p - kStrideY, north = p - kStrideZ, south = p + kStrideZ, west = p - kStrideX,
+                          east = p + kStrideX;
+                const bool renderUp = !same(up), renderDown = !same(down) && !infos[ids[down]].occludes;
+                const bool renderSide[4] = {!same(north), !same(south), !same(west), !same(east)};
+                if (!renderUp && !renderDown && !renderSide[0] && !renderSide[1] && !renderSide[2] && !renderSide[3]) continue;
+                const float self = height(p);
+                float hNE = 1, hNW = 1, hSE = 1, hSW = 1;
+                if (self < 1.0f) {
+                    const float hN = height(north), hS = height(south), hE = height(east), hW = height(west);
+                    auto average = [&](float h2, float h1, int corner) {  // calculateAverageHeight
+                        if (h1 >= 1.0f || h2 >= 1.0f) return 1.0f;
+                        float sum = 0, weight = 0;
+                        auto add = [&](float h) {
+                            if (h >= 0.8f) sum += h * 10.0f, weight += 10.0f;
+                            else if (h >= 0.0f) sum += h, weight += 1.0f;
+                        };
+                        if (h1 > 0.0f || h2 > 0.0f) {
+                            const float c = height(corner);
+                            if (c >= 1.0f) return 1.0f;
+                            add(c);
+                        }
+                        add(self), add(h1), add(h2);
+                        return weight > 0 ? sum / weight : 0.0f;
+                    };
+                    hNE = average(hN, hE, north + kStrideX), hNW = average(hN, hW, north - kStrideX);
+                    hSE = average(hS, hE, south + kStrideX), hSW = average(hS, hW, south - kStrideX);
+                }
+                auto hb = [](float h) { return u32(std::clamp(int(std::lround(h * 240.0f)), 0, 255)); };
+                // getLightCoords: the brighter of the cell and the one above (sky and block separately)
+                auto lightOf = [&](int a, int b) {
+                    const u8 la = light[a], lb = light[b];
+                    return u32(std::max(la >> 4, lb >> 4) << 4 | std::max(la & 15, lb & 15));
+                };
+                const int kind = t == 1 ? BiomeColors::Water : -1;
+                const u32 color = t == 1 ? (colors ? colors->index[kind][(z + 1) * 18 + (x + 1)] : 5u) : 0u;
+                const u8 layer = t == 1 ? u8(LayerTranslucent) : infos[ids[p]].fluid ? infos[ids[p]].layer : u8(LayerOpaque);
+                auto emit = [&](int face, u32 tex, u32 angle, u32 heights, u32 lit) {
+                    const CubeQuad q{u32(x) | (u32(y) << 4) | (u32(z) << 8) | (u32(face) << 20) | ((color & 15) << 25) | (1u << 30),
+                                     tex | (angle << 12) | (((color & 0xFFFF) >> 4) << 20), heights, lit};
+                    buckets[layer * 6 + face].push_back(q);
+                };
+                const u32 still = t == 1 ? waterStill : lavaStill, flowTex = t == 1 ? waterFlow : lavaFlow;
+                const u32 lit = lightOf(p, up);
+                if (renderUp && !(infos[ids[up]].occludes && std::min(std::min(hNW, hSW), std::min(hSE, hNE)) >= 1.0f)) {
+                    // FlowingFluid.getFlow: the height differences to the neighbours (over a drop: to the fluid below it)
+                    double fx = 0, fz = 0;
+                    const float own = amount(p);
+                    static constexpr int kStep[4][2] = {{0, -1}, {0, 1}, {-1, 0}, {1, 0}};
+                    const int nq[4] = {north, south, west, east};
+                    for (int k = 0; k < 4; ++k) {
+                        const int q = nq[k];
+                        if (type(q) != 0 && type(q) != t) continue;  // affectsFlow: empty or the same fluid
+                        float nh = type(q) ? amount(q) : 0.0f, dist = 0;
+                        if (nh == 0.0f) {
+                            // BLOCKS_FLUID_FLOW: blocks_motion (approximated by a collision shape) and signs
+                            const bool blocks = solid(q) || registry.name(ids[q]).find("_sign") != std::string::npos;
+                            if (!blocks && (type(q - kStrideY) == 0 || type(q - kStrideY) == t)) {
+                                const float below = type(q - kStrideY) ? amount(q - kStrideY) : 0.0f;
+                                if (below > 0.0f) dist = own - (below - 0.8888889f);
+                            }
+                        } else {
+                            dist = own - nh;
+                        }
+                        fx += kStep[k][0] * dist, fz += kStep[k][1] * dist;
+                    }
+                    u32 angle = 255, tex = still;
+                    if (fx != 0 || fz != 0) {
+                        double a = std::atan2(fz, fx) - 3.14159265358979 / 2;
+                        a -= std::floor(a / (2 * 3.14159265358979)) * 2 * 3.14159265358979;
+                        angle = u32(std::lround(a / (2 * 3.14159265358979) * 255.0)) % 255, tex = flowTex;
+                    }
+                    emit(1, tex, angle, hb(hNW) | hb(hNE) << 8 | hb(hSW) << 16 | hb(hSE) << 24, lit);
+                }
+                if (renderDown) emit(0, still, 255, 0, lightOf(down, p));
+                // Sides: N, S, W, E with their two top heights by the face's A axis (+x for N / S, +z for W / E)
+                const int sideFace[4] = {2, 3, 4, 5}, sideCell[4] = {north, south, west, east};
+                const float top[4][2] = {{hNW, hNE}, {hSW, hSE}, {hNW, hSW}, {hNE, hSE}};
+                for (int k = 0; k < 4; ++k) {
+                    const int q = sideCell[k];
+                    if (!renderSide[k] || infos[ids[q]].occludes) continue;
+                    u32 tex = flowTex;
+                    if (t == 1) {  // HalfTransparentBlock / LeavesBlock beside it: the overlay texture
+                        const std::string& n = registry.name(ids[q]);
+                        const bool half = infos[ids[q]].leaves || (n.find("glass") != std::string::npos && n.find("pane") == std::string::npos) ||
+                                          n.starts_with("minecraft:ice") || n.starts_with("minecraft:slime_block") ||
+                                          n.starts_with("minecraft:honey_block") || n.starts_with("minecraft:frosted_ice");
+                        if (half && waterOverlay) tex = waterOverlay;
+                    }
+                    emit(sideFace[k], tex, 255, hb(top[k][0]) | hb(top[k][1]) << 8, lit);
+                }
+            }
+}
+
 void meshGrid(const u16* ids, const u8* light, const BlockRegistry& registry, bool models, bool skirts,
               SectionMesh& out, const ColumnColors* colors) {
     const bool smooth = gSmoothLighting.load(std::memory_order_relaxed), cutoutLeaves = gCutoutLeaves.load(std::memory_order_relaxed);
@@ -175,9 +315,10 @@ void meshGrid(const u16* ids, const u8* light, const BlockRegistry& registry, bo
     // Full-collision cells darken corners (smooth lighting only; LOD meshes have no light). Cached per block id.
     thread_local std::vector<i8> solidOf;
     if (solidOf.size() < registry.blockCount()) solidOf.resize(registry.blockCount(), -1);
+    const bool fluids = models && light;  // full detail: fluids are shaped by FluidRenderer (fluidFaces), not cubes
     for (int i = 0; i < kPadCells; ++i) {
         const BlockInfo& b = infos[ids[i]];
-        sc.cube[i] = b.kind == KindCube ? ids[i] : b.waterlogged ? water : 0;
+        sc.cube[i] = b.kind == KindCube && !(fluids && b.fluid) ? ids[i] : b.waterlogged && !fluids ? water : 0;
         if (!light) continue;
         i8& solid = solidOf[ids[i]];
         if (solid < 0) {
@@ -321,6 +462,8 @@ void meshGrid(const u16* ids, const u8* light, const BlockRegistry& registry, bo
                 }
         }
     }
+
+    if (fluids) fluidFaces(ids, light, registry, colors, sc.buckets);
 
     // Non-cube block models: baked quads, culled against occluding neighbours.
     if (models) {

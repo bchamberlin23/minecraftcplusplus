@@ -48,6 +48,9 @@ CubeVertex pullCube(uint vid) {
     if ((q.x >> 29) & 1u) {
         if (face == 1 || (face >= 2 && (corner >> 1) == 1)) p.y -= 0.125;
     }
+    float2 fluidSt = 0;
+    const bool fluid = isFluidQuad(q);
+    if (fluid) fluidCorner(q, face, a, b, p, fluidSt);
     p.xz *= float(1u << origin.w);  // LOD columns span 2^level blocks (heights stay exact); UVs stay in block units
 
     // Canonical face UVs (same convention as the game's automatic UVs), then rotation.
@@ -62,6 +65,7 @@ CubeVertex pullCube(uint vid) {
     }
     uint rot = (q.x >> 23) & 3;
     v.st = rot == 0 ? uv : rot == 1 ? float2(uv.y, -uv.x) : rot == 2 ? -uv : float2(-uv.y, uv.x);
+    if (fluid) v.st = fluidSt;
     v.q = q;
     v.corner = corner;
     v.face = face;
@@ -71,9 +75,9 @@ CubeVertex pullCube(uint vid) {
     return v;
 }
 
-float cornerSky(CubeVertex v) { return float((v.q.z >> (v.corner * 8)) & 0xFF) / 16.0; }
-float cornerBlock(CubeVertex v) { return float((v.q.w >> (v.corner * 8)) & 0xFF) / 16.0; }
-float cornerAo(CubeVertex v) { return 1.0 - 0.2 * float((v.q.y >> (12 + v.corner * 2)) & 3); }
+float cornerSky(CubeVertex v) { return isFluidQuad(v.q) ? fluidSky(v.q) : float((v.q.z >> (v.corner * 8)) & 0xFF) / 16.0; }
+float cornerBlock(CubeVertex v) { return isFluidQuad(v.q) ? fluidBlock(v.q) : float((v.q.w >> (v.corner * 8)) & 0xFF) / 16.0; }
+float cornerAo(CubeVertex v) { return isFluidQuad(v.q) ? 1.0 : 1.0 - 0.2 * float((v.q.y >> (12 + v.corner * 2)) & 3); }
 uint colorIndex(CubeVertex v) { return ((v.q.y >> 20) << 4) | ((v.q.x >> 25) & 15); }
 // Texture coordinates + layer; coarse LOD nodes mark theirs negative for the flat-colour path (sampleTerrain).
 float3 lodUvl(CubeVertex v, float layer) { return float3(v.st, v.origin.w > 0 ? -(layer + 1.0) : layer); }

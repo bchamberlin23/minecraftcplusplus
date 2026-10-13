@@ -83,7 +83,21 @@ float3 rtCubeCorner(uint4 q, uint corner) {
     if ((q.x >> 29) & 1u) {
         if (face == 1 || (face >= 2 && (corner >> 1) == 1)) p.y -= 0.125;
     }
+    if (isFluidQuad(q)) {
+        float2 st;
+        fluidCorner(q, face, a, b, p, st);
+    }
     return p;
+}
+
+// Texture coordinates of corner `corner` of a fluid quad (fluidCorner).
+float2 rtFluidUv(uint4 q, uint corner) {
+    uint face = (q.x >> 20) & 7;
+    if (((0x19u >> face) & 1u) != 0 && (corner == 1 || corner == 2)) corner ^= 3;
+    float3 p = 0;
+    float2 st;
+    fluidCorner(q, face, float(corner & 1), float(corner >> 1), p, st);
+    return st;
 }
 
 struct RtSurface {
@@ -103,6 +117,11 @@ float3 rtUvLayer(uint slot, uint kind, uint prim, float2 bary, float3 pos, out u
     if (kind != kKindModel) {
         uint4 q = gRtCube[rtCubeIndex(slot, kind, quad)];
         baseLayer = q.y & 0xFFF;
+        if (isFluidQuad(q)) {  // the corners' fluid texture coordinates across the triangle
+            uint3 c = (prim & 1) ? uint3(2, 1, 3) : uint3(0, 1, 2);
+            float2 uv = rtFluidUv(q, c.x) * (1 - bary.x - bary.y) + rtFluidUv(q, c.y) * bary.x + rtFluidUv(q, c.z) * bary.y;
+            return float3(uv, float(gTextureRemap[baseLayer]));
+        }
         return float3(rtCubeUv(q, pos - rtSectionRel(slot)), float(gTextureRemap[baseLayer]));
     }
     uint base = rtModelBase(slot, quad);
@@ -150,8 +169,8 @@ RtSurface rtSurface(uint slot, uint kind, uint prim, float2 bary, float3 origin,
         s.tint = tintColor(((q.y >> 20) << 4) | ((q.x >> 25) & 15));
         float4 sky = float4(q.z & 0xFF, (q.z >> 8) & 0xFF, (q.z >> 16) & 0xFF, q.z >> 24) / 16.0;
         float4 blk = float4(q.w & 0xFF, (q.w >> 8) & 0xFF, (q.w >> 16) & 0xFF, q.w >> 24) / 16.0;
-        s.sky = dot(sky, 0.25);
-        s.block = dot(blk, 0.25);
+        s.sky = isFluidQuad(q) ? fluidSky(q) : dot(sky, 0.25);
+        s.block = isFluidQuad(q) ? fluidBlock(q) : dot(blk, 0.25);
     } else {
         uint base = rtModelBase(slot, quad);
         uint3 c = (prim & 1) ? uint3(2, 1, 3) : uint3(0, 1, 2);

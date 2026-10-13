@@ -35,6 +35,9 @@ public:
 //   sky   = per corner sky light in 4.4 fixed point (average of the four cells in front of the corner)
 //   block = per corner block light, same
 // Corner c is (c & 1) along the quad's A axis and (c >> 1) along its B axis (see TerrainVS).
+// Fluid quads (geo bit 30, full detail; FluidRenderer): one block face. sky = the top's corner heights (bytes by
+// a + 2b, in 1/240 block) or a side's two top heights (bytes 0 / 1 by a); block = the block's light (sky << 4 |
+// block); tex bits 12..19 = the top's flow angle (255: still, no rotation) instead of the ambient occlusion.
 // Coordinates are in cells; LOD meshes scale cells by 2^level on the GPU.
 // Model quads carry the light of their own cell in word 11 (low 8 bits) and their colour index above it.
 constexpr u8 kFullSky = 0xF0;
