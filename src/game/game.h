@@ -95,7 +95,9 @@ public:
     // Entity hook (multiplayer), called on clicks before blocks: returns true when an entity closer than
     // blockDistance (< 0: no block targeted) is under the crosshair; it then takes the click.
     std::function<bool(bool attack, bool use, double blockDistance)> onEntityClick;
-    std::function<bool()> entityUsePassed;  // the last entity click's interactions passed (EntityWorld)
+    std::function<int(int hand)> entityInteract;  // the picked entity's interaction with a hand: 1 consumed (EntityWorld)
+    // LocalPlayer.pick: a pickable entity nearer than the block but beyond the entity reach makes the hit a miss
+    bool entityBlocksTarget = false;
     std::function<bool()> entityAttackMissed;  // the last entity attack was only a swing (out of the weapon's range)
     // Sound hooks (audio): a block the player broke (its old state) or placed (the new state), once
     // applied; and the end of every 20 Hz player tick.
@@ -189,7 +191,7 @@ public:
     // predictItemUse (ItemStack.use: starts the use, cooldowns, buckets), predictUseOn (ItemStack.useOn of items that
     // are not blocks); handHasItem / handOnCooldown describe the hands; predictRelease (Item.releaseUsing: riptide).
     static constexpr int kUsePass = 0, kUseConsume = 1, kUseFail = 2;
-    void startUseItem(bool afterEntity);
+    bool startUseItem(bool afterEntity, int onlyHand = -1);  // true: a use went through (consumed or failed)
     int useItemOn(int hand);
     std::function<int(int hand, const RayHit* target)> predictItemUse;
     std::function<int(int hand, const RayHit& hit)> predictUseOn;

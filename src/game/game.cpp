@@ -289,6 +289,7 @@ void Game::retarget() {
     target_ = physics_.raycast(origin, dir, std::max(blockReach, entityReach));
     blockDistance_ = target_.hit ? target_.distance : -1.0;
     if (target_.hit && !(target_.distance < blockReach)) target_.hit = false;  // filterHitResult: a miss
+    if (entityBlocksTarget) target_.hit = false;  // an entity in front, out of reach: the whole hit is a miss
 }
 
 void Game::simulate(const PlayerInput& input, int ticks) {
@@ -335,17 +336,20 @@ void Game::handleClicks(Window& w, double dt, int rightPresses, int middlePresse
         use.active = false;  // Player.releaseUsingItem: the client stops at once
         if (onReleaseUseItem) onReleaseUseItem();
     }
-    if (doPlace && onEntityClick && onEntityClick(false, ev.right > 0, blockDistance_)) {
-        repeatTimer_ = 0.2;
-        if (ev.right > 0 && entityUsePassed && !entityUsePassed()) {  // consumed (InteractionResult.SUCCESS): a swing
-            if (onSwing) {
-                const int attackSwing = swingTicks;
-                swingTicks = useSwingTicksOf[0];
-                onSwing(0, useSwingTypeOf[0]);
-                swingTicks = attackSwing;
+    if (doPlace && onEntityClick && onEntityClick(false, true, blockDistance_)) {
+        repeatTimer_ = 0.2;  // rightClickDelay: held, it repeats every 4 ticks
+        // Minecraft.startUseItem on an entity: each hand's interaction, then that hand's item use, until one goes through
+        for (int hand = 0; hand < 2; ++hand) {
+            if (entityInteract && entityInteract(hand) == 1) {  // Success: the hand swings
+                if (onSwing) {
+                    const int attackSwing = swingTicks;
+                    swingTicks = useSwingTicksOf[hand];
+                    onSwing(hand, useSwingTypeOf[hand]);
+                    swingTicks = attackSwing;
+                }
+                return;
             }
-        } else if (ev.right > 0 && !usingItem_) {
-            startUseItem(true);  // the interactions passed: the held items' turn
+            if (!usingItem_ && startUseItem(true, hand)) return;
         }
         return;
     }
@@ -354,9 +358,9 @@ void Game::handleClicks(Window& w, double dt, int rightPresses, int middlePresse
     if (doPlace && !use.active) startUseItem(false);
 }
 
-void Game::startUseItem(bool afterEntity) {
+bool Game::startUseItem(bool afterEntity, int onlyHand) {
     useConsumed_ = false;
-    for (int hand = 0; hand < 2; ++hand) {
+    for (int hand = onlyHand < 0 ? 0 : onlyHand; hand < (onlyHand < 0 ? 2 : onlyHand + 1); ++hand) {
         if (!afterEntity && target_.hit) {
             useOnTakesItem = placedLast_ = false;
             const int r = useItemOn(hand);
@@ -366,7 +370,7 @@ void Game::startUseItem(bool afterEntity) {
                 // (hasInfiniteMaterials) moves the hand.
                 const bool hasItem = handHasItem ? handHasItem(hand) : hand == 0;
                 if (r == kUseConsume && hasItem && (placedLast_ || useOnTakesItem || instabuild) && onItemUsed) onItemUsed(hand);
-                return;
+                return true;
             }
         }
         const bool hasItem = handHasItem ? handHasItem(hand) : (hand == 0 && hotbar_[selected_] != 0);
@@ -375,9 +379,10 @@ void Game::startUseItem(bool afterEntity) {
         usingItem_ = true;
         if (predictItemUse && predictItemUse(hand, afterEntity || !target_.hit ? nullptr : &target_) == kUseConsume) {
             if (onItemUsed) onItemUsed(hand);
-            return;
+            return true;
         }
     }
+    return false;
 }
 
 bool Game::useTarget(bool place) {

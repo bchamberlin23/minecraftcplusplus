@@ -446,7 +446,12 @@ public:
     // Player.interactOn on the client (Entity.interact, then ItemStack.interactLivingEntity): 1 when the held item's
     // interaction with the entity consumes the click, 0 when it passes, -1 when the hand is empty (and passes).
     std::function<int(const Entity& e, int hand)> interactionResult;
-    bool lastUsePassed = false;
+    // The entity a use click picked (click with use), for interactHand: 1 consumed, else passed.
+    PickResult usePick;
+    bool useSneaking = false;
+    int interactHand(int hand);
+    std::function<int()> localVehicle;  // the entity the local player rides (-1 none): not pickable from outside
+    int rootVehicle(int id) const;
     bool lastAttackMissed = false;  // the last attack click only swung (out of the weapon's attack range)  // the last click's interactions all passed: the held items' turn (Minecraft.startUseItem)
     // A player in spectator mode (the player list): not pickable.
     std::function<bool(const Entity& e)> isSpectator;

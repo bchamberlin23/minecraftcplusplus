@@ -714,8 +714,9 @@ void Gameplay::frame() {
         const CameraState c = game_->camera();
         const double eye[3] = {c.x, c.y, c.z}, cp = std::cos(c.pitch);
         const double dir[3] = {-std::sin(c.yaw) * cp, -std::sin(c.pitch), std::cos(c.yaw) * cp};
+        // LocalPlayer.pick: entities up to the block hit (or the longer reach), out of the entity reach a miss
         const double block = game_->pickBlockDistance();
-        const double limit = block >= 0 ? std::min(block, game_->entityReach) : game_->entityReach;
+        const double limit = block >= 0 ? block : std::max(game_->blockReach, game_->entityReach);
         ent::PickResult pick;
         if (game_->attackMaxReach >= 0) {  // LocalPlayer.raycastHitResult: the held item's attack_range picks
             const double* v = game_->player().vel;
@@ -726,7 +727,11 @@ void Gameplay::frame() {
                                                   return h.hit ? h.distance : max;
                                               });
         }
-        if (pick.id < 0) pick = entities_->pick(eye, dir, limit);
+        game_->entityBlocksTarget = false;
+        if (pick.id < 0) {
+            pick = entities_->pick(eye, dir, limit);
+            if (pick.id >= 0 && !(pick.distance < game_->entityReach)) game_->entityBlocksTarget = true, pick.id = -1;
+        }
         game_->crosshairEntity = pick.id;
         if (pick.id >= 0)
             if (const ent::Entity* e = entities_->entity(pick.id); e && e->info) {

@@ -2001,15 +2001,28 @@ bool rayBox(const double o[3], const double dir[3], const double lo[3], const do
 }
 }  // namespace
 
+// The root vehicle (Entity.getRootVehicle) of an entity id.
+int EntityWorld::rootVehicle(int id) const {
+    for (int guard = 0; guard < 16; ++guard) {
+        auto it = entities_.find(id);
+        if (it == entities_.end() || it->second.vehicle < 0) return id;
+        id = it->second.vehicle;
+    }
+    return id;
+}
+
+// ProjectileUtil.getEntityHitResult (LocalPlayer.pick): the nearest pickable entity's box (getBoundingBox, inflated by
+// getPickRadius) the ray reaches; living entities stay pickable while they die (until removed); the local player's
+// own root vehicle (and whoever rides it) only when the eye is inside its box.
 PickResult EntityWorld::pick(const double o[3], const double dir[3], double maxDistance) const {
     PickResult best;
     best.distance = maxDistance;
-    const float pt = partialTick();
+    const int ownVehicle = localVehicle ? localVehicle() : -1;
+    const int ownRoot = ownVehicle >= 0 ? rootVehicle(ownVehicle) : INT_MIN;
     for (const auto& [id, e] : entities_) {
         if (!e.info) continue;
-        if (e.deathTime > 0) continue;
         double c[3];
-        for (int a = 0; a < 3; ++a) c[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt;
+        for (int a = 0; a < 3; ++a) c[a] = e.pos[a];
         if (e.info->name == "minecraft:ender_dragon" && e.health > 0) {  // EnderDragonPart (ids: the dragon's + 1 .. 8)
             double parts[8][6];
             dragonPartBoxes(e, parts);
@@ -2044,6 +2057,7 @@ PickResult EntityWorld::pick(const double o[3], const double dir[3], double maxD
             t0 = std::max(t0, ta), t1 = std::min(t1, tb);
             if (t0 > t1) hit = false;
         }
+        if (hit && t0 > 0 && rootVehicle(id) == ownRoot) hit = false;  // our own vehicle: from inside only
         if (hit && t0 < best.distance) {
             best.id = id;
             best.distance = t0;
@@ -2092,17 +2106,16 @@ PickResult EntityWorld::pickAttackRange(const double eye[3], const double dir[3]
         t = t0;
         return true;
     };
-    const float pt = partialTick();
     int bestId = -1;
     double bestDist = 1e30;
     for (const auto& [id, e] : entities_) {
-        if (!e.info || e.deathTime > 0) continue;
+        if (!e.info) continue;
         const std::string& n = e.info->name;
         // EntitySelector.CAN_BE_PICKED: the entities the crosshair can target (EntityWorld::pick).
         if (!pickableEntity(e)) continue;
         double w, h, c[3];
         entitySize(e, w, h);
-        for (int a = 0; a < 3; ++a) c[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt;
+        for (int a = 0; a < 3; ++a) c[a] = e.pos[a];  // getBoundingBox: where the entity is this tick
         const double r = pickRadius(e);  // the box inflated by getPickRadius
         const double lo[3] = {c[0] - w / 2 - r, c[1] - r, c[2] - w / 2 - r}, hi[3] = {c[0] + w / 2 + r, c[1] + h + r, c[2] + w / 2 + r};
         double hit[3];
@@ -2156,20 +2169,16 @@ bool EntityWorld::click(const double eye[3], const double dir[3], bool attack, b
         lastAttackMissed = true;
         return true;
     }
-    lastUsePassed = false;
-    if (attack) {
-        this->attack(p.id);
-    } else if (use) {  // Minecraft.startUseItem: each hand's interaction (packet first), until one consumes
-        this->use(p.id, p.hit, sneaking, 0);
-        const Entity* e = entity(p.id);
-        int r = e && interactionResult ? interactionResult(*e, 0) : 1;
-        if (r == -1) {  // an empty main hand passes (its item use too): the off hand's interaction
-            this->use(p.id, p.hit, sneaking, 1);
-            r = e && interactionResult ? interactionResult(*e, 1) : 1;
-        }
-        lastUsePassed = r != 1;
-    }
+    if (attack) this->attack(p.id);
+    else if (use) usePick = p, useSneaking = sneaking;  // interactHand sends each hand's interaction
     return true;
+}
+
+int EntityWorld::interactHand(int hand) {  // MultiPlayerGameMode.interact: the packet, then the predicted result
+    if (usePick.id < 0) return 0;
+    this->use(usePick.id, usePick.hit, useSneaking, hand);
+    const Entity* e = entity(usePick.id);
+    return e && interactionResult ? interactionResult(*e, hand) : 1;
 }
 
 bool EntityWorld::pickItem(const double eye[3], const double dir[3], double blockDistance, double reach, bool includeData) {
