@@ -107,8 +107,8 @@ kept out of Chat and Language (no general "an EditBox has focus" query); the soc
 disabled (reporting needs a Microsoft account). HUD order, creative inventory, tab list and chat (tags, restrictions,
 history) audited and fixed. Not ported: the chat screen's own narration (title, usage, "Message to send"); tab heads
 show in singleplayer though the local server is offline (deliberate); subtitles draw before the toasts, not after.
-Toasts follow ToastInstance now. Toast residuals: the server pack download toast is one static toast (the game
-updates one per download with progress and hides it on success); no toasts for world access / chunk load or save /
+Toasts follow ToastInstance now (the server pack download toast shows its progress). Toast residuals: no toasts
+for world access / chunk load or save /
 file drop / pack load failures or periodic notifications; friend toasts have no face (this port's friends have no
 game profile); the Online screen's Friends section has only In-Game Notification (the rest is Microsoft's). Tested against local mock status servers
 (a Python script: modern, no-version, legacy-only, silent and closing servers).
