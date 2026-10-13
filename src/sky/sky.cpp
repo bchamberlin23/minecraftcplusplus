@@ -720,7 +720,7 @@ void Sky::update(const CameraState& cam, double dt) {
         envStart = a[int(Attr::FogStart)][0] - 160.0f * rainFog_;
         envEnd = std::max(std::min(96.0f, a[int(Attr::FogEnd)][0]), a[int(Attr::FogEnd)][0] - 256.0f * rainFog_);
         if (bossFog_) {  // a boss bar's world fog: start <= 10, end <= 96, the sky and clouds end with it
-            envStart = std::min(envStart, 10.0f), envEnd = std::min(envEnd, 96.0f), skyEnd = envEnd, hideSky = true;
+            envStart = std::min(envStart, 10.0f), envEnd = std::min(envEnd, 96.0f), skyEnd = envEnd;
         }
     }
     f.skyEnd = std::min(f.skyEnd, skyEnd);
@@ -728,7 +728,7 @@ void Sky::update(const CameraState& cam, double dt) {
     f.renderSky = !hideSky;
     renderer_->setFogLimit(envStart, envEnd);
     // ClientLevelData.getHorizonHeight: the bottom of the world when it is flat, else 63; not drawn underwater.
-    f.darkDisc = cam.y - (flat_ ? double(dimension_->minY) : 63.0) < 0.0;
+    f.darkDisc = cam.y - (flat_ ? double(dimension_->minY) : 63.0) < 0.0 && fogType != FogType::Water;  // not under water
     renderer_->setAtmosphere(f.fogColor, a[int(Attr::SkyLightFactor)][0]);
     skyDarken_ = int(15.0f - a[int(Attr::SkyLightLevel)][0]);
     {  // the game's lightmap inputs (LightmapRenderStateExtractor)
@@ -1052,7 +1052,7 @@ void Sky::buildClouds(const CameraState& cam, const Value* a) {
     std::copy(color.begin(), color.end(), f.cloudColor);
     f.cloudOffset[0] = -xIn, f.cloudOffset[1] = relBottom, f.cloudOffset[2] = -zIn;
     f.cloudFogEnd = std::min(float(options_.cloudRange * 16), a[int(Attr::CloudFogEnd)][0]);
-    f.cloudFogEnd = std::min(f.cloudFogEnd, cloudFogLimit_);  // a fog environment's cloud end (boss fog: = fog end)
+    if (cloudFogLimit_ < 1e29f) f.cloudFogEnd = cloudFogLimit_;  // a fog environment's own cloud end (boss fog: = fog end)
     f.cloudFaces = &cloudFaces_;
     f.cloudVersion = cloudVersion_;
 }

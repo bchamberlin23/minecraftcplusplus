@@ -60,7 +60,7 @@ public:
     void update(const CameraState& cam, double dt);
     // The boss bars' flags (BossHealthOverlay.shouldDarkenScreen / shouldCreateWorldFog), before update():
     // the world darkening ramps in (GameRenderer.bossOverlayWorldDarkening) and darkens the lightmap and fog colour;
-    // the world fog closes the fog in to 10..96 blocks and hides the sky.
+    // the world fog closes the fog in to 10..96 blocks (the sky and clouds end with it).
     void setBossOverlay(bool darkenScreen, bool worldFog) { bossDarken_ = darkenScreen, bossFog_ = worldFog; }
     // Options.getEffectiveRenderDistance (chunks): what the fog formulas are given (sky fog colour, the sky end,
     // blindness / darkness / spectator fog).

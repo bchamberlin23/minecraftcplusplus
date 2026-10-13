@@ -181,7 +181,9 @@ void AudioSystem::setVolume(Category c, float v) {
     volumes_[int(c)] = std::clamp(v, 0.0f, 1.0f);
     engine_.setCategoryGain(c, config_.muted && c == Category::Master ? 0.0f : volumes_[int(c)]);
     saveSettings();
-    if ((c == Category::Music || c == Category::Master) && v > 0.0f && !toastShown_) {  // showNowPlayingToastIfNeeded
+    // Options: a master or music volume with sound left (master x music > 0) shows a pending Now Playing toast
+    if ((c == Category::Music || c == Category::Master) && volumes_[int(Category::Master)] * volumes_[int(Category::Music)] > 0.0f &&
+        !toastShown_) {  // showNowPlayingToastIfNeeded
         ++nowPlayingShows_;
         toastShown_ = true;
     }
@@ -612,7 +614,10 @@ void AudioSystem::update(double dt, const CameraState& cam, const WorldInfo& inf
     if (!ready()) return;
     Timer timer;
     info_.gameMode = info.gameMode;
-    if (info.dimension != dimension_) dimension_ = info.dimension;
+    if (info.dimension != dimension_) {  // ClientPacketListener.handleRespawn: a new dimension stops the music
+        if (!dimension_.empty()) stopMusic_ = true;
+        dimension_ = info.dimension;
+    }
     info_.dimension = dimension_;
     camera_ = cam;
 
@@ -713,7 +718,7 @@ void AudioSystem::setScreenMusic(std::string_view event) {
         music_ = 0, musicEvent_ = -1;
         musicSong_.clear();
         ++nowPlayingHides_;
-        nextSongDelay_ = 100;
+        stopMusic_ = true;  // the delay: re-rolled for the situational music + 100 (next tick)
     }
     screenMusic_ = MusicDef{id, 0, 0, true};  // Musics.CREDITS: no delay, replaces what plays
 }
@@ -731,6 +736,20 @@ void AudioSystem::tickMusic(const AudioEnvironment* env, bool creative, bool und
         if (musicFrequency_ == 2) return 100;
         return rng_.nextInt(std::min(m->minDelay, maxFrequency), std::min(m->maxDelay, maxFrequency));
     };
+    if (stopMusic_) {  // MusicManager.stopPlaying
+        stopMusic_ = false;
+        if (music_) {
+            engine_.stopHandle(music_);
+            music_ = 0, musicEvent_ = -1;
+            musicSong_.clear();
+            ++nowPlayingHides_;
+        }
+        nextSongDelay_ = nextDelay(pick()) + 100;
+    }
+    if (rerollMusicDelay_) {  // MusicManager.setMinutesBetweenSongs
+        rerollMusicDelay_ = false;
+        nextSongDelay_ = nextDelay(pick());
+    }
     if (music_ && musicGain_ != volume) {  // fadePlaying
         if (musicGain_ < volume) {
             musicGain_ += std::clamp(musicGain_, 5.0E-4f, 0.005f);

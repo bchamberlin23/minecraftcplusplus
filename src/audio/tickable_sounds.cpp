@@ -159,8 +159,10 @@ void TickableSounds::tick(int gameMode) {
         start(in, "minecraft:item.elytra.flying", Category::Player, playerPos);
     }
     wasFallFlying_ = p.fallFlying;
-    // LocalPlayer.updateIsUnderwater: the enter / exit sounds and the underwater loop.
-    if (underwater != wasUnderwater_) {
+    // LocalPlayer.updateIsUnderwater: the enter / exit sounds and the underwater loop (none for a spectator).
+    if (underwater != wasUnderwater_ && gameMode == 3) {
+        wasUnderwater_ = underwater;
+    } else if (underwater != wasUnderwater_) {
         audio_.play(underwater ? "minecraft:ambient.underwater.enter" : "minecraft:ambient.underwater.exit", Category::Ambient, playerPos[0],
                     playerPos[1], playerPos[2], 1.0f, 1.0f);
         if (underwater) {

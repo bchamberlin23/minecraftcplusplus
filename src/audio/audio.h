@@ -75,7 +75,10 @@ public:
     // MusicManager: the Music Frequency option (0 default, 1 frequent, 2 constant); the song playing as a translation
     // key (getCurrentMusicTranslationKey: "music.game.sweden", "" none); counters of the now playing toast's show
     // requests (a song started audibly, or the music turned up while one plays silently) and hide requests.
-    void setMusicFrequency(int frequency) { musicFrequency_ = frequency; }
+    void setMusicFrequency(int frequency) {  // MusicManager.setMinutesBetweenSongs: re-rolls the delay
+        if (frequency != musicFrequency_) rerollMusicDelay_ = true;
+        musicFrequency_ = frequency;
+    }
     const std::string& currentSongKey() const { return musicSong_; }
     int nowPlayingShows() const { return nowPlayingShows_; }
     // Jukebox songs started (LevelEventHandler.playJukeboxSong -> Hud.setNowPlaying): a counter and the last song's
@@ -206,6 +209,7 @@ private:
     int nextSongDelay_ = 100;
     float musicGain_ = 1.0f;
     int musicFrequency_ = 0;
+    bool stopMusic_ = false, rerollMusicDelay_ = false;  // MusicManager.stopPlaying / setMinutesBetweenSongs (next tick)
     std::string musicSong_;
     int nowPlayingShows_ = 0, nowPlayingHides_ = 0;
     int jukeboxSongs_ = 0;
