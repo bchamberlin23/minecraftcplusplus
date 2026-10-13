@@ -201,6 +201,9 @@ struct Entity {
     int attachedTo = -1;     // firework rocket: the entity it is attached to (DATA_ATTACHED_TO_TARGET), -1 none
     std::string fireworks;   // firework rocket: its item's "fireworks" component (encoded), "" without one
     bool silent = false;     // DATA_SILENT
+    int attackTarget = 0;    // Guardian DATA_ID_ATTACK_TARGET (0 none) and clientSideAttackTime
+    int attackTime = 0;
+    int snifferState = 0;    // Sniffer DATA_STATE (Sniffer.State id)
     bool staysStill = false; // happy ghast: STAYS_STILL (holding still: its rider does not steer)
     int unloadedTicks = 0;  // ticks spent outside the loaded world
     // ItemPickupParticle: a collected item flies to its collector (entity id; the local player when it is not one of
@@ -329,7 +332,7 @@ public:
            painting = -1, nameVisible = 3, livingFlags = -1, attachedTo = -1, sleepPos = -1, ticksFrozen = -1,
            paddleLeft = -1, paddleRight = -1, chest = -1, color = -1, attachFace = -1, peek = -1, fireworksItem = -1,
            silent = 4, staysStill = -1, dangerous = -1, cloudRadius = -1, cloudWaiting = -1, cloudParticle = -1,
-           commandName = -1, lastOutput = -1;
+           commandName = -1, lastOutput = -1, attackTarget = -1, snifferState = -1;
         // Display entities.
         i8 dStart = -1, dDuration = -1, dPosRot = -1, dTranslation = -1, dScale = -1, dLeft = -1, dRight = -1,
            dBillboard = -1, dBrightness = -1, dViewRange = -1, dWidth = -1, dHeight = -1, dBlock = -1, dItem = -1,

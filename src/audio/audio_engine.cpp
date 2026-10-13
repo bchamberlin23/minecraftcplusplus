@@ -377,6 +377,14 @@ void Engine::setVolume(u32 handle, float volume) {
     commands_.push_back({Command::Volume, r});
 }
 
+void Engine::setPitch(u32 handle, float pitch) {
+    PlayRequest r;
+    r.handle = handle;
+    r.pitch = pitch;
+    std::lock_guard lock(mutex_);
+    commands_.push_back({Command::Pitch, r});
+}
+
 void Engine::setListener(const double pos[3], const float forward[3], const float up[3]) {
     Command c{Command::Listener, {}};
     std::copy(pos, pos + 3, c.req.pos);
@@ -746,6 +754,13 @@ void Engine::run() {
             case Command::Volume:
                 for (auto& v : m.voices)
                     if (v.req.handle == c.req.handle) v.req.volume = std::clamp(c.req.volume, 0.0f, 1.0f);
+                break;
+            case Command::Pitch:
+                for (auto& v : m.voices)
+                    if (v.req.handle == c.req.handle && !v.draining) {
+                        v.req.pitch = std::clamp(c.req.pitch, 0.5f, 2.0f);
+                        if (v.req.pitch != v.pitchSet) v.sv->SetFrequencyRatio(v.req.pitch), v.pitchSet = v.req.pitch;
+                    }
                 break;
             case Command::Listener: {
                 std::copy(c.req.pos, c.req.pos + 3, m.listener);

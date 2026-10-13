@@ -2,6 +2,7 @@
 #include "assets/block_shapes.h"
 #include "assets/game_reports.h"
 #include "audio/audio.h"
+#include "audio/tickable_sounds.h"
 #include "audio/audio_test.h"
 #include "core/common.h"
 #include "core/jobs.h"
@@ -813,6 +814,7 @@ int wmain(int argc, wchar_t** argv) {
     }
     bool texturesReloaded = false;  // server resource packs: the block textures need uploading
     Game game(world, registry, terrain, renderer, player);
+    audio::TickableSounds tickableSounds(audio, entities, game);
     if (session) session->attach(game, terrain);
     {  // Front end: title screen, lists, switching instances (ui/title.cpp)
         ui::FrontEnd fe;
@@ -1088,6 +1090,7 @@ int wmain(int argc, wchar_t** argv) {
         }
         audio.update(dt, cam, {session ? session->gameMode() : 1,
                                session ? std::string_view(session->dimension().name) : "minecraft:overworld"});
+        tickableSounds.frame(dt, session && haveEntities && !menu, session ? session->gameMode() : 1);
 
         const double preMs = frameTop.ms();
         // Only a discontinuous move restarts the entrance wave; walking does not.

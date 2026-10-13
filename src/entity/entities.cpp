@@ -205,6 +205,8 @@ EntityWorld::EntityWorld(EntityAssets& assets, World& world, BlockRegistry& regi
         d.cloudParticle = id({"DATA_PARTICLE"});
         d.commandName = id({"DATA_ID_COMMAND_NAME"});
         d.lastOutput = id({"DATA_ID_LAST_OUTPUT"});
+        d.attackTarget = id({"DATA_ID_ATTACK_TARGET"});
+        d.snifferState = id({"DATA_STATE"});
         d.damage = id({"DATA_ID_DAMAGE"});
         d.mainGene = id({"MAIN_GENE_ID", "DATA_MAIN_GENE_ID"});
         d.mobFlags = id({"DATA_MOB_FLAGS_ID"});
@@ -1052,6 +1054,8 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
             e.tame = (v.i & 4) != 0;  // TamableAnimal.DATA_FLAGS_ID
         else if (idx == d.collar) e.collar = int(v.i);
         else if (idx == d.anger) e.angry = v.i > 0;
+        else if (idx == d.attackTarget) e.attackTarget = int(v.i), e.attackTime = 0;  // Guardian.onSyncedDataUpdated
+        else if (idx == d.snifferState && name == "minecraft:sniffer") e.snifferState = int(v.i);
         else if (idx == d.standFlags) e.standFlags = int(v.i);
         else if (d.standPose >= 0 && idx >= d.standPose && idx < d.standPose + 6) {
             float* p = e.standPose[idx - d.standPose];
@@ -1237,6 +1241,8 @@ void EntityWorld::tickEntity(Entity& e) {
         return;
     }
     ++e.age;
+    if (e.attackTarget != 0 && e.attackTime < (e.info && e.info->name == "minecraft:elder_guardian" ? 60 : 80))
+        ++e.attackTime;  // Guardian.aiStep (client): clientSideAttackTime up to getAttackDuration
     if (e.display.is) {  // Display.tick (client side)
         DisplayState& s = e.display;
         const float last = displayProgress(e, 0.0f);  // lastProgress: the progress the last frame drew

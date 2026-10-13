@@ -79,6 +79,14 @@ public:
     // A sound the server named by Holder<SoundEvent>: registry id (>= 0), else the inline name.
     u32 playNetwork(int registryId, std::string_view name, Category category, const double pos[3], float volume, float pitch);
     void stop(u32 handle);
+    // Tickable sound instances (tickable_sounds.cpp): a playing sound's instance volume (times the sound's own volume,
+    // clamped to [0, 1]), pitch and position; whether it is still playing.
+    void setVolume(u32 handle, float volume) { engine_.setVolume(handle, volume); }
+    void setPitch(u32 handle, float pitch) { engine_.setPitch(handle, pitch); }
+    void setPosition(u32 handle, const double pos[3]) { engine_.setPosition(handle, pos); }
+    bool finished(u32 handle) const { return std::find(finished_.begin(), finished_.end(), handle) != finished_.end(); }
+    int eventId(std::string_view name) const { return bank_.eventId(name); }
+    i64 nextSeed() { return rng_.nextLong(); }
 
     // SoundEventListener (the subtitles): every sound that starts with its subtitle key (sounds.json), position,
     // audible range (infinite for sounds at the listener) and whether it loops. Main thread.
