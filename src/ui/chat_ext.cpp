@@ -543,6 +543,13 @@ bool chatExtInput(UiState& s, const InputEvent& e) {
     return false;
 }
 
+// GuiMessageTag.text: the tag's name, for chatModified the signed text below it in gray
+std::vector<Text> tagTooltip(UiState& s, const ChatTag& tag) {
+    Text t(s.res.translate(tag.key));
+    if (!tag.original.empty()) t.spans.push_back({"\n" + tag.original, colorStyle(0xAAAAAA)});
+    return s.font.split(t, 210);
+}
+
 void chatExtDraw(UiState& s, Canvas& c) {
     useTarget(chatTarget(s));
     if (suggestionsDraw(s, c)) return;
@@ -553,7 +560,17 @@ void chatExtDraw(UiState& s, Canvas& c) {
     if (my < float(chatBottom) && mx >= 0 && mx < 2 && line >= 0 && line < std::min(int(s.chatLines.size()) - s.chatScroll, 20)) {
         const ChatTag& tag = s.chatLines[size_t(line + s.chatScroll)].tag;
         if (tag.color && !tag.key.empty()) {
-            s.drawTooltip(c, s.font.split(Text(s.res.translate(tag.key)), 210), mx, my);
+            s.drawTooltip(c, tagTooltip(s, tag), mx, my);
+            return;
+        }
+    }
+    // ... and over a tag's icon at the end of its line (icon/chat_modified)
+    if (my < float(chatBottom) && line >= 0 && line < std::min(int(s.chatLines.size()) - s.chatScroll, 20)) {
+        const ChatLine& l = s.chatLines[size_t(line + s.chatScroll)];
+        const float left = 4.0f + float(s.font.width(l.text) + 4);
+        const float top = float(chatBottom - line * 9 - 9);
+        if (l.tag.icon && mx >= left && mx < left + 9 && my >= top && my < top + 9) {
+            s.drawTooltip(c, tagTooltip(s, l.tag), mx, my);
             return;
         }
     }

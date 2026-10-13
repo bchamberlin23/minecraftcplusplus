@@ -782,6 +782,22 @@ void Ui::State::drawChat(Canvas& c, bool focused) {
         if (line.tag.color)  // GuiMessageTag indicator
             c.fill(-4, float(entryTop), -2, float(entryBottom), withAlpha(line.tag.color, alpha * textOpacity));
     }
+    if (focused) {  // DrawingFocusedGraphicsAccess.handleTagIcon: shown over a hovered message (on its last line) or icon
+        const float lmx = mouseX / scale - 4.0f, lmy = mouseY / scale;
+        bool hoveredMessage = false;
+        for (int i = 0; i < std::min(total - chatScroll, linesPerPage); ++i) {  // bottom first, as forEachLine
+            const ChatLine& line = chatLines[size_t(i + chatScroll)];
+            const int entryBottom = chatBottom - i * entryHeight, textTop = entryBottom - entryBottomToMessageY;
+            const int width = font.width(line.text);
+            hoveredMessage |= lmx >= 0 && lmx < float(width) && lmy >= float(textTop) && lmy < float(textTop + 9);
+            const bool force = line.endOfEntry && hoveredMessage;
+            if (line.endOfEntry) hoveredMessage = false;
+            if (!line.tag.icon) continue;
+            const int left = width + 4, top = textTop + 9 - 9 - 1;
+            const bool over = lmx >= float(left) && lmx < float(left + 9) && lmy >= float(top) && lmy < float(top + 9);
+            if (force || over) blitSprite(c, sprites.sprite("icon/chat_modified"), float(left), float(top), 9, 9);
+        }
+    }
     if (!chatQueue.empty())  // "[+n pending lines]": clicking it shows the next one (QUEUE_EXPAND_ID)
         font.draw(c, translatable("chat.queue", {Text(std::to_string(chatQueue.size()))}, lang()), 0, float(chatBottom + 9 - 8),
                   withAlpha(0xFFFFFF, 0.5f * textOpacity), true);

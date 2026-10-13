@@ -75,11 +75,14 @@ net::Client::Information clientInformation(const Settings& s);
 struct ChatTag {
     u32 color = 0;
     std::string key;
+    bool icon = false;     // GuiMessageTag.Icon.CHAT_MODIFIED (icon/chat_modified, 9 x 9) at the line's end
+    std::string original;  // chatModified: the signed text, a second (gray) tooltip line
 };
 inline const ChatTag kTagSystemSinglePlayer{0xD0D0D0, "chat.tag.system_single_player"};
 inline const ChatTag kTagSystem{0xD0D0D0, "chat.tag.system"};
 inline const ChatTag kTagNotSecure{0xD0D0D0, "chat.tag.not_secure"};
 inline const ChatTag kTagError{0xFF5555, "chat.tag.error"};
+inline ChatTag chatModifiedTag(std::string original) { return {0x606060, "chat.tag.modified", true, std::move(original)}; }
 // A tooltip's image component (ClientTooltipComponent.extractImage, e.g. a bundle's contents), after the first line.
 struct TooltipImage {
     int width = 0, height = 0;

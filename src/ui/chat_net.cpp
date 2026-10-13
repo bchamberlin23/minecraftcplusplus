@@ -111,6 +111,7 @@ struct PlayerChat {
     std::string sender;  // UUID bytes
     std::optional<Sig> signature;
     std::string content;
+    i64 timestamp = 0;  // epoch milliseconds
     std::vector<PackedSig> lastSeen;
     std::optional<Text> unsignedContent;
     int filter = 0;  // FilterMask type: 0 pass through, 1 fully filtered, 2 partially
@@ -261,9 +262,22 @@ void handlePlayerChat(UiState& s, PlayerChat& m) {
         });
         return;
     }
-    // ChatTrustLevel: our own messages in singleplayer are secure, unsigned ones are not.
+    // ChatTrustLevel.evaluate: unsigned or expired (MESSAGE_EXPIRES_AFTER_CLIENT, 7 minutes) -> NOT_SECURE; a signed
+    // body the decorated message no longer contains, or unsigned content in another font -> MODIFIED. Our own messages
+    // in singleplayer are secure.
     const bool local = s.fe->cfg.singleplayer && s.client && m.sender == s.client->playerUuid();
-    const ChatTag tag = local || signature ? ChatTag{} : kTagNotSecure;
+    ChatTag tag;
+    const i64 now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    if (!local && (!signature || now > m.timestamp + 7 * 60 * 1000)) {
+        tag = kTagNotSecure;
+    } else if (!local) {
+        const Text decoratedContent = m.unsignedContent ? *m.unsignedContent : Text(m.content);
+        bool modified = decorate(m.bound.type.chat, m.bound, decoratedContent, lang).plain().find(m.content) == std::string::npos;
+        if (!modified && m.unsignedContent)
+            for (const Span& sp : m.unsignedContent->spans)  // containsModifiedStyle: a font other than the default
+                if (sp.style.font >= 0 && !(fontDesc(sp.style.font) == FontDesc{FontDesc::Resource, "minecraft:default"})) modified = true;
+        if (modified) tag = chatModifiedTag(m.content);
+    }
     bool shown = false;
     // Only Show Secure Chat: the signed body without the server's unsigned decoration, and nothing unsigned (our own
     // messages are secure).
@@ -344,7 +358,8 @@ void registerHandlers(UiState& s, net::Client& client) {
         r.varInt();  // index (of the sender's chain)
         if (r.boolean()) m->signature = std::string(r.bytes(256));
         m->content = std::string(r.str());
-        r.i64v(), r.i64v();  // timestamp, salt
+        m->timestamp = r.i64v();
+        r.i64v();  // salt
         const i32 seen = r.varInt();
         for (i32 i = 0; i < seen && i < 20 && r.ok; ++i) m->lastSeen.push_back(readPacked(r));
         if (r.boolean()) m->unsignedContent = parseComponent(r.nbt(), lang);
