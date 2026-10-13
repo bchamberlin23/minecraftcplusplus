@@ -90,6 +90,18 @@ void parsePort(const std::string& v) {
         else g.port = u16(n);
     }
     g.portValid = g.portError.empty();
+    g.portField.textColor = g.portValid ? 0xFFE0E0E0 : 0xFFDF5050;  // setPortError: the text colour
+}
+
+// ComponentUtils.copyOnClickText: "[value]", green, copied on click (hover: "Click to Copy to Clipboard")
+Text copyOnClickText(UiState& s, const std::string& value) {
+    Style st = colorStyle(0x55FF55);
+    auto events = std::make_shared<TextEvents>();
+    events->click = "copy_to_clipboard", events->clickValue = value;
+    events->hover = "show_text", events->hoverText = tr(s, "chat.copy.click");
+    events->insertion = value;
+    st.events = events;
+    return translatable("chat.square_brackets", {Text(value, st)}, s.lang());
 }
 
 std::string lanMotd(UiState& s) {  // like the game's LAN announcement: "<player> - <world>"
@@ -139,7 +151,7 @@ void applyChanges(UiState& s) {
                 s.addChat(tr(s, "commands.publish.failed"));
             } else {
                 g_host.lan = true, g_host.port = g.port, s.fe->lanOpenPort = g.port;
-                s.addChat(translatable("menu.multiplayerOptions.publish.started.lan", {Text(std::to_string(g.port))}, s.lang()));
+                s.addChat(translatable("menu.multiplayerOptions.publish.started.lan", {copyOnClickText(s, std::to_string(g.port))}, s.lang()));
             }
         }
     }
