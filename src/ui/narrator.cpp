@@ -119,6 +119,10 @@ void say(const std::string& text, bool interrupt) {
     }
 }
 
+void systemNow(UiState& s, const Text& message) {
+    if (systemOn(s.settings.narrator)) say(message.plain(), true);
+}
+
 void statusChanged(UiState& s) {
     const int st = std::clamp(s.settings.narrator, 0, 3);
     static const char* const kStatus[4] = {"options.narrator.off", "options.narrator.all", "options.narrator.chat", "options.narrator.system"};

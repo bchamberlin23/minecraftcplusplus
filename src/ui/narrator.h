@@ -11,6 +11,7 @@ void say(const std::string& text, bool interrupt);
 void statusChanged(UiState& s);                         // GameNarrator.updateNarratorStatus: speech + toast
 void chat(UiState& s, const Text& message, int source);  // a chat line (GuiMessageSource 0 / 1 system, 2 player)
 void system(UiState& s, const Text& message);            // saySystemQueued (action bar, titles)
+void systemNow(UiState& s, const Text& message);         // saySystemNow: interrupting, when system messages are narrated
 void frame(UiState& s);                                  // the hovered widget of the open screen (Screen narration)
 bool hotkey(UiState& s, const Window::InputEvent& e);    // Ctrl+B (KeyboardHandler); true: consumed
 

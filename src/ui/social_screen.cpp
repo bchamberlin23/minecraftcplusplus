@@ -107,7 +107,7 @@ void build(UiState& s) {
                                   : i == 1          ? "gui.socialInteractions.empty_hidden"
                                   : i == 2          ? "gui.socialInteractions.empty_blocked"
                                                     : nullptr;
-                if (key) narrator::say(p->res.translate(key), true);
+                if (key) narrator::systemNow(*p, Text(p->res.translate(key)));
             }
         });
     }
@@ -143,7 +143,7 @@ void toggleHidden(UiState& s, const Entry& e) {  // PlayerEntry: hidePlayer / sh
     else g.hidden.erase(e.p.uuid);
     const Text msg = translatable(hide ? "gui.socialInteractions.hidden_in_chat" : "gui.socialInteractions.shown_in_chat", {Text(e.p.name)}, s.lang());
     s.addChatMessage({msg, s.guiTicks, {}, {}, 0});
-    narrator::say(msg.plain(), true);  // the row stays (only its buttons and status change)
+    narrator::systemNow(s, msg);  // the row stays (only its buttons and status change)
 }
 
 void draw(UiState& s, Canvas& c) {
@@ -284,7 +284,7 @@ bool worldKey(UiState& s, const InputEvent& e) {
     if (s.fe->cfg.singleplayer) {  // only in multiplayer worlds
         const Text msg(s.res.translate("multiplayer.socialInteractions.not_available"));
         s.actionbar = msg, s.actionbarTime = 60, s.actionbarAnimated = false;
-        narrator::say(msg.plain(), true);
+        narrator::system(s, msg);  // Gui: chatListener.handleOverlay, then the narrator (queued)
         return true;
     }
     open(s, Screen::None);

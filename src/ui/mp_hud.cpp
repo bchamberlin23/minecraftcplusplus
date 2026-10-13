@@ -7,11 +7,13 @@
 #include "entity/skin_cache.h"
 #include "ui/resources.h"
 #include "ui/frontend.h"
+#include "ui/narrator.h"
 #include "ui/ui_state.h"
 #include "world/nbt.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cwctype>
 #include <unordered_set>
 #include <map>
 
@@ -489,10 +491,20 @@ void drawPlayerList(UiState& s, Canvas& c) {
         g.tabVisible = false;
         return;
     }
+    const bool shown = !g.tabVisible;  // setVisible(true): narrated below
     g.tabVisible = true;
-    auto lower = [](std::string v) {
-        for (char& ch : v) ch = char(std::tolower(u8(ch)));
-        return v;
+    auto lower = [](const std::string& v) {  // String.compareToIgnoreCase: per UTF-16 unit, upper then lower case
+        std::u16string out;
+        for (size_t i = 0; i < v.size();) {
+            const u32 cp = nextCodepoint(v, i);
+            if (cp > 0xFFFF) {
+                out.push_back(char16_t(0xD800 + ((cp - 0x10000) >> 10)));
+                out.push_back(char16_t(0xDC00 + ((cp - 0x10000) & 0x3FF)));
+            } else {
+                out.push_back(char16_t(std::towlower(std::towupper(wint_t(cp)))));
+            }
+        }
+        return out;
     };
     auto teamName = [](const PlayerEntry* p) {
         auto it = g.playerTeam.find(p->name);
@@ -526,6 +538,7 @@ void drawPlayerList(UiState& s, Canvas& c) {
     std::vector<Entry> entries;
     const int spacer = s.font.width(" ");
     int maxName = 0, maxScore = 0;
+    std::string narrated;
     NumFmt listDefault;
     listDefault.type = 1, listDefault.style = colorStyle(0xFFFF55);  // StyledFormat.PLAYER_LIST_DEFAULT (yellow)
     for (const PlayerEntry* p : list) {
@@ -537,6 +550,7 @@ void drawPlayerList(UiState& s, Canvas& c) {
             e.name = e.name.withStyle(it);
         }
         maxName = std::max(maxName, s.font.width(e.name));
+        if (shown) narrated += (narrated.empty() ? "" : ", ") + e.name.plain();  // ComponentUtils.formatList(..., ", ")
         if (listObj) {
             const Score* sc = nullptr;
             if (auto o = g.scores.find(p->name); o != g.scores.end())
@@ -549,6 +563,7 @@ void drawPlayerList(UiState& s, Canvas& c) {
         }
         entries.push_back(std::move(e));
     }
+    if (shown) narrator::systemNow(s, translatable("multiplayer.player.list.narration", {Text(narrated)}, s.lang()));
     const int slots = int(list.size());
     int rows = slots, cols = 1;
     while (rows > 20) ++cols, rows = (slots + cols - 1) / cols;

@@ -34,7 +34,7 @@ double dist2(const double a[3], const double b[3]) {
     return dx * dx + dy * dy + dz * dz;
 }
 
-// Subtitle.getBestSubtitleCandidate: the latest play within range (the nearer one on a tie).
+// Subtitle.getBestSubtitleCandidate: the latest play within range (the farther one on a tie: max of time, distance).
 const PlayedAt* best(const Subtitle& s, const double cam[3]) {
     if (s.played.empty()) return nullptr;
     if (s.played.size() == 1) return &s.played.front();
