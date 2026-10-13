@@ -40,7 +40,8 @@ struct MetaValue {
 
 enum class EventType : u8 {
     Add, Remove, Move, PositionSync, Teleport, Motion, HeadRot, Data, Equipment, PlayerInfo, PlayerRemove, Swing,
-    Hurt, Damage, EntityEvent, TakeItem, Passengers, Animate, Jukebox, ProjectilePower, EntityLink, TransientBlock
+    Hurt, Damage, EntityEvent, TakeItem, Passengers, Animate, Jukebox, ProjectilePower, EntityLink, TransientBlock,
+    MinecartSteps
 };
 
 struct Step {
@@ -62,15 +63,21 @@ struct Event {
     u32 first = 0, count = 0;  // pool range (steps, meta values, ids)
 };
 
+struct MinecartStep {  // NewMinecartBehavior.MinecartStep
+    double pos[3], movement[3];
+    float yRot, xRot, weight;
+};
+
 struct EventQueue {
     std::vector<Event> events;
+    std::vector<MinecartStep> minecartSteps;
     std::vector<Step> steps;
     std::vector<MetaValue> meta;
     std::vector<i32> ints;
     std::vector<std::string> strings;
     std::vector<std::shared_ptr<const ui::ItemStack>> stacks;
     void clear() {
-        events.clear(), steps.clear(), meta.clear(), ints.clear();
+        events.clear(), steps.clear(), meta.clear(), ints.clear(), minecartSteps.clear();
         strings.clear(), stacks.clear();
     }
 };
@@ -205,6 +212,13 @@ struct Entity {
     int attackTime = 0;
     int snifferState = 0;    // Sniffer DATA_STATE (Sniffer.State id)
     int cape = -1;                // the profile's cape (atlas texture), -1 none
+    // NewMinecartBehavior (experimental minecarts, ClientboundMoveMinecartPacket): the steps waiting, the ones being
+    // lerped through over 3 ticks by weight, and where the lerp started.
+    std::vector<MinecartStep> lerpSteps, currentLerpSteps;
+    double currentLerpWeight = 0;
+    MinecartStep oldLerp{};
+    int lerpDelay = 0;
+    bool newMinecart = false;
     std::string profileTextures;  // Mannequin DATA_PROFILE: its "textures" property; profileSkin 1 while it downloads
     int profileSkin = 0;
     bool staysStill = false; // happy ghast: STAYS_STILL (holding still: its rider does not steer)

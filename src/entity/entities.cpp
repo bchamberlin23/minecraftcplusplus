@@ -544,6 +544,23 @@ void EntityWorld::attach(net::Client& client) {
         e.flag = r.boolean();
         if (r.ok) q.events.push_back(e);
     });
+    on("move_minecart_along_track", [](net::Reader& r, EventQueue& q) {  // ClientboundMoveMinecartPacket
+        Event e;
+        e.type = EventType::MinecartSteps;
+        e.id = r.varInt();
+        e.first = u32(q.minecartSteps.size());
+        const i32 n = r.varInt();
+        for (i32 i = 0; i < n && r.ok && i < 4096; ++i) {
+            MinecartStep s;
+            for (double& v : s.pos) v = r.f64();
+            for (double& v : s.movement) v = r.f64();
+            s.yRot = unpackDegrees(i8(r.u8v())), s.xRot = unpackDegrees(i8(r.u8v()));
+            s.weight = r.f32();
+            q.minecartSteps.push_back(s);
+        }
+        e.count = u32(q.minecartSteps.size()) - e.first;
+        if (r.ok) q.events.push_back(e);
+    });
     on("set_entity_motion", [](net::Reader& r, EventQueue& q) {
         Event e;
         e.type = EventType::Motion;
@@ -1024,6 +1041,10 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
         case EventType::Motion:
             if (e.id != localControl_) std::copy(ev.d, ev.d + 3, e.vel);
             break;
+        case EventType::MinecartSteps:  // ClientPacketListener.handleMinecartAlongTrack
+            e.newMinecart = true;
+            e.lerpSteps.insert(e.lerpSteps.end(), q.minecartSteps.begin() + ev.first, q.minecartSteps.begin() + ev.first + ev.count);
+            break;
         case EventType::HeadRot:
             e.lerpHeadYaw = ev.f[0];
             e.lerpHeadSteps = 3;
@@ -1371,6 +1392,45 @@ void EntityWorld::tickEntity(Entity& e) {
     // Interpolation (a vehicle the local player drives moves itself).
     if (e.id == localControl_ && localTick_) {
         localTick_(e);
+    } else if (e.newMinecart) {  // NewMinecartBehavior.lerpClientPositionAndRotation
+        if (--e.lerpDelay <= 0) {
+            e.oldLerp = MinecartStep{{e.pos[0], e.pos[1], e.pos[2]}, {e.vel[0], e.vel[1], e.vel[2]}, e.yaw, e.pitch, 0};
+            e.currentLerpSteps.clear();
+            if (!e.lerpSteps.empty()) {
+                e.currentLerpSteps.swap(e.lerpSteps);
+                e.currentLerpWeight = 0;
+                for (const MinecartStep& s : e.currentLerpSteps) e.currentLerpWeight += s.weight;
+                e.lerpDelay = e.currentLerpWeight == 0.0 ? 0 : 3;
+            }
+        }
+        if (!e.currentLerpSteps.empty()) {  // getCurrentLerpStep(1): the step at (3 - lerpDelay + 1) / 3 of the weight
+            const float alpha = float(3 - e.lerpDelay + 1) / 3.0f;
+            float countUp = 0, inStep = 1;
+            size_t index = e.currentLerpSteps.size() - 1;
+            for (size_t i = 0; i < e.currentLerpSteps.size(); ++i) {
+                const float w = e.currentLerpSteps[i].weight;
+                if (w <= 0) continue;
+                countUp += w;
+                if (countUp >= e.currentLerpWeight * alpha) {
+                    inStep = float((alpha * e.currentLerpWeight - (countUp - w)) / w);
+                    index = i;
+                    break;
+                }
+            }
+            const MinecartStep& cur = e.currentLerpSteps[index];
+            const MinecartStep& prev = index > 0 ? e.currentLerpSteps[index - 1] : e.oldLerp;
+            for (int a = 0; a < 3; ++a) {
+                e.pos[a] = prev.pos[a] + (cur.pos[a] - prev.pos[a]) * inStep;
+                e.vel[a] = prev.movement[a] + (cur.movement[a] - prev.movement[a]) * inStep;
+            }
+            auto rotLerp = [](float t, float a, float b) {  // Mth.rotLerp
+                float d = std::fmod(b - a, 360.0f);
+                if (d >= 180) d -= 360;
+                if (d < -180) d += 360;
+                return a + t * d;
+            };
+            e.pitch = rotLerp(inStep, prev.xRot, cur.xRot), e.yaw = rotLerp(inStep, prev.yRot, cur.yRot);
+        }
     } else if (e.stepCount) {
         const int interval = std::max(1, e.info ? e.info->updateInterval : 3);
         // getNewPositionAndRotation
