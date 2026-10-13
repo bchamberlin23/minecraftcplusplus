@@ -393,6 +393,11 @@ void EntityRenderer::buildDefs() {
                 d.armorSlim[k] = set == "player" ? M(std::string("player_slim") + kPieces[k]) : -1;
             }
         }
+        for (const char* b : {"allay", "blaze", "magma_cube", "vex", "wither", "wither_skull", "shulker_bullet", "dragon_fireball",
+                              "fireball", "small_fireball", "eye_of_ender"})
+            if (n == b) d.blockLight = 1;  // full bright renderers (ThrownItemRenderer's fullBright ones too)
+        if (n == "experience_orb") d.blockLight = 2;
+        if (n == "glow_squid") d.blockLight = 3;
         if (d.kind == Kind::Mob && (d.base.model < 0 || d.base.tex < 0)) d.kind = Kind::Box;  // geometry fallback
         if (d.kind == Kind::Sprite && d.sprite < 0) d.kind = Kind::Box;
     }
@@ -605,6 +610,7 @@ int EntityRenderer::resolveUncached(const Entity& e, const TypeDef& d, Layer* ou
         pick(d.extra[i], m, t);
         if (m >= 0 && t >= 0) out[n++] = {m, t, kWhite, d.extra[i].flags};
     }
+    if (d.anim == Anim::ShulkerBullet) out[n++] = {model, tex, 0x26FFFFFFu, u16(Translucent | NoOverlay)};  // the halo (1.5 x)
     if (d.special == SpSheep && !(e.wool & 0x10)) {  // wool (SheepWoolLayer / SheepWoolUndercoatLayer)
         const int color = e.wool & 15;
         const int woolModel = assets_.model(baby ? "sheep_baby#wool" : "sheep#wool");
@@ -1858,6 +1864,7 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         for (size_t i = 0; i < parts; ++i) poses_[i] = m.parts[i].pose;
         u64 hiddenRoles = 0;
         M34 layerRoot = (L.flags & DisplayBlock) ? *reinterpret_cast<const M34*>(&displayRoot_) : root;
+        if (d.anim == Anim::ShulkerBullet && li == 1) layerRoot = mul(root, scale(1.5f, 1.5f, 1.5f));  // ShulkerBulletRenderer
         if (d.special == SpBoat) {  // BoatModel / RaftModel.animatePaddle from AbstractBoat.getRowingTime
             for (size_t i = 0; i < parts; ++i) {
                 const bool left = m.parts[i].name == "left_paddle";
@@ -2954,6 +2961,16 @@ void EntityRenderer::build(const PassContext& ctx) {
         u32 light = 0xF0;
         if (ly >= world.minSectionY() * 16 && ly < (world.maxSectionY() + 1) * 16)
             light = world.light(lx >> 4, ly >> 4, lz >> 4).at(lx & 15, ly & 15, lz & 15);
+        if (d.blockLight) {  // getBlockLightLevel overrides
+            int block = int(light & 15);
+            if (d.blockLight == 1) block = 15;
+            else if (d.blockLight == 2) block = std::min(block + 7, 15);
+            else {  // GlowSquidRenderer: lit while it is not darkened
+                const int glow = int(std::clamp(1.0f - float(dataInt(e, "DATA_DARK_TICKS_REMAINING")) / 10.0f, 0.0f, 1.0f) * 15.0f);
+                block = glow == 15 ? 15 : std::max(glow, block);
+            }
+            light = (light & ~15u) | u32(block);
+        }
         // Motion: last frame's pose of this entity (prev_), compared after posing.
         PrevPose* prev = nullptr;
         if (!pack_) {

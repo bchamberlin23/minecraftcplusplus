@@ -101,6 +101,7 @@ public:
         float flip = 90.0f;      // death roll
         int sprite = -1;         // atlas texture of thrown items / sprites
         float spriteScale = 0.5f;
+        u8 blockLight = 0;       // the renderer's getBlockLightLevel: 1 always 15, 2 + 7 (XP orbs), 3 glow squid
         std::string block;       // block drawn by Kind::Block when there is no block state
         mutable u16 blockId = 0;
     };
