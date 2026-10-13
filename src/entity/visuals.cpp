@@ -3423,6 +3423,9 @@ void Visuals::Impl::buildHand(const PassContext& ctx, float viewProj[16], bool j
                     if (q == arm) under = true;
                 if (!under) break;
             }
+            // the sleeves follow the Skin Customization (PlayerModelPart LEFT_SLEEVE 2, RIGHT_SLEEVE 3)
+            if ((part.name == "left_sleeve" && !(ui->settings().modelParts & 4)) || (part.name == "right_sleeve" && !(ui->settings().modelParts & 8)))
+                continue;
             PartPose pp = part.pose;
             if (i == size_t(arm)) pp.zRot = rightArm ? 0.1f : -0.1f, pp.xRot = pp.yRot = 0;
             Xf l = xfTranslate(pp.x / 16.0f, pp.y / 16.0f, pp.z / 16.0f);
@@ -3613,7 +3616,9 @@ void Visuals::Impl::buildHand(const PassContext& ctx, float viewProj[16], bool j
                 ps = xfMul(ps, xfRotY(float(inv) * 65.3f * kDeg));
                 ps = xfMul(ps, xfRotZ(float(inv) * -9.785f * kDeg));
                 const float timeHeld = duration - (remaining - pt + 1.0f);
-                pullTransform(ps, inv, std::min(timeHeld / 25.0f, 1.0f), timeHeld, 0.04f);
+                // the stack's CrossbowItem.getChargeDuration (Quick Charge)
+                const float chargeTicks = float(std::max(1, ui::crossbowChargeTicks(ui->items(), stack)));
+                pullTransform(ps, inv, std::min(timeHeld / chargeTicks, 1.0f), timeHeld, 0.04f);
             } else {
                 swingArm(ps, inv, att);
                 if (charge && att < 0.001f && hand == 0) {
@@ -3732,7 +3737,9 @@ void Visuals::Impl::buildHand(const PassContext& ctx, float viewProj[16], bool j
     const bool mainRight = !ui || ui->settings().mainHand != 0;
     const float mainAttack = swingHand == 0 ? attack : 0.0f, offAttack = swingHand == 1 ? attack : 0.0f;
     if (drawMain) {
-        if (mainHand.item < 0) renderArm(pose, mainInv, mainAttack, mainRight);
+        if (mainHand.item < 0) {
+            if (!(avatar.sharedFlags & 0x20)) renderArm(pose, mainInv, mainAttack, mainRight);  // not while invisible
+        }
         else renderItem(pose, mainHand, mainInv, mainAttack, mainRight, 0);
     }
     if (drawOff && offHand.item >= 0) renderItem(pose, offHand, offInv, offAttack, !mainRight, 1);
