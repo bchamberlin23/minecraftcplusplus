@@ -1796,6 +1796,7 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         root = mul(root, translate(0, -1.501f, 0));
     }
 
+    if (rootOverride_) root = *reinterpret_cast<const M34*>(rootOverride_);  // the elder guardian appearance
     // DonkeyModel / LlamaModel: the chests show only on chested animals.
     const bool hideChests = !e.hasChest && e.info &&
                             (e.info->name.ends_with("llama") || e.info->name == "minecraft:donkey" || e.info->name == "minecraft:mule");
@@ -2052,7 +2053,8 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
             entHash_ = entHash_ * 31 + u32(L.model) * 7 + u32(parts);
         }
         const TexRect& tr = assets_.rect(L.tex);
-        GpuInstance inst{base, L.color, (L.flags & Emissive) ? (light | 256u) : light, (L.flags & NoOverlay) ? 0u : overlay,
+        const u32 layerColor = appearanceAlpha_ >= 0 ? u32(appearanceAlpha_ * 255.0f) << 24 | (L.color & 0xFFFFFF) : L.color;
+        GpuInstance inst{base, layerColor, (L.flags & Emissive) ? (light | 256u) : light, (L.flags & NoOverlay) || appearanceAlpha_ >= 0 ? 0u : overlay,
                          {tr.u0, tr.v0, tr.du, tr.dv}};
         if (L.flags & Scroll) {  // RenderTypes.energySwirl / breezeWind: the texture offset (bits 16..31, 1/256 steps)
             auto frac256 = [](float v) { return u32(int(std::floor((v - std::floor(v)) * 256.0f)) & 255); };
@@ -2061,7 +2063,7 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         }
         const u32 instId = instCount_++;
         std::memcpy(frameBase_ + kInstOffset + u64(instId) * 32, &inst, 32);
-        const bool translucent = (L.flags & (Translucent | Additive)) != 0;
+        const bool translucent = (L.flags & (Translucent | Additive)) != 0 || appearanceAlpha_ >= 0;
         if (pack_) {  // shader pack: the posed quads as vertices (entity atlas coordinates)
             const auto& quads = assets_.quads();
             // Armour glint (TextureTransform.setupGlintTexturing, scale 0.16, glint speed 0.5) as gbuffers_armor_glint
@@ -2953,6 +2955,34 @@ void EntityRenderer::build(const PassContext& ctx) {
                 light = world.light(t.x >> 4, t.y >> 4, t.z >> 4).at(t.x & 15, t.y & 15, t.z & 15);
             M34 m = translate(float(t.x - cam[0]), float(t.y - cam[1]), float(t.z - cam[2]));
             emitBlock(block, *reinterpret_cast<const Mat34*>(&m), light, 0);
+        }
+    }
+    // ElderGuardianParticleGroup: the elder guardian in front of the camera, tilting down and fading in and out over 30
+    // ticks (full bright, translucent; the camera's rotation, then 60 - 150 x age degrees about x).
+    {
+        auto& starts = world_.mobAppearances;
+        const double now = nowSeconds();
+        std::erase_if(starts, [&](double t) { return now - t > 1.5; });
+        static const int elder = assets_.typeId("minecraft:elder_guardian");
+        if (!starts.empty() && !shadowOnly_ && !pack_ && elder >= 0 && size_t(elder) < defs_.size() && defs_[size_t(elder)].kind == Kind::Mob) {
+            static Entity fake;
+            fake = Entity{};
+            fake.id = INT_MIN + 7, fake.type = elder, fake.info = &assets_.types()[size_t(elder)], fake.category = Category::Living;
+            for (int a = 0; a < 3; ++a) fake.pos[a] = fake.prevPos[a] = cam[a];
+            fake.health = 1;
+            for (double t : starts) {
+                const float age = std::clamp(float((now - t) * 20.0) / 30.0f, 0.0f, 1.0f);
+                M34 m = mul(rotY((180.0f - camYaw_) * kDeg), rotX(-camPitch_ * kDeg));
+                m = mul(m, rotX((60.0f - 150.0f * age) * kDeg));
+                m = mul(m, scale(0.42553192f, -0.42553192f, -0.42553192f));
+                m = mul(m, translate(0.0f, -0.56f, 3.5f));
+                const Mat34 root = *reinterpret_cast<const Mat34*>(&m);
+                rootOverride_ = &root;
+                appearanceAlpha_ = 0.05f + 0.5f * std::sin(age * kPi);
+                modelEntity(fake, defs_[size_t(elder)], pt, cam, 0xFF);
+                rootOverride_ = nullptr;
+                appearanceAlpha_ = -1;
+            }
         }
     }
     if (!shadowOnly_) {  // the projection's y scale (1 / tan(fov / 2)): the fishing line's pixel width

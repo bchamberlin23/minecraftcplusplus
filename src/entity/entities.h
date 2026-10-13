@@ -41,7 +41,7 @@ struct MetaValue {
 enum class EventType : u8 {
     Add, Remove, Move, PositionSync, Teleport, Motion, HeadRot, Data, Equipment, PlayerInfo, PlayerRemove, Swing,
     Hurt, Damage, EntityEvent, TakeItem, Passengers, Animate, Jukebox, ProjectilePower, EntityLink, TransientBlock,
-    MinecartSteps
+    MinecartSteps, MobAppearance
 };
 
 struct Step {
@@ -410,6 +410,7 @@ public:
         u64 serial;  // the terrain's mesh serial when it arrived
     };
     std::vector<TransientBlock> transientBlocks;
+    std::vector<double> mobAppearances;  // ElderGuardianParticle start times (nowSeconds), main thread
     // Particles of entities (set before attach): reading an encoded ParticleOptions (network thread) and spawning one.
     std::function<bool(net::Reader& r, std::string& raw)> readParticle;
     // The local player uses an entity (before the interact packet; main thread): true opens something client side

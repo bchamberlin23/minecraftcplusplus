@@ -157,6 +157,8 @@ private:
     static float tntSwell(float fuse);
     static bool tntLit(float fuse);
     Mat34 displayRoot_{};                                    // the DisplayBlock layer's root (minecartContents)
+    const Mat34* rootOverride_ = nullptr;                    // modelEntity's root (the elder guardian appearance)
+    float appearanceAlpha_ = -1;                             // >= 0: every layer translucent with this alpha
     std::unordered_map<std::string, u16> displayStates_;     // minecart display block states by key
     void emitFree(const float pos[4][3], const float uv[4][2], const float n[3], u32 tex, u32 color, u32 light,
                   u32 overlay);

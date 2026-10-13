@@ -1103,6 +1103,8 @@ void Ui::State::runScript(double) {
                         m.slots[i].enchantments);
             if (!carried.empty()) LOG("script: carried = %d x %s", carried.count, items.name(carried.item).c_str());
             LOG("script: xp level %d, menu %s data %d %d %d %d", xpLevel, m.typeName.c_str(), m.data[0], m.data[1], m.data[2], m.data[3]);
+        } else if (st.verb == "mobappearance") {  // the elder guardian curse's appearance, as from game event 10
+            if (entities) entities->mobAppearances.push_back(nowSeconds());
         } else if (st.verb == "drop") {  // drop <path>...: files dropped on the window
             for (const auto& w : a) window->injectDrop(std::filesystem::path(w).wstring());
         } else if (st.verb == "screen") {  // screen <name>: opens a menu screen directly

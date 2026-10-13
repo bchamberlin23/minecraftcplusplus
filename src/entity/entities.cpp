@@ -465,6 +465,15 @@ void EntityWorld::attach(net::Client& client) {
         });
     };
     const int effect = entityEffectParticle_;
+    client.onPlayPeek("game_event", [this](net::Reader& r) {  // GUARDIAN_ELDER_EFFECT (10): the ELDER_GUARDIAN particle
+        const int type = r.u8v();
+        r.f32();
+        if (!r.ok || type != 10) return;
+        std::lock_guard lock(mutex_);
+        Event e;
+        e.type = EventType::MobAppearance;
+        incoming_.events.push_back(e);
+    });
     on("add_entity", [](net::Reader& r, EventQueue& q) {
         Event e;
         e.type = EventType::Add;
@@ -992,6 +1001,10 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
             LOG("entities: add %d %s at %.2f %.2f %.2f yaw %.0f head %.0f data %d", ev.id, e.info ? e.info->name.c_str() : "?",
                 e.pos[0], e.pos[1], e.pos[2], e.yaw, e.headYaw, ev.b);
         entities_[ev.id] = std::move(e);
+        return;
+    }
+    if (ev.type == EventType::MobAppearance) {  // ElderGuardianParticle: 30 ticks from now
+        mobAppearances.push_back(nowSeconds());
         return;
     }
     auto it = entities_.find(ev.id);
