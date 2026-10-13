@@ -123,8 +123,8 @@ Later: armor (black dye, wings on piglins / drowned), riding / dead walk animati
 depth, the camera's fluid (near plane), weather (biome precipitation data, instant levels). Fog residuals: the
 render-distance fog cylinder follows the far-terrain fog distance, not the chunk setting (deliberate for the LOD
 terrain); a non-atmospheric environment can only shrink the sky fog end; decal armor trims use the normal pipeline.
-Lightmap (flicker, End flash), outline gating, particles (box collision, limits), conduit frames done. Not ported:
-an opening shulker box pushing entities (moveCollidedEntities), the bell's raider particles (showBellParticles), the
+Lightmap (flicker, End flash), outline gating, particles (box collision, limits), conduit frames, the shulker box
+lid pushing the player done (other entities are the server's). Not ported: the bell's raider particles (showBellParticles), the
 darkness pulse on the player's own tick count, filtered sign text (needs the account's profanity filter flag). Toasts follow ToastInstance now (the
 server pack download toast shows its progress). Toast residuals: no toasts
 for world access / chunk load or save /
