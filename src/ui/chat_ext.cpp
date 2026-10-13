@@ -40,6 +40,7 @@ struct ChatExt {
     std::string lastValue;
     bool tracking = false;
     bool open = false;  // drawn since the chat screen opened
+    bool allow = false;  // ChatScreen's setAllowSuggestions: off when it opens and on a history recall, on with edits
     float lastMx = -1, lastMy = -1;
     // The parse of the input with the command tree (currentParse).
     std::string parsedValue;
@@ -90,11 +91,18 @@ void hide() {
     cx.ghost.clear();
 }
 
-int screenX(UiState& s, int pos) {  // EditBox.getScreenX with the field's scroll
+int screenX(UiState& s, int pos) {  // EditBox.getScreenX: from the box's x, whatever the field shows (no scroll)
+    const auto& f = *tg.field;
+    if (pos > int(f.value.size())) return tg.originX;
+    return tg.originX + s.font.width(f.value.substr(0, size_t(std::max(pos, 0))));
+}
+int shownX(UiState& s, int pos) {  // where a character is drawn (the field's scroll, the text inset)
     const auto& f = *tg.field;
     pos = std::clamp(pos, f.scroll, int(f.value.size()));
-    return tg.originX + s.font.width(f.value.substr(size_t(f.scroll), size_t(pos - f.scroll)));
+    return int(f.textX) + s.font.width(f.value.substr(size_t(f.scroll), size_t(pos - f.scroll)));
 }
+// CommandSuggestions.updateCommandInfo's auto-show: allowSuggestions (the chat's gate) and the Auto Suggestions option
+bool autoShow(UiState& s) { return s.settings.autoSuggestions && (tg.field != &s.chatInput || cx.allow); }
 
 std::string applySuggestion(const Suggestion& sg, const std::string& input) {  // Suggestion.apply
     const size_t a = std::min(size_t(cx.start), input.size()), b = std::min(size_t(cx.start + cx.length), input.size());
@@ -306,7 +314,7 @@ void update(UiState& s) {
             cx.result.clear();
             for (const std::string& t : comp.local) cx.result.push_back({t});
             updateUsage(s);
-            showSuggestions(s);
+            if (autoShow(s)) showSuggestions(s);
             return;
         }
     }
@@ -380,7 +388,7 @@ void registerHandlers(UiState& s, net::Client& client) {
             if (id != cx.pendingId || sp->screen != tg.screen) return;
             cx.haveResult = true, cx.start = start, cx.length = length, cx.result = list;
             updateUsage(*sp);
-            if (sp->settings.autoSuggestions) showSuggestions(*sp);  // CommandSuggestions.updateCommandInfo
+            if (autoShow(*sp)) showSuggestions(*sp);  // CommandSuggestions.updateCommandInfo
         });
     });
 }
@@ -502,7 +510,7 @@ bool suggestionsInput(UiState& s, const InputEvent& e) {
         }
         return false;
     }
-    if (e.type == E::Button && e.down && e.code == 0) {
+    if (e.type == E::Button && e.down) {  // SuggestionsList.mouseClicked: any button
         if (cx.visible && s.mouseX >= cx.x && s.mouseX < cx.x + cx.w && s.mouseY >= cx.y && s.mouseY < cx.y + cx.h) {
             const int line = int(s.mouseY - float(cx.y)) / 12 + cx.offset;
             if (line >= 0 && line < int(cx.list.size())) {
@@ -517,12 +525,12 @@ bool suggestionsInput(UiState& s, const InputEvent& e) {
 
 // The suggestion after the text, then the list or the usage lines; true when the list is drawn.
 bool suggestionsDraw(UiState& s, Canvas& c) {
-    if (!cx.open) cx.open = true, cx.tracking = false, hide(), cx.pendingId = -1;  // the screen (re)opened
+    if (!cx.open) cx.open = true, cx.tracking = false, hide(), cx.pendingId = -1, cx.allow = false;  // the screen (re)opened
     update(s);
     const auto& f = *tg.field;
     // EditBox suggestion: gray after the text when the cursor is at the end.
     if (!cx.ghost.empty() && f.cursor >= int(f.value.size()))
-        s.font.draw(c, cx.ghost, float(screenX(s, int(f.value.size())) - 1), float(tg.textY), 0xFF808080, true);
+        s.font.draw(c, cx.ghost, float(shownX(s, int(f.value.size())) - 1), float(tg.textY), 0xFF808080, true);
     const float mx = s.mouseX, my = s.mouseY;
     const bool moved = mx != cx.lastMx || my != cx.lastMy;
     cx.lastMx = mx, cx.lastMy = my;
@@ -584,6 +592,8 @@ std::vector<Text> tagTooltip(UiState& s, const ChatTag& tag) {
     return s.font.split(t, 210);
 }
 
+void chatSuggestionsAllow(bool allow) { cx.allow = allow; }
+
 // CommandSuggestions.hasAllowedInput: Enter sends nothing while the input is of a kind the Chat option forbids.
 bool chatInputAllowed(UiState& s) {
     const InputKind k = inputKind(s.chatInput.value);
@@ -638,7 +648,8 @@ namespace {
 Target editorTarget(UiState& s, UiState::TextField& field, float x, float y, float w, float h) {
     Target t;
     t.field = &field;
-    t.originX = int(x + 4), t.innerW = int(w - 8);  // EditBox.getScreenX(0) / getInnerWidth (bordered)
+    // the field is 1 px inside the EditBox's border: getScreenX(0) is the box's x, getInnerWidth its width - 8
+    t.originX = int(x - 1), t.innerW = int(w + 2 - 8);
     t.textY = int(y + (h - 8) / 2);
     t.bordered = true, t.anchorBottom = false, t.commandsOnly = true, t.pastError = true;
     t.lineStart = 0, t.limit = 7, t.fill = 0x80000000u;

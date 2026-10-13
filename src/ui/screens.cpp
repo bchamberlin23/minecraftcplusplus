@@ -978,6 +978,7 @@ void Ui::State::screenInput(const Window::InputEvent& e) {
                 chatInput.value = next == max ? historyDraft : sentHistory[size_t(next)];  // setValue (onEdited)
                 chatInput.cursor = chatInput.selection = int(chatInput.value.size());
                 chatIsDraft = false;
+                chatSuggestionsAllow(false);  // moveInHistory: setAllowSuggestions(false)
                 return;
             }
             if (e.code == VK_PRIOR || e.code == VK_NEXT) {
@@ -991,7 +992,7 @@ void Ui::State::screenInput(const Window::InputEvent& e) {
         }
         const std::string before = chatInput.value;
         textFieldKey(chatInput, e);
-        if (chatInput.value != before) chatIsDraft = false;  // ChatScreen.onEdited
+        if (chatInput.value != before) chatIsDraft = false, chatSuggestionsAllow(true);  // ChatScreen.onEdited
         return;
     }
     if (screen == Screen::Death) {

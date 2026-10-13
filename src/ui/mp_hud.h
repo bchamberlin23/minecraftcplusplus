@@ -54,7 +54,8 @@ std::vector<TeamView> teamViews();
 
 // Chat screen (screens.cpp, Screen::Chat): input first (true: consumed), drawing after the input box.
 bool chatExtInput(UiState& s, const InputEvent& e);
-bool chatInputAllowed(UiState& s);  // CommandSuggestions.hasAllowedInput (the Chat option's restrictions)
+bool chatInputAllowed(UiState& s);
+void chatSuggestionsAllow(bool allow);  // ChatScreen.setAllowSuggestions (edits on, history recalls off)  // CommandSuggestions.hasAllowedInput (the Chat option's restrictions)
 void chatExtDraw(UiState& s, Canvas& c);
 // The command block editors' command field (AbstractCommandBlockEditScreen's CommandSuggestions): the field's
 // text box; input first (true: consumed), drawing after the widgets.
