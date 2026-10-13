@@ -22,7 +22,10 @@ skins for players / mannequins / the player list (VIS-07, NET-17), the Social In
 particles and the potent sulfur client effects (FX-05), command suggestions and colours in the command block
 editors, the spectated entities' post effects (FX-07), experimental minecart movement (NET-15), name / id
 only profiles through Mojang's profile service and the skin patch's cape / elytra, the 26.3 F3 debug screen (entries,
-Debug Options, key combinations, renderers, charts with the TPS debug subscription: DEBUG-01, NET-16). ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
+Debug Options, key combinations, renderers, charts with the TPS debug subscription: DEBUG-01, NET-16), server post
+effects (/posteffect), saved creative hotbars, the smooth camera and spyglass sensitivity, glowing outlines of dropped
+items / frames / paintings, minecart contents and the TNT fuse flash, the sleep fade, the friends key, the test instance
+beam, files dropped on the window (packs into the mods folder), F3 + C (debug crash) and F3 + S (texture dump). ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
 switch (automated runs never change the display mode) and the LAN publish from World Options (it would open a
 listening socket).
 
@@ -34,17 +37,18 @@ listening socket).
 
 ## Visuals / effects
 
-- **VIS-06 residual**: glowing outlines under a shader pack (entities go through the pack's gbuffers there) and of
-  dropped items (drawn by the visuals pass).
+- **VIS-06 residual**: glowing outlines under a shader pack (entities go through the pack's gbuffers there).
+- Test instance blocks: the error markers (red boxes with their text) are not drawn; optional tests' failure beam is red,
+  not orange (the test registry is not sent to clients).
 
 ## Screens
 
 
 ## Debug
 
-- **DEBUG-01 residual**: the profiler pie (F3 + 1: no profiler of the game's kind; F3 + L likewise), F3 + S (dump
-  dynamic textures), F3 + C held for the debug crash, the sky light sections renderer, the chunk culling / octree
-  renderers (the game's section graph), labels of the projected renderers not scaled with distance.
+- **DEBUG-01 residual**: the profiler pie (F3 + 1) and F3 + L profiling (no profiler of the game's kind), the sky
+  light sections renderer, the chunk culling / octree renderers (the game's section graph), labels of the projected
+  renderers not scaled with distance.
 
 ## Gameplay / world
 
