@@ -615,15 +615,15 @@ int EntityRenderer::resolveUncached(const Entity& e, const TypeDef& d, Layer* ou
         if (m >= 0 && t >= 0) out[n++] = {m, t, kWhite, d.extra[i].flags};
     }
     if (d.anim == Anim::ShulkerBullet) out[n++] = {model, tex, 0x26FFFFFFu, u16(Translucent | NoOverlay)};  // the halo (1.5 x)
-    if (d.special == SpSheep && !(e.wool & 0x10)) {  // wool (SheepWoolLayer / SheepWoolUndercoatLayer)
+    if (d.special == SpSheep) {  // SheepWoolUndercoatLayer (also when sheared) / SheepWoolLayer (not sheared)
         const int color = e.wool & 15;
-        const int woolModel = assets_.model(baby ? "sheep_baby#wool" : "sheep#wool");
-        const int woolTex = T(baby ? "sheep/sheep_wool_baby" : "sheep/sheep_wool");
         if (!baby && (color != 0 || e.name == "jeb_")) {
             const int under = assets_.model("sheep#wool_undercoat"), underTex = T("sheep/sheep_wool_undercoat");
             if (under >= 0 && underTex >= 0) out[n++] = {under, underTex, kWhite, TintWool};
         }
-        if (woolModel >= 0 && woolTex >= 0) out[n++] = {woolModel, woolTex, kWhite, TintWool};
+        const int woolModel = assets_.model(baby ? "sheep_baby#wool" : "sheep#wool");
+        const int woolTex = T(baby ? "sheep/sheep_wool_baby" : "sheep/sheep_wool");
+        if (!(e.wool & 0x10) && woolModel >= 0 && woolTex >= 0) out[n++] = {woolModel, woolTex, kWhite, TintWool};
     }
     if ((d.special == SpWolf || d.special == SpCat) && e.tame && n < 6) {  // collar layer
         const char* base = d.special == SpWolf ? "wolf/wolf_collar" : "cat/cat_collar";
@@ -1084,7 +1084,7 @@ int EntityRenderer::equipmentLayers(const Entity& e, const TypeDef& d, Layer* ou
             if (l.tex < 0 || n >= max) continue;
             u32 color = kWhite;
             if (l.dyeable) {
-                const i32 dye = e.equipDye[slot] >= 0 ? e.equipDye[slot] : l.undyed;
+                const i32 dye = e.equipDye[slot] > 0 ? e.equipDye[slot] : l.undyed;
                 if (dye < 0) continue;  // getColorForLayer: 0 = not drawn
                 color = abgr(u32(dye));
             }
@@ -1121,7 +1121,7 @@ int EntityRenderer::equipmentLayers(const Entity& e, const TypeDef& d, Layer* ou
                 if (l.tex < 0 || n >= max) continue;
                 u32 color = kWhite;
                 if (l.dyeable) {
-                    const i32 dye = e.equipDye[slot] >= 0 ? e.equipDye[slot] : l.undyed;
+                    const i32 dye = e.equipDye[slot] > 0 ? e.equipDye[slot] : l.undyed;
                     if (dye < 0) continue;
                     color = abgr(u32(dye));
                 }

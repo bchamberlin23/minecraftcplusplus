@@ -252,7 +252,7 @@ void zombieArms(const Parts& P, const AnimState& s) {
     // AnimationUtils.animateZombieArms: not with a spear; a trident thrower's right arm keeps its pose.
     if (s.havePoses && (s.rightPose == ArmPose::Spear || s.leftPose == ArmPose::Spear)) return;
     if (s.havePoses && s.rightPose == ArmPose::ThrowTrident) ra = nullptr;
-    const bool raise = !s.baby || !(s.swingLeft ? s.leftItem : s.rightItem);  // the main hand's item
+    const bool raise = !s.baby || !(s.leftHanded ? s.leftItem : s.rightItem);  // getMainHandItemStack: the main arm's item
     const float drop = raise ? -kPi / (s.aggressive ? 1.5f : 2.25f) : 0.0f;
     const float ay = (raise ? 1.0f : -1.0f) * std::sin(s.swing * kPi);
     const float ax = std::sin((1.0f - (1.0f - s.swing) * (1.0f - s.swing)) * kPi);

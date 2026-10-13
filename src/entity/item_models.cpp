@@ -1383,6 +1383,8 @@ bool ItemModels::mountLayer(std::string_view entity, int slot, bool baby, const 
         {"happy_ghast", 6, "happy_ghast_harness#main", "happy_ghast_baby_harness#main", "happy_ghast_body"},
         {"nautilus", 6, "nautilus_armor#main", nullptr, "nautilus_body"},
         {"nautilus", 7, "nautilus#saddle", nullptr, "nautilus_saddle"},
+        {"zombie_nautilus", 6, "nautilus_armor#main", nullptr, "nautilus_body"},  // ZombieNautilusRenderer: the same layers
+        {"zombie_nautilus", 7, "nautilus#saddle", nullptr, "nautilus_saddle"},
     };
     if (entity.starts_with("minecraft:")) entity.remove_prefix(10);
     for (const Row& r : kRows)

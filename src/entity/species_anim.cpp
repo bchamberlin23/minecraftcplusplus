@@ -1460,6 +1460,9 @@ u64 animateSpecies(Anim kind, const AnimState& s, const Model& model, PartPose* 
     switch (kind) {
         case Anim::Piglin: piglin(c, false); break;
         case Anim::ZombifiedPiglin: piglin(c, true); break;
+        case Anim::Skeleton:  // BoggedModel: a sheared bogged has no mushrooms
+            if (c.e.info && c.e.info->name == "minecraft:bogged") c.visible("mushrooms", !dataInt(c.e, "DATA_SHEARED"));
+            break;
         case Anim::Enderman: enderman(c); break;
         case Anim::IronGolem: ironGolem(c); break;
         case Anim::Villager:
