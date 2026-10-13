@@ -99,12 +99,50 @@ void openEditServer(State& s, int index) {
     s.openScreen(Screen::EditServer);
 }
 
+// ServerAddress.isValidAddress: Guava HostAndPort.fromString (a bracketed host, or host:port with one colon, the port
+// 0..65535 in ASCII digits) with a non-empty host that IDN.toASCII takes (no empty label, ASCII labels of at most 63).
+bool validAddress(const std::string& in) {
+    std::string host, port;
+    bool hasPort = false;
+    if (!in.empty() && in[0] == '[') {
+        const size_t colon = in.find(':'), close = in.rfind(']');
+        if (colon == std::string::npos || close == std::string::npos || close < colon) return false;
+        host = in.substr(1, close - 1);
+        if (close + 1 < in.size()) {
+            if (in[close + 1] != ':') return false;
+            hasPort = true, port = in.substr(close + 2);
+        }
+    } else {
+        const size_t colon = in.find(':');
+        if (colon != std::string::npos && in.find(':', colon + 1) == std::string::npos)
+            host = in.substr(0, colon), hasPort = true, port = in.substr(colon + 1);
+        else host = in;
+    }
+    if (hasPort) {
+        if (port.empty() || port.size() > 10) return false;
+        for (char ch : port)
+            if (ch < '0' || ch > '9') return false;
+        if (std::stoll(port) > 65535) return false;
+    }
+    if (host.empty()) return false;
+    if (host == ".") return true;  // IDN: the root label
+    for (size_t at = 0; at < host.size();) {
+        size_t dot = host.find('.', at);
+        if (dot == std::string::npos) dot = host.size();
+        const std::string label = host.substr(at, dot - at);
+        if (label.empty()) return false;
+        bool ascii = true;
+        for (unsigned char ch : label) ascii &= ch < 0x80;
+        if (ascii && label.size() > 63) return false;
+        at = dot + 1;
+    }
+    return true;
+}
+
 void saveEditServer(State& s) {
     FrontEndState& f = *s.fe;
-    std::string ip = f.serverIp.text.value, name = f.serverName.text.value;
-    while (!ip.empty() && ip.back() == ' ') ip.pop_back();
-    while (!ip.empty() && ip.front() == ' ') ip.erase(ip.begin());
-    if (ip.empty()) return;
+    std::string ip = f.serverIp.text.value, name = f.serverName.text.value;  // ManageServerScreen.onAdd
+    if (!validAddress(ip)) return;
     if (name.empty()) name = s.res.translate("selectServer.defaultName");
     if (f.editServer >= 0 && f.editServer < int(f.servers.size())) {
         ServerEntry& e = f.servers[size_t(f.editServer)];
@@ -480,6 +518,7 @@ void buildEditServer(State& s) {
     f.serverName.x = x, f.serverName.y = 66, f.serverName.w = 200;
     f.serverIp.x = x, f.serverIp.y = 106, f.serverIp.w = 200;
     f.serverIp.text.maxLength = 128;
+    f.serverName.hint = s.res.translate("selectServer.defaultName");  // nameEdit.setHint
     setFields(s, {&f.serverName, &f.serverIp}, 0);
     // CycleButton "Server Resource Packs: Prompt / Enabled / Disabled" (ServerData.ServerPackStatus)
     static const char* const kPackStatus[] = {"manageServer.resourcePack.prompt", "manageServer.resourcePack.enabled",
@@ -494,7 +533,7 @@ void buildEditServer(State& s) {
     done.labelFn = [p] { return tr(*p, "addServer.add"); };
     addButton(s, x, float(H / 4 + 120 + 18), 200, tr(s, "gui.cancel"), [p] { openServers(*p); });
     f.onBack = [p] { openServers(*p); };
-    f.onEnter = [p] { saveEditServer(*p); };
+    f.onEnter = nullptr;  // ManageServerScreen has no Enter shortcut
 }
 
 void drawEditServer(State& s, Canvas& c) {
@@ -504,11 +543,11 @@ void drawEditServer(State& s, Canvas& c) {
     menuBackground(s, c);
     s.drawCentered(c, tr(s, f.editServer >= 0 ? "manageServer.edit.title" : "manageServer.add.title"), float(W / 2), 17,
                    0xFFFFFFFF);
-    s.drawText(c, tr(s, "manageServer.enterName"), x, 53, 0xFFA0A0A0, true);
-    s.drawText(c, tr(s, "manageServer.enterIp"), x, 94, 0xFFA0A0A0, true);
-    // Done needs an address (ManageServerScreen.updateAddButtonStatus).
+    s.drawText(c, tr(s, "manageServer.enterName"), x + 1, 53, 0xFFA0A0A0, true);
+    s.drawText(c, tr(s, "manageServer.enterIp"), x + 1, 94, 0xFFA0A0A0, true);
+    // Done needs a valid address (ManageServerScreen.updateAddButtonStatus).
     for (Button& b : s.buttons)
-        if (b.labelFn && b.y > float(s.guiH() / 4 + 72)) b.active = !f.serverIp.text.value.empty();
+        if (b.labelFn && b.y > float(s.guiH() / 4 + 72)) b.active = validAddress(f.serverIp.text.value);
     drawFields(s, c);
     s.drawButtons(c);
 }
@@ -523,26 +562,37 @@ void buildDirectConnect(State& s) {
     f.directIp.x = x, f.directIp.y = 116, f.directIp.w = 200;
     f.directIp.text.maxLength = 128;
     setFields(s, {&f.directIp}, 0);
-    auto join = [p] {
-        FrontEndState& fe = *p->fe;
-        std::string ip = fe.directIp.text.value;
-        while (!ip.empty() && ip.back() == ' ') ip.pop_back();
-        if (ip.empty()) return;
+    // DirectJoinServerScreen.removed: the address typed is kept as lastMpIp however the screen closes
+    auto keep = [p] {
+        const std::string ip = p->fe->directIp.text.value;
         saveAll(*p, &ip);
         p->settings.lastServer = ip, p->settings.save();
+    };
+    auto join = [p, keep] {
+        const std::string ip = p->fe->directIp.text.value;
+        if (!validAddress(ip)) return;
+        keep();
         connect(*p, ip);
     };
-    addButton(s, x, float(H / 4 + 96 + 12), 200, tr(s, "selectServer.select"), join);
-    addButton(s, x, float(H / 4 + 120 + 12), 200, tr(s, "gui.cancel"), [p] { openServers(*p); });
-    f.onBack = [p] { openServers(*p); };
-    f.onEnter = join;
+    addButton(s, x, float(H / 4 + 96 + 12), 200, tr(s, "selectServer.select"), join).labelFn = [p] {
+        return tr(*p, "selectServer.select");
+    };
+    auto cancel = [p, keep] {
+        keep();
+        openServers(*p);
+    };
+    addButton(s, x, float(H / 4 + 120 + 12), 200, tr(s, "gui.cancel"), cancel);
+    f.onBack = cancel;
+    f.onEnter = join;  // keyPressed: confirmation with the address valid
 }
 
 void drawDirectConnect(State& s, Canvas& c) {
     const int W = c.guiWidth();
     menuBackground(s, c);
     s.drawCentered(c, tr(s, "selectServer.direct"), float(W / 2), 20, 0xFFFFFFFF);
-    s.drawText(c, tr(s, "manageServer.enterIp"), float(W / 2 - 100), 100, 0xFFA0A0A0, true);
+    s.drawText(c, tr(s, "manageServer.enterIp"), float(W / 2 - 100 + 1), 100, 0xFFA0A0A0, true);
+    for (Button& b : s.buttons)  // updateSelectButtonStatus
+        if (b.labelFn) b.active = validAddress(s.fe->directIp.text.value);
     drawFields(s, c);
     s.drawButtons(c);
 }
