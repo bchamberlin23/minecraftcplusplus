@@ -671,6 +671,13 @@ std::vector<Restriction> restrictions(UiState& s) {
     return {};
 }
 
+// A restriction's text as drawn: bold red, wrapped in FocusableTextWidget's 250 less its 4 px padding on both sides.
+std::vector<Text> restrictionLines(UiState& s, const Restriction& rs) {
+    Style st = colorStyle(0xFF5555);
+    st.bold = 1;
+    return s.font.split(Text(s.res.translate(rs.display), st), 250 - 2 * 4);
+}
+
 void restrictionsBack(UiState& s) {  // onClose: the screen it was opened from
     if (s.restrictionsParent == Screen::Chat) s.openChat(false);
     else s.openScreen(s.restrictionsParent);
@@ -682,7 +689,7 @@ void restrictionsBuild(UiState& s) {
     const int W = s.guiW(), H = s.guiH();
     float y = 33;
     for (const Restriction& rs : restrictions(s)) {
-        y += float(s.font.split(Text(s.res.translate(rs.display)), 250).size() * 9 + 8);
+        y += float(restrictionLines(s, rs).size() * 9 + 8);
         if (*rs.action) {
             addButton(s, float(W / 2 - 100), y, 200, tr(s, rs.action), [p] { p->openScreen(Screen::ChatOptions); });
             y += 20;
@@ -698,9 +705,7 @@ void restrictionsDraw(UiState& s, Canvas& c) {
     float y = 33;
     const std::vector<Restriction> list = restrictions(s);
     for (const Restriction& rs : list) {
-        Style st = colorStyle(0xFF5555);
-        st.bold = 1;
-        for (const Text& line : s.font.split(Text(s.res.translate(rs.display), st), 250)) {
+        for (const Text& line : restrictionLines(s, rs)) {
             s.drawCentered(c, line, float(W / 2), y + 4, 0xFFFFFFFF);
             y += 9;
         }

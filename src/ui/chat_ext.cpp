@@ -617,6 +617,12 @@ void chatExtDraw(UiState& s, Canvas& c) {
             }
         }
     }
+    // The queue line and the restricted prompt: clickable, the queue's hover text (QUEUE_EXPAND_TEXT_STYLE).
+    if (const int special = chatSpecialAt(s, mx, my)) {
+        s.requestCursor(UiState::CursorPointingHand);
+        if (special == 1) s.drawTooltip(c, s.font.split(Text(s.res.translate("chat.queue.tooltip")), 210), mx, my);
+        return;
+    }
     // Hovered chat component: its hover event.
     Style st;
     const bool styled = chatStyleAt(s, mx, my, st) && st.events;

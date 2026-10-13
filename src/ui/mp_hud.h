@@ -65,6 +65,7 @@ void commandFieldFormatter(UiState& s, UiState::TextField* field);  // the field
 // delayed-message line / the restricted prompt (true: handled).
 bool chatLineStyleAt(UiState& s, float mx, float my, Style& out);
 bool chatSpecialClick(UiState& s, float mx, float my);
+int chatSpecialAt(UiState& s, float mx, float my);  // hud.cpp: 1 the queue line, 2 the restricted prompt, 0 none
 // ClientPacketListener.verifyCommand / SignableCommand against the server's command tree (the command without
 // the slash).
 enum class CommandCheck { NoIssues, ParseErrors, SignatureRequired, PermissionsRequired };

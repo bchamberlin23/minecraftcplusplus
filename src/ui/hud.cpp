@@ -823,27 +823,41 @@ void Ui::State::drawChat(Canvas& c, bool focused) {
 
 // Chat clicks below / above the lines: the queue line shows the next waiting message, the restricted prompt opens
 // the Restrictions screen. true when handled.
-bool chatSpecialClick(UiState& s, float mx, float my) {
+// The queue line ("[+n pending lines]", 1) or the restricted prompt (2) under a GUI point: their text only (the click
+// and hover events are on the styled text); 0 none.
+int chatSpecialAt(UiState& s, float mx, float my) {
     const float scale = float(std::max(0.01, s.settings.chatScale));
     const int chatBottom = int(std::floor(float(s.guiH() - 40) / scale));
     const float x = mx / scale - 4, y = my / scale;
-    const int maxWidth = int(std::ceil(float(chatWidthPixels(s.settings.chatWidth)) / scale));
-    if (x < -4 || x > float(maxWidth + 8)) return false;
-    if (!s.chatQueue.empty() && y >= float(chatBottom) && y < float(chatBottom + 9)) {
+    if (x < 0) return 0;
+    if (!s.chatQueue.empty()) {
+        const int w = s.font.width(translatable("chat.queue", {Text(std::to_string(s.chatQueue.size()))}, s.lang()));
+        const int top = chatBottom + 9 - 8;
+        if (x < float(w) && y >= float(top) && y < float(top + 9)) return 1;
+    }
+    if (s.settings.chatVisibility != 0) {
+        const double spacing = s.settings.chatLineSpacing;
+        const int entryHeight = int(9.0 * (spacing + 1.0));
+        const int entryBottomToMessageY = int(std::lround(8.0 * (spacing + 1.0) - 4.0 * spacing));
+        const int count = std::max(0, std::min(int(s.chatLines.size()) - s.chatScroll, s.chatLinesPerPage()));
+        const int top = chatBottom - (count + 1) * entryHeight + entryHeight - entryBottomToMessageY - 1;
+        if (x < float(s.font.width(Text(s.res.translate("chat_screen.restricted")))) && y >= float(top) && y < float(top + 9)) return 2;
+    }
+    return 0;
+}
+
+bool chatSpecialClick(UiState& s, float mx, float my) {
+    const int at = chatSpecialAt(s, mx, my);
+    if (at == 1) {  // QUEUE_EXPAND_ID
         auto fn = std::move(s.chatQueue.front());  // acceptNextDelayedMessage: a shown message restarts the delay
         s.chatQueue.pop_front();
         if (fn()) s.previousMessageTime = s.clock;
         return true;
     }
-    if (s.settings.chatVisibility != 0) {
-        const int entryHeight = int(9.0 * (s.settings.chatLineSpacing + 1.0));
-        int count = std::min(int(s.chatLines.size()) - s.chatScroll, s.chatLinesPerPage());
-        const int top = chatBottom - (std::max(count, 0) + 1) * entryHeight;
-        if (y >= float(top) && y < float(top + entryHeight)) {  // GO_TO_RESTRICTIONS_SCREEN
-            s.restrictionsParent = Screen::Chat;
-            s.openScreen(Screen::Restrictions);
-            return true;
-        }
+    if (at == 2) {  // GO_TO_RESTRICTIONS_SCREEN
+        s.restrictionsParent = Screen::Chat;
+        s.openScreen(Screen::Restrictions);
+        return true;
     }
     return false;
 }
