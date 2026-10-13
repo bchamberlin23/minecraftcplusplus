@@ -233,6 +233,10 @@ struct Visuals::Impl {
     void entityEffect(const Entity& e, int event, bool animate);
     void mobTick(const Entity& e);  // the client-side particles / sounds of entity ticks (aiStep's isClientSide parts)
     std::unordered_map<int, u8> wasOnGround;  // AbstractCubeMob.wasOnGround (landing particles)
+    std::unordered_map<int, u8> wasInWater;   // Entity.wasTouchingWater (the splash on entering)
+    bool localWasInWater = false;
+    // Entity.doWaterSplashEffect's particles and spawnSprintParticle (world lock held).
+    void waterAndSprint(const double pos[3], const double vel[3], float width, bool inWater, bool& wasIn, bool sprinting);
     std::unordered_map<int, int> stunnedTicks;  // Ravager.stunnedTick (event 39)
     // LivingEntity.breakItem: the item's break sound and five shards from the eyes (item: network id).
     void breakItem(int item, const double pos[3], double eyeHeight, float yaw, float pitch, bool silent, audio::Category category);
@@ -1727,6 +1731,10 @@ void Visuals::Impl::update() {
                                  gauss(rng) * 0.05);
             mobTick(e);
         }
+        if (game && !(gameMode && gameMode() == 3)) {  // the local player (not a spectator)
+            const Player& p = game->player();
+            waterAndSprint(p.pos, p.vel, 0.6f, p.inWater, localWasInWater, p.sprinting && !p.sneaking && !p.inLava);
+        }
     }
     if (particles) {
         // ClientLevel.getMarkerParticleTarget: a creative player holding a barrier or a light marks those blocks.
@@ -2478,8 +2486,30 @@ void Visuals::localEntityEvent(int event) {  // our own entity's events (LocalPl
     }
 }
 
+void Visuals::Impl::waterAndSprint(const double pos[3], const double vel[3], float width, bool inWater, bool& wasIn, bool sprinting) {
+    std::uniform_real_distribution<double> u(0.0, 1.0);
+    if (inWater && !wasIn) {  // doWaterSplashEffect: bubbles and splashes over the surface
+        const double yt = std::floor(pos[1]) + 1.0;
+        const int n = int(1.0f + width * 20.0f);
+        for (int i = 0; i < n; ++i)
+            particles->spawn("bubble", pos[0] + (u(fxRandom) * 2 - 1) * width, yt, pos[2] + (u(fxRandom) * 2 - 1) * width, vel[0],
+                             vel[1] - u(fxRandom) * 0.2, vel[2]);
+        for (int i = 0; i < n; ++i)
+            particles->spawn("splash", pos[0] + (u(fxRandom) * 2 - 1) * width, yt, pos[2] + (u(fxRandom) * 2 - 1) * width, vel[0], vel[1], vel[2]);
+    }
+    wasIn = inWater;
+    if (sprinting && !inWater) particles->sprintDust(pos[0], pos[1], pos[2], width, vel);
+}
+
 void Visuals::Impl::mobTick(const Entity& e) {
     if (!e.info || e.dying) return;
+    {
+        u8& was = wasInWater[e.id];
+        bool w0 = was != 0;
+        const bool sprint = e.category == Category::Player && (e.sharedFlags & 0x08) && !(e.sharedFlags & 0x02) && e.pose != 5;
+        waterAndSprint(e.pos, e.vel, e.info->width, e.inWater, w0, sprint);
+        was = w0;
+    }
     const std::string& n = e.info->name;
     float w, h;
     entityBox(e, w, h);

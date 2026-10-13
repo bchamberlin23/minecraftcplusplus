@@ -80,6 +80,8 @@ public:
     void spawnColored(std::string_view type, double x, double y, double z, double vx, double vy, double vz, u32 argb);
     // BlockParticleOption types (block, falling_dust...) for a block state key ("minecraft:honey_block").
     void spawnBlock(std::string_view type, std::string_view stateKey, double x, double y, double z, double vx, double vy, double vz);
+    // Entity.spawnSprintParticle: dust of the block under (x, y, z) kicked back against the movement (world lock held).
+    void sprintDust(double x, double y, double z, double width, const double vel[3]);
     // An encoded ParticleOptions (type id, then its options: an entity's synched particle): read past it keeping the
     // bytes (network thread), and spawn one from such bytes (main thread, ClientLevel.addAlwaysVisibleParticle).
     bool readEncoded(net::Reader& r, std::string& raw) const;

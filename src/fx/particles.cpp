@@ -1657,6 +1657,22 @@ void Particles::spawnBlock(std::string_view type, std::string_view stateKey, dou
     if (o.block > 0) add(typeId(type), x, y, z, vx, vy, vz, &o);
 }
 
+void Particles::sprintDust(double x, double y, double z, double width, const double vel[3]) {
+    const int bx = int(std::floor(x)), by = int(std::floor(y - 0.2)), bz = int(std::floor(z));  // getOnPosLegacy
+    const u16 id = blockAt(bx, by, bz);
+    if (!id) return;
+    const std::string_view n = baseName(id);
+    if (n == "barrier" || n == "light" || n == "structure_void" || n == "moving_piston") return;  // RenderShape.INVISIBLE
+    double px = x + (double(randf()) - 0.5) * width, pz = z + (double(randf()) - 0.5) * width;
+    if (int(std::floor(x)) != bx) px = std::clamp(px, double(bx), bx + 1.0);
+    if (int(std::floor(z)) != bz) pz = std::clamp(pz, double(bz), bz + 1.0);
+    Options o;
+    o.block = netState(id);
+    static int block = -2;
+    if (block == -2) block = typeId("block");
+    add(block, px, y + 0.1, pz, vel[0] * -4.0, 1.5, vel[2] * -4.0, &o);
+}
+
 void Particles::spawnColored(std::string_view type, double x, double y, double z, double vx, double vy, double vz, u32 argb) {
     Options o;
     o.hasColor = true, o.color = argb;
