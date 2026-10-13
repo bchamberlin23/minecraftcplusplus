@@ -162,6 +162,29 @@ void gatherSection(const World& world, int cx, int sy, int cz, u16* padded, u8* 
                 if (dx || dz) fillBorder(world, cx, sy, cz, dx, dy, dz, padded, light);
 }
 
+void gatherRing(const World& world, int cx, int sy, int cz, const u16* padded, u16* ring) {
+    const int ox = cx * 16, oy = sy * 16, oz = cz * 16;
+    int lastKey[3] = {INT_MIN, 0, 0};  // the section last looked up (most ring cells share one)
+    int loaded = 0;
+    const World::Region* region = nullptr;
+    const World::Section* section = nullptr;
+    for (int face = 0; face < 6; ++face)
+        for (int v = -1; v <= 16; ++v)
+            for (int u = -1; u <= 16; ++u) {
+                const int out = (face & 1) ? 17 : -2;
+                const int x = face >= 4 ? out : u, y = face < 2 ? out : v, z = face < 2 ? v : face < 4 ? out : u;
+                const int wx = ox + x, wy = oy + y, wz = oz + z;
+                if (lastKey[0] != wx >> 4 || lastKey[1] != wy >> 4 || lastKey[2] != wz >> 4) {
+                    lastKey[0] = wx >> 4, lastKey[1] = wy >> 4, lastKey[2] = wz >> 4;
+                    loaded = world.hasChunk(wx >> 4, wz >> 4);
+                    section = loaded ? world.section(wx >> 4, wy >> 4, wz >> 4, &region) : nullptr;
+                }
+                u16& out16 = ring[face * 324 + (v + 1) * 18 + (u + 1)];
+                if (!loaded) out16 = padded[padIndex(std::clamp(x, -1, 16), std::clamp(y, -1, 16), std::clamp(z, -1, 16))];
+                else out16 = section ? World::blockAt(*region, *section, u32(((wy & 15) << 8) | ((wz & 15) << 4) | (wx & 15))) : 0;
+            }
+}
+
 namespace {
 std::atomic<bool> gSmoothLighting{true}, gCutoutLeaves{true}, gNetherShade{false};
 }  // namespace
@@ -244,8 +267,16 @@ struct LightGrid {
     const u8* light;
     const BlockInfo* infos;
     const u8* solid;  // getShadeBrightness 0.2
+    const u16* ring = nullptr;  // gatherRing: the ids two cells out
     int cell(int x, int y, int z) const {  // clamped to the one-cell border (lookups further out read the border)
         return padIndex(std::clamp(x, -1, 16), std::clamp(y, -1, 16), std::clamp(z, -1, 16));
+    }
+    u16 idAt(int x, int y, int z) const {  // the block id, from the ring two cells out of a face
+        const bool inside = x >= -1 && x <= 16 && y >= -1 && y <= 16 && z >= -1 && z <= 16;
+        if (inside || !ring) return ids[cell(x, y, z)];
+        const int face = y < -1 ? 0 : y > 16 ? 1 : z < -1 ? 2 : z > 16 ? 3 : x < -1 ? 4 : 5;
+        const int u = std::clamp(face >= 4 ? z : x, -1, 16), v = std::clamp(face < 2 ? z : y, -1, 16);
+        return ring[face * 324 + (v + 1) * 18 + (u + 1)];
     }
     u32 coords(int c, const BlockInfo& state) const {  // LightCoordsUtil.getLightCoords
         if (state.emissiveRendering) return 0xF000F0u;
@@ -297,8 +328,7 @@ bool smoothQuad(const LightGrid& g, int x, int y, int z, int dir, const float po
         const int ci = g.cell(bx + c[0], by + c[1], bz + c[2]);
         l[k] = g.coords(ci, g.infos[g.ids[ci]]);
         sh[k] = g.shade(ci);
-        const int pi = g.cell(bx + c[0] + s[0], by + c[1] + s[1], bz + c[2] + s[2]);
-        permeable[k] = !g.infos[g.ids[pi]].occludes;  // BlockState.isLightPermeable
+        permeable[k] = !g.infos[g.idAt(bx + c[0] + s[0], by + c[1] + s[1], bz + c[2] + s[2])].occludes;  // isLightPermeable
     }
     auto corner = [&](int a, int b, float& shade, u32& lc) {
         if (!permeable[b] && !permeable[a]) {
@@ -457,7 +487,7 @@ static void fluidFaces(const u16* ids, const u8* light, const BlockRegistry& reg
 }
 
 void meshGrid(const u16* ids, const u8* light, const BlockRegistry& registry, bool models, bool skirts,
-              SectionMesh& out, const ColumnColors* colors, const i32* origin) {
+              SectionMesh& out, const ColumnColors* colors, const i32* origin, const u16* ring) {
     const bool smooth = gSmoothLighting.load(std::memory_order_relaxed), cutoutLeaves = gCutoutLeaves.load(std::memory_order_relaxed);
     const bool netherShade = gNetherShade.load(std::memory_order_relaxed);
     Scratch& sc = scratch();
@@ -583,7 +613,7 @@ void meshGrid(const u16* ids, const u8* light, const BlockRegistry& registry, bo
                                 }
                                 u32 cl[4];
                                 float faceAo[4];
-                                const LightGrid grid{ids, light, infos, sc.solid};
+                                const LightGrid grid{ids, light, infos, sc.solid, ring};
                                 centerShade = smoothQuad(grid, x, y, z, d, corners, true, cl, faceAo);
                                 for (int corner = 0; corner < 4; ++corner) {
                                     const u32 n = u32(std::lround((1.0f - faceAo[corner]) * 5.0f)) - (centerShade ? 1u : 0u);
@@ -660,7 +690,7 @@ void meshGrid(const u16* ids, const u8* light, const BlockRegistry& registry, bo
                     // out; else flat (BlockModelLighter.prepareQuadFlat).
                     const bool ao = light && smooth && b.emission == 0 && b.modelAo;
                     const bool fullCollision = sc.solid[p];  // isCollisionShapeFullBlock (approximately: its shade solidity)
-                    const LightGrid grid{ids, light, infos, sc.solid};
+                    const LightGrid grid{ids, light, infos, sc.solid, ring};
                     for (u32 qi = quadFirst; qi < quadFirst + quadCount; ++qi) {
                         const ModelQuad& m = registry.modelQuad(qi);
                         if (m.cull >= 0 && infos[ids[p + kDirOffset[m.cull]]].occludes) continue;

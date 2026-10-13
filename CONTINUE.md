@@ -87,8 +87,8 @@ listening socket).
 - **Improved Transparency** (video option) is stored but not read; this engine's translucency path (OIT under the
   shader pipeline) is its own. The nausea overlay and vignette draw after the UI layer (they also tint the HUD).
 
-- **Block rendering audit, still open**: smooth lighting (cubes and models, one BlockModelLighter port) clamps its
-  lookups to the section's one-cell border (Java reads up to two cells beyond a face for light permeability). Fluids skip self-occlusion of waterlogged partial blocks (faces hidden inside them).
+- **Block rendering audit, still open**: fluids skip self-occlusion of waterlogged partial blocks (faces hidden inside
+  them).
 - **Audit leftovers (2026-10-13)**: remote entities are not pushed by client-side pistons (Entity.move(PISTON) and its applyPredictedMovement), passengers are placed at render time; keyboard-focused widget tooltips (BelowOrAboveWidgetTooltipPositioner) and the widget tooltips of the other screens' own widgets (recipe book buttons, server / world list buttons) still use the mouse positioner; the chat's MODIFIED tag and RestrictionsScreen. (Minecarts under minecart_improvements: NO_OP interpolation, untested without an experimental world.)
 - **VIS-06 residual**: glowing outlines under a shader pack (entities go through the pack's gbuffers there).
 - Test instance blocks: optional tests' failure beam is red, not orange (the test registry is not sent to clients);

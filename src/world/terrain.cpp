@@ -467,16 +467,18 @@ void Terrain::workerMain() {
             Jobs::parallelFor(count, [&](size_t i) {
                 thread_local u16 padded[kPadCells];
                 thread_local u8 light[kPadCells];
+                thread_local u16 ring[kRingCells];
                 thread_local ColumnColors colors;
                 const Request& r = batch[first + i];
                 {
                     std::shared_lock lock(world_.mutex());  // the main thread may be editing
                     gatherSection(world_, r.cx, r.sy, r.cz, padded, light);
+                    gatherRing(world_, r.cx, r.sy, r.cz, padded, ring);
                     if (biomeColors_) gatherColumnColors(world_, *biomeColors_, r.cx, r.cz, colors);
                 }
                 results[i].req = r;
                 const i32 origin[3] = {r.cx * 16, r.sy * 16, r.cz * 16};
-                meshGrid(padded, light, registry_, true, false, results[i].mesh, biomeColors_ ? &colors : nullptr, origin);
+                meshGrid(padded, light, registry_, true, false, results[i].mesh, biomeColors_ ? &colors : nullptr, origin, ring);
             });
             {
                 std::lock_guard lock(mutex_);
@@ -695,11 +697,13 @@ void Terrain::remesh(const std::vector<u64>& sections, bool byPlayer) {
         const bool resident = isSlot(state) || state == Renderer::kNoSlot;
         if (isSlot(state)) renderer_.removeMesh(state);
         gatherSection(world_, cx, sy, cz, padded, light);
+        thread_local u16 ring[kRingCells];
+        gatherRing(world_, cx, sy, cz, padded, ring);
         thread_local ColumnColors colors;
         if (biomeColors_) gatherColumnColors(world_, *biomeColors_, cx, cz, colors);
         SectionMesh mesh;
         const i32 origin[3] = {cx * 16, sy * 16, cz * 16};
-        meshGrid(padded, light, registry_, true, false, mesh, biomeColors_ ? &colors : nullptr, origin);
+        meshGrid(padded, light, registry_, true, false, mesh, biomeColors_ ? &colors : nullptr, origin, ring);
         state = mesh.empty() ? Renderer::kNoSlot : renderer_.addMesh(mesh, 0, cx * 16, sy * 16, cz * 16);
         sectionSerial_[k] = ++meshSerial_;
         markDirty(it->second);

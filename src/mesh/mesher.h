@@ -58,6 +58,11 @@ struct SectionMesh {
 // Full-detail section plus a one-cell border from its 26 neighbours (missing ones read as air), with
 // the game's stored light for the same cells.
 void gatherSection(const World& world, int cx, int sy, int cz, u16* padded, u8* light);
+// The block ids two cells beyond each face of the section (kRingCells: 6 faces of 18 x 18, down / up / north / south /
+// west / east at y / z / x = -2 or 17, indexed (v + 1) * 18 + (u + 1) over the face's other axes, x before z before y):
+// BlockModelLighter's light permeability test reaches that far. Unloaded neighbours repeat the padded border.
+constexpr int kRingCells = 6 * 18 * 18;
+void gatherRing(const World& world, int cx, int sy, int cz, const u16* padded, u16* ring);
 
 // The video options meshes depend on: Smooth Lighting (corner light averaging and ambient occlusion; off: each face
 // lit by the cell in front of it) and See-Through Leaves (off: leaves are opaque and hide the faces between them,
@@ -76,5 +81,6 @@ MeshOptions meshOptions();
 //  skirts: keep horizontal border faces in the surface band so seams between LOD levels never gap.
 //  colors: biome tint colours per padded column (null: the fixed default tints).
 //  origin: the section's world block position (full detail: per-position model variants and offsets).
+//  ring: gatherRing's outer cells (null: lookups beyond the border read the border).
 void meshGrid(const u16* padded, const u8* light, const BlockRegistry& registry, bool models, bool skirts,
-              SectionMesh& out, const ColumnColors* colors = nullptr, const i32* origin = nullptr);
+              SectionMesh& out, const ColumnColors* colors = nullptr, const i32* origin = nullptr, const u16* ring = nullptr);
