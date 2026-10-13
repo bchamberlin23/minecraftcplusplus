@@ -133,8 +133,8 @@ Sky::Frame::Vertex vertex(const float p[3], float u, float v, u32 color, u32 lay
     return r;
 }
 
-// Vanilla lightmap.fsh for one (block, sky) light pair, with the default brightness option (0.5).
-void lightmap(int block, int skyLevel, const Value* a, float out[3]) {
+// Vanilla lightmap.fsh for one (block, sky) light pair at the Brightness option.
+void lightmap(int block, int skyLevel, const Value* a, float out[3], float brightnessOption) {
     auto brightness = [](float level) { return level / (4.0f - 3.0f * level); };
     const float bl = float(block) / 15.0f, sl = float(skyLevel) / 15.0f;
     const float blockB = brightness(bl) * 1.4f;
@@ -150,7 +150,7 @@ void lightmap(int block, int skyLevel, const Value* a, float out[3]) {
         maxC = std::max(maxC, c[k]);
     }
     const float inv = 1.0f - maxC, scaled = 1.0f - inv * inv * inv * inv;
-    for (int k = 0; k < 3; ++k) out[k] = maxC > 0 ? c[k] + (c[k] * (scaled / maxC) - c[k]) * 0.5f : c[k];
+    for (int k = 0; k < 3; ++k) out[k] = maxC > 0 ? c[k] + (c[k] * (scaled / maxC) - c[k]) * brightnessOption : c[k];
 }
 
 }  // namespace
@@ -763,6 +763,15 @@ void Sky::update(const CameraState& cam, double dt) {
             lm.blockTint[c] = a[int(Attr::BlockLightTint)][c];
         }
         lm.skyFactor = a[int(Attr::SkyLightFactor)][0];
+        if (!options_.hideFlashes) lm.skyFactor += bossFog_ ? endFlashNow_ / 3.0f : endFlashNow_;  // the End flash
+        // blockLightFlicker: per client tick, flicker += (r - r) * r * r * 0.1, then x 0.9
+        flickerTicks_ += dt * 20.0;
+        for (; flickerTicks_ >= 1.0; flickerTicks_ -= 1.0) {
+            auto r = [&] { flickerSeed_ = flickerSeed_ * 1664525u + 1013904223u; return float(flickerSeed_ >> 8) / 16777216.0f; };
+            const float a1 = r(), a2 = r(), a3 = r(), a4 = r();
+            blockFlicker_ = (blockFlicker_ + (a1 - a2) * a3 * a4 * 0.1f) * 0.9f;
+        }
+        lm.blockFactor = 1.4f + blockFlicker_;
         // lightmap.fsh: night vision lifts the ambient colour to the night vision colour (max per channel).
         if (fx_.lightmapNightVision > 0.0f)
             for (int c = 0; c < 3; ++c)
@@ -892,6 +901,7 @@ void Sky::buildCelestial(const Value* a, float rain, bool) {
     Frame& f = *frame_;
     f.fan.clear(), f.additive.clear(), f.endSky.clear();
     f.starBrightness = 0;
+    endFlashNow_ = 0;
     if (f.skybox == Skybox::End) {  // SkyRenderer.buildEndSky, then renderEndFlash
         endFlash(f);
         for (int i = 0; i < 6; ++i) {
@@ -1002,6 +1012,7 @@ void Sky::endFlash(Frame& f) {
         }
     }
     const float intensity = old + (now - old) * pt;
+    endFlashNow_ = intensity;
     if (intensity <= 1e-5f) return;
     // renderEndFlash: Y by 180 - yAngle, X by -90 - xAngle, a 60-wide quad at height 100, coloured by the intensity.
     const Mat3 m = mul(rotY((180.0f - yAngle) * kPi / 180.0f), rotX((-90.0f - xAngle) * kPi / 180.0f));
@@ -1124,7 +1135,7 @@ void Sky::buildWeather(const CameraState& cam, const Value* a, float rain) {
                 blockL = (blockL * 3 + 15) / 4, skyL = (skyL * 3 + 15) / 4;
             }
             float lm[3];
-            lightmap(blockL, skyL, a, lm);
+            lightmap(blockL, skyL, a, lm, options_.brightness);
             const float relX = float(x + 0.5 - cam.x), relZ = float(z + 0.5 - cam.z);
             const float distSq = relX * relX + relZ * relZ;
             const float maxAlpha = isSnow ? 0.8f : 1.0f;

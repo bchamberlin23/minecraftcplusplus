@@ -116,6 +116,11 @@ private:
     i64 endFlashSeed_ = INT64_MIN, endFlashTick_ = INT64_MIN, endFlashSoundAt_ = INT64_MIN;
     int endFlashOffset_ = 0, endFlashDuration_ = 1;
     float endFlashAngle_[2] = {};
+    float endFlashNow_ = 0;  // the End flash's intensity last frame (0 elsewhere): the lightmap's sky factor
+    // LightmapRenderStateExtractor.tick: the block light flicker, once per client tick
+    float blockFlicker_ = 0;
+    double flickerTicks_ = 0;
+    u32 flickerSeed_ = 0x9E3779B9u;
     std::mt19937_64 endFlashRng_{0xE4DF1A54};
 
     Environment env_;
