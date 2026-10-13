@@ -24,9 +24,10 @@ enum class Kind : u8 {
     LargeSmoke, WhiteSmoke, Flame, SmallFlame, Crit, DamageIndicator, EnchantedHit, Heart, AngryVillager, Bubble,
     BubblePop, CherryLeaves, PaleLeaves, TintedLeaves, Portal, Enchant, CampfireCosy, CampfireSignal, Spell, Witch,
     Suspended, HappyVillager, Lava, Dust, DustTransition, Note, Cloud, Snowflake, Item, Vibration, Drip, Spark, Flash,
-    Totem, EndRod, Gust, GustSeed, Rising, SculkCharge, SculkChargePop, Shriek, Firefly, Glow, Trail
+    Totem, EndRod, Gust, GustSeed, Rising, SculkCharge, SculkChargePop, Shriek, Firefly, Glow, Trail, SulfurBubble,
+    NoxiousGas, GasCloud, GeyserEruption, GeyserBase, GeyserPlume
 };
-enum class Opt : u8 { None, Block, Dust, DustTransition, Spell, Color, Float, VarInt, Int, IntFloat, Trail, Item, Vibration };
+enum class Opt : u8 { None, Block, Dust, DustTransition, Spell, Color, Float, VarInt, Int, IntFloat, Trail, Item, Vibration, Geyser, GeyserBase };
 enum SizeMode : u8 { SizeConst, SizeGrow, SizeFlame, SizePortal, SizeLava };
 enum Flags : u8 { Physics = 1, OnGround = 2, SpeedUp = 4, Stopped = 8, Removed = 16, Translucent = 32, NoRender = 64, AgeSprite = 128 };
 
@@ -54,7 +55,10 @@ const std::pair<const char*, Kind> kKinds[] = {
     {"gust_emitter_small", Kind::GustSeed}, {"sonic_boom", Kind::Explosion}, {"soul", Kind::Rising},
     {"sculk_soul", Kind::Rising}, {"sculk_charge", Kind::SculkCharge}, {"sculk_charge_pop", Kind::SculkChargePop},
     {"shriek", Kind::Shriek}, {"firefly", Kind::Firefly}, {"glow", Kind::Glow}, {"wax_on", Kind::Glow},
-    {"wax_off", Kind::Glow}, {"electric_spark", Kind::Glow}, {"scrape", Kind::Glow}, {"trail", Kind::Trail}};
+    {"wax_off", Kind::Glow}, {"electric_spark", Kind::Glow}, {"scrape", Kind::Glow}, {"trail", Kind::Trail},
+    {"sulfur_bubbles", Kind::SulfurBubble}, {"noxious_gas", Kind::NoxiousGas}, {"noxious_gas_cloud", Kind::GasCloud},
+    {"geyser", Kind::GeyserEruption}, {"geyser_base", Kind::GeyserBase}, {"geyser_poof", Kind::GeyserBase},
+    {"geyser_plume", Kind::GeyserPlume}, {"sulfur_cube_goo", Kind::Item}};
 
 // DripParticle and its providers: the hanging drop falls into the next type, which lands as another one.
 enum DripStage : u8 { DripHang, DripCoolingHang, DripFall, DripFallLand, DripDripstoneFallLand, DripHoneyFallLand, DripLand };
@@ -100,7 +104,8 @@ const std::pair<const char*, Opt> kOptions[] = {
     {"effect", Opt::Spell}, {"instant_effect", Opt::Spell}, {"entity_effect", Opt::Color}, {"tinted_leaves", Opt::Color},
     {"flash", Opt::Color}, {"dragon_breath", Opt::Float}, {"sculk_charge", Opt::Float}, {"shriek", Opt::VarInt},
     {"geyser", Opt::Int}, {"geyser_plume", Opt::Int}, {"geyser_base", Opt::IntFloat}, {"geyser_poof", Opt::IntFloat},
-    {"trail", Opt::Trail}, {"item", Opt::Item}, {"vibration", Opt::Vibration}};
+    {"trail", Opt::Trail}, {"item", Opt::Item}, {"vibration", Opt::Vibration}, {"geyser", Opt::Geyser},
+    {"geyser_plume", Opt::Geyser}, {"geyser_base", Opt::GeyserBase}, {"geyser_poof", Opt::GeyserBase}};
 
 constexpr u32 kTints[8] = {0xFFFFFF, 0x91BD59, 0x77AB2F, 0x80A755, 0x619961, 0x3F76E4, 0x208030, 0x8B1A00};
 
@@ -294,6 +299,8 @@ bool Particles::readOptions(void* reader, int type, Options& o) const {
         case Opt::VarInt: o.delay = r.varInt(); break;  // shriek: the delay
         case Opt::Int: r.i32v(); break;
         case Opt::IntFloat: r.i32v(), r.f32(); break;
+        case Opt::Geyser: o.waterBlocks = r.i32v(); break;                          // GeyserParticleOptions
+        case Opt::GeyserBase: o.waterBlocks = r.i32v(), o.power = r.f32(); break;  // GeyserBaseParticleOptions
         case Opt::Trail:  // TrailParticleOption: target, colour, duration
             o.target[0] = r.f64(), o.target[1] = r.f64(), o.target[2] = r.f64();
             o.color = 0xFF000000u | u32(r.i32v()), o.hasColor = true;
@@ -394,6 +401,9 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
                 sprite = rect >= 0 ? rect + 1 : -1;
             }
             if (sprite > 0) shard(sprite - 1, x, y, z, xa, ya, za, true);
+        } else if (t.name == "sulfur_cube_goo") {  // SulfurCubeProvider: the sprite set's (only) sprite, the plain random push
+            const int rect = items_.texture("particle/sulfur_cube_goo");
+            if (rect >= 0) shard(rect, x, y, z, 0, 0, 0, false);
         } else {  // SlimeProvider / SnowballProvider / CobwebProvider: a fixed item, the plain random push
             const char* tex = t.name == "item_slime" ? "item/slime_ball" : t.name == "item_snowball" ? "item/snowball" : "block/cobweb";
             const int rect = items_.texture(tex);
@@ -402,7 +412,7 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
         return nullptr;
     }
     if (t.sprites.empty() && t.kind != Kind::Terrain && t.kind != Kind::Crumble && t.kind != Kind::DustPillar &&
-        t.kind != Kind::ExplosionSeed && t.kind != Kind::GustSeed) {
+        t.kind != Kind::ExplosionSeed && t.kind != Kind::GustSeed && t.kind != Kind::GasCloud && t.kind != Kind::GeyserEruption) {
         // Sprite set from assets/minecraft/particles/<type>.json (loaded on first use).
         const nlohmann::json j = res_ ? res_->json("assets/minecraft/particles/" + t.name + ".json") : nlohmann::json();
         if (j.is_object() && j.contains("textures") && j["textures"].is_array())
@@ -746,6 +756,76 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
             if (t.name == "sneeze") p.r = 0.22f, p.g = 1.0f, p.b = 0.53f, p.a = 0.4f, p.flags |= Translucent;  // SneezeProvider
             ageSprite();
             break;
+        case Kind::SulfurBubble: {  // SulfurBubbleParticle (the provider passes y speed as z speed)
+            base(x, y, z);
+            p.gravity = -0.04f, p.friction = 0.85f;
+            p.xd = xa * 0.2f + (randf() * 2.0f - 1.0f) * 0.02f;
+            p.zd = ya * 0.2f + (randf() * 2.0f - 1.0f) * 0.02f;
+            p.e1 = 0.02f + 0.02f * randf();  // sizeStart
+            p.quadSize = p.e1;
+            p.lifetime = INT32_MAX;
+            p.sy = y, p.e0 = 3.0f, p.sz = y;  // yStart, yEnd - yStart, yPrev
+            randomSprite();
+            break;
+        }
+        case Kind::NoxiousGas: {  // NoxiousGasParticle: BaseAshSmokeParticle(0.1, colour random 0.3, lifetime 5, gravity -0.02) x 3
+            baseVel(x, y, z, 0, 0, 0);
+            p.friction = 0.96f, p.gravity = -0.02f;
+            p.flags |= SpeedUp | Translucent;
+            p.xd = p.xd * 0.1f + xa, p.yd = p.yd * 0.1f + ya, p.zd = p.zd * 0.1f + za;
+            (void)randf();  // the ash colour, made white below
+            p.quadSize *= 0.75f * 3.0f;
+            (void)randf();  // BaseAshSmokeParticle's lifetime, replaced below
+            p.lifetime = std::max(int(6.0 / (randf() * 0.5 + 0.5) * 3.0), 1);
+            p.e0 = float(p.lifetime) / 2.0f;  // fadeOutStartingPoint
+            p.sizeMode = SizeGrow;
+            ageSprite();
+            break;
+        }
+        case Kind::GasCloud:  // NoxiousGasCloudParticle: no quad, a gas puff every other tick for 20 ticks
+        case Kind::GeyserEruption:  // GeyserEruptionParticle: base, plume and poof particles for 20 ticks
+            base(x, y, z);
+            p.flags = NoRender;
+            p.lifetime = 20;
+            p.sx = xa, p.sy = ya, p.sz = za;
+            p.e0 = float(opt ? opt->waterBlocks : 1);
+            break;
+        case Kind::GeyserBase: {  // GeyserBaseParticle (provider: a jitter of 0.25, 0.2 up)
+            const int wb = opt ? opt->waterBlocks : 1;
+            const float burstBase = opt ? opt->power : 1.5f;
+            const double px = x + (randf() - 0.5f) * 0.5f, py = y + (randf() - 0.5f) * 0.5f + 0.2f, pz = z + (randf() - 0.5f) * 0.5f;
+            const float burst = burstBase + 0.25f * float(wb), size = 3.0f + 0.125f * float(wb);
+            baseVel(px, py, pz, 0, 0, 0);
+            p.friction = 0.725f, p.gravity = 0;
+            p.flags |= SpeedUp;
+            p.xd = p.xd * burst + xa, p.yd = std::abs(p.yd * burst + ya), p.zd = p.zd * burst + za;
+            (void)randf();  // the ash colour (white)
+            p.quadSize *= 0.75f * size;
+            p.lifetime = int(25.0f * (0.8f + 0.2f * randf()));
+            p.sizeMode = SizeGrow;
+            ageSprite();
+            break;
+        }
+        case Kind::GeyserPlume: {  // GeyserPlumeParticle (provider: a jitter of 0.1, up to a block up)
+            const int wb = opt ? opt->waterBlocks : 1;
+            const double px = x + (randf() - 0.5f) * 0.2f, py = y + randf(), pz = z + (randf() - 0.5f) * 0.2f;
+            baseVel(px, py, pz, xa, ya, za);
+            const int plume = 5 * std::max(1, wb);
+            p.flags |= SpeedUp;
+            p.lifetime = plume * 5;
+            p.yd = 0;
+            p.sy = py, p.e0 = float(plume) - 1.0f;  // startY, maxY - startY
+            p.e1 = (randf() - 0.5f) * 0.2f, p.e2 = (randf() - 0.5f) * 0.2f;  // horizontal spray
+            p.friction = 1.0f;
+            p.e3 = (wb == 1 ? 1.5f : 1.0f) * float(plume) * 1.45f;  // initialPropulsion
+            p.gravity = -p.e3;
+            const float size = p.quadSize * 0.75f;
+            p.sx = size * (2.0f + float(plume) / 8.0f), p.sz = size * (3.0f + float(plume) / 8.0f);  // min / max size
+            p.quadSize = float(p.sx);
+            p.target = 0;  // done
+            ageSprite();
+            break;
+        }
         case Kind::Trail: {  // TrailParticle: flies to its target over the duration, its colour varied a little, full bright
             if (!opt) return nullptr;
             base(x, y, z);
@@ -758,6 +838,7 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
             };
             p.r = scaled(16), p.g = scaled(8), p.b = scaled(0);
             p.emissive = 15;
+            randomSprite();
             break;
         }
         case Kind::Vibration: {  // VibrationSignalParticle: flies to its destination, arriving after `arrival` ticks
@@ -1658,6 +1739,134 @@ void Particles::shard(int rect, double x, double y, double z, double xa, double 
     ++stats_.spawned;
 }
 
+// FluidState.isSourceOfType(WATER): a still water block, a bubble column or a waterlogged block.
+bool Particles::waterSource(int x, int y, int z) {
+    const u16 id = blockAt(x, y, z);
+    if (registry_.infos()[id].waterlogged) return true;
+    const std::string& n = registry_.name(id);
+    if (n.starts_with("minecraft:bubble_column")) return true;
+    return n.starts_with("minecraft:water") && registry_.property(id, "level") == "0";
+}
+
+// PotentSulfurBlockEntity.isGeyserPassableBlock: air, water, or no collision.
+bool Particles::geyserPassable(int x, int y, int z) {
+    const u16 id = blockAt(x, y, z);
+    if (!id || registry_.name(id).starts_with("minecraft:water")) return true;
+    return registry_.infos()[id].collisionCount == 0;
+}
+
+// Level.clip with COLLIDER blocks and no fluids: true when a block's collision box is in the way from a to b.
+bool Particles::clipBlocks(const double a[3], const double b[3]) {
+    const double d[3] = {b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+    int v[3] = {int(std::floor(a[0])), int(std::floor(a[1])), int(std::floor(a[2]))};
+    const int end[3] = {int(std::floor(b[0])), int(std::floor(b[1])), int(std::floor(b[2]))};
+    int step[3];
+    double tMax[3], tDelta[3];
+    for (int k = 0; k < 3; ++k) {
+        step[k] = d[k] > 0 ? 1 : d[k] < 0 ? -1 : 0;
+        tDelta[k] = step[k] ? std::abs(1.0 / d[k]) : 1e30;
+        const double next = step[k] > 0 ? std::floor(a[k]) + 1 - a[k] : a[k] - std::floor(a[k]);
+        tMax[k] = step[k] ? next * tDelta[k] : 1e30;
+    }
+    for (int guard = 0; guard < 64; ++guard) {
+        const BlockInfo& bi = registry_.infos()[blockAt(v[0], v[1], v[2])];
+        for (u32 i = 0; i < bi.collisionCount; ++i) {  // the segment against the box (slabs)
+            const auto& box = registry_.box(bi.collisionFirst + i);
+            double t0 = 0, t1 = 1;
+            bool hit = true;
+            for (int k = 0; k < 3 && hit; ++k) {
+                const double lo = v[k] + box.min[k], hi = v[k] + box.max[k];
+                if (std::abs(d[k]) < 1e-12) {
+                    hit = a[k] >= lo && a[k] <= hi;
+                } else {
+                    double ta = (lo - a[k]) / d[k], tb = (hi - a[k]) / d[k];
+                    if (ta > tb) std::swap(ta, tb);
+                    t0 = std::max(t0, ta), t1 = std::min(t1, tb);
+                    hit = t0 <= t1;
+                }
+            }
+            if (hit) return true;
+        }
+        if (v[0] == end[0] && v[1] == end[1] && v[2] == end[2]) return false;
+        const int k = tMax[0] < tMax[1] ? (tMax[0] < tMax[2] ? 0 : 2) : (tMax[1] < tMax[2] ? 1 : 2);
+        if (tMax[k] > 1.0) return false;
+        v[k] += step[k], tMax[k] += tDelta[k];
+    }
+    return false;
+}
+
+// PotentSulfurBlockEntity.canBeReachedByNoxiousGas
+bool Particles::noxiousGasReaches(int sx, int sy, int sz, const double pos[3]) {
+    const int bx = int(std::floor(pos[0])), by = int(std::floor(pos[1])), bz = int(std::floor(pos[2]));
+    if (!geyserPassable(bx, by, bz)) return false;
+    const double dx = pos[0] - (sx + 0.5), dy = pos[1] - (sy + 0.5), dz = pos[2] - (sz + 0.5);
+    if (dx * dx + dy * dy + dz * dz > 9.0) return false;
+    const double belowSource[3] = {sx + 0.5, sy - 0.5, sz + 0.5}, belowPos[3] = {pos[0], pos[1] - 1.0, pos[2]};
+    return waterSource(int(std::floor(belowPos[0])), int(std::floor(belowPos[1])), int(std::floor(belowPos[2]))) && !clipBlocks(belowSource, belowPos);
+}
+
+// PotentSulfurBlockEntity.findNoxiousGasSourceBlock: the open block above up to 4 blocks of still water; false: none.
+bool Particles::gasSource(int x, int y, int z, int& sourceY) {
+    for (int py = y + 1; py <= y + 5; ++py) {
+        const u16 id = blockAt(x, py, z);
+        const bool waterSrc = waterSource(x, py, z);
+        const bool water = registry_.name(id).starts_with("minecraft:water");
+        if (!waterSrc || (!water && !geyserPassable(x, py, z))) {
+            if (!id || geyserPassable(x, py, z)) {
+                sourceY = py;
+                return true;
+            }
+            return false;
+        }
+    }
+    return false;
+}
+
+// The potent sulfur block entities' client tickers near the camera: WET / DORMANT puff noxious gas every 20 ticks,
+// ERUPTING / CONTINUOUS throw a geyser plume every 20 ticks of the eruption with its sound every 40.
+void Particles::tickPotentSulfur() {
+    static int cloud = -2, geyser = -2;
+    if (cloud == -2) cloud = typeId("noxious_gas_cloud"), geyser = typeId("geyser");
+    const int ccx = int(std::floor(cam_[0])) >> 4, ccz = int(std::floor(cam_[2])) >> 4;
+    std::unordered_map<u64, u64> seen;
+    for (int cz = ccz - 3; cz <= ccz + 3; ++cz)
+        for (int cx = ccx - 3; cx <= ccx + 3; ++cx) {
+            const auto* list = world_.blockEntities(cx, cz);
+            if (!list) continue;
+            for (const World::BlockEntityNbt& be : *list) {
+                const u16 id = blockAt(be.x, be.y, be.z);
+                if (!registry_.name(id).starts_with("minecraft:potent_sulfur")) continue;
+                const std::string_view state = registry_.property(id, "potent_sulfur_state");
+                const u64 key = (u64(u32(be.x)) << 40) ^ (u64(u32(be.y)) << 20) ^ u64(u32(be.z));
+                if (state == "wet" || state == "dormant") {
+                    int sy;
+                    if (ticks_ % 20 == 0 && gasSource(be.x, be.y, be.z, sy)) add(cloud, be.x + 0.5, sy + 0.5, be.z + 0.5, 0, 0, 0);
+                } else if (state == "erupting" || state == "continuous") {
+                    // eruptionTick: when the block entity appears or the eruption starts (the block event on placing)
+                    auto it = eruptions_.find(key);
+                    if (it == eruptions_.end() || it->second.second != id) it = eruptions_.insert_or_assign(key, std::make_pair(ticks_, id)).first;
+                    seen[key] = 1;
+                    int sy;
+                    if (!gasSource(be.x, be.y, be.z, sy)) continue;
+                    const u64 t = ticks_ - it->second.first;
+                    if (t % 20 == 0) {
+                        Options o;
+                        o.waterBlocks = sy - be.y - 1;
+                        add(geyser, be.x + 0.5, sy, be.z + 0.5, 0, 0, 0, &o);
+                    }
+                    if (t % 40 == 0)
+                        if (audio::AudioSystem* a = audio::instance()) {
+                            const double pos[3] = {be.x + 0.5, sy + 0.5, be.z + 0.5};
+                            a->playNetwork(-1, state == "continuous" ? "minecraft:block.potent_sulfur.geyser_continuous_eruption_active"
+                                                                     : "minecraft:block.potent_sulfur.geyser_eruption_active",
+                                           audio::Category::Block, pos, 1.0f, 1.0f);
+                        }
+                }
+            }
+        }
+    std::erase_if(eruptions_, [&](const auto& e) { return !seen.contains(e.first); });
+}
+
 // PositionSource.getPosition: the block centre, or the entity's position raised by its y offset.
 bool Particles::vibrationTarget(const Particle& p, double out[3]) {
     if (p.target < 0) {
@@ -1836,6 +2045,75 @@ void Particles::tickOne(Particle& p) {
             defaultTick();
             p.g *= 0.96f, p.b *= 0.9f;
             break;
+        case Kind::SulfurBubble: {
+            defaultTick();
+            if (p.flags & Removed) break;
+            const int bx = int(std::floor(p.x)), by = int(std::floor(p.y)), bz = int(std::floor(p.z));
+            if (!waterSource(bx, by, bz) || p.y >= p.sy + p.e0 || p.y <= p.sz) return remove();
+            auto wiggle = [&] { return double(randf() * 0.003f * ((rng_() & 1) ? 1.0f : -1.0f)) * 0.5; };
+            p.xd += wiggle(), p.zd += wiggle();
+            move(p, p.xd, 0, p.zd);
+            const float progress = float((p.y - p.sy) / p.e0);
+            p.quadSize = p.e1 + progress * (0.15f - p.e1);
+            p.sz = p.y;
+            break;
+        }
+        case Kind::NoxiousGas:
+            defaultTick();
+            ageSprite();
+            if (float(p.age) > p.e0) p.a = (float(p.lifetime) - (float(p.age) - p.e0)) / float(p.lifetime);
+            break;
+        case Kind::GasCloud: {
+            if (p.age++ >= p.lifetime) return remove();
+            if (p.age % 2 == 0) {  // a random spot within 3 blocks the gas can reach
+                static int gas = -2;
+                if (gas == -2) gas = typeId("noxious_gas");
+                const int sx = int(std::floor(p.x)), sy = int(std::floor(p.y)), sz = int(std::floor(p.z));
+                double dx = randf() - 0.5f, dz = randf() - 0.5f;
+                const double len = std::sqrt(dx * dx + dz * dz);
+                if (len > 1e-9) dx /= len, dz /= len;
+                const double dist = randf() * 3.0f;
+                const double pos[3] = {sx + 0.5 + dx * dist, sy + 0.5 - 0.25, sz + 0.5 + dz * dist};
+                if (noxiousGasReaches(sx, sy, sz, pos)) add(gas, pos[0], pos[1], pos[2], 0, 0, 0);
+            }
+            break;
+        }
+        case Kind::GeyserEruption: {
+            if (p.age++ >= p.lifetime) return remove();
+            static int baseId = -2, plumeId = -2, poofId = -2;
+            if (baseId == -2) baseId = typeId("geyser_base"), plumeId = typeId("geyser_plume"), poofId = typeId("geyser_poof");
+            Options o;
+            o.waterBlocks = int(p.e0);
+            if (p.age % 2 == 0) {
+                o.power = 1.5f;
+                for (int i = 0; i < 2; ++i) add(baseId, p.x, p.y, p.z, p.sx, p.sy, p.sz, &o);
+            }
+            for (int i = 0; i < o.waterBlocks + 2; ++i) add(plumeId, p.x, p.y, p.z, p.sx, p.sy, p.sz, &o);
+            if (p.age % 10 == 0) {
+                o.power = 2.0f;
+                for (int i = 0; i < 20; ++i) add(poofId, p.x, p.y, p.z, p.sx, p.sy, p.sz, &o);
+            }
+            break;
+        }
+        case Kind::GeyserBase:
+            defaultTick();
+            ageSprite();
+            break;
+        case Kind::GeyserPlume: {
+            defaultTick();
+            if (p.flags & Removed) break;
+            if (!p.target && (p.yd < 0.0 || p.y > p.sy + p.e0 || p.y == p.yo)) {
+                p.lifetime = std::min(p.lifetime, p.age + 5);
+                p.friction = 0;
+                p.target = 1;
+            }
+            const double progress = std::clamp((p.y - p.sy) / double(p.e0), 0.0, 1.0);
+            p.gravity = p.e3 * float(progress * progress * progress) * 0.12f;
+            p.xd = progress * p.e1, p.zd = progress * p.e2;
+            ageSprite();
+            p.quadSize = float(p.sx + progress * (p.sz - p.sx));
+            break;
+        }
         case Kind::Trail: {
             if (p.age++ >= p.lifetime) return remove();
             const double alpha = 1.0 / double(p.lifetime - p.age);  // Mth.lerp(1 / ticksRemaining, pos, target)
@@ -1987,7 +2265,7 @@ void Particles::ambient(const double cam[3]) {
         for (int i = 0; i < 10; ++i) ids[i] = typeId(names[i]);
     }
     enum Amb : u8 { AmbNone, AmbTorch, AmbWallTorch, AmbSoulTorch, AmbSoulWallTorch, AmbTinted, AmbCherry, AmbPale, AmbLava,
-                    AmbCampfire, AmbFurnace, AmbWater };
+                    AmbCampfire, AmbFurnace, AmbWater, AmbSulfur };
     auto classify = [&](u16 id) -> u8 {
         if (blockKinds_.size() <= id) blockKinds_.resize(size_t(id) + 1, 0);
         if (!blockKinds_[id]) {
@@ -2011,6 +2289,7 @@ void Particles::ambient(const double cam[3]) {
             else if ((n.starts_with("minecraft:furnace") || n.starts_with("minecraft:smoker") || n.starts_with("minecraft:blast_furnace")) &&
                      n.find("lit=true") != std::string::npos)
                 k = AmbFurnace;
+            if (n.starts_with("minecraft:potent_sulfur") && registry_.property(id, "potent_sulfur_state") != "dry") k = AmbSulfur;
             blockKinds_[id] = u8(k + 1);
         }
         return u8(blockKinds_[id] - 1);
@@ -2064,6 +2343,18 @@ void Particles::ambient(const double cam[3]) {
                     break;
                 case AmbWater:
                     if (rng_() % 10 == 0) fluidDrip(id, x, y, z, ids[8]);
+                    break;
+                case AmbSulfur:  // PotentSulfurBlock.animateTick: bubbles in the water above, now and then the gas sound
+                    if (waterSource(x, y + 1, z)) {
+                        static int bubbles = -2;
+                        if (bubbles == -2) bubbles = typeId("sulfur_bubbles");
+                        for (int i = 0; i < 2; ++i) add(bubbles, x + randf(), y + 1 + randf(), z + randf(), 0, 0, 0);
+                        if (rng_() % 10 == 0)
+                            if (audio::AudioSystem* a = audio::instance()) {
+                                const double pos[3] = {double(x), double(y), double(z)};
+                                a->playNetwork(-1, "minecraft:block.potent_sulfur.noxious_gas", audio::Category::Ambient, pos, 1.0f, 1.0f);
+                            }
+                    }
                     break;
                 case AmbCampfire:  // BlockPos.asLong
                     campfires_.insert((u64(x & 0x3FFFFFF) << 38) | (u64(z & 0x3FFFFFF) << 12) | u64(y & 0xFFF));
@@ -2228,6 +2519,7 @@ void Particles::tick() {
     starters_.erase(std::remove_if(starters_.begin(), starters_.end(), [](const Starter& s) { return s.life < 0; }), starters_.end());
     ambient(cam_);
     weather(cam_);
+    tickPotentSulfur();
     // CampfireBlockEntity.particleTick for campfires the sampler found (forgotten when broken or far away).
     static int cosy = -2, signal = -2;
     if (cosy == -2) cosy = typeId("campfire_cosy_smoke"), signal = typeId("campfire_signal_smoke");

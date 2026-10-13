@@ -110,6 +110,7 @@ private:
         double target[3] = {};
         float yOffset = 0;
         int arrival = 0;
+        int waterBlocks = 1;  // geyser particles (power: the base / poof burst impulse)
     };
     void tick();
     void ambient(const double cam[3]);
@@ -117,6 +118,13 @@ private:
     void fluidDrip(u16 fluidBlock, int x, int y, int z, int drip);
     Particle* add(int type, double x, double y, double z, double xa, double ya, double za, const Options* opt = nullptr);
     void tickOne(Particle& p);
+    bool waterSource(int x, int y, int z);
+    bool geyserPassable(int x, int y, int z);
+    bool clipBlocks(const double a[3], const double b[3]);
+    bool noxiousGasReaches(int sx, int sy, int sz, const double pos[3]);
+    bool gasSource(int x, int y, int z, int& sourceY);
+    void tickPotentSulfur();
+    std::unordered_map<u64, std::pair<u64, u16>> eruptions_;  // potent sulfur position -> (eruption start tick, state)
     void move(Particle& p, double xa, double ya, double za);
     u16 blockAt(int x, int y, int z);  // through a small per-frame cache (collisions repeat lookups)
     u8 lightAt(double x, double y, double z) const;
