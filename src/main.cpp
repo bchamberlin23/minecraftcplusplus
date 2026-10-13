@@ -895,6 +895,7 @@ int wmain(int argc, wchar_t** argv) {
         ui.setFrontEnd(fe);
     }
     if (!ui.init({&registry, &renderer, &window, &game, &world, &terrain, opt.detail})) return 1;
+    ui.setMenuBlur([&postEffects](const PassContext& ctx, float radius) { postEffects.blur(ctx, radius); });
     if (session) ui.attachSession(netClient.get(), session.get());
     if (!opt.script.empty()) ui.loadScript(opt.script);
     // The saved shader pack (render/packs), unless this run's command line picks a pack or a shader mode.

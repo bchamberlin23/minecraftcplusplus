@@ -266,10 +266,10 @@ std::string fitText(Font& f, const std::string& text, int maxWidth) {
 }
 
 void menuBackground(State& s, Canvas& c) {
-    // Screen.renderMenuBackground: the texture every 32 GUI pixels (the title screen's panorama shows through).
+    // Screen.extractBackground: extractBlurredBackground (with Menu Background Blur at 1 or more, what is drawn so far
+    // is blurred: the panorama, or the world and the HUD), then the menu background texture every 32 GUI pixels.
+    if (s.settings.menuBackgroundBlurriness >= 1) c.markBlur();
     const Sprite* t = s.sprites.texture(s.fe->cfg.menu ? "gui/menu_background" : "gui/inworld_menu_background");
-    // Darker than the texture alone: the game blurs what is behind, a sharp world needs more shade to read text on.
-    c.fill(0, 0, float(c.guiWidth()), float(c.guiHeight()), s.fe->cfg.menu ? 0x50000000 : 0x80000000);
     tileTexture(c, t, 0, 0, float(c.guiWidth()), float(c.guiHeight()), 32);
 }
 

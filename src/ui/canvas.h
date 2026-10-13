@@ -61,6 +61,10 @@ public:
     };
 
     void begin(u32 widthPx, u32 heightPx, int guiScale);
+    // GuiGraphicsExtractor.blurBeforeThisStratum: what is drawn from here on goes over the blurred frame (the menu
+    // background blur); once per frame. blurBatch: the first batch after it, -1 without.
+    void markBlur();
+    int blurBatch() const { return blurAt_; }
     int scale() const { return scale_; }
     int guiWidth() const { return guiW_; }
     int guiHeight() const { return guiH_; }
@@ -110,6 +114,7 @@ private:
     std::vector<std::array<int, 4>> scissors_;
     std::vector<UiVertex> verts_;
     std::vector<Batch> batches_;
+    int blurAt_ = -1;
     u8 blend_ = 0;
     float alpha_ = 1.0f;
 };

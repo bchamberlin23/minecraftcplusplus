@@ -184,7 +184,10 @@ void UiPass::upload(const PassContext& ctx, Atlas& atlas, ID3D12Resource* tex, u
 void UiPass::draw(const PassContext& ctx) {
     // With a separate UI layer the batches that read the scene (inverting crosshair, vignette, additive overlays)
     // draw onto the final image before the layer goes over it (BeforeUi); otherwise everything draws in the Hud stage.
+    // A blur mark (a menu's background): what comes before it draws onto the final image, which is then blurred, and
+    // the rest goes on as usual (GuiRenderer: blurBeforeThisStratum).
     const bool afterUi = ctx.stage == PassStage::BeforeUi;
+    const int split = blur && ctx.uiBlur ? canvas_.blurBatch() : -1;
     if (ctx.stage == PassStage::AfterUi || (afterUi && !ctx.uiLayer)) return;
     u64 used = 0;
     if (!afterUi) {
@@ -213,9 +216,34 @@ void UiPass::draw(const PassContext& ctx) {
     D3D12_VERTEX_BUFFER_VIEW vbv{vertices_->GetGPUVirtualAddress() + offset, u32(bytes), sizeof(UiVertex)};
     list->IASetVertexBuffers(0, 1, &vbv);
     const D3D12_RECT full{0, 0, LONG(ctx.width), LONG(ctx.height)};
-    for (const Canvas::Batch& b : canvas_.batches()) {
+    auto bind = [&] {
+        list->SetDescriptorHeaps(1, heaps);
+        list->SetGraphicsRootSignature(root_.Get());
+        list->SetGraphicsRoot32BitConstants(0, 12, consts, 0);
+        list->SetGraphicsRootDescriptorTable(1, renderer_->gpuDescriptor(descriptors_));
+        list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        list->IASetVertexBuffers(0, 1, &vbv);
+        list->SetPipelineState(blend == 1   ? psoInvert_.Get()
+                               : blend == 2 ? psoGlint_.Get()
+                               : blend == 3 ? psoVignette_.Get()
+                               : blend == 4 ? psoAdditive_.Get()
+                               : blend == 5 ? psoLogo_.Get()
+                                            : pso_.Get());
+    };
+    const bool blurHere = split >= 0 && (!ctx.uiLayer || afterUi);  // onto the final image
+    const auto& batches = canvas_.batches();
+    for (size_t bi = 0; bi < batches.size(); ++bi) {
+        const Canvas::Batch& b = batches[bi];
+        if (blurHere && int(bi) == split) {
+            const D3D12_VIEWPORT vp{0, 0, float(ctx.width), float(ctx.height), 0, 1};
+            blur(ctx);
+            list->RSSetViewports(1, &vp);
+            bind();
+        }
         if (!b.count || b.first >= maxVerts) continue;
-        if (ctx.uiLayer && (b.blend == 1 || b.blend == 3 || b.blend == 4) != afterUi) continue;
+        const bool special = b.blend == 1 || b.blend == 3 || b.blend == 4;
+        // with a layer: before the mark everything goes onto the final image (BeforeUi), after it the special ones
+        if (ctx.uiLayer && ((split >= 0 && int(bi) < split) || special) != afterUi) continue;
         D3D12_RECT r = full;
         if (b.clip) {
             r = {LONG(b.scissor[0]), LONG(b.scissor[1]), LONG(b.scissor[2]), LONG(b.scissor[3])};

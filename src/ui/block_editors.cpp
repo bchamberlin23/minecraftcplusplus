@@ -193,7 +193,7 @@ void commandDraw(UiState& s, Canvas& c) {
         }
     }
     const int W = c.guiWidth();
-    menuBackground(s, c);
+    c.gradient(0, 0, float(c.guiWidth()), float(c.guiHeight()), 0xC0101010, 0xD0101010);  // isInGameUi: transparent
     s.drawCentered(c, tr(s, "advMode.setCommand"), float(W / 2), 20, 0xFFFFFFFF);
     label(s, c, "advMode.command", float(W / 2 - 149), 40);
     drawFields(s, c);
@@ -292,7 +292,7 @@ void jigsawBuild(UiState& s) {
 
 void jigsawDraw(UiState& s, Canvas& c) {
     const int W = c.guiWidth();
-    menuBackground(s, c);
+    c.gradient(0, 0, float(c.guiWidth()), float(c.guiHeight()), 0xC0101010, 0xD0101010);  // isInGameUi: transparent
     label(s, c, "jigsaw_block.pool", float(W / 2 - 153), 10);
     label(s, c, "jigsaw_block.name", float(W / 2 - 153), 45);
     label(s, c, "jigsaw_block.target", float(W / 2 - 153), 80);
@@ -419,7 +419,7 @@ void structureBuild(UiState& s) {
 void structureDraw(UiState& s, Canvas& c) {
     const int W = c.guiWidth();
     const int m = g.structMode;
-    menuBackground(s, c);
+    c.gradient(0, 0, float(c.guiWidth()), float(c.guiHeight()), 0xC0101010, 0xD0101010);  // isInGameUi: transparent
     s.drawCentered(c, Text(s.res.translate("block.minecraft.structure_block")), float(W / 2), 10, 0xFFFFFFFF);
     if (m != 3) label(s, c, "structure_block.structure_name", float(W / 2 - 153), 30);
     if (m == 0 || m == 1) {
@@ -477,7 +477,7 @@ void testBuild(UiState& s) {
 
 void testDraw(UiState& s, Canvas& c) {
     const int W = c.guiWidth();
-    menuBackground(s, c);
+    c.gradient(0, 0, float(c.guiWidth()), float(c.guiHeight()), 0xC0101010, 0xD0101010);  // isInGameUi: transparent
     s.drawCentered(c, Text(s.res.translate("block.minecraft.test_block")), float(W / 2), 10, 0xFFFFFFFF);
     if (g.testMode != 0) label(s, c, "test_block.message", float(W / 2 - 153), 70);
     label(s, c, (std::string("test_block.mode_info.") + kTestModes[g.testMode]).c_str(), float(W / 2 - 153), 174);
@@ -554,7 +554,7 @@ void testInstanceBuild(UiState& s) {
 void testInstanceDraw(UiState& s, Canvas& c) {
     const int W = c.guiWidth();
     const float L = float(W / 2 - 158);
-    menuBackground(s, c);
+    c.gradient(0, 0, float(c.guiWidth()), float(c.guiHeight()), 0xC0101010, 0xD0101010);  // isInGameUi: transparent
     s.drawCentered(c, Text(s.res.translate("block.minecraft.test_instance_block")), float(W / 2), 10, 0xFFFFFFFF);
     label(s, c, "test_instance_block.test_id", L, 30);
     label(s, c, "test_instance_block.size", L, 150);

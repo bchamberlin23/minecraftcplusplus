@@ -1095,6 +1095,11 @@ void Ui::setItemModels(ent::ItemModels* models) {
 int Ui::ticksFrozen() const { return s_->ticksFrozen; }
 int Ui::spectatorEffectToggles() const { return s_->spectatorEffectToggles; }
 std::vector<std::string> Ui::postEffects() const { return s_->postEffects; }
+
+void Ui::setMenuBlur(std::function<void(const PassContext&, float radius)> blur) {
+    State* s = s_.get();
+    if (s->pass) s->pass->blur = [s, blur](const PassContext& ctx) { blur(ctx, float(s->settings.menuBackgroundBlurriness)); };
+}
 void Ui::setEngineInfo(std::function<std::string(std::string_view)> fn) { s_->engineInfo = std::move(fn); }
 
 const Items& Ui::items() const { return s_->items; }

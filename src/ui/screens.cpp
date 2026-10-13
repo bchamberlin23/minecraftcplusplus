@@ -731,7 +731,7 @@ void Ui::State::drawScreen(Canvas& c) {
                 drawCentered(c, Text(res.translate("menu.paused")), float(W / 2), 10.f, 0xFFFFFFFF);
                 return;
             }
-            c.gradient(0, 0, float(W), float(H), 0xC0101010, 0xD0101010);
+            menuBackground(*this, c);  // PauseScreen.extractBackground: blurred (the topmost screen), the menu texture
             drawCentered(c, Text(res.translate("menu.game")), float(W / 2), 40.f, 0xFFFFFFFF);
             drawButtons(c);
             if (rendersNowPlayingToast()) drawNowPlaying(*this, c, 0, 0);  // PauseScreen: the song playing, top left

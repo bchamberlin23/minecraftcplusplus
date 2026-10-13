@@ -18,6 +18,7 @@ class Renderer;
 class Game;
 class World;
 class BlockRegistry;
+struct PassContext;
 class Terrain;
 class GameReports;
 namespace net {
@@ -269,6 +270,9 @@ public:
     // equippable allows players. Unset: armour by name.
     int spectatorEffectToggles() const;
     std::vector<std::string> postEffects() const;  // the server's post effects for the player (ids)
+    // GameRenderer.processBlurEffect for the menus' background blur (PostEffects.blur at the canvas's blur mark),
+    // with the Menu Background Blur option as its radius.
+    void setMenuBlur(std::function<void(const ::PassContext&, float radius)> blur);
     void setEngineInfo(std::function<std::string(std::string_view)> fn);  // F3 entries' engine numbers  // presses of the Toggle Spectator Shader Effects key so far
     int ticksFrozen() const;  // our DATA_TICKS_FROZEN (the third-person avatar shakes when fully frozen)
     // The local player's mob effects as the view shows them (fog, lightmap: view_effects.cpp), and the nausea / nether

@@ -63,6 +63,9 @@ struct PassContext {
     float lightmap[3][4] = {};  // Lightmap::pack: for passes that light with the game's lightmap (lightmap.hlsli)
     PassStage stage{};  // the stage being drawn (a pass may be registered for several)
     bool uiLayer = false;  // Hud passes draw into a separate UI layer (composited later), not onto the scene
+    // The UI may split at its menu blur: its batches before the mark go onto the final image (here with no UI layer,
+    // else in BeforeUi, colorRtv then being the final image's), which is blurred (PostEffects.blur), the rest after.
+    bool uiBlur = false;
     // An OptiFine / Iris shader pack is active (render/packs): passes that support it hand vanilla-style geometry to
     // the pack's gbuffers programs (render/pack_sink.h); others draw as usual into a layer the pack merges.
     class PackSink* pack = nullptr;

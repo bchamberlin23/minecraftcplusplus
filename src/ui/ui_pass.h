@@ -4,6 +4,8 @@
 #include "render/renderer.h"
 #include "ui/canvas.h"
 
+#include <functional>
+
 namespace ui {
 
 class UiPass : public RenderPass {
@@ -15,6 +17,8 @@ public:
     Canvas& canvas() { return canvas_; }
     // Enchantment glint: texture rect in the GUI atlas (u0 v0 du dv), scroll offset, screen pixels per repeat.
     float glint[8] = {};
+    // The menu background blur at the canvas's blur mark (PostEffects.blur over the frame drawn so far).
+    std::function<void(const PassContext&)> blur;
 
 private:
     static constexpr u64 kVertexBytes = u64(8) << 20;  // per frame in flight

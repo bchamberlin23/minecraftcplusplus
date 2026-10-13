@@ -196,7 +196,7 @@ void Ui::State::buildModsButtons() {
 void Ui::State::drawModsScreen(Canvas& c) {
     mods::Manager& mm = mods::Manager::get();
     const int W = c.guiWidth(), H = c.guiHeight();
-    c.gradient(0, 0, float(W), float(H), 0xC0101010, 0xD0101010);
+    menuBackground(*this, c);
     drawCentered(c, Text("Mods & Packs"), float(W / 2), 8, 0xFFFFFFFF);
     drawCentered(c, Text(fit(font, "Drop packs (.zip / folders), Fabric mods (.jar) and native mods (.dll) into the mods folder", W - 8)),
                  float(W / 2), 20, 0xFFA0A0A0);

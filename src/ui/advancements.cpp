@@ -3,6 +3,7 @@
 // tiled backgrounds, connections, obtained / unobtained frames, the hover box with title, progress and description,
 // dragging / wheel scrolling, select_advancements_tab and seen_advancements.
 #include "audio/audio.h"
+#include "ui/frontend.h"
 #include "ui/toasts.h"
 #include "ui/ui_state.h"
 
@@ -513,7 +514,7 @@ void draw(UiState& s, Canvas& c) {
     const int W = c.guiWidth(), H = c.guiHeight();
     const int left = (W - 252) / 2, top = (H - 140) / 2;
     const float mx = s.mouseX, my = s.mouseY;
-    c.gradient(0, 0, float(W), float(H), 0xC0101010, 0xD0101010);
+    menuBackground(s, c);  // Screen.extractBackground
     s.drawCentered(c, Text(s.res.translate("gui.advancements")), float(W / 2), float((33 - 9) / 2), 0xFFFFFFFF);
     Tab* t = selectedTab();
     // Dragging (mouseDragged with the left button).

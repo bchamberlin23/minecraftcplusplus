@@ -118,6 +118,12 @@ void PostEffects::draw(const PassContext& ctx) {
     ++frame_;
     std::erase_if(retired_, [&](const auto& r) { return frame_ > r.first + Renderer::kFrames + 1; });
     std::erase(effects_, None);
+    run(ctx, effects_, blurRadius_);
+}
+
+void PostEffects::blur(const PassContext& ctx, float radius) { run(ctx, {Blur}, radius); }
+
+void PostEffects::run(const PassContext& ctx, const std::vector<Effect>& effects_, float blurRadius_) {
     if (effects_.empty() || !sig_ || !ctx.sceneColor || !ctx.colorRtv.ptr || !ctx.width || !ctx.height) return;
     ID3D12Device* device = r_->device();
     ID3D12GraphicsCommandList* list = ctx.list;

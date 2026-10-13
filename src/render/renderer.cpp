@@ -1242,6 +1242,7 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     pc.uiLayer = (shaded || packUi) && !upscalers_->uiComposedBySwapChain();  // we composite it, then AfterUi on top
     if (!shaded && !packUi) pc.colorRtv = rtv, pc.dsv = dsv;  // Hud passes that draw elsewhere rebind these
     pc.sceneColor = bb;
+    pc.uiBlur = (!shaded && !packUi) || pc.uiLayer;  // not when the swap chain composites the layer (FSR FG)
     runPasses(PassStage::Hud, pc);
     if (!shaded && !packUi) runPasses(PassStage::AfterUi, pc);
     if (pc.uiLayer || ((shaded || packUi) && upscalers_->uiComposedBySwapChain())) {
@@ -1253,6 +1254,7 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
         list_->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
         PassContext before = pc;
         before.uiLayer = true;
+        before.colorRtv = rtv, before.uiBlur = pc.uiLayer;
         runPasses(PassStage::BeforeUi, before);
     }
     if (shaded || packUi) {

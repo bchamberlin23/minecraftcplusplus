@@ -249,9 +249,8 @@ void build(UiState& s) {
 void draw(UiState& s, Canvas& c) {
     const int W = c.guiWidth(), H = c.guiHeight();
     const float mx = s.mouseX, my = s.mouseY;
-    // Backgrounds: the tab header, the in-world menu background, the footer separator (the game blurs the world
-    // under them; without blur the darkening gradient of the other in-game screens keeps the text readable).
-    c.gradient(0, 0, float(W), float(H), 0xC0101010, 0xD0101010);
+    // Backgrounds: the blur, the tab header, the in-world menu background, the footer separator.
+    if (s.settings.menuBackgroundBlurriness >= 1) c.markBlur();
     tile(c, s.sprites.texture("gui/tab_header_background"), 0, 0, float(W), float(kTabBarH), 16, 16);
     tile(c, s.sprites.texture("gui/inworld_menu_background"), 0, float(kTabBarH), float(W), float(H - kTabBarH), 16, 16);
     tile(c, s.sprites.texture("gui/footer_separator"), 0, float(H - kFooterH), float(W), 2, 32, 2);  // Screen.FOOTER_SEPARATOR

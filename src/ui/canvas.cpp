@@ -62,7 +62,14 @@ void Canvas::begin(u32 widthPx, u32 heightPx, int guiScale) {
     verts_.clear();
     batches_.clear();
     blend_ = 0;
+    blurAt_ = -1;
     newBatch();
+}
+
+void Canvas::markBlur() {
+    if (blurAt_ >= 0) return;
+    newBatch();
+    blurAt_ = int(batches_.size()) - 1;
 }
 
 void Canvas::push() { poses_.push_back(pose_); }

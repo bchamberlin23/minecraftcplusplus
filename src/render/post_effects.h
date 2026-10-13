@@ -15,8 +15,11 @@ public:
     static Effect byName(std::string_view id);  // "minecraft:creeper" -> Creeper; None if unknown
     bool create(Renderer& renderer) override;
     void draw(const PassContext& ctx) override;
+    // GameRenderer.processBlurEffect: blur.json over ctx.sceneColor, written back through ctx.colorRtv.
+    void blur(const PassContext& ctx, float radius);
 
 private:
+    void run(const PassContext& ctx, const std::vector<Effect>& effects, float radius);
     Renderer* r_ = nullptr;
     std::vector<Effect> effects_;
     float blurRadius_ = 5;  // MenuBlurRadius (the menu background blurriness) for blur.json's radius 0
