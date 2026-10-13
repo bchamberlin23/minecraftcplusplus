@@ -113,6 +113,7 @@ public:
     std::function<bool(net::Reader& r, int& item)> readItem;
     // EntityPositionSource: an entity's position (main thread); false when unknown (the vibration ends).
     std::function<bool(int entity, double pos[3])> entityPosition;
+    std::function<void()> onElderGuardian;  // an elder_guardian particle (main thread)
 
     struct Particle;  // particles.cpp
 

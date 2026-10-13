@@ -437,6 +437,7 @@ bool Visuals::load(const fs::path& jar, const fs::path& minecraftDir, const Game
         if (e) std::copy(e->pos, e->pos + 3, pos);
         return e != nullptr;
     };
+    m.particles->onElderGuardian = [&world = m.world] { world.mobAppearances.push_back(nowSeconds()); };
     m.loaded = true;
     LOG("visuals %7.1f ms  item models, font and particles from the game", t.ms());
     return true;

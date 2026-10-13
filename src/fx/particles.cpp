@@ -401,6 +401,10 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
     if (typeIndex < 0 || size_t(typeIndex) >= types_.size()) return nullptr;
     Type& t = types_[size_t(typeIndex)];
     if (t.kind == Kind::None) return nullptr;
+    if (t.name == "elder_guardian") {  // ElderGuardianParticle: the elder guardian's appearance (drawn by the entities)
+        if (onElderGuardian) onElderGuardian();
+        return nullptr;
+    }
     if (live_.size() + spawnQueue_.size() >= kMaxParticles) return nullptr;
     if (t.kind == Kind::Item) {  // BreakingItemParticle: the item's particle texture, no sprite set
         if (t.name == "item") {
@@ -883,6 +887,8 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
             p.quadSize *= randf() * 0.6f + 0.5f;
             p.xd *= 0.02f, p.yd *= 0.02f, p.zd *= 0.02f;
             p.lifetime = int(20.0 / (randf() * 0.8 + 0.2));
+            if (t.name == "dolphin") p.r = 0.3f, p.g = 0.5f, p.b = 1.0f, p.lifetime /= 2;  // DolphinSpeedProvider (opaque: no alpha)
+            if (t.name == "composter") p.lifetime = 3 + int(randf() * 5.0f);  // ComposterFillProvider
             p.flags &= u8(~Physics);
             randomSprite();
             break;
