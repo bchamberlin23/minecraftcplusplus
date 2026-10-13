@@ -226,7 +226,28 @@ void Riding::rideTick(const PlayerInput& in) {
     // LocalPlayer.rideTick: paddling a boat keeps the hands busy.
     game_.handsBusy = controlled_ && kind_ == Kind::Boat && (in.forward != 0 || in.strafe != 0);
     // The player sits on the seat (the vehicle's current position).
-    if (const ent::Entity* e = entity()) seat(*e, e->pos, e->yaw, p.pos);
+    if (const ent::Entity* e = entity()) {
+        seat(*e, e->pos, e->yaw, p.pos);
+        // Minecart.tick / positionRider (experimental movement): the cart's turns while it moves gather in
+        // rotationOffset, and with Rotate with Minecarts the player's view follows half way each tick.
+        if (e->newMinecart && e->info && e->info->name == "minecraft:minecart") {
+            if (cartVehicle_ != vehicle_) {
+                cartVehicle_ = vehicle_, cartYaw_ = e->yaw, cartRotation_ = cartPlayerRotation_ = 0;
+                std::copy(e->pos, e->pos + 3, cartPos_);
+            }
+            const double moved = std::hypot(e->pos[0] - cartPos_[0], e->pos[1] - cartPos_[1], e->pos[2] - cartPos_[2]);
+            if (moved > 0.01) cartRotation_ = std::fmod(cartRotation_ + std::fmod(e->yaw - cartYaw_, 360.0f), 360.0f);
+            cartYaw_ = e->yaw;
+            std::copy(e->pos, e->pos + 3, cartPos_);
+            if (game_.rotateWithMinecart) {
+                const float yRot = cartPlayerRotation_ + wrapDegrees(cartRotation_ - cartPlayerRotation_) * 0.5f;  // Mth.rotLerp(0.5)
+                p.yaw -= (yRot - cartPlayerRotation_) * kDegf;
+                cartPlayerRotation_ = yRot;
+            }
+        } else {
+            cartVehicle_ = -1;
+        }
+    }
 }
 
 void Riding::vehicleTick(ent::Entity& e) {

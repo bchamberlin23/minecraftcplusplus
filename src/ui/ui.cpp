@@ -227,6 +227,7 @@ void Ui::State::applyControls() {  // the key bindings and control options the g
     game->discreteScroll = settings.discreteMouseScroll, game->wheelSensitivity = settings.mouseWheelSensitivity;
     game->player().autoJump = settings.autoJump;
     game->player().sprintWindow = settings.sprintWindow;
+    game->rotateWithMinecart = settings.rotateWithMinecart;
 }
 
 int Ui::State::gameMode() const {

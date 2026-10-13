@@ -53,6 +53,10 @@ private:
     ent::Entity* entity() const;
     bool computeControlled(const ent::Entity& e) const;
     void seat(const ent::Entity& e, const double vehiclePos[3], float vehicleYaw, double out[3]) const;  // rider's feet
+    // Minecart's rotationOffset / playerRotationOffset while riding an experimental minecart (Rotate with Minecarts).
+    int cartVehicle_ = -1;
+    float cartYaw_ = 0, cartRotation_ = 0, cartPlayerRotation_ = 0;
+    double cartPos_[3] = {};
     void rideTick(const PlayerInput& in);  // Game::rideTick
     void vehicleTick(ent::Entity& e);      // EntityWorld local control tick
     void boatTick(ent::Entity& e);
