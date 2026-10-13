@@ -241,6 +241,8 @@ struct Visuals::Impl {
     void waterAndSprint(const double pos[3], const double vel[3], float width, bool inWater, bool& wasIn, bool sprinting);
     std::unordered_map<int, int> stunnedTicks;  // Ravager.stunnedTick (event 39)
     std::unordered_map<int, std::pair<u8, int>> pandaState;  // was sneezing, the last EAT_COUNTER seen
+    struct StareState { i64 creepy = -1, staredAt = 0, lastSound = INT64_MIN / 2; };
+    std::unordered_map<int, StareState> stareState;  // Enderman DATA_CREEPY / DATA_STARED_AT as last seen, lastStareSound
     std::unordered_map<int, std::pair<int, u64>> stateStart;  // pose / sniffer state and the age it began (animation times)
     std::unordered_map<int, std::pair<int, int>> breezeState;  // Breeze.jumpTrailStartedTick, soundTick
     // LivingEntity.breakItem: the item's break sound and five shards from the eyes (item: network id).
@@ -2650,6 +2652,16 @@ void Visuals::Impl::mobTick(const Entity& e) {
     } else if (n == "minecraft:enderman" || n == "minecraft:endermite") {  // Enderman / Endermite.aiStep
         const double dy = n == "minecraft:enderman" ? -0.25 : 0.0;
         for (int i = 0; i < 2; ++i) particles->spawn("portal", rx(0.5), ry() + dy, rz(0.5), (R() - 0.5) * 2.0, -R(), (R() - 0.5) * 2.0);
+        if (n == "minecraft:enderman") {  // onSyncedDataUpdated(DATA_CREEPY) while stared at: playStareSound
+            auto& st = stareState[e.id];
+            const i64 creepy = dataInt(e, "DATA_CREEPY"), stared = dataInt(e, "DATA_STARED_AT");
+            // DATA_CREEPY is applied before DATA_STARED_AT, so it sees the stared-at value from before the update.
+            if (st.creepy >= 0 && creepy != st.creepy && st.staredAt && i64(e.age) >= st.lastSound + 400) {
+                st.lastSound = i64(e.age);
+                sound("minecraft:entity.enderman.stare", audio::Category::Hostile, e.pos[0], e.pos[1] + 2.55, e.pos[2], 2.5f, 1.0f);
+            }
+            st.creepy = creepy, st.staredAt = stared;
+        }
     } else if (n == "minecraft:glow_squid") {  // GlowSquid.aiStep
         particles->spawn("glow", rx(0.6), ry(), rz(0.6), 0, 0, 0);
     } else if (n == "minecraft:dolphin") {  // Dolphin.tick: the trail while swimming fast
