@@ -472,6 +472,8 @@ void collide(const std::vector<AABB>& boxes, AABB& b, double out[3], const doubl
 }
 }  // namespace
 
+void Physics::collideBoxes(const std::vector<AABB>& boxes, AABB& b, double out[3], const double in[3]) { collide(boxes, b, out, in); }
+
 // Player.canFallAtLeast: nothing below the box (moved by dx, dz) within minHeight.
 bool Player::canFallAtLeast(const Physics& physics, double dx, double dz, double minHeight) const {
     const AABB b = box();

@@ -17,6 +17,7 @@
 
 class World;
 class BlockRegistry;
+class Physics;
 class GameReports;
 namespace net {
 class Client;
@@ -224,6 +225,10 @@ struct Entity {
     MinecartStep oldLerp{};
     int lerpDelay = 0;
     bool newMinecart = false;
+    // Client-simulated movement (entity_physics.cpp): collision flags, fluid heights, the orb's first tick and target.
+    bool horizontalCollision = false, verticalCollisionBelow = false, simFirstTick = true;
+    double waterHeight = 0, lavaHeight = 0;
+    int orbTarget = INT_MIN;
     std::string profileTextures;  // Mannequin DATA_PROFILE: its "textures" property; profileSkin 1 while it downloads
     std::string profileResolve;   // ... given only by name ("N" + name) or id ("U" + 16 bytes): profileSkin 4 meanwhile
     int profileSkin = 0;
@@ -395,6 +400,9 @@ private:
     void tickEntity(Entity& e);
     void updateProfileSkins();  // SkinManager: downloaded profile skins replace the default ones
     void startInterpolation(Entity& e, const Step* steps, u32 count, float yaw, float pitch, bool hasRot);
+    // entity_physics.cpp: the movement of items, experience orbs and falling blocks (false for other entities).
+    bool simulateClient(Entity& e);
+    std::shared_ptr<Physics> physics_;
     Category categoryFor(const std::string& name) const;
     static const std::string& name(const std::vector<std::string>& v, int id) {
         static const std::string kNone;
@@ -456,6 +464,13 @@ public:
         std::string asset;
     };
     std::vector<InlinePainting> inlinePaintings;
+    // The local player as the client's experience orbs see it (Level.getNearestPlayer), set each frame by the owner.
+    struct LocalPlayerView {
+        bool targetable = false;  // not spectating, alive
+        double pos[3] = {};
+        double eyeHeight = 1.62;
+    };
+    LocalPlayerView localPlayer;
     std::function<u64()> meshSerial;
     std::function<u64(int, int, int)> sectionMeshSerial;
 

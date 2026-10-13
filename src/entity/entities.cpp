@@ -1649,6 +1649,7 @@ void EntityWorld::tickEntity(Entity& e) {
     // Interpolation (a vehicle the local player drives moves itself).
     if (e.id == localControl_ && localTick_) {
         localTick_(e);
+    } else if (simulateClient(e)) {  // items, experience orbs, falling blocks: their own movement
     } else if (e.newMinecart) {  // NewMinecartBehavior.lerpClientPositionAndRotation
         if (--e.lerpDelay <= 0) {
             e.oldLerp = MinecartStep{{e.pos[0], e.pos[1], e.pos[2]}, {e.vel[0], e.vel[1], e.vel[2]}, e.yaw, e.pitch, 0};

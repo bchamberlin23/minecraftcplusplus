@@ -32,6 +32,8 @@ class Physics {
 public:
     Physics(const World& world, const BlockRegistry& registry) : world_(world), registry_(registry) {}
     void collisionBoxes(const AABB& area, std::vector<AABB>& out) const;
+    // Entity.collideWithShapes: moves box `b` by `in` through `boxes` (Y first, then the larger horizontal axis).
+    static void collideBoxes(const std::vector<AABB>& boxes, AABB& b, double out[3], const double in[3]);
     // Block hit along a ray against the outline shapes (ClipContext.Block.OUTLINE), or with `visual` against the
     // visual shapes (VISUAL: the third-person camera).
     RayHit raycast(const double origin[3], const double dir[3], double maxDistance, bool visual = false) const;
