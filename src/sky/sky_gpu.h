@@ -42,7 +42,7 @@ private:
     void writeConstants(const PassContext& ctx);
     u32 putVertices(const std::vector<Sky::Frame::Vertex>& v);  // into this frame's slot; returns first index
     void bindCommon(ID3D12GraphicsCommandList* list);
-    bool createTexture(const Image* layers, u32 count, u32 descriptor, ComPtr<ID3D12Resource>& out);
+    bool createTexture(const Image* layers, u32 count, u32 descriptor, ComPtr<ID3D12Resource>& out, u32 mips = 1);
 
     const Sky::Frame& frame_;
     Stage skyStage_, lateStage_;

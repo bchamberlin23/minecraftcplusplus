@@ -63,7 +63,7 @@ enum class Blend { None, Alpha, Add };
 
 }  // namespace
 
-bool SkyGpu::createTexture(const Image* layers, u32 count, u32 descriptor, ComPtr<ID3D12Resource>& out) {
+bool SkyGpu::createTexture(const Image* layers, u32 count, u32 descriptor, ComPtr<ID3D12Resource>& out, u32 mips) {
     ID3D12Device* device = renderer_->device();
     D3D12_HEAP_PROPERTIES hp{};
     hp.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -72,7 +72,9 @@ bool SkyGpu::createTexture(const Image* layers, u32 count, u32 descriptor, ComPt
     td.Width = u64(layers[0].w);
     td.Height = u32(layers[0].h);
     td.DepthOrArraySize = u16(count);
-    td.MipLevels = 1;
+    if (count != 1) mips = 1;
+    while (mips > 1 && ((layers[0].w >> (mips - 1)) == 0 || (layers[0].h >> (mips - 1)) == 0)) --mips;
+    td.MipLevels = u16(mips);
     td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     td.SampleDesc.Count = 1;
     if (!ok(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &td, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
@@ -81,6 +83,22 @@ bool SkyGpu::createTexture(const Image* layers, u32 count, u32 descriptor, ComPt
         return false;
     std::vector<const u8*> subs;
     for (u32 i = 0; i < count; ++i) subs.push_back(layers[i].rgba.data());
+    std::vector<std::vector<u8>> chain;  // MipmappedTexture: box-filtered levels (single textures only)
+    for (u32 level = 1; level < mips; ++level) {
+        const int pw = layers[0].w >> (level - 1), ph = layers[0].h >> (level - 1), w = pw / 2, h = ph / 2;
+        const u8* src = level == 1 ? layers[0].rgba.data() : chain.back().data();
+        std::vector<u8> dst(size_t(w) * h * 4);
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x)
+                for (int c = 0; c < 4; ++c) {
+                    int sum = 0;
+                    for (int dy = 0; dy < 2; ++dy)
+                        for (int dx = 0; dx < 2; ++dx) sum += src[(size_t(y * 2 + dy) * pw + (x * 2 + dx)) * 4 + c];
+                    dst[(size_t(y) * w + x) * 4 + c] = u8((sum + 2) / 4);
+                }
+        chain.push_back(std::move(dst));
+    }
+    for (const std::vector<u8>& level : chain) subs.push_back(level.data());
     if (!renderer_->uploadTexture(out.Get(), subs)) return false;
     D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
     srv.Format = td.Format;
@@ -91,7 +109,7 @@ bool SkyGpu::createTexture(const Image* layers, u32 count, u32 descriptor, ComPt
         srv.Texture2DArray.ArraySize = count;
     } else {
         srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-        srv.Texture2D.MipLevels = 1;
+        srv.Texture2D.MipLevels = mips;
     }
     device->CreateShaderResourceView(out.Get(), &srv, renderer_->cpuDescriptor(descriptor));
     return true;
@@ -109,7 +127,7 @@ bool SkyGpu::init(Renderer& renderer, SkyImages images, std::vector<Sky::Frame::
     if (!createTexture(images.celestial, 10, descriptors_, celestial_) ||
         !createTexture(&images.endSky, 1, descriptors_ + 1, endSky_) ||
         !createTexture(&images.rain, 1, descriptors_ + 2, rain_) || !createTexture(&images.snow, 1, descriptors_ + 3, snow_) ||
-        !createTexture(&images.forcefield, 1, descriptors_ + 4, forcefield_))
+        !createTexture(&images.forcefield, 1, descriptors_ + 4, forcefield_, 5))  // WorldBorderRenderer: mipmapped (4)
         return false;
 
     D3D12_DESCRIPTOR_RANGE range{};
