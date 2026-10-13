@@ -1260,7 +1260,7 @@ int EntityRenderer::speciesLayers(const Entity& e, const TypeDef& d, float pt, L
             if (dataInt(e, "DATA_DANGEROUS")) setTex(tex("wither/wither_invulnerable"));
             break;
         case Anim::Arrow:  // TippableArrowRenderer
-            if (e.info && e.info->name == "minecraft:arrow" && dataInt(e, "ID_EFFECT_COLOR", -1) != -1) setTex(tex("projectiles/arrow_tipped"));
+            if (e.info && e.info->name == "minecraft:arrow" && dataInt(e, "ID_EFFECT_COLOR", -1) > 0) setTex(tex("projectiles/arrow_tipped"));
             break;
         case Anim::Wither: {  // WitherBossRenderer: invulnerable texture blinking; WitherArmorLayer below half health
             const int inv = int(std::floor(std::max(0.0f, float(dataInt(e, "DATA_ID_INV")) - pt)));
