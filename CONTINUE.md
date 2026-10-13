@@ -114,7 +114,11 @@ scale / easing), its hurt tilt and walk bob are not applied, and the FOV modifie
 player's flying / speed / bow); the minecart camera branch is not implemented. Also audited and fixed: music (fades, underwater), tooltips, key
 binds, the spectator menu (residual: teams listed alphabetically, Java's hash order), the title screen (the first
 one fades in; deliberate: the live world panorama without the overlay, Mods & Packs in the Realms slot, the port in
-the version line) and command suggestions. Toasts follow ToastInstance now (the
+the version line) and command suggestions. Then: name tags, advancements, boats (push rule), camels, elytra (the
+server ends the glide), item use (crossbow 72000, the unclamped counter, horn durations), the attack's item dip.
+Residuals noted by the audits: the first tick's lava guard (Entity.firstTick), the shield's block delay and head-yaw
+limit, the local nudge of a hit boat / minecart, the hurtClient rules of frames / paintings / cushions in adventure,
+a mount's Jump Boost, the camel passenger's sprint (held key only), horizontal wheel scrolling (no such input). Toasts follow ToastInstance now (the
 server pack download toast shows its progress). Toast residuals: no toasts
 for world access / chunk load or save /
 file drop / pack load failures or periodic notifications; friend toasts have no face (this port's friends have no
