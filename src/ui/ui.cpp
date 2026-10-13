@@ -774,13 +774,12 @@ void Ui::registerHandlers(net::Client& client) {
             s->effects[id] = e;
         });
     });
-    // ClientboundPostEffectsPacket (/posteffect): of the game's post chains only minecraft:invert is drawn (as an
-    // inverting full-screen quad); others are ignored.
+    // ClientboundPostEffectsPacket: LocalPlayer.setActivePostEffects (drawn by render/post_effects.cpp).
     client.onPlay("post_effects", [s](net::Reader& r) {
-        bool invert = false;
+        std::vector<std::string> ids;
         const i32 n = r.varInt();
-        for (i32 i = 0; i < n && r.ok; ++i) invert |= r.str() == "minecraft:invert";
-        if (r.ok) s->post([s, invert] { s->invertPostEffect = invert; });
+        for (i32 i = 0; i < n && r.ok && i < 64; ++i) ids.emplace_back(r.str());
+        if (r.ok) s->post([s, ids] { s->postEffects = ids; });
     });
     client.onPlayPeek("remove_mob_effect", [s](net::Reader& r) {
         const int entity = r.varInt(), id = r.varInt();
@@ -974,6 +973,7 @@ void Ui::setItemModels(ent::ItemModels* models) {
 
 int Ui::ticksFrozen() const { return s_->ticksFrozen; }
 int Ui::spectatorEffectToggles() const { return s_->spectatorEffectToggles; }
+std::vector<std::string> Ui::postEffects() const { return s_->postEffects; }
 void Ui::setEngineInfo(std::function<std::string(std::string_view)> fn) { s_->engineInfo = std::move(fn); }
 
 const Items& Ui::items() const { return s_->items; }
@@ -1272,11 +1272,6 @@ void Ui::endFrame() {
     s.sprites.tick(u64(s.guiTicks));  // animated GUI sprites and textures, item icons
     s.icons.tick(u64(s.guiTicks));
     if (!s.fe->cfg.menu) drawScreenEffects(s, c);  // view_effects.cpp: in the 3D view, with or without the HUD
-    if (s.invertPostEffect && !s.fe->cfg.menu) {  // post/invert.fsh: mix(c, 1 - c, 0.8) = the inverting blend of 0.8 grey
-        c.setInvert(true);
-        c.fill(0, 0, float(c.guiWidth()), float(c.guiHeight()), 0xFFCCCCCC);
-        c.setInvert(false);
-    }
     const bool hud = !s.hudHidden && !s.fe->cfg.menu;  // the title screen has no HUD
     if (hud) s.drawHud(c);
     if (hud) s.drawModHud(c);  // native mods

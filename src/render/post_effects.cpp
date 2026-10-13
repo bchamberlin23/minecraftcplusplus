@@ -49,8 +49,18 @@ const Pass kInvert[] = {
     {ShInvert, Main, Main, Swap, {0.8f}},
     {ShBlit, Swap, Swap, Screen, {1, 1, 1, 1}},
 };
+// post_effect/blur.json: three horizontal / vertical box blur pairs of radius 0 (the menu blur radius)
+const Pass kBlur[] = {
+    {ShBlur, Main, Main, Swap, {1, 0, 0}}, {ShBlur, Swap, Swap, Main, {0, 1, 0}}, {ShBlur, Main, Main, Swap, {1, 0, 0}},
+    {ShBlur, Swap, Swap, Main, {0, 1, 0}}, {ShBlur, Main, Main, Swap, {1, 0, 0}}, {ShBlur, Swap, Swap, Screen, {0, 1, 0}},
+};
 
 }  // namespace
+
+PostEffects::Effect PostEffects::byName(std::string_view id) {
+    if (id.starts_with("minecraft:")) id.remove_prefix(10);
+    return id == "creeper" ? Creeper : id == "spider" ? Spider : id == "invert" ? Invert : id == "blur" ? Blur : None;
+}
 
 bool PostEffects::create(Renderer& r) {
     r_ = &r;
@@ -107,7 +117,8 @@ bool PostEffects::create(Renderer& r) {
 void PostEffects::draw(const PassContext& ctx) {
     ++frame_;
     std::erase_if(retired_, [&](const auto& r) { return frame_ > r.first + Renderer::kFrames + 1; });
-    if (effect_ == None || !sig_ || !ctx.sceneColor || !ctx.colorRtv.ptr || !ctx.width || !ctx.height) return;
+    std::erase(effects_, None);
+    if (effects_.empty() || !sig_ || !ctx.sceneColor || !ctx.colorRtv.ptr || !ctx.width || !ctx.height) return;
     ID3D12Device* device = r_->device();
     ID3D12GraphicsCommandList* list = ctx.list;
     const u32 w = ctx.width, h = ctx.height;
@@ -178,10 +189,15 @@ void PostEffects::draw(const PassContext& ctx) {
     list->SetDescriptorHeaps(1, heaps);
     list->SetGraphicsRootSignature(sig_.Get());
     list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    const Pass* passes = effect_ == Creeper ? kCreeper : effect_ == Spider ? kSpider : kInvert;
-    const size_t count = effect_ == Creeper ? std::size(kCreeper) : effect_ == Spider ? std::size(kSpider) : std::size(kInvert);
+    for (size_t e = 0; e < effects_.size(); ++e) {
+    const Effect effect = effects_[e];
+    const bool last = e + 1 == effects_.size();  // earlier chains write back into minecraft:main
+    const Pass* passes = effect == Creeper ? kCreeper : effect == Spider ? kSpider : effect == Blur ? kBlur : kInvert;
+    const size_t count = effect == Creeper ? std::size(kCreeper) : effect == Spider ? std::size(kSpider) : effect == Blur ? std::size(kBlur) : std::size(kInvert);
     for (size_t i = 0; i < count; ++i) {
-        const Pass& p = passes[i];
+        Pass p = passes[i];
+        if (p.out == Screen && !last) p.out = Main;
+        if (effect == Blur && p.shader == ShBlur) p.p[2] = blurRadius_;
         toState(p.in, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         toState(p.blur, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         D3D12_CPU_DESCRIPTOR_HANDLE target = ctx.colorRtv;  // the last pass replaces the scene
@@ -194,6 +210,7 @@ void PostEffects::draw(const PassContext& ctx) {
         list->SetGraphicsRootDescriptorTable(2, r_->gpuDescriptor(srv_ + u32(p.blur)));
         list->SetPipelineState(pso_[p.shader].Get());
         list->DrawInstanced(3, 1, 0, 0);
+    }
     }
     list->OMSetRenderTargets(1, &ctx.colorRtv, FALSE, ctx.dsv.ptr ? &ctx.dsv : nullptr);
 }

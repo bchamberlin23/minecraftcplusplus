@@ -1130,7 +1130,12 @@ int wmain(int argc, wchar_t** argv) {
                 if ((ui.spectatorEffectToggles() - lastToggles) % 2) effectActive = !effectActive;
                 lastToggles = ui.spectatorEffectToggles();
             }
-            postEffects.setEffect(session && effectActive ? effect : PostEffects::None);
+            // GameRenderer.update: the player's post effects, then the spectated entity's
+            std::vector<PostEffects::Effect> chain;
+            if (session)
+                for (const std::string& id : ui.postEffects()) chain.push_back(PostEffects::byName(id));
+            if (session && effectActive && effect != PostEffects::None) chain.push_back(effect);
+            postEffects.setEffects(std::move(chain), float(ui.settings().menuBackgroundBlurriness));
         }
         ui.beginFrame(dt);  // UI input first: an open screen takes the game's input
 

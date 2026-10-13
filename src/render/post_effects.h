@@ -1,22 +1,25 @@
 #pragma once
-// The spectated entity's post effect (GameRenderer.checkEntityPostEffect): creeper (green mosaic), spider (eight
-// blurred eyes) and invert (enderman) over the finished scene, before the UI. A Hud-stage pass, registered before
-// the UI's.
+// GameRenderer's post effects over the finished scene, before the UI: the ones the server asks for
+// (ClientboundPostEffectsPacket) and the spectated entity's (checkEntityPostEffect: creeper, spider, invert), applied
+// in order. A Hud-stage pass, registered before the UI's.
 #include "render/renderer.h"
 
+#include <string_view>
 #include <utility>
 #include <vector>
 
 class PostEffects : public RenderPass {
 public:
-    enum Effect { None, Creeper, Spider, Invert };
-    void setEffect(Effect e) { effect_ = e; }
+    enum Effect { None, Creeper, Spider, Invert, Blur };
+    void setEffects(std::vector<Effect> effects, float blurRadius) { effects_ = std::move(effects), blurRadius_ = blurRadius; }
+    static Effect byName(std::string_view id);  // "minecraft:creeper" -> Creeper; None if unknown
     bool create(Renderer& renderer) override;
     void draw(const PassContext& ctx) override;
 
 private:
     Renderer* r_ = nullptr;
-    Effect effect_ = None;
+    std::vector<Effect> effects_;
+    float blurRadius_ = 5;  // MenuBlurRadius (the menu background blurriness) for blur.json's radius 0
     ComPtr<ID3D12RootSignature> sig_;
     ComPtr<ID3D12PipelineState> pso_[7];  // colour convolve, bits, box blur, spider clip, invert, blit
     ComPtr<ID3D12DescriptorHeap> rtvs_;
