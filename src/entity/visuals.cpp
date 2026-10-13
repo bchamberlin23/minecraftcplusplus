@@ -2586,15 +2586,37 @@ void Visuals::Impl::breakItem(int item, const double pos[3], double eyeHeight, f
 
 void Visuals::predictUse(const Entity& e) {
     Impl& m = *impl_;
-    if (!m.game || !m.particles || !e.info || !e.baby) return;
-    // AbstractHorse / Llama / Camel.handleEating, fed to a baby (fedFood): a happy villager particle as it ages up.
+    if (!m.game || !m.particles || !e.info) return;
     int item;
     i32 dye;
     bool foil;
     m.heldStack(36 + m.game->selectedSlot(), item, dye, foil);
-    if (item < 0) return;
-    const std::string food = m.models.itemName(item);
+    const std::string held = item >= 0 ? m.models.itemName(item) : std::string();
     const std::string& n = e.info->name;
+    audio::AudioSystem* a = audio::instance();
+    if (n == "minecraft:sheep" && held.ends_with("_dye") && a) {  // DyeItem.interactLivingEntity: a new colour on unsheared wool
+        static const char* kColors[16] = {"white", "orange", "magenta", "light_blue", "yellow", "lime", "pink", "gray",
+                                          "light_gray", "cyan", "purple", "blue", "brown", "green", "red", "black"};
+        const i64 wool = dataInt(e, "DATA_WOOL_ID");
+        int color = -1;
+        for (int i = 0; i < 16; ++i)
+            if (held == std::string(kColors[i]) + "_dye") color = i;
+        if (color >= 0 && !(wool & 0x10) && (wool & 15) != color)
+            a->play("minecraft:item.dye.use", audio::Category::Player, e.pos[0], e.pos[1], e.pos[2], 1.0f, 1.0f);
+        return;
+    }
+    if (n == "minecraft:allay" && a) {  // Allay.mobInteract: duplicating, giving, taking (the user's own sounds)
+        if (dataInt(e, "DATA_DANCING") && held == "amethyst_shard" && dataInt(e, "DATA_CAN_DUPLICATE"))
+            a->play("minecraft:block.amethyst_block.chime", audio::Category::Neutral, e.pos[0], e.pos[1], e.pos[2], 2.0f, 1.0f);
+        else if (e.equipment[0] < 0 && item >= 0)
+            a->play("minecraft:entity.allay.item_given", audio::Category::Neutral, e.pos[0], e.pos[1], e.pos[2], 2.0f, 1.0f);
+        else if (e.equipment[0] >= 0 && item < 0)
+            a->play("minecraft:entity.allay.item_taken", audio::Category::Neutral, e.pos[0], e.pos[1], e.pos[2], 2.0f, 1.0f);
+        return;
+    }
+    if (!e.baby || item < 0) return;
+    // AbstractHorse / Llama / Camel.handleEating, fed to a baby (fedFood): a happy villager particle as it ages up.
+    const std::string& food = held;
     bool fed = false;
     if (n == "minecraft:horse" || n == "minecraft:donkey" || n == "minecraft:mule")
         for (const char* f : {"wheat", "sugar", "hay_block", "apple", "carrot", "golden_carrot", "golden_apple", "enchanted_golden_apple"})

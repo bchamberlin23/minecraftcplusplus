@@ -968,6 +968,22 @@ int Gameplay::predictItemUse(int hand, const RayHit* target) {
         return result;
     }
     if (name == "bundle" || name.ends_with("_bundle")) return start();
+    if (name == "glass_bottle") {  // BottleItem.use: a water source in reach fills it (BOTTLE_FILL, the user's own)
+        const CameraState c = game_->camera();
+        const double eye[3] = {c.x, c.y, c.z}, cp = std::cos(c.pitch);
+        const double dir[3] = {-std::sin(c.yaw) * cp, -std::sin(c.pitch), std::cos(c.yaw) * cp};
+        const RayHit blockHit = game_->physics().raycast(eye, dir, game_->blockReach);
+        const double limit = blockHit.hit ? blockHit.distance : game_->blockReach;
+        for (double t = 0; t < limit; t += 0.01) {  // ClipContext.Fluid.SOURCE_ONLY
+            const int x = int(std::floor(eye[0] + dir[0] * t)), y = int(std::floor(eye[1] + dir[1] * t)), z = int(std::floor(eye[2] + dir[2] * t));
+            const Physics::Fluid f = game_->physics().fluid(x, y, z);
+            if (!f.type || !f.source || eye[1] + dir[1] * t > y + game_->physics().fluidHeight(x, y, z, f)) continue;
+            if (registry_.name(world_.block(x, y, z)).starts_with("minecraft:lava")) return Game::kUsePass;
+            localSound("minecraft:item.bottle.fill", audio::Category::Neutral, 1.0f, 1.0f);
+            return Game::kUseConsume;
+        }
+        return Game::kUsePass;
+    }
     if (name == "bucket" || name == "water_bucket" || name == "lava_bucket" || name.ends_with("_bucket") && name != "milk_bucket" &&
         name != "powder_snow_bucket")
         return predictBucket(hand, name);
@@ -1111,6 +1127,12 @@ int Gameplay::predictUseOn(int hand, const RayHit& hit) {
         if (lightable || world_.block(fx, fy, fz) == 0)  // BaseFireBlock.canBePlacedAt: an empty cell
             if (audio::AudioSystem* a = audio::instance())
                 a->play("minecraft:item.flintandsteel.use", audio::Category::Block, fx + 0.5, fy + 0.5, fz + 0.5, 1.0f, randf() * 0.4f + 0.8f);
+        return Game::kUseConsume;
+    }
+    if (name == "shears" && (block == "kelp" || block == "weeping_vines" || block == "twisting_vines" || block == "cave_vines") &&
+        registry_.property(world_.block(hit.x, hit.y, hit.z), "age") != "25") {  // ShearsItem.useOn: a growing plant's head
+        if (audio::AudioSystem* a = audio::instance())
+            a->play("minecraft:block.growing_plant.crop", audio::Category::Block, hit.x + 0.5, hit.y + 0.5, hit.z + 0.5, 1.0f, 1.0f);
         return Game::kUseConsume;
     }
     if (name == "fire_charge" || name.ends_with("_spawn_egg") || name == "armor_stand" ||
