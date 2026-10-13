@@ -1187,9 +1187,9 @@ void Player::tick(const Physics& physics, const PlayerInput& rawInput) {
     } else {
         noJumpDelay_ = 0;
     }
-    // Gliding ends on the ground, without a glider, while flying or levitating (LivingEntity.canGlide on the server).
-    if (fallFlying && (onGround || flying || !attr.canGlide || attr.levitation >= 0)) fallFlying = false;
-    if (fallFlying && vel[1] > -0.5 && fallDistance > 1.0) fallDistance = 1.0;  // checkFallDistanceAccumulation
+    // updateFallFlying while gliding: checkFallDistanceAccumulation; the end of the glide (on the ground, without a
+    // glider, flying, levitating: canGlide) is the server's, through the shared flags.
+    if (fallFlying && vel[1] > -0.5 && fallDistance > 1.0) fallDistance = 1.0;
     const AABB beforeTravel = box();
     if (attr.slowFalling >= 0 || attr.levitation >= 0) fallDistance = 0;
     travel(physics, input, input.jump);
