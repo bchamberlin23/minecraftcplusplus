@@ -748,4 +748,20 @@ bool bossWorldFog() {
     return false;
 }
 
+Text teamFormattedName(const std::string& member, const Text& name) { return formatForTeam(teamOf(member), name); }
+
+bool belowNameText(const std::string& owner, Text& out) {
+    const Objective* obj = displayObjective(2);
+    if (!obj) return false;
+    auto so = g.scores.find(owner);
+    if (so == g.scores.end()) return false;
+    auto sc = so->second.find(g.slots[2]);
+    if (sc == so->second.end()) return false;
+    NumFmt noStyle;  // objective.numberFormatOrDefault(StyledFormat.NO_STYLE)
+    noStyle.type = 1;
+    out = Text();
+    out.append(formatScore(sc->second, *obj, noStyle)).append(" ").append(obj->display);
+    return true;
+}
+
 }  // namespace ui

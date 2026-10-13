@@ -15,6 +15,7 @@
 #include "render/pack_sink.h"
 #include "ui/font.h"
 #include "ui/items.h"
+#include "ui/mp_hud.h"
 #include "ui/resources.h"
 #include "ui/ui.h"
 #include "world/world.h"
@@ -361,6 +362,7 @@ struct Visuals::Impl {
     u32 lightAt(double x, double y, double z) const;
     bool isSkull(int item);
     const Tag& tag(const std::string& name);
+    const Tag& tag(const ui::Text& text);  // styled (team colours), cached by its spans
     const PaintingInfo* painting(int id);
     void heldStack(int slot, int& item, i32& dye, bool& foil) const;
     int chargeOf(int menuSlot) const;
@@ -1451,13 +1453,18 @@ const Visuals::Impl::PaintingInfo* Visuals::Impl::painting(int id) {
     return p.asset.empty() ? nullptr : &p;
 }
 
-const Visuals::Impl::Tag& Visuals::Impl::tag(const std::string& name) {
+const Visuals::Impl::Tag& Visuals::Impl::tag(const std::string& name) { return tag(ui::Text(name)); }
+
+const Visuals::Impl::Tag& Visuals::Impl::tag(const ui::Text& text) {
+    std::string name;  // the cache key: each span with its look
+    for (const ui::Span& sp : text.spans)
+        name += sp.text + '\x1f' + std::to_string(sp.style.color) + char('0' + sp.style.bold + 1) + char('0' + sp.style.italic + 1) +
+                char('0' + sp.style.underlined + 1) + char('0' + sp.style.strikethrough + 1) + char('0' + sp.style.obfuscated + 1) + '\x1e';
     auto it = tags.find(name);
     if (it != tags.end()) return it->second;
     Tag t;
     if (font && tags.size() < 4096) {
         canvas.begin(1u << 14, 1u << 14, 1);
-        const ui::Text text(name);
         t.width = font->widthF(text);
         const float x0 = -t.width / 2.0f;
         font->draw(canvas, text, x0, 0, 0xFFFFFFFF, false);
@@ -2211,23 +2218,35 @@ void Visuals::Impl::buildTags(const PassContext& ctx) {
         const float d2 = x * x + y * y + z * z;
         if (d2 > 64.0f * 64.0f || (discrete && d2 >= 1024.0f)) continue;
         if (fwd[0] * x + fwd[1] * y + fwd[2] * z < -1.0f) continue;  // behind the camera
-        const Tag& t = tag(e.name);
-        if (t.first == UINT32_MAX) continue;
-        Xf m;
-        const float s = 0.025f;
-        for (int r = 0; r < 3; ++r) m.m[r * 4] = right[r] * s, m.m[r * 4 + 1] = -up[r] * s, m.m[r * 4 + 2] = fwd[r] * s;
-        m.m[3] = x, m.m[7] = y, m.m[11] = z;
+        // Entity.getDisplayName: the team's prefix, colour and suffix (members: a player's name, else the UUID).
+        char uuidText[37];
+        std::snprintf(uuidText, sizeof(uuidText), "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x", e.uuid[0], e.uuid[1],
+                      e.uuid[2], e.uuid[3], e.uuid[4], e.uuid[5], e.uuid[6], e.uuid[7], e.uuid[8], e.uuid[9], e.uuid[10], e.uuid[11], e.uuid[12],
+                      e.uuid[13], e.uuid[14], e.uuid[15]);
+        const std::string member = player ? e.name : std::string(uuidText);
         const u32 light = lightAt(p[0], p[1] + e.info->eye, p[2]) | 512u;
         const u32 textHalf = 0x80FFFFFFu, bgColor = 0x40000000u;  // ABGR: white at 0.5, black at 0.25
-        if (!discrete) {
-            tagSee.add(m, t.first, 1, light, bgColor);
-            tagSee.add(m, t.first + 1, t.glyphs, light, textHalf);
-            const u32 bright = (light & ~15u) | std::max<u32>(light & 15, 2);  // lightCoordsWithEmission(light, 2)
-            tagNormal.add(m, t.first + 1, t.glyphs, bright, 0xFFFFFFFFu);
-        } else {
-            tagNormal.add(m, t.first, 1, light, bgColor);
-            tagNormal.add(m, t.first + 1, t.glyphs, light, textHalf);
-        }
+        auto submit = [&](const Tag& t, float yUp) {  // EntityRenderer.submitNameTag at the attachment, raised by yUp
+            if (t.first == UINT32_MAX) return;
+            Xf m;
+            const float s = 0.025f;
+            for (int r = 0; r < 3; ++r) m.m[r * 4] = right[r] * s, m.m[r * 4 + 1] = -up[r] * s, m.m[r * 4 + 2] = fwd[r] * s;
+            m.m[3] = x, m.m[7] = y + yUp, m.m[11] = z;
+            if (!discrete) {
+                tagSee.add(m, t.first, 1, light, bgColor);
+                tagSee.add(m, t.first + 1, t.glyphs, light, textHalf);
+                const u32 bright = (light & ~15u) | std::max<u32>(light & 15, 2);  // lightCoordsWithEmission(light, 2)
+                tagNormal.add(m, t.first + 1, t.glyphs, bright, 0xFFFFFFFFu);
+            } else {
+                tagNormal.add(m, t.first, 1, light, bgColor);
+                tagNormal.add(m, t.first + 1, t.glyphs, light, textHalf);
+            }
+        };
+        // EntityRenderer.submitNameDisplay: the below-name score (within 10 blocks) first, the name 9 * 1.15 px above.
+        float raise = 0;
+        ui::Text score;
+        if (d2 < 100.0f && ui::belowNameText(member, score)) submit(tag(score), 0), raise = 9.0f * 1.15f * 0.025f;
+        submit(tag(ui::teamFormattedName(member, ui::Text(e.name))), raise);
         ++self.stats_.tags;
     }
 }
