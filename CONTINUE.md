@@ -71,7 +71,8 @@ listening socket).
 ## Screens
 
 - The friends feature is this port's own; Java's FriendToast (Mojang's friend service) needs the Microsoft login.
-- Deliberate differences: a full static voice pool replaces its quietest voice with a louder new sound (Java drops the
+- Deliberate differences: mouse look stops at +-1.55 rad pitch (Java: 90 degrees; the camera bases here come from a
+  cross product with up); a full static voice pool replaces its quietest voice with a louder new sound (Java drops the
   new one); the window title (an FPS / GPU line in game, not "Minecraft* 26.3 - Singleplayer"); the
   level loading screen follows the server process's log, without LevelLoadingScreen's chunk map; no OutOfMemoryScreen
   or crash-report text (crashes write a minidump to %LOCALAPPDATA%\minecraftCplusplus\crashes).
