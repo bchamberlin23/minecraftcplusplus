@@ -1072,7 +1072,8 @@ void Ui::State::runScript(double) {
         } else if (st.verb == "useitem") {  // right click into the air: use the held item
             game->startUseItem(false);
         } else if (st.verb == "attack") {  // left click on the entity under the crosshair
-            if (game->onEntityClick) game->onEntityClick(true, false, -1.0);
+            if (game->gameMode == 3 && game->onSpectatorAttack) game->onSpectatorAttack(-1.0);
+            else if (game->onEntityClick) game->onEntityClick(true, false, -1.0);
         } else if (st.verb == "shot") {
             shotPath = arg(0);
             shotPending = true;

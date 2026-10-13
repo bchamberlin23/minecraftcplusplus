@@ -117,6 +117,9 @@ public:
     // Spectators: the hotbar keys (what 0, value the slot), the wheel (1, notches) and the pick block key (2) go to the
     // spectator menu (SpectatorGui) instead; true: taken.
     std::function<bool(int what, int value)> spectatorInput;
+    // Minecraft.startAttack for spectators: spectate the entity under the crosshair (or nothing); blockDistance < 0:
+    // no block targeted.
+    std::function<void(double blockDistance)> onSpectatorAttack;
     // Right click on a block that reacts to use (containers, doors...): true sends the use to the server as is
     // instead of placing the held block.
     std::function<bool(int x, int y, int z)> onInteract;
@@ -239,6 +242,7 @@ public:
     std::function<void()> onStab;
     std::function<void()> onStabEffects;  // PiercingWeapon.makeSound for the local player (gameplay layer)
     bool crosshairOnLiving = false;    // a living entity is under the crosshair (Minecraft.crosshairPickEntity)
+    bool crosshairOnMenuEntity = false;  // ... an entity with a menu (MenuProvider: chest / hopper minecarts, chest boats)
     float attackStrengthScale(float a) const {
         const float delay = 20.0f / std::max(attackSpeed, 1e-4f);
         return std::clamp((float(attackStrengthTicker) + a) / delay, 0.0f, 1.0f);

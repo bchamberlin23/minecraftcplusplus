@@ -267,6 +267,9 @@ public:
     // Sends attack (attack + punch) or use (interact) for an entity; false if not connected.
     bool attack(int id);
     bool use(int id, const double hit[3], bool sneaking);
+    // MultiPlayerGameMode.spectate / spectatorNoAction: ServerboundSpectatorActionPacket with the entity under the
+    // crosshair (closer than blockDistance, < 0: no block), or none.
+    bool spectate(const double eye[3], const double dir[3], double blockDistance, double reach);
 
     const std::unordered_map<int, Entity>& entities() const { return entities_; }
     Entity* entity(int id) {

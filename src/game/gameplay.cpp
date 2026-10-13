@@ -650,7 +650,7 @@ void Gameplay::frame() {
         if (item != lastMainItem_) game_->attackStrengthTicker = 0;
         lastMainItem_ = item;
     }
-    game_->crosshairOnLiving = false;
+    game_->crosshairOnLiving = game_->crosshairOnMenuEntity = false;
     if (entities_) {  // Minecraft.crosshairPickEntity: a living entity in front of the targeted block
         const CameraState c = game_->camera();
         const double eye[3] = {c.x, c.y, c.z}, cp = std::cos(c.pitch);
@@ -668,6 +668,12 @@ void Gameplay::frame() {
                                               });
         }
         if (pick.id < 0) pick = entities_->pick(eye, dir, limit);
+        if (pick.id >= 0)
+            if (const ent::Entity* e = entities_->entity(pick.id); e && e->info) {
+                const std::string& n = e->info->name;
+                game_->crosshairOnMenuEntity = n.ends_with("chest_minecart") || n == "minecraft:hopper_minecart" ||
+                                               n.ends_with("_chest_boat") || n.ends_with("_chest_raft");
+            }
         if (pick.id >= 0)
             if (const ent::Entity* e = entities_->entity(pick.id))
                 game_->crosshairOnLiving = (e->category == ent::Category::Living || e->category == ent::Category::Player) &&

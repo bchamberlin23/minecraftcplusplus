@@ -230,8 +230,27 @@ void Ui::State::drawHud(Canvas& c) {
     const float W = float(c.guiWidth()), H = float(c.guiHeight());
     const int gw = c.guiWidth(), gh = c.guiHeight();
     drawCameraOverlays(*this, c);  // gameplay_hud.cpp: spyglass scope
-    // Crosshair (inverting blend), first person only (Hud.extractCrosshair).
-    if (!spectator() && screen == Screen::None && game->cameraMode == 0) {
+    // Crosshair (inverting blend), first person only (Hud.extractCrosshair); spectators only on something with a menu
+    // or a portal (canRenderCrosshairForSpectator).
+    auto spectatorCrosshair = [&] {
+        if (game->crosshairOnMenuEntity) return true;
+        const RayHit& t = game->target();
+        if (!t.hit || !world || !registry) return false;
+        std::string n;
+        {
+            std::shared_lock lock(world->mutex());
+            n = registry->name(world->block(t.x, t.y, t.z));
+        }
+        n = n.substr(0, n.find('['));
+        static const char* kMenus[] = {"chest", "trapped_chest", "barrel", "furnace", "blast_furnace", "smoker", "beacon", "brewing_stand",
+                                       "crafter", "dispenser", "dropper", "hopper", "lectern", "cartography_table", "crafting_table",
+                                       "enchanting_table", "grindstone", "loom", "smithing_table", "stonecutter", "nether_portal",
+                                       "end_portal", "end_gateway"};
+        for (const char* m : kMenus)
+            if (n == std::string("minecraft:") + m) return true;
+        return n.ends_with("shulker_box") || n.ends_with("anvil") || n.ends_with("copper_chest");
+    };
+    if ((!spectator() || spectatorCrosshair()) && screen == Screen::None && game->cameraMode == 0) {
         c.setInvert(true);
         blitSprite(c, sprites.sprite("hud/crosshair"), float((gw - 15) / 2), float((gh - 15) / 2), 15, 15);
         c.setInvert(false);

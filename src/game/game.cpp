@@ -595,7 +595,10 @@ bool Game::continueDestroyBlock(int x, int y, int z, int face) {
 
 bool Game::startAttack() {
     if (missTime_ > 0 || handsBusy) return false;
-    if (gameMode == 3) return true;  // spectators: no attack, no digging
+    if (gameMode == 3) {  // spectators: no attack, no digging; an entity under the crosshair is spectated
+        if (onSpectatorAttack) onSpectatorAttack(blockDistance_);
+        return true;
+    }
     // Player.cannotAttackWithItem: a weapon with a minimum_attack_charge waits for its charge (no swing either).
     if (heldMinimumCharge > 0 && float(attackStrengthTicker) / attackStrengthDelay() < heldMinimumCharge) return false;
     if (heldPiercing) {  // MultiPlayerGameMode.piercingAttack: a stab (the server finds what it hits)

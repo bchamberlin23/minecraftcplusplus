@@ -1660,6 +1660,14 @@ bool EntityWorld::click(const double eye[3], const double dir[3], bool attack, b
     return true;
 }
 
+bool EntityWorld::spectate(const double eye[3], const double dir[3], double blockDistance, double reach) {
+    if (!client_ || !client_->alive()) return false;
+    const PickResult p = pick(eye, dir, blockDistance >= 0 ? std::min(blockDistance, reach) : reach);
+    net::Writer w;
+    w.varInt(p.id >= 0 ? p.id + 1 : 0);  // OPTIONAL_VAR_INT
+    return client_->sendPlay("spectator_action", w);
+}
+
 bool EntityWorld::attack(int id) {
     if (!client_ || !client_->alive()) return false;
     auto it = entities_.find(id);

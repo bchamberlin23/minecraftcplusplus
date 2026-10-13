@@ -942,6 +942,13 @@ int wmain(int argc, wchar_t** argv) {
         }
         return entities.click(eye, dir, attack, use, blockDistance, game.entityReach, game.player().sneaking);
     };
+    game.onSpectatorAttack = [&](double blockDistance) {
+        if (!session || !haveEntities) return;
+        const CameraState c = game.camera();
+        const double eye[3] = {c.x, c.y, c.z}, cp = std::cos(c.pitch);
+        const double dir[3] = {-std::sin(c.yaw) * cp, -std::sin(c.pitch), std::cos(c.yaw) * cp};
+        entities.spectate(eye, dir, blockDistance, game.entityReach);
+    };
     // Music, ambience, sky / fog colours and rain or snow follow the surface biome the world stores (from the
     // save, the server or our generator); where it has none, the generator's biome at that position.
     wg::DensityContext audioBiomeContext, skyBiomeContext;
