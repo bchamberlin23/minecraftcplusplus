@@ -394,6 +394,8 @@ namespace {
 // The style under GUI point (mx, my) in the open chat (hud.cpp); null: none.
 const Style* chatStyleAt(UiState& s, float mx, float my, Style& out) { return chatLineStyleAt(s, mx, my, out) ? &out : nullptr; }
 
+}  // namespace
+
 std::vector<Text> hoverLines(UiState& s, const TextEvents& ev) {
     std::vector<Text> lines;
     if (ev.hover == "show_text") {
@@ -403,15 +405,18 @@ std::vector<Text> hoverLines(UiState& s, const TextEvents& ev) {
         ItemStack st;
         st.item = s.items.id(id), st.count = std::max(1, ev.hoverCount);
         if (st.item >= 0) lines = s.items.tooltip(st, s.settings.advancedItemTooltips);
-    } else if (ev.hover == "show_entity") {  // HoverEvent.EntityTooltipInfo.getTooltipLines
+    } else if (ev.hover == "show_entity" && s.settings.advancedItemTooltips) {  // HoverEvent.EntityTooltipInfo.getTooltipLines
         if (!ev.hoverText.empty()) lines.push_back(ev.hoverText);
         std::string type = ev.hoverId.find(':') == std::string::npos ? "minecraft:" + ev.hoverId : ev.hoverId;
         std::string key = "entity." + type;
         std::replace(key.begin(), key.end(), ':', '.');
         lines.push_back(translatable("gui.entity_tooltip.type", {Text(s.res.translate(key))}, s.lang()));
+        if (!ev.hoverUuid.empty()) lines.push_back(Text(ev.hoverUuid));
     }
     return lines;
 }
+
+namespace {
 
 // ChatScreen.handleComponentClicked + Screen.defaultHandleGameClickEvent.
 bool clickStyle(UiState& s, const Style& st, bool shift) {

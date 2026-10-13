@@ -59,6 +59,9 @@ bool chatSpecialClick(UiState& s, float mx, float my);
 enum class CommandCheck { NoIssues, ParseErrors, SignatureRequired, PermissionsRequired };
 CommandCheck verifyCommand(const std::string& command);
 bool commandHasSignedArguments(const std::string& command);
+// GuiGraphicsExtractor.componentHoverEffect: the tooltip of a hover event (show_text / show_item / show_entity, the
+// last only with advanced tooltips); empty: none.
+std::vector<Text> hoverLines(UiState& s, const TextEvents& ev);
 
 // chat_net.cpp: ClientPacketListener.sendChat / sendCommand (unsigned: no profile key) with the last-seen
 // acknowledgements; the command without the slash.

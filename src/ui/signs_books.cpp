@@ -6,6 +6,7 @@
 #include "audio/audio.h"
 #include "blockentity/block_entities.h"
 #include "ui/frontend.h"
+#include "ui/mp_hud.h"
 #include "ui/ui_state.h"
 #include "world/world.h"
 
@@ -761,10 +762,10 @@ void viewDraw(UiState& s, Canvas& c) {
     if (view.page < int(view.pages.size()) - 1) drawPageButton(s, c, true);
     if (view.page > 0) drawPageButton(s, c, false);
     s.drawButtons(c);
-    // HoveredTextEffects.TOOLTIP_AND_CURSOR: a hovered show_text event as a tooltip.
+    // HoveredTextEffects.TOOLTIP_AND_CURSOR: a hovered event's tooltip (componentHoverEffect).
     Style st;
-    if (bookStyleAt(s, c, st) && st.events && st.events->hover == "show_text")
-        s.drawTooltip(c, s.font.split(st.events->hoverText, std::max(s.guiW() / 2, 200)), s.mouseX, s.mouseY);
+    if (bookStyleAt(s, c, st) && st.events)
+        if (const std::vector<Text> lines = hoverLines(s, *st.events); !lines.empty()) s.drawTooltip(c, lines, s.mouseX, s.mouseY);
 }
 
 void viewInput(UiState& s, const InputEvent& e) {
