@@ -163,14 +163,14 @@ void gatherSection(const World& world, int cx, int sy, int cz, u16* padded, u8* 
 }
 
 namespace {
-std::atomic<bool> gSmoothLighting{true}, gCutoutLeaves{true};
+std::atomic<bool> gSmoothLighting{true}, gCutoutLeaves{true}, gNetherShade{false};
 }  // namespace
 
 void setMeshOptions(const MeshOptions& o) {
-    gSmoothLighting.store(o.smoothLighting), gCutoutLeaves.store(o.cutoutLeaves);
+    gSmoothLighting.store(o.smoothLighting), gCutoutLeaves.store(o.cutoutLeaves), gNetherShade.store(o.netherShade);
 }
 
-MeshOptions meshOptions() { return {gSmoothLighting.load(), gCutoutLeaves.load()}; }
+MeshOptions meshOptions() { return {gSmoothLighting.load(), gCutoutLeaves.load(), gNetherShade.load()}; }
 
 namespace {
 // A cell's fluid (FluidState): 0 none, else type (1 water, 2 lava) | amount (1..8) << 2 | falling << 6. Waterlogged
@@ -315,6 +315,7 @@ static void fluidFaces(const u16* ids, const u8* light, const BlockRegistry& reg
 void meshGrid(const u16* ids, const u8* light, const BlockRegistry& registry, bool models, bool skirts,
               SectionMesh& out, const ColumnColors* colors, const i32* origin) {
     const bool smooth = gSmoothLighting.load(std::memory_order_relaxed), cutoutLeaves = gCutoutLeaves.load(std::memory_order_relaxed);
+    const bool netherShade = gNetherShade.load(std::memory_order_relaxed);
     Scratch& sc = scratch();
     const BlockInfo* infos = registry.infos();
     const u16 water = registry.waterId();
@@ -511,7 +512,8 @@ void meshGrid(const u16* ids, const u8* light, const BlockRegistry& registry, bo
                         }
                         for (int w = 0; w < 6; ++w) sc.model.push_back(u32(pos[w * 2]) | (u32(pos[w * 2 + 1]) << 16));
                         for (int w = 0; w < 4; ++w) sc.model.push_back(u32(uv[w * 2]) | (u32(uv[w * 2 + 1]) << 16));
-                        sc.model.push_back(u32(m.tex) | (u32(m.tint & 7) << 16) | (u32(m.shade) << 19));
+                        const u32 shade = netherShade && m.shadeFace < 2 ? 230u : m.shade;  // CardinalLighting.NETHER
+                        sc.model.push_back(u32(m.tex) | (u32(m.tint & 7) << 16) | (shade << 19));
                         const int kind = biomeKind(m.tint);
                         const u32 color = colors && kind >= 0 ? colors->index[kind][(z + 1) * 18 + (x + 1)] : m.tint;
                         u32 lit = light ? light[p] : kFullSky;

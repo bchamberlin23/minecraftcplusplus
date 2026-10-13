@@ -50,8 +50,9 @@ struct FrameConstants {
     u32 misc[4];
     float lightmap[3][4];
     float fade[4];  // x = fade clock (seconds), y = 1 / fade duration
+    float shade[2][4];  // cardinal shade by face: down up north south, west east
 };
-static_assert(sizeof(FrameConstants) == 448);
+static_assert(sizeof(FrameConstants) == 480);
 
 struct GpuSection {
     i32 origin[4];  // xyz in blocks, w = LOD level
@@ -1003,6 +1004,11 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
         fc.fade[3] = shaded ? 1.0f : 0.0f;  // temporal accumulation (TAA / upscalers) blends a moving dither
     }
     const u32 activeCount = u32(std::min<size_t>(drawList_.size(), kMaxActive));
+    {  // CardinalLighting of the dimension (the vanilla terrain path's cube faces)
+        const float up = netherShade_ ? 0.9f : 1.0f, down = netherShade_ ? 0.9f : 0.5f;
+        const float shade[2][4] = {{down, up, 0.8f, 0.8f}, {0.6f, 0.6f, 0, 0}};
+        std::memcpy(fc.shade, shade, sizeof(shade));
+    }
     fc.misc[0] = activeCount;
     sortTranslucent(cam, activeCount);
     fc.misc[3] = u32(translucent_.size());

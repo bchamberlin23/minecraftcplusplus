@@ -31,7 +31,8 @@ struct ModelQuad {
     float uv[4][2];
     u16 tex;
     u8 tint;
-    u8 shade;  // 0..255 directional shade
+    u8 shade;  // 0..255 directional shade (CardinalLighting.DEFAULT of shadeFace)
+    i8 shadeFace;  // the face direction whose cardinal shade it takes (nearest to its normal, or the override)
     i8 cull;   // face direction whose neighbour hides this quad, or -1
     u8 layer;
     u8 emission = 0;  // the element's light_emission (its block light is at least this)

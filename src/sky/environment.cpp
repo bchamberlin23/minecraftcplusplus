@@ -383,6 +383,7 @@ bool Environment::load(const AssetSource& jar) {
         const std::string box = j.value("skybox", std::string("overworld"));
         d.skybox = box == "end" ? Skybox::End : box == "none" ? Skybox::None : Skybox::Overworld;
         d.hasSkylight = j.value("has_skylight", true);
+        d.netherShade = j.value("cardinal_light", std::string("default")) == "nether";
         d.hasCeiling = j.value("has_ceiling", false);
         d.minY = j.value("min_y", -64);
         dimensions_.push_back(std::move(d));

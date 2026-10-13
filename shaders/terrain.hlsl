@@ -16,7 +16,7 @@ StructuredBuffer<uint4> gQuads : register(t0);  // CubeQuad: geo, tex | ao, sky 
 #define TRACED 0
 #endif
 
-static const float kShade[6] = {0.5, 1.0, 0.8, 0.8, 0.6, 0.6};
+float faceShade(uint face) { return face < 4 ? gShade[0][face] : gShade[1][face - 4]; }
 static const float3 kNormal[6] = {
     float3(0, -1, 0), float3(0, 1, 0), float3(0, 0, -1), float3(0, 0, 1), float3(-1, 0, 0), float3(1, 0, 0)};
 
@@ -90,7 +90,7 @@ VSOut TerrainVS(uint vid : SV_VertexID) {
     o.pos = mul(gViewProj, float4(v.rel, 1));
     o.uvl = lodUvl(v, float(gTextureRemap[v.q.y & 0xFFF]));
     // Smooth lighting: this corner's light (4.4 fixed point) and ambient occlusion (1 - 0.2 per solid cell).
-    o.color = tintColor(colorIndex(v)) * (kShade[v.face] * cornerAo(v)) * lightColorLevels(cornerSky(v), cornerBlock(v));
+    o.color = tintColor(colorIndex(v)) * (faceShade(v.face) * cornerAo(v)) * lightColorLevels(cornerSky(v), cornerBlock(v));
     o.fog = fogFactor(v.rel);
     return o;
 }

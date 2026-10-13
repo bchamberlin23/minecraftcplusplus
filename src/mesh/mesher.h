@@ -59,8 +59,9 @@ void gatherSection(const World& world, int cx, int sy, int cz, u16* padded, u8* 
 // The video options meshes depend on: Smooth Lighting (corner light averaging and ambient occlusion; off: each face
 // lit by the cell in front of it) and See-Through Leaves (off: leaves are opaque and hide the faces between them,
 // ModelBlockRenderer.forceOpaque / LeavesBlock.skipRendering). Terrain::rebuildAll re-meshes after a change.
+// netherShade: the dimension's cardinal_light is "nether" (CardinalLighting.NETHER: up and down faces 0.9).
 struct MeshOptions {
-    bool smoothLighting = true, cutoutLeaves = true;
+    bool smoothLighting = true, cutoutLeaves = true, netherShade = false;
     bool operator==(const MeshOptions&) const = default;
 };
 void setMeshOptions(const MeshOptions& o);

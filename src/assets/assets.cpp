@@ -106,7 +106,6 @@ struct Element {
     F3 euler;  // degrees about x, then y, then z
     int rescaleAxis = -1;
     float rescale = 1.0f;
-    bool shade = true;
     int shadeDir = -1;
     u8 lightEmission = 0;
     Face faces[6];
@@ -391,7 +390,6 @@ struct BlockRegistry::Impl {
                         e.euler = {num(member(r, "x"), 0), num(member(r, "y"), 0), num(member(r, "z"), 0)};
                     }
                 }
-                if (member(ej, "shade").is_boolean()) e.shade = member(ej, "shade").get<bool>();
                 e.lightEmission = u8(std::clamp(int(num(member(ej, "light_emission"), 0)), 0, 15));
                 if (member(ej, "shade_direction_override").is_string())
                     e.shadeDir = faceIndex(member(ej, "shade_direction_override").get<std::string>());
@@ -575,15 +573,18 @@ struct BlockRegistry::Impl {
         q.emission = e.lightEmission;
         q.layer = texClass[f.tex];
         q.cull = f.cull >= 0 ? i8(dirIndex(rotVariant(kDir[f.cull], r.x, r.y))) : i8(-1);
-        float shade;
-        if (!e.shade)
-            shade = 1.0f;
-        else if (e.shadeDir >= 0)
-            shade = kFaceShade[dirIndex(rotVariant(kDir[e.shadeDir], r.x, r.y))];
-        else
-            shade = normal.x * normal.x * 0.6f + normal.z * normal.z * 0.8f +
-                    normal.y * normal.y * (normal.y > 0 ? 1.0f : 0.5f);
-        q.shade = u8(std::clamp(shade, 0.0f, 1.0f) * 255.0f + 0.5f);
+        // BlockModelLighter.getDirectionalBrightness: the shade direction override, else the face direction nearest
+        // to the quad's normal (FaceBakery.calculateFacing)
+        int shadeFace = 1;
+        if (e.shadeDir >= 0) {
+            shadeFace = dirIndex(rotVariant(kDir[e.shadeDir], r.x, r.y));
+        } else {
+            float best = -1e9f;
+            for (int k = 0; k < 6; ++k)
+                if (const float p = dot(normal, toF(kDir[k])); p > best) best = p, shadeFace = k;
+        }
+        q.shadeFace = i8(shadeFace);
+        q.shade = u8(kFaceShade[shadeFace] * 255.0f + 0.5f);
         return true;
     }
 };

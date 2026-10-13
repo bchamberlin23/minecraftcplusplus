@@ -81,6 +81,7 @@ struct DimensionInfo {
     Skybox skybox = Skybox::Overworld;
     bool hasSkylight = true, hasCeiling = false;
     bool piglinsZombify = true;  // gameplay/piglins_zombify
+    bool netherShade = false;    // cardinal_light "nether" (CardinalLighting.NETHER)
     int minY = -64;
     bool canHaveWeather() const { return hasSkylight && !hasCeiling && skybox != Skybox::End; }
 };

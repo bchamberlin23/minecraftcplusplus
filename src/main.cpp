@@ -1376,7 +1376,8 @@ int wmain(int argc, wchar_t** argv) {
                                         float(ui.settings().entityDistanceScaling));
         {  // Video Settings the meshes depend on (Smooth Lighting, See-Through Leaves, Biome Blend): re-mesh on change
             const ui::Settings& vs = ui.settings();
-            const MeshOptions mo{vs.ao, vs.cutoutLeaves};
+            const MeshOptions mo{vs.ao, vs.cutoutLeaves, sky.netherShade()};
+            renderer.setNetherShade(mo.netherShade);
             terrain.setChunkUpdates(vs.prioritizeChunkUpdates);  // Chunk Builder (PrioritizeChunkUpdates)
             static int blendRadius = -1;
             if (!(mo == meshOptions()) || vs.biomeBlendRadius != blendRadius) {

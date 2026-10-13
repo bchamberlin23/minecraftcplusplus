@@ -12,6 +12,7 @@ cbuffer Frame : register(b0) {
     uint4 gMisc;         // x = active slot count, y = texture LOD bias (float bits), z = texture filtering options
     float4 gLightmap[3]; // the game's lightmap inputs (lightmap.hlsli)
     float4 gFade;        // x = fade clock (seconds), y = 1 / fade duration, z = frame index, w = temporal AA on
+    float4 gShade[2];    // CardinalLighting by face: down up north south, west east
 };
 #include "lightmap.hlsli"
 

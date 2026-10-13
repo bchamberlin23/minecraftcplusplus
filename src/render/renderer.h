@@ -247,6 +247,7 @@ public:
     // by one at the same place and level (an edit, new light) swaps at once.
     void setActive(const std::vector<u32>& slots);
     void setFadeSeconds(float seconds) { fadeSeconds_ = std::max(seconds, 0.0f); }
+    void setNetherShade(bool on) { netherShade_ = on; }  // the dimension's CardinalLighting is NETHER
     void beginWorldReveal(double x, double z);  // stagger entrance fades outward on join/large teleport
     void flushUploads();  // submit staged copies now (used while loading)
 
@@ -430,6 +431,7 @@ private:
     std::vector<u32> cutMark_;
     u32 cutStamp_ = 0;
     float fadeSeconds_ = 0.75f;  // the game's chunkSectionFadeInTime default
+    bool netherShade_ = false;
     u32 fadeFrame_ = 0;
     float revealStart_ = 0;
     double revealX_ = 0, revealZ_ = 0;

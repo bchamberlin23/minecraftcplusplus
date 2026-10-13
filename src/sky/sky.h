@@ -55,6 +55,7 @@ public:
     void setBiomeLookup(BiomeLookup lookup);
     // The current dimension's gameplay/piglins_zombify (piglins and hoglins shake while converting).
     bool piglinsZombify() const { return !dimension_ || dimension_->piglinsZombify; }
+    bool netherShade() const { return dimension_ && dimension_->netherShade; }
     // Once per frame before Renderer::render: advances time, evaluates the attributes, sets the atmosphere.
     void update(const CameraState& cam, double dt);
     // The boss bars' flags (BossHealthOverlay.shouldDarkenScreen / shouldCreateWorldFog), before update():
