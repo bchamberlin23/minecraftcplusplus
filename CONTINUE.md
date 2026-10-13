@@ -54,6 +54,12 @@ listening socket).
   light sections renderer, the chunk culling / octree renderers (the game's section graph), labels of the projected
   renderers not scaled with distance.
 
+## Entities
+
+- Client-side mob effects not yet ported: the breeze (jump trail, ground particles, whirl / ambient sounds), pandas
+  (sneezing, eating particles), horses / llamas / camels eating, the ender dragon's phase particles, the sniffer's
+  digging hit sound, the enderman stare sound.
+
 ## Gameplay / world
 
 - **WORLD-04**: Blender port (blending old pre-1.18 chunks with new generation). Low priority: it only affects
