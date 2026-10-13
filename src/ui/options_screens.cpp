@@ -220,7 +220,8 @@ void drawOptionsList(UiState& s, Canvas& c, const std::function<void(Canvas&, fl
         if (!b.tooltip || (i < g.rowY.size() && !inList)) continue;
         if (s.mouseX < b.x || s.mouseY < b.y || s.mouseX >= b.x + b.w || s.mouseY >= b.y + b.h) continue;
         const std::vector<Text> lines = tooltipLines(s, b.tooltip());
-        if (!lines.empty()) s.drawTooltip(c, lines, s.mouseX, s.mouseY);
+        const float rect[4] = {b.x, b.y, b.w, b.h};  // the widget's own tooltip (MenuTooltipPositioner)
+        if (!lines.empty()) s.drawTooltip(c, lines, s.mouseX, s.mouseY, nullptr, false, {}, rect);
         break;
     }
 }
@@ -418,7 +419,8 @@ void optionsDraw(UiState& s, Canvas& c) {
     s.drawButtons(c);
     for (const Button& b : s.buttons)
         if (b.tooltip && s.mouseX >= b.x && s.mouseY >= b.y && s.mouseX < b.x + b.w && s.mouseY < b.y + b.h) {
-            s.drawTooltip(c, tooltipLines(s, b.tooltip()), s.mouseX, s.mouseY);
+            const float rect[4] = {b.x, b.y, b.w, b.h};
+            s.drawTooltip(c, tooltipLines(s, b.tooltip()), s.mouseX, s.mouseY, nullptr, false, {}, rect);
             break;
         }
 }

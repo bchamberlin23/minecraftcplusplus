@@ -434,7 +434,8 @@ void hoverTooltips(State& s, Canvas& c) {  // Tooltip of the button under the mo
     for (const Button& b : s.buttons)
         if (b.tooltip && s.mouseX >= b.x && s.mouseY >= b.y && s.mouseX < b.x + b.w && s.mouseY < b.y + b.h) {
             const Text t = b.tooltip();
-            if (!t.empty()) s.drawTooltip(c, s.font.split(t, 170), s.mouseX, s.mouseY);
+            const float rect[4] = {b.x, b.y, b.w, b.h};  // the widget's own tooltip (MenuTooltipPositioner)
+            if (!t.empty()) s.drawTooltip(c, s.font.split(t, 170), s.mouseX, s.mouseY, nullptr, false, {}, rect);
             return;
         }
 }

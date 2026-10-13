@@ -6,6 +6,7 @@
 #include "ui/narrator.h"
 #include "ui/options_list.h"
 
+#include <array>
 #include <algorithm>
 
 namespace ui {
@@ -126,7 +127,8 @@ void draw(UiState& s, Canvas& c) {
     blitTexture(c, s.sprites.texture("gui/title/edition"), float(W / 2 - 64), 30 + 44 - 7, 0, 0, 128, 14, 128, 16);
     for (const Button& b : s.buttons)
         if (b.tooltip && s.mouseX >= b.x && s.mouseY >= b.y && s.mouseX < b.x + b.w && s.mouseY < b.y + b.h)
-            s.drawTooltip(c, s.font.split(b.tooltip(), 170), s.mouseX, s.mouseY);
+            s.drawTooltip(c, s.font.split(b.tooltip(), 170), s.mouseX, s.mouseY, nullptr, false, {},
+                          std::array<float, 4>{b.x, b.y, b.w, b.h}.data());
 }
 
 void input(UiState& s, const Window::InputEvent& e) {

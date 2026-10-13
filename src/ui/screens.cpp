@@ -13,6 +13,7 @@
 #include "ui/ui_state.h"
 #include "world/terrain.h"
 
+#include <array>
 #include <cmath>
 
 namespace ui {
@@ -731,7 +732,7 @@ void Ui::State::drawScreen(Canvas& c) {
             drawSubtitles(*this, c);
             for (const Button& b : buttons)  // the custom options button's tooltip
                 if (b.tooltip && mouseX >= b.x && mouseY >= b.y && mouseX < b.x + b.w && mouseY < b.y + b.h)
-                    drawTooltip(c, font.split(b.tooltip(), 170), mouseX, mouseY);
+                    drawTooltip(c, font.split(b.tooltip(), 170), mouseX, mouseY, nullptr, false, {}, std::array<float, 4>{b.x, b.y, b.w, b.h}.data());
             return;
         }
         default: break;

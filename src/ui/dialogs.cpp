@@ -1061,6 +1061,8 @@ void drawDialog(UiState& s, Canvas& c, Instance& inst) {
     const Area a = area(s, inst);
     const Dialog& d = *inst.d;
     std::vector<Text> tooltip;
+    float tipWidget[4] = {};  // a button's own tooltip: its rect (MenuTooltipPositioner)
+    bool widgetTip = false;
     const ItemStack* tooltipItem = nullptr;
     // Slider dragging.
     if (inst.draggingSlider >= 0) {
@@ -1095,7 +1097,10 @@ void drawDialog(UiState& s, Canvas& c, Instance& inst) {
             case Widget::Button: {
                 const ActionButton& b = inst.buttons[size_t(w.button)];
                 drawButtonSprite(s, c, x, y, float(w.w), float(w.h), b.label, true, hover);
-                if (hover && b.hasTooltip) tooltip = s.font.split(b.tooltip, 170);
+                if (hover && b.hasTooltip) {
+                    tooltip = s.font.split(b.tooltip, 170);
+                    tipWidget[0] = x, tipWidget[1] = y, tipWidget[2] = float(w.w), tipWidget[3] = float(w.h), widgetTip = true;
+                }
                 break;
             }
             case Widget::Checkbox: {
@@ -1150,15 +1155,21 @@ void drawDialog(UiState& s, Canvas& c, Instance& inst) {
             s.drawText(c, w.text, float(w.x), float(w.y), 0xFFFFFFFF, true);
         } else if (w.button == -2) {  // ImageButton with the warning sprites
             blitSprite(c, s.sprites.sprite(hover ? "dialog/warning_button_highlighted" : "dialog/warning_button"), float(w.x), float(w.y), 20, 20);
-            if (hover) tooltip = s.font.split(tr(s, "menu.custom_screen_info.tooltip"), 170);
+            if (hover) {
+                tooltip = s.font.split(tr(s, "menu.custom_screen_info.tooltip"), 170);
+                tipWidget[0] = float(w.x), tipWidget[1] = float(w.y), tipWidget[2] = 20, tipWidget[3] = 20, widgetTip = true;
+            }
         } else {
             const ActionButton& b = inst.buttons[size_t(w.button)];
             drawButtonSprite(s, c, float(w.x), float(w.y), float(w.w), float(w.h), b.label, true, hover);
-            if (hover && b.hasTooltip) tooltip = s.font.split(b.tooltip, 170);
+            if (hover && b.hasTooltip) {
+                tooltip = s.font.split(b.tooltip, 170);
+                tipWidget[0] = float(w.x), tipWidget[1] = float(w.y), tipWidget[2] = float(w.w), tipWidget[3] = float(w.h), widgetTip = true;
+            }
         }
     }
     if (tooltipItem) s.drawTooltip(c, s.items.tooltip(*tooltipItem, s.settings.advancedItemTooltips), mx, my, nullptr, true, tooltipStyle(s.items, *tooltipItem));
-    else if (!tooltip.empty()) s.drawTooltip(c, tooltip, mx, my);
+    else if (!tooltip.empty()) s.drawTooltip(c, tooltip, mx, my, nullptr, false, {}, widgetTip ? tipWidget : nullptr);
 }
 
 // ConfirmScreen: title, message (max width W - 50, centred), optional warning, buttons (spacing 4, 16 above),

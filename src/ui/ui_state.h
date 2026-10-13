@@ -404,8 +404,10 @@ struct Ui::State {
     int popTime[46] = {};  // ItemStack.popTime of the player inventory menu's slots (hotbar stacks that grew)
     // GuiGraphicsExtractor tooltips: item tooltips (extraSpaceAfterFirstLine) leave 2 px under the first line; style:
     // TOOLTIP_STYLE ("" the default tooltip/background and frame sprites).
+    // widget (x, y, w, h): a widget's own tooltip, placed by MenuTooltipPositioner beside the mouse and below or above
+    // the widget; else DefaultTooltipPositioner at the mouse.
     void drawTooltip(Canvas& c, const std::vector<Text>& lines, float x, float y, const TooltipImage* image = nullptr,
-                     bool itemTooltip = false, const std::string& style = {});
+                     bool itemTooltip = false, const std::string& style = {}, const float* widget = nullptr);
     void drawText(Canvas& c, const Text& t, float x, float y, u32 color, bool shadow) { font.draw(c, t, x, y, color, shadow); }
     void drawCentered(Canvas& c, const Text& t, float cx, float y, u32 color, bool shadow = true) {
         font.draw(c, t, cx - float(font.width(t) / 2), y, color, shadow);

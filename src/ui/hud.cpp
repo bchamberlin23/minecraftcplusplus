@@ -270,15 +270,30 @@ void Ui::State::drawItem(Canvas& c, const ItemStack& s, float x, float y, bool d
 }
 
 void Ui::State::drawTooltip(Canvas& c, const std::vector<Text>& lines, float mx, float my, const TooltipImage* image,
-                            bool itemTooltip, const std::string& style) {
+                            bool itemTooltip, const std::string& style, const float* widget) {
     if (lines.empty()) return;
     const size_t count = lines.size() + (image ? 1 : 0);
     int w = 0, h = itemTooltip && count != 1 ? 0 : -2;
     for (const Text& l : lines) w = std::max(w, font.width(l)), h += 10;
     if (image) w = std::max(w, image->width), h += image->height;
     float x = mx + 12, y = my - 12;
-    if (x + float(w) > float(c.guiWidth())) x = std::max(x - 24 - float(w), 4.0f);
-    if (y + float(h) + 3 > float(c.guiHeight())) y = float(c.guiHeight() - h - 3);
+    if (widget) {  // MenuTooltipPositioner
+        const int sw = c.guiWidth(), sh = c.guiHeight(), top = int(widget[1]), height = int(widget[3]), bottom = top + height;
+        auto offset = [&](int mouseY, int widgetY) {  // getOffset
+            const int distance = std::min(std::abs(mouseY - widgetY), height);
+            return int(std::lround(float(height - 3) + (5.0f - float(height - 3)) * (float(distance) / float(height))));
+        };
+        int rx = int(mx) + 12, ry = int(my);
+        if (rx + w > sw - 5) rx = std::max(int(mx) - 12 - w, 9);
+        ry += 3;
+        const int padded = h + 3 + 3;
+        if (bottom + 3 + offset(0, 0) + padded <= sh - 5) ry += offset(ry, top);
+        else ry -= padded + offset(ry, bottom);
+        x = float(rx), y = float(ry);
+    } else {  // DefaultTooltipPositioner
+        if (x + float(w) > float(c.guiWidth())) x = std::max(x - 24 - float(w), 4.0f);
+        if (y + float(h) + 3 > float(c.guiHeight())) y = float(c.guiHeight() - h - 3);
+    }
     const float x0 = x - 12, y0 = y - 12, pw = float(w + 24), ph = float(h + 24);
     // TooltipRenderUtil: tooltip/<style>_background / _frame (the style's namespace kept), else tooltip/background / frame
     std::string prefix = "tooltip/";
