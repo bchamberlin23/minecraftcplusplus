@@ -54,6 +54,10 @@ public:
     // The local player: inventory from the UI, input hooks on the game. After the game, the UI and audio exist.
     void setPlayer(Game& game, ui::Ui& ui, const std::string& name, std::function<int()> gameMode);
     void setItemRules(ItemRules* rules);  // item default components (spear timing in the arm / item animations)
+    // The block ambience's environment (fx::Particles::setAmbientEnv; the marker block comes from the held item here)
+    // and its sources: block tags, the biome foliage colour.
+    void setAmbientEnv(bool night, bool nether, int skyDarken);
+    void setParticleSources(std::function<bool(std::string_view, std::string_view)> blockTag, std::function<u32(int, int)> foliage);
 
     struct Stats {
         double updateMs = 0, worldMs = 0, afterMs = 0, hudMs = 0;

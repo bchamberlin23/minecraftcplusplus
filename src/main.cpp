@@ -915,6 +915,10 @@ int wmain(int argc, wchar_t** argv) {
         gameplay.setEntities(&entities);
         blockEntityRenderer.setRules(&gameplay.rules());
         visuals.setItemRules(&gameplay.rules());
+        visuals.setParticleSources([&](std::string_view tag, std::string_view block) { return gameplay.rules().inTag(tag, block); },
+                                   [&](int x, int z) {
+                                       return haveBiomeColors ? biomeColors.color(world.biomeAt(x, z), BiomeColors::Foliage) : 0x48B518u;
+                                   });
         entities.onUntrackedEntityEvent = [&](int id, int event) {  // our own entity events
             if (event == 2 && session && id == session->entityId()) gameplay.kineticHit();  // EntityEvent.KINETIC_HIT
         };
@@ -1301,6 +1305,11 @@ int wmain(int argc, wchar_t** argv) {
         }
         if (haveEntities)
             entityRenderer.setShadows(ui.settings().entityShadows, sky.skyDarken(), session ? session->dimension().ambientLight : 0.0f);
+        if (haveEntities && session) {  // the day timeline's creaking_active / firefly_bush_sounds stretch: 12600..23400
+            const std::string& dim = session->dimension().name;
+            const i64 t = i64(sky.dayTicks()) % 24000;
+            visuals.setAmbientEnv(dim == "minecraft:overworld" && t >= 12600 && t < 23401, dim == "minecraft:the_nether", sky.skyDarken());
+        }
         if (haveEntities)
             entityRenderer.setViewScale(std::clamp(float(ui.settings().renderDistance) / 8.0f, 1.0f, 2.5f) *
                                         float(ui.settings().entityDistanceScaling));

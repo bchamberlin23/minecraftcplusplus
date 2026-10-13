@@ -92,6 +92,15 @@ public:
     };
     const Stats& stats() const { return stats_; }
     void setRainOverride(float level) { rainOverride_ = level; }
+    // ClientLevel.animateTick's environment, each tick: the overworld day timeline's night stretch (creaking_active /
+    // firefly_bush_sounds), the Nether (water evaporates, lava drips from dripstone), the sky darkening, the block a
+    // creative player's held barrier / light marks ("" none).
+    void setAmbientEnv(bool night, bool nether, int skyDarken, std::string markerBlock) {
+        ambientNight_ = night, ambientNether_ = nether, skyDarken_ = skyDarken, markerBlock_ = std::move(markerBlock);
+    }
+    // Block tags ("minecraft:logs", block id "minecraft:oak_log") and the biome foliage colour (0xRRGGBB) at a column.
+    std::function<bool(std::string_view tag, std::string_view block)> blockTag;
+    std::function<u32(int x, int z)> foliageColor;
     // ItemParticleOption (ItemStackTemplate.STREAM_CODEC): reads the stack and returns its item network id (network
     // thread; unset or false: the packet is dropped).
     std::function<bool(net::Reader& r, int& item)> readItem;
@@ -143,6 +152,21 @@ private:
     bool vibrationTarget(const Particle& p, double out[3]);
     int blockSprite(u16 block, u32& tint);  // item atlas rect of the block's particle texture
     u32 dustColor(u16 block);
+    // ClientLevel.animateTick (particles_ambient.inc): each block's animateTick, its fluid, the marker, biome particles.
+    void animateBlock(u16 id, int x, int y, int z);
+    u8 ambientKind(u16 id);
+    std::string_view baseName(u16 id) const;  // "oak_leaves"
+    int netState(u16 local);
+    bool faceSturdy(u16 id, int dir) const;  // Direction order: down, up, north, south, west, east
+    bool fullCollision(u16 id) const;
+    bool tagged(std::string_view tag, u16 id) const;
+    void localSound(const char* id, double x, double y, double z, float volume, float pitch, bool ambientCategory);
+    bool rainingAt(int x, int y, int z);
+    int surfaceY(int x, int z, bool motionBlocking);
+    bool canBurn(u16 id);
+    const std::vector<std::pair<int, float>>& biomeParticles(u8 biome);
+    bool desertVegetationBelow(int x, int y, int z);
+    bool desertSandAround(int x, int y, int z);
     float randf() { return std::uniform_real_distribution<float>(0.0f, 1.0f)(rng_); }
     double gauss() { return std::normal_distribution<double>(0.0, 1.0)(rng_); }
 
@@ -169,7 +193,15 @@ private:
     std::mt19937 rng_{0x51A7E5u};
     double tickClock_ = 0, cam_[3] = {};
     u64 ticks_ = 0;
-    float rain_ = 0, rainTarget_ = 0, rainOverride_ = -1;
+    float rain_ = 0, rainTarget_ = 0, rainOverride_ = -1, thunder_ = 0;
+    int rainSoundTime_ = 0;
+    bool ambientNight_ = false, ambientNether_ = false;
+    int skyDarken_ = 0;
+    std::string markerBlock_;
+    std::unordered_map<u16, int> netStates_;
+    std::unordered_set<std::string> flammable_;
+    std::unordered_map<u8, std::vector<std::pair<int, float>>> biomeParticles_;
+    std::unordered_map<std::string, int> ambientTypes_;
     std::unordered_set<u64> campfires_;        // lit campfires found by the ambient sampler
     float partial_ = 0;
     float frameTicks_ = 0;  // last frame's length in ticks (particle motion vectors)

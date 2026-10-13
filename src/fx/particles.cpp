@@ -2,6 +2,7 @@
 
 #include "audio/audio.h"
 
+#include "assets/asset_source.h"
 #include "assets/assets.h"
 #include "assets/game_reports.h"
 #include "entity/item_models.h"
@@ -9,6 +10,7 @@
 #include "net/protocol.h"
 #include "ui/resources.h"
 #include "world/world.h"
+#include "worldgen/rng.h"
 
 #include <algorithm>
 #include <cmath>
@@ -25,10 +27,11 @@ enum class Kind : u8 {
     BubblePop, CherryLeaves, PaleLeaves, TintedLeaves, Portal, Enchant, CampfireCosy, CampfireSignal, Spell, Witch,
     Suspended, HappyVillager, Lava, Dust, DustTransition, Note, Cloud, Snowflake, Item, Vibration, Drip, Spark, Flash,
     Totem, EndRod, Gust, GustSeed, Rising, SculkCharge, SculkChargePop, Shriek, Firefly, Glow, Trail, SulfurBubble,
-    NoxiousGas, GasCloud, GeyserEruption, GeyserBase, GeyserPlume
+    NoxiousGas, GasCloud, GeyserEruption, GeyserBase, GeyserPlume, Ash, SuspendedAir, ReversePortal, CurrentDown, BubbleUp,
+    Marker
 };
 enum class Opt : u8 { None, Block, Dust, DustTransition, Spell, Color, Float, VarInt, Int, IntFloat, Trail, Item, Vibration, Geyser, GeyserBase };
-enum SizeMode : u8 { SizeConst, SizeGrow, SizeFlame, SizePortal, SizeLava };
+enum SizeMode : u8 { SizeConst, SizeGrow, SizeFlame, SizePortal, SizeLava, SizeReverse };
 enum Flags : u8 { Physics = 1, OnGround = 2, SpeedUp = 4, Stopped = 8, Removed = 16, Translucent = 32, NoRender = 64, AgeSprite = 128 };
 
 const std::pair<const char*, Kind> kKinds[] = {
@@ -58,7 +61,10 @@ const std::pair<const char*, Kind> kKinds[] = {
     {"wax_off", Kind::Glow}, {"electric_spark", Kind::Glow}, {"scrape", Kind::Glow}, {"trail", Kind::Trail},
     {"sulfur_bubbles", Kind::SulfurBubble}, {"noxious_gas", Kind::NoxiousGas}, {"noxious_gas_cloud", Kind::GasCloud},
     {"geyser", Kind::GeyserEruption}, {"geyser_base", Kind::GeyserBase}, {"geyser_poof", Kind::GeyserBase},
-    {"geyser_plume", Kind::GeyserPlume}, {"sulfur_cube_goo", Kind::Item}};
+    {"geyser_plume", Kind::GeyserPlume}, {"sulfur_cube_goo", Kind::Item}, {"ash", Kind::Ash}, {"white_ash", Kind::Ash},
+    {"underwater", Kind::SuspendedAir}, {"crimson_spore", Kind::SuspendedAir}, {"warped_spore", Kind::SuspendedAir},
+    {"spore_blossom_air", Kind::SuspendedAir}, {"reverse_portal", Kind::ReversePortal}, {"current_down", Kind::CurrentDown},
+    {"bubble_column_up", Kind::BubbleUp}, {"block_marker", Kind::Marker}};
 
 // DripParticle and its providers: the hanging drop falls into the next type, which lands as another one.
 enum DripStage : u8 { DripHang, DripCoolingHang, DripFall, DripFallLand, DripDripstoneFallLand, DripHoneyFallLand, DripLand };
@@ -272,7 +278,7 @@ void Particles::attach(net::Client& client) {
     client.onPlayPeek("game_event", [this](net::Reader& r) {
         const int type = r.u8v();
         const float param = r.f32();
-        if (!r.ok || (type != 1 && type != 2 && type != 7)) return;
+        if (!r.ok || (type != 1 && type != 2 && type != 7 && type != 8)) return;
         std::lock_guard lock(netMutex_);
         netWeather_.push_back({type, param});
     });
@@ -412,7 +418,8 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
         return nullptr;
     }
     if (t.sprites.empty() && t.kind != Kind::Terrain && t.kind != Kind::Crumble && t.kind != Kind::DustPillar &&
-        t.kind != Kind::ExplosionSeed && t.kind != Kind::GustSeed && t.kind != Kind::GasCloud && t.kind != Kind::GeyserEruption) {
+        t.kind != Kind::ExplosionSeed && t.kind != Kind::GustSeed && t.kind != Kind::GasCloud && t.kind != Kind::GeyserEruption &&
+        t.kind != Kind::Marker) {
         // Sprite set from assets/minecraft/particles/<type>.json (loaded on first use).
         const nlohmann::json j = res_ ? res_->json("assets/minecraft/particles/" + t.name + ".json") : nlohmann::json();
         if (j.is_object() && j.contains("textures") && j["textures"].is_array())
@@ -683,6 +690,87 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
             }
             p.e0 = p.a;  // original alpha
             ageSprite();
+            break;
+        }
+        case Kind::Ash: {  // AshParticle / WhiteAshParticle (BaseAshSmokeParticle, direction 0.1 / -0.1 / 0.1)
+            const bool white = t.name == "white_ash";
+            double vx = 0, vy = 0, vz = 0;
+            if (white) {  // WhiteAshParticle.Provider
+                vx = randf() * -1.9 * randf() * 0.1, vy = randf() * -0.5 * randf() * 0.1 * 5.0, vz = randf() * -1.9 * randf() * 0.1;
+            }
+            baseVel(x, y, z, 0, 0, 0);
+            p.friction = 0.96f, p.gravity = white ? 0.0125f : 0.1f;
+            p.flags |= SpeedUp;
+            p.flags &= u8(~Physics);
+            p.xd = p.xd * 0.1f + vx, p.yd = p.yd * -0.1f + vy, p.zd = p.zd * 0.1f + vz;
+            const float c = white ? 0.0f : randf() * 0.5f;
+            p.r = p.g = p.b = c;
+            if (white) color(0xBAB1C2);
+            p.quadSize *= 0.75f;
+            p.lifetime = std::max(int(20.0 / (randf() * 0.8 + 0.2)), 1);
+            p.sizeMode = SizeGrow;
+            ageSprite();
+            break;
+        }
+        case Kind::SuspendedAir: {  // SuspendedParticle and its providers
+            const bool still = t.name == "underwater";
+            double vx = 0, vy = 0, vz = 0;
+            if (t.name == "crimson_spore") vx = gauss() * 1.0e-6, vy = gauss() * 1.0e-4, vz = gauss() * 1.0e-6;
+            else if (t.name == "warped_spore") vy = randf() * -1.9 * randf() * 0.1;
+            else if (t.name == "spore_blossom_air") vy = -0.8f;
+            if (still) base(x, y - 0.125, z);
+            else baseVel(x, y - 0.125, z, vx, vy, vz);
+            p.quadSize *= still ? randf() * 0.6f + 0.2f : randf() * 0.6f + 0.6f;
+            p.lifetime = int(16.0 / (randf() * 0.8 + 0.2));
+            p.flags &= u8(~Physics);
+            p.friction = 1.0f, p.gravity = 0.0f;
+            if (t.name == "underwater") p.r = 0.4f, p.g = 0.4f, p.b = 0.7f;
+            else if (t.name == "crimson_spore") p.r = 0.9f, p.g = 0.4f, p.b = 0.5f;
+            else if (t.name == "warped_spore") p.r = 0.1f, p.g = 0.1f, p.b = 0.3f;
+            else p.r = 0.32f, p.g = 0.5f, p.b = 0.22f, p.lifetime = 500 + int(rng_() % 501), p.gravity = 0.01f;
+            randomSprite();
+            break;
+        }
+        case Kind::ReversePortal: {  // ReversePortalParticle (PortalParticle, bigger, 60 ticks, accelerating outwards)
+            base(x, y, z);
+            p.xd = xa, p.yd = ya, p.zd = za;
+            p.quadSize = 0.1f * (randf() * 0.2f + 0.5f) * 1.5f;
+            const float br = randf() * 0.6f + 0.4f;
+            p.r = br * 0.9f, p.g = br * 0.3f, p.b = br;
+            p.lifetime = int(randf() * 2.0f) + 60;
+            p.flags &= u8(~Physics);
+            p.sizeMode = SizeReverse;
+            randomSprite();
+            break;
+        }
+        case Kind::CurrentDown:  // WaterCurrentDownParticle
+            base(x, y, z);
+            p.lifetime = int(randf() * 60.0f) + 30;
+            p.flags &= u8(~Physics);
+            p.xd = 0, p.yd = -0.05, p.zd = 0;
+            p.quadSize *= randf() * 0.6f + 0.2f;
+            p.gravity = 0.002f;
+            randomSprite();
+            break;
+        case Kind::BubbleUp:  // BubbleColumnUpParticle
+            base(x, y, z);
+            p.gravity = -0.125f, p.friction = 0.85f;
+            p.quadSize *= randf() * 0.6f + 0.2f;
+            p.xd = xa * 0.2f + (randf() * 2.0f - 1.0f) * 0.02f, p.yd = ya * 0.2f + (randf() * 2.0f - 1.0f) * 0.02f;
+            p.zd = za * 0.2f + (randf() * 2.0f - 1.0f) * 0.02f;
+            p.lifetime = int(40.0 / (randf() * 0.8 + 0.2));
+            randomSprite();
+            break;
+        case Kind::Marker: {  // BlockMarker: the block's particle texture, half a block, 80 ticks
+            const u16 block = opt ? localBlock(opt->block) : 0;
+            if (!block) return nullptr;
+            u32 tint;
+            p.sprite = blockSprite(block, tint);
+            if (p.sprite < 0) return nullptr;
+            base(x, y, z);
+            p.gravity = 0, p.lifetime = 80, p.quadSize = 0.5f;
+            p.flags &= u8(~Physics);
+            if (items_.rect(p.sprite).translucent) p.flags |= Translucent;
             break;
         }
         case Kind::Suspended:
@@ -2034,6 +2122,37 @@ void Particles::tickOne(Particle& p) {
                 remove();
             }
             break;
+        case Kind::Ash:
+            defaultTick();
+            ageSprite();
+            break;
+        case Kind::SuspendedAir:
+        case Kind::Marker:
+            defaultTick();
+            break;
+        case Kind::ReversePortal: {
+            if (p.age++ >= p.lifetime) return remove();
+            const float speed = float(p.age) / float(p.lifetime);
+            p.x += p.xd * speed, p.y += p.yd * speed, p.z += p.zd * speed;
+            break;
+        }
+        case Kind::CurrentDown: {
+            if (p.age++ >= p.lifetime) return remove();
+            p.xd += 0.6f * std::cos(p.e0), p.zd += 0.6f * std::sin(p.e0);
+            p.xd *= 0.07, p.zd *= 0.07;
+            move(p, p.xd, p.yd, p.zd);
+            const BlockInfo& b = registry_.infos()[blockAt(int(std::floor(p.x)), int(std::floor(p.y)), int(std::floor(p.z)))];
+            if (!(b.fluid || b.waterlogged) || (p.flags & OnGround)) return remove();
+            p.e0 += 0.08f;
+            break;
+        }
+        case Kind::BubbleUp: {
+            defaultTick();
+            if (p.flags & Removed) break;
+            const BlockInfo& b = registry_.infos()[blockAt(int(std::floor(p.x)), int(std::floor(p.y)), int(std::floor(p.z)))];
+            if (!(b.fluid || b.waterlogged)) remove();
+            break;
+        }
         case Kind::Suspended:
         case Kind::HappyVillager:
             if (p.lifetime-- <= 0) return remove();
@@ -2262,123 +2381,758 @@ void Particles::tickOne(Particle& p) {
     if (p.lifetime <= 0 && p.age > 1000) remove();
 }
 
-void Particles::ambient(const double cam[3]) {
-    // ClientLevel.animateTick: random blocks around the camera run their animateTick.
-    const int cx = int(std::floor(cam[0])), cy = int(std::floor(cam[1])), cz = int(std::floor(cam[2]));
-    static int ids[10] = {-2};
-    if (ids[0] == -2) {
-        const char* names[10] = {"flame", "smoke", "soul_fire_flame", "tinted_leaves", "cherry_leaves", "pale_oak_leaves",
-                                 "lava", "campfire_cosy_smoke", "dripping_water", "dripping_lava"};
-        for (int i = 0; i < 10; ++i) ids[i] = typeId(names[i]);
+// ---------------------------------------------------------------------------------------------------------
+// ClientLevel.animateTick: blocks around the camera, their fluids, the held marker block and the biome's particles
+
+namespace {
+
+enum Amb : u8 {
+    AmbNone, AmbTorch, AmbWallTorch, AmbSoulTorch, AmbSoulWallTorch, AmbCopperTorch, AmbCopperWallTorch, AmbRedstoneTorch,
+    AmbRedstoneWallTorch, AmbLeaves, AmbCampfire, AmbSoulCampfire, AmbFurnace, AmbBlastFurnace, AmbSmoker, AmbSulfur,
+    AmbCandle, AmbCandleCake, AmbFire, AmbSoulFire, AmbBeehive, AmbBrewing, AmbBrushable, AmbBubbleColumn, AmbCreakingHeart,
+    AmbCryingObsidian, AmbDriedGhast, AmbDeadBush, AmbDryGrass, AmbEnchanting, AmbEndGateway, AmbEndPortal, AmbEndRod,
+    AmbEnderChest, AmbEyeblossom, AmbFalling, AmbSand, AmbFireflyBush, AmbHangingMoss, AmbLever, AmbLightningRod,
+    AmbMycelium, AmbNetherPortal, AmbDripstone, AmbRedstoneOre, AmbRedstoneWire, AmbRepeater, AmbRespawnAnchor,
+    AmbSculkSensor, AmbSporeBlossom, AmbWetSponge, AmbWitherRose
+};
+
+// Leaves: the falling leaf particle (FallingParticlesLeavesBlock), its chance and colour (0: the block's tint here).
+struct LeafDef {
+    const char* block;
+    const char* particle;  // nullptr: no falling leaves (spruce)
+    float chance;
+    u32 color;  // tinted_leaves colour; 1: biome foliage, 0: untinted
+    bool poplar;
+};
+const LeafDef kLeaves[] = {
+    {"oak_leaves", "tinted_leaves", 0.01f, 1, false},       {"spruce_leaves", nullptr, 0, 0, false},
+    {"birch_leaves", "tinted_leaves", 0.01f, 0xFF80A755, false}, {"jungle_leaves", "tinted_leaves", 0.01f, 1, false},
+    {"acacia_leaves", "tinted_leaves", 0.01f, 1, false},    {"dark_oak_leaves", "tinted_leaves", 0.01f, 1, false},
+    {"mangrove_leaves", "tinted_leaves", 0.01f, 1, false},  {"cherry_leaves", "cherry_leaves", 0.1f, 0, false},
+    {"pale_oak_leaves", "pale_oak_leaves", 0.02f, 0, false}, {"red_poplar_leaves", "red_poplar_leaves", 0.01f, 0, true},
+    {"orange_poplar_leaves", "orange_poplar_leaves", 0.01f, 0, true}, {"yellow_poplar_leaves", "yellow_poplar_leaves", 0.01f, 0, true},
+    {"azalea_leaves", "tinted_leaves", 0.01f, 0xFF70922D, false}, {"flowering_azalea_leaves", "tinted_leaves", 0.01f, 0xFF70922D, false},
+};
+
+const char* const kFlammable[] = {  // FireBlock.bootStrap (wool, wool stairs / slabs and dyed carpets by suffix)
+#include "flammable_blocks.inc"
+};
+
+constexpr int kStep[6][3] = {{0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}};  // Direction order
+int opposite(int d) { return d ^ 1; }
+int dirOf(std::string_view f) {
+    return f == "down" ? 0 : f == "up" ? 1 : f == "north" ? 2 : f == "south" ? 3 : f == "west" ? 4 : f == "east" ? 5 : -1;
+}
+
+}  // namespace
+
+std::string_view Particles::baseName(u16 id) const {
+    const std::string& n = registry_.name(id);
+    const size_t b = n.find('['), c = n.find(':');
+    return std::string_view(n).substr(c == std::string::npos ? 0 : c + 1, b == std::string::npos ? std::string::npos : b - c - 1);
+}
+
+int Particles::netState(u16 local) {
+    auto it = netStates_.find(local);
+    if (it != netStates_.end()) return it->second;
+    const int id = reports_.stateId(registry_.name(local));
+    netStates_[local] = id;
+    return id;
+}
+
+// BlockState.isFaceSturdy (FULL): a collision box covering the whole face.
+bool Particles::faceSturdy(u16 id, int dir) const {
+    const BlockInfo& b = registry_.infos()[id];
+    constexpr float e = 1e-4f;
+    for (u32 i = 0; i < b.collisionCount; ++i) {
+        const Box& s = registry_.box(b.collisionFirst + i);
+        const int axis = dir < 2 ? 1 : dir < 4 ? 2 : 0;
+        const bool high = dir & 1;
+        if (high ? s.max[axis] < 1 - e : s.min[axis] > e) continue;
+        bool covers = true;
+        for (int a = 0; a < 3; ++a)
+            if (a != axis && (s.min[a] > e || s.max[a] < 1 - e)) covers = false;
+        if (covers) return true;
     }
-    enum Amb : u8 { AmbNone, AmbTorch, AmbWallTorch, AmbSoulTorch, AmbSoulWallTorch, AmbTinted, AmbCherry, AmbPale, AmbLava,
-                    AmbCampfire, AmbFurnace, AmbWater, AmbSulfur };
-    auto classify = [&](u16 id) -> u8 {
-        if (blockKinds_.size() <= id) blockKinds_.resize(size_t(id) + 1, 0);
-        if (!blockKinds_[id]) {
-            const std::string& n = registry_.name(id);
-            u8 k = AmbNone;
-            if (n.starts_with("minecraft:torch")) k = AmbTorch;
-            else if (n.starts_with("minecraft:wall_torch")) k = AmbWallTorch;
-            else if (n.starts_with("minecraft:soul_torch")) k = AmbSoulTorch;
-            else if (n.starts_with("minecraft:soul_wall_torch")) k = AmbSoulWallTorch;
-            else if (n.starts_with("minecraft:cherry_leaves")) k = AmbCherry;
-            else if (n.starts_with("minecraft:pale_oak_leaves")) k = AmbPale;
-            else if (n.starts_with("minecraft:oak_leaves") || n.starts_with("minecraft:birch_leaves") ||
-                     n.starts_with("minecraft:jungle_leaves") || n.starts_with("minecraft:acacia_leaves") ||
-                     n.starts_with("minecraft:dark_oak_leaves") || n.starts_with("minecraft:mangrove_leaves"))
-                k = AmbTinted;
-            else if (n.starts_with("minecraft:lava")) k = AmbLava;
-            else if (n.starts_with("minecraft:water") || n.starts_with("minecraft:bubble_column") || registry_.infos()[id].waterlogged)
-                k = AmbWater;
-            else if ((n.starts_with("minecraft:campfire") || n.starts_with("minecraft:soul_campfire")) && n.find("lit=true") != std::string::npos)
-                k = AmbCampfire;
-            else if ((n.starts_with("minecraft:furnace") || n.starts_with("minecraft:smoker") || n.starts_with("minecraft:blast_furnace")) &&
-                     n.find("lit=true") != std::string::npos)
-                k = AmbFurnace;
-            if (n.starts_with("minecraft:potent_sulfur") && registry_.property(id, "potent_sulfur_state") != "dry") k = AmbSulfur;
-            blockKinds_[id] = u8(k + 1);
+    return false;
+}
+
+bool Particles::fullCollision(u16 id) const {  // isCollisionShapeFullBlock
+    const BlockInfo& b = registry_.infos()[id];
+    for (u32 i = 0; i < b.collisionCount; ++i) {
+        const Box& s = registry_.box(b.collisionFirst + i);
+        if (s.min[0] <= 1e-4f && s.min[1] <= 1e-4f && s.min[2] <= 1e-4f && s.max[0] >= 1 - 1e-4f && s.max[1] >= 1 - 1e-4f &&
+            s.max[2] >= 1 - 1e-4f)
+            return true;
+    }
+    return false;
+}
+
+bool Particles::tagged(std::string_view tag, u16 id) const {
+    if (!blockTag) return false;
+    const std::string& n = registry_.name(id);
+    return blockTag(tag, std::string_view(n).substr(0, n.find('[')));
+}
+
+void Particles::localSound(const char* id, double x, double y, double z, float volume, float pitch, bool ambientCategory) {
+    if (audio::AudioSystem* a = audio::instance()) {
+        const double pos[3] = {x, y, z};
+        a->playNetwork(-1, std::string("minecraft:") + id, ambientCategory ? audio::Category::Ambient : audio::Category::Block, pos,
+                       volume, pitch);
+    }
+}
+
+// Level.isRainingAt: raining, the sky above (no motion-blocking block higher up) and a biome where it rains.
+bool Particles::rainingAt(int x, int y, int z) {
+    const float rain = rainOverride_ >= 0 ? rainOverride_ : rain_;
+    if (rain <= 0.2f) return false;
+    const u8 biome = world_.biomeAt(x, z);
+    if (biome != World::kUnknownBiome) {
+        const std::string_view b = World::biomeNameView(biome);
+        if (b.find("desert") != b.npos || b.find("savanna") != b.npos || b.find("badlands") != b.npos || b.find("snowy") != b.npos ||
+            b.find("frozen") != b.npos || b.find("ice") != b.npos || b.find("grove") != b.npos || b.find("peaks") != b.npos)
+            return false;
+    }
+    for (int yy = y; yy < y + 64; ++yy) {
+        const u16 id = blockAt(x, yy, z);
+        if (id && (registry_.infos()[id].collisionCount || registry_.infos()[id].fluid)) return false;
+    }
+    return true;
+}
+
+int Particles::surfaceY(int x, int z, bool motionBlocking) {  // Heightmap WORLD_SURFACE / MOTION_BLOCKING_NO_LEAVES
+    const int top = (world_.maxSectionY() + 1) * 16 - 1, bottom = world_.minSectionY() * 16;
+    for (int y = top; y >= bottom; --y) {
+        const u16 id = blockAt(x, y, z);
+        if (!id) continue;
+        if (!motionBlocking) return y + 1;
+        const BlockInfo& b = registry_.infos()[id];
+        if ((b.collisionCount || b.fluid || b.waterlogged) && baseName(id).find("leaves") == std::string_view::npos) return y + 1;
+    }
+    return bottom;
+}
+
+u8 Particles::ambientKind(u16 id) {
+    if (blockKinds_.size() <= id) blockKinds_.resize(size_t(id) + 1, 0);
+    if (blockKinds_[id]) return u8(blockKinds_[id] - 1);
+    const std::string_view n = baseName(id);
+    u8 k = AmbNone;
+    if (n == "torch") k = AmbTorch;
+    else if (n == "wall_torch") k = AmbWallTorch;
+    else if (n == "soul_torch") k = AmbSoulTorch;
+    else if (n == "soul_wall_torch") k = AmbSoulWallTorch;
+    else if (n == "copper_torch") k = AmbCopperTorch;
+    else if (n == "copper_wall_torch") k = AmbCopperWallTorch;
+    else if (n == "redstone_torch") k = AmbRedstoneTorch;
+    else if (n == "redstone_wall_torch") k = AmbRedstoneWallTorch;
+    else if (n.ends_with("leaves")) k = AmbLeaves;
+    else if (n == "campfire") k = AmbCampfire;
+    else if (n == "soul_campfire") k = AmbSoulCampfire;
+    else if (n == "furnace") k = AmbFurnace;
+    else if (n == "blast_furnace") k = AmbBlastFurnace;
+    else if (n == "smoker") k = AmbSmoker;
+    else if (n == "potent_sulfur") k = AmbSulfur;
+    else if (n.ends_with("candle_cake")) k = AmbCandleCake;
+    else if (n == "candle" || n.ends_with("_candle")) k = AmbCandle;
+    else if (n == "fire") k = AmbFire;
+    else if (n == "soul_fire") k = AmbSoulFire;
+    else if (n == "beehive" || n == "bee_nest") k = AmbBeehive;
+    else if (n == "brewing_stand") k = AmbBrewing;
+    else if (n == "suspicious_sand" || n == "suspicious_gravel") k = AmbBrushable;
+    else if (n == "bubble_column") k = AmbBubbleColumn;
+    else if (n == "creaking_heart") k = AmbCreakingHeart;
+    else if (n == "crying_obsidian") k = AmbCryingObsidian;
+    else if (n == "dried_ghast") k = AmbDriedGhast;
+    else if (n == "dead_bush") k = AmbDeadBush;
+    else if (n == "short_dry_grass" || n == "tall_dry_grass") k = AmbDryGrass;
+    else if (n == "enchanting_table") k = AmbEnchanting;
+    else if (n == "end_gateway") k = AmbEndGateway;
+    else if (n == "end_portal") k = AmbEndPortal;
+    else if (n == "end_rod") k = AmbEndRod;
+    else if (n == "ender_chest") k = AmbEnderChest;
+    else if (n == "open_eyeblossom") k = AmbEyeblossom;
+    else if (n == "sand" || n == "red_sand") k = AmbSand;
+    else if (n == "gravel" || n.ends_with("_concrete_powder") || n.ends_with("anvil") || n == "dragon_egg") k = AmbFalling;
+    else if (n == "firefly_bush") k = AmbFireflyBush;
+    else if (n == "pale_hanging_moss") k = AmbHangingMoss;
+    else if (n == "lever") k = AmbLever;
+    else if (n.ends_with("lightning_rod")) k = AmbLightningRod;
+    else if (n == "mycelium") k = AmbMycelium;
+    else if (n == "nether_portal") k = AmbNetherPortal;
+    else if (n == "pointed_dripstone") k = AmbDripstone;
+    else if (n == "redstone_ore" || n == "deepslate_redstone_ore") k = AmbRedstoneOre;
+    else if (n == "redstone_wire") k = AmbRedstoneWire;
+    else if (n == "repeater") k = AmbRepeater;
+    else if (n == "respawn_anchor") k = AmbRespawnAnchor;
+    else if (n == "sculk_sensor" || n == "calibrated_sculk_sensor") k = AmbSculkSensor;
+    else if (n == "spore_blossom") k = AmbSporeBlossom;
+    else if (n == "wet_sponge") k = AmbWetSponge;
+    else if (n == "wither_rose") k = AmbWitherRose;
+    blockKinds_[id] = u8(k + 1);
+    return k;
+}
+
+bool Particles::canBurn(u16 id) {  // FireBlock.canBurn: flammable
+    const std::string_view n = baseName(id);
+    if (n.ends_with("_wool") || n.ends_with("_wool_stairs") || n.ends_with("_wool_slab") || (n.ends_with("_carpet") && n != "moss_carpet"))
+        return true;
+    if (flammable_.empty())
+        for (const char* f : kFlammable) flammable_.insert(f);
+    return flammable_.count(std::string(n)) != 0;
+}
+
+// The biome's visual/ambient_particles (worldgen/biome/<name>.json): (particle type, probability).
+const std::vector<std::pair<int, float>>& Particles::biomeParticles(u8 biome) {
+    auto it = biomeParticles_.find(biome);
+    if (it != biomeParticles_.end()) return it->second;
+    std::vector<std::pair<int, float>>& out = biomeParticles_[biome];
+    const std::string name(World::biomeNameView(biome));
+    const size_t c = name.find(':');
+    std::vector<u8> bytes;
+    if (c != std::string::npos &&
+        AssetSource::data().read("data/" + name.substr(0, c) + "/worldgen/biome/" + name.substr(c + 1) + ".json", bytes)) {
+        const nlohmann::json j = nlohmann::json::parse(bytes.begin(), bytes.end(), nullptr, false);
+        if (j.is_object() && j.contains("attributes") && j["attributes"].contains("minecraft:visual/ambient_particles")) {
+            const nlohmann::json& a = j["attributes"]["minecraft:visual/ambient_particles"];
+            const nlohmann::json& list = a.is_object() && a.contains("argument") ? a["argument"] : a;
+            if (list.is_array())
+                for (const auto& e : list) {
+                    if (!e.is_object() || !e.contains("particle")) continue;
+                    const nlohmann::json& p = e["particle"];
+                    std::string type = p.is_object() ? p.value("type", "") : p.is_string() ? p.get<std::string>() : "";
+                    if (type.starts_with("minecraft:")) type = type.substr(10);
+                    const int t = typeId(type);
+                    if (t >= 0) out.push_back({t, e.value("probability", 0.0f)});
+                }
         }
-        return u8(blockKinds_[id] - 1);
-    };
-    auto facingStep = [&](u16 id, int& sx, int& sz) {
-        const std::string_view f = registry_.property(id, "facing");
-        sx = f == "east" ? 1 : f == "west" ? -1 : 0;
-        sz = f == "south" ? 1 : f == "north" ? -1 : 0;
-    };
+    }
+    return out;
+}
+
+void Particles::ambient(const double cam[3]) {
+    const int cx = int(std::floor(cam[0])), cy = int(std::floor(cam[1])), cz = int(std::floor(cam[2]));
+    static u16 markerBlock = 0;
+    static std::string markerName;
+    if (markerName != markerBlock_) markerName = markerBlock_, markerBlock = 0;
     for (int i = 0; i < 667; ++i)
         for (int radius : {16, 32}) {
             const int x = cx + int(rng_() % u32(radius)) - int(rng_() % u32(radius));
             const int y = cy + int(rng_() % u32(radius)) - int(rng_() % u32(radius));
             const int z = cz + int(rng_() % u32(radius)) - int(rng_() % u32(radius));
             const u16 id = blockAt(x, y, z);
-            if (!id) continue;
-            const u8 k = classify(id);
-            switch (k) {
-                case AmbTorch:
-                case AmbSoulTorch:
-                    add(ids[1], x + 0.5, y + 0.7, z + 0.5, 0, 0, 0);
-                    add(k == AmbTorch ? ids[0] : ids[2], x + 0.5, y + 0.7, z + 0.5, 0, 0, 0);
-                    break;
-                case AmbWallTorch:
-                case AmbSoulWallTorch: {
-                    int sx, sz;
-                    facingStep(id, sx, sz);
-                    const double px = x + 0.5 - 0.27 * sx, py = y + 0.7 + 0.22, pz = z + 0.5 - 0.27 * sz;
-                    add(ids[1], px, py, pz, 0, 0, 0);
-                    add(k == AmbWallTorch ? ids[0] : ids[2], px, py, pz, 0, 0, 0);
-                    break;
-                }
-                case AmbTinted:
-                case AmbCherry:
-                case AmbPale: {
-                    const float chance = k == AmbCherry ? 0.1f : k == AmbPale ? 0.02f : 0.01f;
-                    if (randf() >= chance) break;
-                    const BlockInfo& below = registry_.infos()[blockAt(x, y - 1, z)];
-                    if (below.occludes) break;
-                    Options o;
-                    o.hasColor = true;
-                    o.color = 0xFF48B518;  // FoliageColor default (no biome blending here)
-                    add(k == AmbTinted ? ids[3] : k == AmbCherry ? ids[4] : ids[5], x + double(randf()), y - 0.05,
-                        z + double(randf()), 0, 0, 0, &o);
-                    break;
-                }
-                case AmbLava:
-                    if (rng_() % 100 == 0 && blockAt(x, y + 1, z) == 0)
-                        add(ids[6], x + double(randf()), y + 1.0, z + double(randf()), 0, 0, 0);
-                    if (rng_() % 10 == 0) fluidDrip(id, x, y, z, ids[9]);
-                    break;
-                case AmbWater:
-                    if (rng_() % 10 == 0) fluidDrip(id, x, y, z, ids[8]);
-                    break;
-                case AmbSulfur:  // PotentSulfurBlock.animateTick: bubbles in the water above, now and then the gas sound
-                    if (waterSource(x, y + 1, z)) {
-                        static int bubbles = -2;
-                        if (bubbles == -2) bubbles = typeId("sulfur_bubbles");
-                        for (int i = 0; i < 2; ++i) add(bubbles, x + randf(), y + 1 + randf(), z + randf(), 0, 0, 0);
-                        if (rng_() % 10 == 0)
-                            if (audio::AudioSystem* a = audio::instance()) {
-                                const double pos[3] = {double(x), double(y), double(z)};
-                                a->playNetwork(-1, "minecraft:block.potent_sulfur.noxious_gas", audio::Category::Ambient, pos, 1.0f, 1.0f);
-                            }
-                    }
-                    break;
-                case AmbCampfire:  // BlockPos.asLong
-                    campfires_.insert((u64(x & 0x3FFFFFF) << 38) | (u64(z & 0x3FFFFFF) << 12) | u64(y & 0xFFF));
-                    break;
-                case AmbFurnace: {
-                    int sx, sz;
-                    facingStep(id, sx, sz);
-                    const double px = x + 0.5 + sx * 0.52 + (sx ? 0 : randf() * 0.6 - 0.3);
-                    const double pz = z + 0.5 + sz * 0.52 + (sz ? 0 : randf() * 0.6 - 0.3);
-                    const double py = y + randf() * 6.0 / 16.0;
-                    add(ids[1], px, py, pz, 0, 0, 0);
-                    add(ids[0], px, py, pz, 0, 0, 0);
-                    break;
-                }
-                default: break;
+            if (id) animateBlock(id, x, y, z);
+            if (!markerName.empty() && id && baseName(id) == markerName) {  // the held barrier / light (creative)
+                Options o;
+                o.block = netState(id);
+                static int marker = -2;
+                if (marker == -2) marker = typeId("block_marker");
+                add(marker, x + 0.5, y + 0.5, z + 0.5, 0, 0, 0, &o);
+            }
+            if (!fullCollision(id)) {  // EnvironmentAttributes.AMBIENT_PARTICLES of the biome
+                const u8 biome = world_.biomeAt(x, z);
+                if (biome != World::kUnknownBiome)
+                    for (const auto& [type, chance] : biomeParticles(biome))
+                        if (randf() <= chance) add(type, x + double(randf()), y + double(randf()), z + double(randf()), 0, 0, 0);
             }
         }
+}
+
+void Particles::animateBlock(u16 id, int x, int y, int z) {
+    auto R = [&] { return double(randf()); };
+    auto ri = [&](int n) { return int(rng_() % u32(n)); };
+    auto type = [&](const char* n) {
+        auto it = ambientTypes_.find(n);
+        if (it == ambientTypes_.end()) it = ambientTypes_.emplace(n, typeId(n)).first;
+        return it->second;
+    };
+    auto prop = [&](u16 b, std::string_view key) { return registry_.property(b, key); };
+    auto dust = [&](u32 argb, float scale, double px, double py, double pz) {
+        Options o;
+        o.hasColor = true, o.color = argb, o.scale = scale;
+        add(type("dust"), px, py, pz, 0, 0, 0, &o);
+    };
+    auto isFree = [&](u16 b) {  // FallingBlock.isFree
+        const BlockInfo& i = registry_.infos()[b];
+        return b == 0 || tagged("minecraft:fire", b) || i.fluid || i.replaceable;
+    };
+    auto below = [&](const char* particle, const Options* o) { add(type(particle), x + R(), y - 0.05, z + R(), 0, 0, 0, o); };
+    const std::string_view facing = prop(id, "facing");
+    const int fd = dirOf(facing);
+    const BlockInfo& info = registry_.infos()[id];
+    const u8 kind = ambientKind(id);
+    switch (kind) {
+        case AmbTorch:
+        case AmbSoulTorch:
+        case AmbCopperTorch: {  // TorchBlock
+            add(type("smoke"), x + 0.5, y + 0.7, z + 0.5, 0, 0, 0);
+            add(type(kind == AmbTorch ? "flame" : kind == AmbSoulTorch ? "soul_fire_flame" : "copper_fire_flame"), x + 0.5, y + 0.7, z + 0.5, 0, 0, 0);
+            break;
+        }
+        case AmbWallTorch:
+        case AmbSoulWallTorch:
+        case AmbCopperWallTorch: {  // WallTorchBlock: 0.27 out from the wall, 0.22 higher
+            if (fd < 2) break;
+            const int o = opposite(fd);
+            const double px = x + 0.5 + 0.27 * kStep[o][0], py = y + 0.7 + 0.22, pz = z + 0.5 + 0.27 * kStep[o][2];
+            add(type("smoke"), px, py, pz, 0, 0, 0);
+            add(type(kind == AmbWallTorch ? "flame" : kind == AmbSoulWallTorch ? "soul_fire_flame" : "copper_fire_flame"), px, py, pz, 0, 0, 0);
+            break;
+        }
+        case AmbRedstoneTorch:
+            if (prop(id, "lit") == "true")
+                dust(0xFFFF0000, 1.0f, x + 0.5 + (R() - 0.5) * 0.2, y + 0.7 + (R() - 0.5) * 0.2, z + 0.5 + (R() - 0.5) * 0.2);
+            break;
+        case AmbRedstoneWallTorch:
+            if (prop(id, "lit") == "true" && fd >= 2) {
+                const int o = opposite(fd);
+                dust(0xFFFF0000, 1.0f, x + 0.5 + (R() - 0.5) * 0.2 + 0.27 * kStep[o][0], y + 0.7 + (R() - 0.5) * 0.2 + 0.22,
+                     z + 0.5 + (R() - 0.5) * 0.2 + 0.27 * kStep[o][2]);
+            }
+            break;
+        case AmbLeaves: {
+            const std::string_view n = baseName(id);
+            const LeafDef* def = nullptr;
+            for (const LeafDef& l : kLeaves)
+                if (n == l.block) def = &l;
+            if (!def) break;
+            const u16 under = blockAt(x, y - 1, z);
+            // LeavesBlock: water drips under leaves in the rain; poplars rustle beside a log
+            if (rainingAt(x, y + 1, z) && ri(15) == 1 && (!registry_.infos()[under].occludes || !faceSturdy(under, 1)))
+                below("dripping_water", nullptr);
+            if (def->poplar && ri(300) == 0) {  // AmbientLeavesBlockSoundPlayer
+                int logs = 0, same = 0;
+                for (int d = 2; d < 6; ++d) {
+                    const u16 nb = blockAt(x + kStep[d][0], y, z + kStep[d][2]);
+                    if (tagged("minecraft:required_for_poplar_leaf_ambience", nb)) ++logs;
+                    if (baseName(nb) == n) ++same;
+                    if (logs == 1 && same == 3) {
+                        localSound("block.poplar_leaves.ambient", x, y, z, 1.0f, 1.0f, true);
+                        break;
+                    }
+                }
+            }
+            if (def->particle && randf() < def->chance && !faceSturdy(under, 1)) {  // makeFallingLeavesParticles
+                Options o;
+                if (def->color == 1) o.hasColor = true, o.color = 0xFF000000 | (foliageColor ? foliageColor(x, z) : 0x48B518);
+                else if (def->color) o.hasColor = true, o.color = def->color;
+                below(def->particle, o.hasColor ? &o : nullptr);
+            }
+            break;
+        }
+        case AmbCampfire:
+        case AmbSoulCampfire:  // CampfireBlock (the cosy / signal smoke: CampfireBlockEntity, below)
+            if (prop(id, "lit") != "true") break;
+            campfires_.insert((u64(x & 0x3FFFFFF) << 38) | (u64(z & 0x3FFFFFF) << 12) | u64(y & 0xFFF));
+            if (ri(10) == 0) localSound("block.campfire.crackle", x + 0.5, y + 0.5, z + 0.5, float(0.5 + R()), float(R() * 0.7 + 0.6), false);
+            if (kind == AmbCampfire && ri(5) == 0) add(type("lava"), x + 0.5, y + 0.5, z + 0.5, R() / 2.0, 5.0e-5, R() / 2.0);
+            break;
+        case AmbFurnace:
+        case AmbBlastFurnace: {
+            if (prop(id, "lit") != "true" || fd < 2) break;
+            if (R() < 0.1)
+                localSound(kind == AmbFurnace ? "block.furnace.fire_crackle" : "block.blastfurnace.fire_crackle", x + 0.5, y, z + 0.5, 1, 1, false);
+            const double ss = R() * 0.6 - 0.3;
+            const double dx = kStep[fd][0] ? kStep[fd][0] * 0.52 : ss, dz = kStep[fd][2] ? kStep[fd][2] * 0.52 : ss;
+            const double dy = R() * (kind == AmbFurnace ? 6.0 : 9.0) / 16.0;
+            add(type("smoke"), x + 0.5 + dx, y + dy, z + 0.5 + dz, 0, 0, 0);
+            if (kind == AmbFurnace) add(type("flame"), x + 0.5 + dx, y + dy, z + 0.5 + dz, 0, 0, 0);
+            break;
+        }
+        case AmbSmoker:
+            if (prop(id, "lit") != "true") break;
+            if (R() < 0.1) localSound("block.smoker.smoke", x + 0.5, y, z + 0.5, 1, 1, false);
+            add(type("smoke"), x + 0.5, y + 1.1, z + 0.5, 0, 0, 0);
+            break;
+        case AmbSulfur:  // PotentSulfurBlock: bubbles in the water above, now and then the gas sound
+            if (prop(id, "potent_sulfur_state") != "dry" && waterSource(x, y + 1, z)) {
+                for (int i = 0; i < 2; ++i) add(type("sulfur_bubbles"), x + R(), y + 1 + R(), z + R(), 0, 0, 0);
+                if (ri(10) == 0) localSound("block.potent_sulfur.noxious_gas", x, y, z, 1, 1, true);
+            }
+            break;
+        case AmbCandle:
+        case AmbCandleCake: {  // AbstractCandleBlock.addParticlesAndSound at each wick
+            if (prop(id, "lit") != "true") break;
+            static const float kWicks[4][4][3] = {{{8, 8, 8}},
+                                                  {{6, 7, 8}, {10, 8, 7}},
+                                                  {{8, 5, 10}, {6, 7, 8}, {9, 8, 7}},
+                                                  {{7, 5, 9}, {10, 7, 9}, {6, 7, 6}, {9, 8, 6}}};
+            const std::string_view cs = prop(id, "candles");
+            const int count = kind == AmbCandleCake ? 1 : std::clamp(cs.empty() ? 1 : cs[0] - '0', 1, 4);
+            for (int w = 0; w < count; ++w) {
+                const float* o = kind == AmbCandleCake ? nullptr : kWicks[count - 1][w];
+                const double px = x + (o ? o[0] : 8) / 16.0, py = y + (o ? o[1] : 16) / 16.0, pz = z + (o ? o[2] : 8) / 16.0;
+                const float chance = randf();
+                if (chance < 0.3f) {
+                    add(type("smoke"), px, py, pz, 0, 0, 0);
+                    if (chance < 0.17f) localSound("block.candle.ambient", px + 0.5, py + 0.5, pz + 0.5, float(1 + R()), float(R() * 0.7 + 0.3), false);
+                }
+                add(type("small_flame"), px, py, pz, 0, 0, 0);
+            }
+            break;
+        }
+        case AmbFire:
+        case AmbSoulFire: {  // BaseFireBlock
+            if (ri(24) == 0) localSound("block.fire.ambient", x + 0.5, y + 0.5, z + 0.5, float(1 + R()), float(R() * 0.7 + 0.3), false);
+            const u16 under = blockAt(x, y - 1, z);
+            const bool soul = kind == AmbSoulFire;  // SoulFireBlock.canBurn: everything
+            if (!(soul || canBurn(under)) && !faceSturdy(under, 1)) {
+                auto side = [&](int dx, int dy, int dz, int axis, bool high) {
+                    const u16 nb = blockAt(x + dx, y + dy, z + dz);
+                    if (!canBurn(nb)) return;
+                    for (int i = 0; i < 2; ++i) {
+                        double p[3] = {x + R(), y + R(), z + R()};
+                        p[axis] = (axis == 0 ? x : axis == 1 ? y : z) + (high ? 1 - R() * 0.1 : R() * 0.1);
+                        add(type("large_smoke"), p[0], p[1], p[2], 0, 0, 0);
+                    }
+                };
+                side(-1, 0, 0, 0, false), side(1, 0, 0, 0, true), side(0, 0, -1, 2, false), side(0, 0, 1, 2, true), side(0, 1, 0, 1, true);
+            } else {
+                for (int i = 0; i < 3; ++i) add(type("large_smoke"), x + R(), y + R() * 0.5 + 0.5, z + R(), 0, 0, 0);
+            }
+            break;
+        }
+        case AmbBeehive: {  // BeehiveBlock.trySpawnDripParticles (a full block: the drip forms under it)
+            const std::string_view h = prop(id, "honey_level");
+            if (h.empty() || h[0] - '0' < 5 || info.waterlogged || randf() < 0.3f) break;
+            const u16 under = blockAt(x, y - 1, z);
+            const BlockInfo& u = registry_.infos()[under];
+            float top = 0;
+            for (u32 i = 0; i < u.collisionCount; ++i) top = std::max(top, registry_.box(u.collisionFirst + i).max[1]);
+            if ((top < 1.0f || !fullCollision(under)) && !u.fluid && !u.waterlogged) add(type("dripping_honey"), x + R(), y - 0.05, z + R(), 0, 0, 0);
+            break;
+        }
+        case AmbBrewing:
+            add(type("smoke"), x + 0.4 + R() * 0.2, y + 0.7 + R() * 0.3, z + 0.4 + R() * 0.2, 0, 0, 0);
+            break;
+        case AmbBrushable:
+        case AmbFalling:
+        case AmbSand:  // FallingBlock / BrushableBlock: dust under the block when it could fall
+            if (ri(16) == 0 && isFree(blockAt(x, y - 1, z))) {
+                Options o;
+                o.block = netState(id);
+                below("falling_dust", &o);
+            }
+            if (kind == AmbSand && blockAt(x, y + 1, z) == 0 && ri(2100) == 0 && desertSandAround(x, y, z))  // SandBlock
+                localSound("block.sand.idle", x, y, z, 1, 1, true);
+            break;
+        case AmbBubbleColumn:
+            if (prop(id, "drag") == "true") {
+                add(type("current_down"), x + 0.5, y + 0.8, z, 0, 0, 0);
+                if (ri(200) == 0) localSound("block.bubble_column.whirlpool_ambient", x, y, z, float(0.2 + R() * 0.2), float(0.9 + R() * 0.15), false);
+            } else {
+                add(type("bubble_column_up"), x + 0.5, y, z + 0.5, 0, 0.04, 0);
+                add(type("bubble_column_up"), x + R(), y + R(), z + R(), 0, 0.04, 0);
+                if (ri(200) == 0) localSound("block.bubble_column.upwards_ambient", x, y, z, float(0.2 + R() * 0.2), float(0.9 + R() * 0.15), false);
+            }
+            break;
+        case AmbCreakingHeart: {  // the creaking_active timeline (night), not uprooted, between pale oak logs on its axis
+            if (!ambientNight_ || prop(id, "creaking_heart_state") == "uprooted" || ri(16) != 0) break;
+            const std::string_view axis = prop(id, "axis");
+            const int a = axis == "x" ? 0 : axis == "z" ? 2 : 1;
+            bool logs = true;
+            for (int s : {-1, 1}) {
+                int p[3] = {x, y, z};
+                p[a] += s;
+                const u16 nb = blockAt(p[0], p[1], p[2]);
+                if (!tagged("minecraft:pale_oak_logs", nb) || prop(nb, "axis") != axis) logs = false;
+            }
+            if (logs) localSound("block.creaking_heart.idle", x, y, z, 1, 1, false);
+            break;
+        }
+        case AmbCryingObsidian:
+        case AmbWetSponge: {  // CryingObsidianBlock / WetSpongeBlock: a drop on a random open side (not the top)
+            if (kind == AmbCryingObsidian && ri(5) != 0) break;
+            const int d = ri(6);
+            if (d == 1) break;
+            const u16 nb = blockAt(x + kStep[d][0], y + kStep[d][1], z + kStep[d][2]);
+            if (info.occludes && faceSturdy(nb, opposite(d))) break;
+            if (kind == AmbCryingObsidian) {
+                auto off = [&](int s) { return s == 0 ? R() : 0.5 + s * 0.6; };
+                add(type("dripping_obsidian_tear"), x + off(kStep[d][0]), y + off(kStep[d][1]), z + off(kStep[d][2]), 0, 0, 0);
+            } else {
+                double px = x, py = y, pz = z;
+                if (d == 0) py -= 0.05, px += R(), pz += R();
+                else {
+                    py += R() * 0.8;
+                    if (d >= 4) pz += R(), px += d == 5 ? 1.1 : 0.05;
+                    else px += R(), pz += d == 3 ? 1.1 : 0.05;
+                }
+                add(type("dripping_water"), px, py, pz, 0, 0, 0);
+            }
+            break;
+        }
+        case AmbDriedGhast:
+            if (!info.waterlogged) {
+                if (ri(40) == 0 && tagged("minecraft:triggers_ambient_dried_ghast_block_sounds", blockAt(x, y - 1, z)))
+                    localSound("block.dried_ghast.ambient", x + 0.5, y + 0.5, z + 0.5, 1, 1, false);
+                if (ri(6) == 0) add(type("white_smoke"), x + 0.5, y + 0.5, z + 0.5, 0, 0.02, 0);
+            } else {
+                if (ri(40) == 0) localSound("block.dried_ghast.ambient_water", x + 0.5, y + 0.5, z + 0.5, 1, 1, false);
+                if (ri(6) == 0)
+                    add(type("happy_villager"), x + 0.5 + (R() * 2 - 1) / 3.0, y + 0.9, z + 0.5 + (R() * 2 - 1) / 3.0, 0, R(), 0);
+            }
+            break;
+        case AmbDeadBush:  // AmbientDesertBlockSoundsPlayer.playAmbientDeadBushSounds
+            if (ri(130) == 0) {
+                const u16 under = blockAt(x, y - 1, z);
+                if ((baseName(under) == "red_sand" || tagged("minecraft:terracotta", under)) && ri(3) != 0) break;
+                if (desertVegetationBelow(x, y, z)) localSound("block.deadbush.idle", x, y, z, 1, 1, true);
+            }
+            break;
+        case AmbDryGrass:  // playAmbientDryGrassSounds: at the player (Level.playPlayerSound)
+            if (ri(200) == 0 && desertVegetationBelow(x, y, z)) localSound("block.dry_grass.ambient", cam_[0], cam_[1], cam_[2], 1, 1, true);
+            break;
+        case AmbEnchanting:  // EnchantingTableBlock: glyphs from the bookshelves around it
+            for (int ox = -2; ox <= 2; ++ox)
+                for (int oz = -2; oz <= 2; ++oz) {
+                    if (std::abs(ox) != 2 && std::abs(oz) != 2) continue;
+                    for (int oy = 0; oy <= 1; ++oy) {
+                        if (ri(16) != 0) continue;
+                        if (!tagged("minecraft:enchantment_power_provider", blockAt(x + ox, y + oy, z + oz)) ||
+                            !tagged("minecraft:enchantment_power_transmitter", blockAt(x + ox / 2, y + oy, z + oz / 2)))
+                            continue;
+                        add(type("enchant"), x + 0.5, y + 2.0, z + 0.5, ox + R() - 0.5, oy - R() - 1.0, oz + R() - 0.5);
+                    }
+                }
+            break;
+        case AmbEndGateway: {  // TheEndGatewayBlockEntity.getParticleAmount: the faces that show
+            int count = 0;
+            for (int d = 0; d < 6; ++d) count += registry_.infos()[blockAt(x + kStep[d][0], y + kStep[d][1], z + kStep[d][2])].occludes ? 0 : 1;
+            for (int i = 0; i < count; ++i) {
+                double px = x + R(), py = y + R(), pz = z + R();
+                double xa = (R() - 0.5) * 0.5, ya = (R() - 0.5) * 0.5, za = (R() - 0.5) * 0.5;
+                const int flip = ri(2) * 2 - 1;
+                if (ri(2)) pz = z + 0.5 + 0.25 * flip, za = R() * 2.0 * flip;
+                else px = x + 0.5 + 0.25 * flip, xa = R() * 2.0 * flip;
+                add(type("portal"), px, py, pz, xa, ya, za);
+            }
+            break;
+        }
+        case AmbEndPortal:
+            add(type("smoke"), x + R(), y + 0.8, z + R(), 0, 0, 0);
+            break;
+        case AmbEndRod: {
+            if (fd < 0) break;
+            const double px = x + 0.55 - R() * 0.1, py = y + 0.55 - R() * 0.1, pz = z + 0.55 - R() * 0.1;
+            const double r = 0.4 - (R() + R()) * 0.4;
+            if (ri(5) == 0)
+                add(type("end_rod"), px + kStep[fd][0] * r, py + kStep[fd][1] * r, pz + kStep[fd][2] * r, gauss() * 0.005, gauss() * 0.005, gauss() * 0.005);
+            break;
+        }
+        case AmbEnderChest:
+            for (int i = 0; i < 3; ++i) {
+                const int fx = ri(2) * 2 - 1, fz = ri(2) * 2 - 1;
+                add(type("portal"), x + 0.5 + 0.25 * fx, y + R(), z + 0.5 + 0.25 * fz, R() * fx, (R() - 0.5) * 0.125, R() * fz);
+            }
+            break;
+        case AmbEyeblossom:
+            if (ri(700) == 0 && baseName(blockAt(x, y - 1, z)) == "pale_moss_block") localSound("block.eyeblossom.idle", x, y, z, 1, 1, true);
+            break;
+        case AmbFireflyBush: {  // the firefly_bush_sounds timeline (night), open sky; fireflies where it is dark enough
+            if (ri(30) == 0 && ambientNight_ && surfaceY(x, z, true) <= y) localSound("block.firefly_bush.idle", x + 0.5, y + 0.5, z + 0.5, 1, 1, true);
+            const u8 l = lightAt(x + 0.5, y + 0.5, z + 0.5);
+            const int raw = std::max(int(l & 15), std::max(int(l >> 4) - skyDarken_, 0));  // getMaxLocalRawBrightness
+            if (raw <= 13 && R() <= 0.7) add(type("firefly"), x + R() * 10 - 5, y + R() * 5, z + R() * 10 - 5, 0, 0, 0);
+            break;
+        }
+        case AmbHangingMoss:
+            if (ri(500) == 0) {
+                const u16 above = blockAt(x, y + 1, z);
+                if (tagged("minecraft:pale_oak_logs", above) || baseName(above) == "pale_oak_leaves")
+                    localSound("block.pale_hanging_moss.idle", x, y, z, 1, 1, true);
+            }
+            break;
+        case AmbLever: {  // LeverBlock.makeParticle(0.5)
+            if (prop(id, "powered") != "true" || randf() >= 0.25f || fd < 0) break;
+            const std::string_view face = prop(id, "face");
+            const int conn = face == "ceiling" ? 0 : face == "floor" ? 1 : fd;  // getConnectedDirection
+            const int a = opposite(fd), b = opposite(conn);
+            dust(0xFFFF0000, 0.5f, x + 0.5 + 0.1 * kStep[a][0] + 0.2 * kStep[b][0], y + 0.5 + 0.1 * kStep[a][1] + 0.2 * kStep[b][1],
+                 z + 0.5 + 0.1 * kStep[a][2] + 0.2 * kStep[b][2]);
+            break;
+        }
+        case AmbLightningRod: {  // sparks on the top rod of a column while it thunders
+            const float rain = rainOverride_ >= 0 ? rainOverride_ : rain_;
+            if (thunder_ * rain <= 0.9f || ri(200) > int(ticks_ % 200) || fd < 0 || y != surfaceY(x, z, false) - 1) break;
+            const int axis = fd < 2 ? 1 : fd < 4 ? 2 : 0;
+            const int n = 1 + ri(2);
+            for (int i = 0; i < n; ++i) {
+                double p[3], v[3];
+                for (int k = 0; k < 3; ++k) {
+                    p[k] = (k == 0 ? x : k == 1 ? y : z) + 0.5 + (R() * 2 - 1) * (k == axis ? 0.5 : 0.125);
+                    v[k] = k == axis ? R() * 2 - 1 : 0;
+                }
+                add(type("electric_spark"), p[0], p[1], p[2], v[0], v[1], v[2]);
+            }
+            break;
+        }
+        case AmbMycelium:
+            if (ri(10) == 0) add(type("mycelium"), x + R(), y + 1.1, z + R(), 0, 0, 0);
+            break;
+        case AmbNetherPortal: {
+            if (ri(100) == 0) localSound("block.portal.ambient", x + 0.5, y + 0.5, z + 0.5, 0.5f, float(R() * 0.4 + 0.8), false);
+            const bool alongX = baseName(blockAt(x - 1, y, z)) == "nether_portal" || baseName(blockAt(x + 1, y, z)) == "nether_portal";
+            for (int i = 0; i < 4; ++i) {
+                double px = x + R(), py = y + R(), pz = z + R();
+                double xa = (R() - 0.5) * 0.5, ya = (R() - 0.5) * 0.5, za = (R() - 0.5) * 0.5;
+                const int flip = ri(2) * 2 - 1;
+                if (!alongX) px = x + 0.5 + 0.25 * flip, xa = R() * 2.0 * flip;
+                else pz = z + 0.5 + 0.25 * flip, za = R() * 2.0 * flip;
+                add(type("portal"), px, py, pz, xa, ya, za);
+            }
+            break;
+        }
+        case AmbDripstone: {  // PointedDripstoneBlock: a free-hanging stalactite tip drips what is above its root
+            if (prop(id, "vertical_direction") != "down" || prop(id, "thickness") != "tip" || info.waterlogged) break;
+            const float r = randf();
+            if (r > 0.12f) break;
+            int top = y;
+            for (int i = 0; i < 11 && baseName(blockAt(x, top + 1, z)) == "pointed_dripstone" && prop(blockAt(x, top + 1, z), "vertical_direction") == "down"; ++i)
+                ++top;
+            const u16 above = blockAt(x, top + 2, z);
+            const std::string_view an = baseName(above);
+            const BlockInfo& ai = registry_.infos()[above];
+            int fluid = 0;  // 1 water, 2 lava
+            if (an == "mud" && !ambientNether_) fluid = 1;
+            else if (an == "lava") fluid = 2;
+            else if (an == "water" || an == "bubble_column" || ai.waterlogged) fluid = 1;
+            if (!(r < 0.02f || fluid)) break;
+            const i64 seed = wg::positionSeed(x, 0, z);  // OffsetType.XZ, at most 0.125
+            const double ox = std::clamp((double(float(seed & 15) / 15.0f) - 0.5) * 0.5, -0.125, 0.125);
+            const double oz = std::clamp((double(float((seed >> 8) & 15) / 15.0f) - 0.5) * 0.5, -0.125, 0.125);
+            const bool lava = fluid == 2 || (fluid == 0 && ambientNether_);  // visual/default_dripstone_particle
+            add(type(lava ? "dripping_dripstone_lava" : "dripping_dripstone_water"), x + 0.5 + ox, y + 0.25, z + 0.5 + oz, 0, 0, 0);
+            break;
+        }
+        case AmbRedstoneOre:  // RedStoneOreBlock.spawnParticles on the open sides
+            if (prop(id, "lit") != "true") break;
+            for (int d = 0; d < 6; ++d) {
+                if (registry_.infos()[blockAt(x + kStep[d][0], y + kStep[d][1], z + kStep[d][2])].occludes) continue;
+                const int axis = d < 2 ? 1 : d < 4 ? 2 : 0;
+                double p[3];
+                for (int k = 0; k < 3; ++k) p[k] = k == axis ? 0.5 + 0.5625 * kStep[d][k] : R();
+                dust(0xFFFF0000, 1.0f, x + p[0], y + p[1], z + p[2]);
+            }
+            break;
+        case AmbRedstoneWire: {  // RedstoneWireBlock: along each connection, coloured by the power
+            const std::string_view ps = prop(id, "power");
+            const int power = ps.empty() ? 0 : std::atoi(std::string(ps).c_str());
+            if (power == 0) break;
+            const float f = float(power) / 15.0f;
+            const float red = f * 0.6f + 0.4f, green = std::clamp(f * f * 0.7f - 0.5f, 0.0f, 1.0f), blue = std::clamp(f * f * 0.6f - 0.7f, 0.0f, 1.0f);
+            const u32 color = 0xFF000000u | u32(red * 255.0f) << 16 | u32(green * 255.0f) << 8 | u32(blue * 255.0f);
+            auto line = [&](int from, int to, float a, float b) {  // spawnParticlesAlongLine
+                const float span = b - a;
+                if (randf() >= 0.2f * span) return;
+                const float t = a + span * randf();
+                dust(color, 1.0f, x + 0.5 + 0.4375 * kStep[from][0] + t * kStep[to][0], y + 0.5 + 0.4375 * kStep[from][1] + t * kStep[to][1],
+                     z + 0.5 + 0.4375 * kStep[from][2] + t * kStep[to][2]);
+            };
+            static const char* kSides[4] = {"north", "south", "west", "east"};
+            for (int i = 0; i < 4; ++i) {
+                const int d = 2 + i;
+                const std::string_view c = prop(id, kSides[i]);
+                if (c == "up") line(d, 1, -0.5f, 0.5f);
+                if (c == "up" || c == "side") line(0, d, 0.0f, 0.5f);
+                else line(0, d, 0.0f, 0.3f);
+            }
+            break;
+        }
+        case AmbRepeater: {
+            if (prop(id, "powered") != "true" || fd < 2) break;
+            const double px = x + 0.5 + (R() - 0.5) * 0.2, py = y + 0.4 + (R() - 0.5) * 0.2, pz = z + 0.5 + (R() - 0.5) * 0.2;
+            float offset = -5.0f;
+            if (ri(2)) {
+                const std::string_view ds = prop(id, "delay");
+                offset = float((ds.empty() ? 1 : ds[0] - '0') * 2 - 1);
+            }
+            offset /= 16.0f;
+            dust(0xFFFF0000, 1.0f, px + offset * kStep[fd][0], py, pz + offset * kStep[fd][2]);
+            break;
+        }
+        case AmbRespawnAnchor: {
+            const std::string_view ch = prop(id, "charges");
+            if (ch.empty() || ch[0] == '0') break;
+            if (ri(100) == 0) localSound("block.respawn_anchor.ambient", x + 0.5, y + 0.5, z + 0.5, 1, 1, false);
+            add(type("reverse_portal"), x + 0.5 + (0.5 - R()), y + 1.0, z + 0.5 + (0.5 - R()), 0, R() * 0.04, 0);
+            break;
+        }
+        case AmbSculkSensor: {
+            if (prop(id, "sculk_sensor_phase") != "active") break;
+            const int d = ri(6);
+            if (d < 2) break;
+            Options o;
+            o.hasColor = true, o.color = 0xFF39D6E0, o.color2 = 0xFFFF0000, o.scale = 1.0f;  // SCULK_TO_REDSTONE
+            add(type("dust_color_transition"), x + 0.5 + (kStep[d][0] == 0 ? 0.5 - R() : kStep[d][0] * 0.6), y + 0.25,
+                z + 0.5 + (kStep[d][2] == 0 ? 0.5 - R() : kStep[d][2] * 0.6), 0, R() * 0.04, 0, &o);
+            break;
+        }
+        case AmbSporeBlossom:
+            add(type("falling_spore_blossom"), x + R(), y + 0.7, z + R(), 0, 0, 0);
+            for (int i = 0; i < 14; ++i) {
+                const int px = x + ri(21) - 10, py = y - ri(10), pz = z + ri(21) - 10;
+                if (!fullCollision(blockAt(px, py, pz))) add(type("spore_blossom_air"), px + R(), py + R(), pz + R(), 0, 0, 0);
+            }
+            break;
+        case AmbWitherRose:  // the flower shape's centre
+            for (int i = 0; i < 3; ++i)
+                if (ri(2)) add(type("smoke"), x + 0.5 + R() / 5.0, y + (0.5 - R()), z + 0.5 + R() / 5.0, 0, 0, 0);
+            break;
+        default: break;
+    }
+    // The fluid: WaterFluid / LavaFluid.animateTick, then FluidState drips through the block below.
+    const std::string_view n = baseName(id);
+    const bool water = n == "water" || n == "bubble_column" || info.waterlogged, lava = n == "lava";
+    if (water) {
+        const std::string_view lv = n == "water" ? prop(id, "level") : std::string_view("0");
+        const int level = lv.empty() ? 0 : std::atoi(std::string(lv).c_str());
+        if (level != 0 && level < 8) {  // flowing, not falling
+            if (ri(64) == 0) localSound("block.water.ambient", x + 0.5, y + 0.5, z + 0.5, float(R() * 0.25 + 0.75), float(R() + 0.5), true);
+        } else if (ri(10) == 0) {
+            add(type("underwater"), x + R(), y + R(), z + R(), 0, 0, 0);
+        }
+        if (ri(10) == 0) fluidDrip(id, x, y, z, type("dripping_water"));
+    } else if (lava) {
+        if (blockAt(x, y + 1, z) == 0) {
+            if (ri(100) == 0) {
+                const double px = x + R(), py = y + 1.0, pz = z + R();
+                add(type("lava"), px, py, pz, 0, 0, 0);
+                localSound("block.lava.pop", px, py, pz, float(0.2 + R() * 0.2), float(0.9 + R() * 0.15), true);
+            }
+            if (ri(200) == 0) localSound("block.lava.ambient", x, y, z, float(0.2 + R() * 0.2), float(0.9 + R() * 0.15), true);
+        }
+        if (ri(10) == 0) fluidDrip(id, x, y, z, type("dripping_lava"));
+    }
+}
+
+// AmbientDesertBlockSoundsPlayer.shouldPlayDesertDryVegetationBlockSounds: two such blocks under the plant.
+bool Particles::desertVegetationBelow(int x, int y, int z) {
+    return tagged("minecraft:triggers_ambient_desert_dry_vegetation_block_sounds", blockAt(x, y - 1, z)) &&
+           tagged("minecraft:triggers_ambient_desert_dry_vegetation_block_sounds", blockAt(x, y - 2, z));
+}
+
+// AmbientDesertBlockSoundsPlayer.shouldPlayAmbientSandSound: sand surfaces 8 blocks away on 3 of the 4 sides.
+bool Particles::desertSandAround(int x, int y, int z) {
+    int found = 0, checked = 0;
+    for (int d = 2; d < 6; ++d) {
+        const int px = x + kStep[d][0] * 8, pz = z + kStep[d][2] * 8;
+        bool hit = false;
+        const int surface = surfaceY(px, pz, false) - 1;
+        if (std::abs(surface - y) > 5) {
+            u16 above = blockAt(px, y + 6, pz);
+            for (int i = 0; i < 10 && !hit; ++i) {
+                const u16 cur = blockAt(px, y + 5 - i, pz);
+                if (above == 0 && tagged("minecraft:triggers_ambient_desert_sand_block_sounds", cur)) hit = true;
+                above = cur;
+            }
+        } else {
+            hit = blockAt(px, surface + 1, pz) == 0 && tagged("minecraft:triggers_ambient_desert_sand_block_sounds", blockAt(px, surface, pz));
+        }
+        if (hit && found++ >= 3) return true;
+        ++checked;
+        if (4 - checked + found < 3) return false;
+    }
+    return false;
 }
 
 // ClientLevel.trySpawnDripParticles: a fluid drips through the ceiling block below it into the air under that.
@@ -2430,6 +3184,8 @@ void Particles::weather(const double cam[3]) {
     const int cx = int(std::floor(cam[0])), cy = int(std::floor(cam[1])), cz = int(std::floor(cam[2]));
     const int radius = 10, diameter = 2 * radius + 1;
     const int count = int(0.225f * float(diameter * diameter) * rain * rain);
+    int soundAt[3] = {};
+    bool haveSound = false;
     for (int i = 0; i < count; ++i) {
         const int x = cx + int(rng_() % u32(diameter)) - radius, z = cz + int(rng_() % u32(diameter)) - radius;
         const u8 biome = world_.biomeAt(x, z);
@@ -2456,7 +3212,18 @@ void Particles::weather(const double cam[3]) {
             const bool hot = n.starts_with("minecraft:lava") || n == "minecraft:magma_block" ||
                              (n.find("campfire") != std::string::npos && n.find("lit=true") != std::string::npos);
             add(hot ? smokeType : rainType, x + bx, y + top, z + bz, 0, 0, 0);
+            soundAt[0] = x, soundAt[1] = y, soundAt[2] = z, haveSound = true;
             break;
+        }
+    }
+    // ClientLevel.tickRain: now and then the rain sound at the last drop (muffled when it falls on a roof above).
+    if (haveSound && int(rng_() % 3) < rainSoundTime_++) {
+        rainSoundTime_ = 0;
+        const bool above = soundAt[1] > cy + 1 && surfaceY(cx, cz, true) > cy;
+        if (audio::AudioSystem* a = audio::instance()) {
+            const double pos[3] = {soundAt[0] + 0.5, soundAt[1] + 0.5, soundAt[2] + 0.5};
+            a->playNetwork(-1, above ? "minecraft:weather.rain.above" : "minecraft:weather.rain", audio::Category::Weather, pos,
+                           above ? 0.1f : 0.2f, above ? 0.5f : 1.0f);
         }
     }
 }
@@ -2511,6 +3278,7 @@ void Particles::tick() {
         if (type == 1) rainTarget_ = 1.0f, rain_ = 0.0f;  // start raining: the level ramps up via event 7
         else if (type == 2) rainTarget_ = 0.0f;
         else if (type == 7) rain_ = rainTarget_ = std::clamp(value, 0.0f, 1.0f);
+        else if (type == 8) thunder_ = std::clamp(value, 0.0f, 1.0f);  // THUNDER_LEVEL_CHANGE
     }
     weatherQueue_.clear();
     if (rain_ < rainTarget_) rain_ = std::min(rainTarget_, rain_ + 0.01f);
@@ -2654,6 +3422,7 @@ u32 Particles::build(GpuParticle* out, u32 max, const double cam[3], u32& opaque
             case SizeFlame: size *= 1.0f - s * s * 0.5f; break;
             case SizePortal: size *= 1.0f - (1.0f - s) * (1.0f - s); break;
             case SizeLava: size *= 1.0f - s * s; break;
+            case SizeReverse: size *= 1.0f - s / 1.5f; break;
             default: break;
         }
         float alpha = p.a;

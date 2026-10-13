@@ -164,6 +164,8 @@ struct Visuals::Impl {
     ItemRules* rules = nullptr;
     std::string playerName;
     std::function<int()> gameMode;
+    bool ambientNight = false, ambientNether = false;
+    int skyDarken = 0;
 
     // GPU
     Renderer* renderer = nullptr;
@@ -435,6 +437,16 @@ bool Visuals::addPasses(Renderer& renderer) {
         if (!renderer.addPass(&m.passes[i], stages[i])) return false;
     }
     return true;
+}
+
+void Visuals::setAmbientEnv(bool night, bool nether, int skyDarken) {
+    impl_->ambientNight = night, impl_->ambientNether = nether, impl_->skyDarken = skyDarken;
+}
+
+void Visuals::setParticleSources(std::function<bool(std::string_view, std::string_view)> blockTag, std::function<u32(int, int)> foliage) {
+    if (!impl_->particles) return;
+    impl_->particles->blockTag = std::move(blockTag);
+    impl_->particles->foliageColor = std::move(foliage);
 }
 
 void Visuals::setItemRules(ItemRules* rules) {
@@ -771,9 +783,9 @@ bool Visuals::Impl::createGpu(Renderer& r) {
         d.DepthStencilState.DepthWriteMask = depthWrite ? D3D12_DEPTH_WRITE_MASK_ALL : D3D12_DEPTH_WRITE_MASK_ZERO;
         d.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_GREATER_EQUAL;  // reversed Z
         d.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-        d.NumRenderTargets = targets == 0 ? 0 : targets == 1 ? 1 : 2;
+        d.NumRenderTargets = targets == 0 ? 0 : targets == 1 || targets == 4 ? 1 : 2;
         d.RTVFormats[0] = targets ? DXGI_FORMAT_R8G8B8A8_UNORM : DXGI_FORMAT_UNKNOWN;
-        if (targets >= 2) {
+        if (targets == 2 || targets == 3) {
             d.RTVFormats[1] = RenderPass::kMotionFormat;
             d.BlendState.IndependentBlendEnable = TRUE;
             d.BlendState.RenderTarget[1].RenderTargetWriteMask = targets == 2 ? D3D12_COLOR_WRITE_ENABLE_ALL : 0;
@@ -785,7 +797,7 @@ bool Visuals::Impl::createGpu(Renderer& r) {
             d.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
         }
         d.DSVFormat = DXGI_FORMAT_D32_FLOAT;
-        if (targets == 4) d.NumRenderTargets = 1, d.DSVFormat = DXGI_FORMAT_UNKNOWN;  // the outline target, no depth
+        if (targets == 4) d.DSVFormat = DXGI_FORMAT_UNKNOWN;  // the outline target, no depth
         d.SampleDesc.Count = 1;
         return check(device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&out)), "CreateGraphicsPipelineState");
     };
@@ -1708,6 +1720,17 @@ void Visuals::Impl::update() {
                                  gauss(rng) * 0.05);
     }
     if (particles) {
+        // ClientLevel.getMarkerParticleTarget: a creative player holding a barrier or a light marks those blocks.
+        std::string marker;
+        if (game && gameMode && gameMode() == 1) {
+            int item;
+            i32 dye;
+            bool foil;
+            heldStack(36 + game->selectedSlot(), item, dye, foil);
+            const std::string n = item >= 0 ? models.itemName(item) : std::string();
+            if (n == "barrier" || n == "light") marker = n;
+        }
+        particles->setAmbientEnv(ambientNight, ambientNether, skyDarken, std::move(marker));
         const CameraState c = game ? game->viewCamera() : CameraState{};
         const double cam[3] = {c.x, c.y, c.z};
         particles->frame(dt, cam);
