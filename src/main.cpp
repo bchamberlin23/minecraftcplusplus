@@ -929,6 +929,18 @@ int wmain(int argc, wchar_t** argv) {
     if (haveEntities) {
         gameplay.setEntities(&entities);
         blockEntityRenderer.setRules(&gameplay.rules());
+        blockEntityRenderer.nearestPlayer = [&](const double at[3], double maxDist, double out[3]) {
+            double best = maxDist * maxDist;
+            bool found = false;
+            auto consider = [&](const double p[3]) {
+                const double dx = p[0] - at[0], dy = p[1] - at[1], dz = p[2] - at[2], d2 = dx * dx + dy * dy + dz * dz;
+                if (d2 < best) best = d2, found = true, std::copy(p, p + 3, out);
+            };
+            if (game.gameMode != 3) consider(game.player().pos);
+            for (const auto& [id, e] : entities.entities())
+                if (e.category == ent::Category::Player && !(entities.isSpectator && entities.isSpectator(e))) consider(e.pos);
+            return found;
+        };
         visuals.setItemRules(&gameplay.rules());
         visuals.setParticleSources([&](std::string_view tag, std::string_view block) { return gameplay.rules().inTag(tag, block); },
                                    [&](int x, int z) {
@@ -1398,6 +1410,7 @@ int wmain(int argc, wchar_t** argv) {
         sky.update(cam, dt);
         entities.piglinsZombify = sky.piglinsZombify();
         blockEntityRenderer.setView(std::min(ui.settings().renderDistance, opt.detail), game.scoping());
+        blockEntityRenderer.setGameTime(entities.gameTime());
         {
             const Player& pl = game.player();
             const double t = game.partialTick();

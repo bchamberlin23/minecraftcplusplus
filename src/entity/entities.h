@@ -462,6 +462,9 @@ private:
     std::function<void(Entity&)> localTick_;
     double tickAccumulator_ = 0, tickSeconds_ = 0.05;
     i64 gameTime_ = 0;  // the level's game time (set_time, advanced each entity tick)
+public:
+    i64 gameTime() const { return gameTime_; }
+private:
     std::atomic<i64> netGameTime_{INT64_MIN};
     std::atomic<float> rainLevel_{0}, thunderLevel_{0};  // game events 1 / 2 / 7 / 8
     u64 ticks_ = 0;

@@ -81,6 +81,9 @@ public:
     // Each frame: the effective render distance (chunks: beacon beams are seen that far, BeaconRenderer.getViewDistance)
     // and whether the player looks through a spyglass (the beam keeps its width, BeaconRenderer.submit).
     void setView(int renderChunks, bool scoping) { renderChunks_ = renderChunks, scoping_ = scoping; }
+    void setGameTime(i64 t) { levelTime_ = t; }  // the level's game time (trial spawner next_mob_spawns_at)
+    // Level.getNearestPlayer(x, y, z, maxDist, false): the nearest non-spectator player's feet (enchanting table book).
+    std::function<bool(const double at[3], double maxDist, double out[3])> nearestPlayer;
     // AbstractSignRenderer.isOutlineVisible: glowing text outlines within 16 blocks of the camera entity's position
     // (its feet, world space), or always while scoping in first person.
     void setOutlineView(const double cameraEntity[3], bool firstPersonScoping) {
@@ -132,6 +135,7 @@ public:
         bool alignBottom = false;                   // shelf
         int entity = -1;                            // spawner / trial spawner display entity (protocol id)
         int delay = 20;                             // spawner Delay
+        i64 nextMobSpawnsAt = 0;                    // trial spawner next_mob_spawns_at (sent while active)
         i8 hitDir = -1;                             // brushable block hit_direction (3D data value)
         i64 age = -1;                               // end gateway Age (-1: unknown)
         u32 beam = 0;                               // test instance block: its beam colour (0xRRGGBB | 1 << 24), 0 none
@@ -309,6 +313,7 @@ private:
     std::atomic<float> tickRate_{20.0f};  // ticking_state: the server's tick rate and freeze
     std::atomic<bool> frozen_{false};
     i64 gameTicks_ = 0;
+    i64 levelTime_ = 0;
     float partial_ = 0;
     u32 random_ = 0x9E3779B9u;
     bool xmas_ = false;  // Christmas chest textures

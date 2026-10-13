@@ -635,6 +635,8 @@ void BlockEntityRenderer::decode(const std::string& nbt, const BlockDef& d, Data
             }
         } else if (d.kind == Kind::Spawner && n == "Delay" && t == TagShort) {
             out.delay = r.i16v();
+        } else if (d.kind == Kind::TrialSpawner && n == "next_mob_spawns_at" && t == TagLong) {
+            out.nextMobSpawnsAt = r.i64v();
         } else if (d.kind == Kind::Vault && n == "shared_data" && t == TagCompound) {  // VaultSharedData.display_item
             u8 t2;
             std::string_view n2;
@@ -1042,11 +1044,15 @@ void BlockEntityRenderer::tick() {
                 keep = a.shakeDir >= 0;
                 break;
             case Kind::Pot: keep = gameTicks_ - a.wobbleStart <= 12; break;
-            case Kind::Enchanting: {  // EnchantingTableBlockEntity.bookAnimationTick (the camera is the player)
+            case Kind::Enchanting: {  // EnchantingTableBlockEntity.bookAnimationTick: towards the nearest player in 3 blocks
                 a.oBook = a.book, a.oRot = a.rot;
-                const double dx = cam_[0] - (x + 0.5), dy = cam_[1] - 1.62 - (y + 0.5), dz = cam_[2] - (z + 0.5);
-                if (dx * dx + dy * dy + dz * dz < 9.0) {
-                    a.tRot = float(std::atan2(dz, dx));
+                const double centre[3] = {x + 0.5, y + 0.5, z + 0.5};
+                double player[3] = {cam_[0], cam_[1] - 1.62, cam_[2]};  // without the hook: the camera's feet
+                const bool inRange = nearestPlayer ? nearestPlayer(centre, 3.0, player)
+                                                : (player[0] - centre[0]) * (player[0] - centre[0]) + (player[1] - centre[1]) * (player[1] - centre[1]) +
+                                                          (player[2] - centre[2]) * (player[2] - centre[2]) < 9.0;
+                if (inRange) {
+                    a.tRot = float(std::atan2(player[2] - centre[2], player[0] - centre[0]));
                     a.book += 0.1f;
                     if (a.book < 0.5f || rnd(40) == 0) {
                         const float old = a.flipT;
@@ -1115,24 +1121,30 @@ void BlockEntityRenderer::tick() {
                 if (a.cooldown > 0) --a.cooldown;
                 break;
             case Kind::Spawner: {  // BaseSpawner.clientTick (requiredPlayerRange 16; the camera stands in for the player)
-                ++a.tickCount;  // display entity age
-                a.oSpin = a.spin;
+                // (the display entity itself is never ticked: its age stays 0)
                 const double dx = cam_[0] - (x + 0.5), dy = cam_[1] - 1.62 - (y + 0.5), dz = cam_[2] - (z + 0.5);
-                if (dx * dx + dy * dy + dz * dz < 16.0 * 16.0) {
-                    if (const Data* data = dataAt(x, y, z); data && data->entity >= 0 && particle) {  // with a display entity
+                const Data* data = dataAt(x, y, z);
+                if (dx * dx + dy * dy + dz * dz >= 16.0 * 16.0) {
+                    a.oSpin = a.spin;
+                } else if (data && data->entity >= 0) {  // with a display entity
+                    if (particle) {
                         const double px = x + rndf(), py = y + rndf(), pz = z + rndf();
                         particle("smoke", px, py, pz, 0, 0, 0);
                         particle("flame", px, py, pz, 0, 0, 0);
                     }
                     if (a.delay > 0) --a.delay;
+                    a.oSpin = a.spin;
                     a.spin = std::fmod(a.spin + 1000.0f / (float(std::max(a.delay, 0)) + 200.0f), 360.0f);
                 }
                 break;
             }
-            case Kind::TrialSpawner: {  // TrialSpawner.tickClient (the spawn delay is not known here: 0)
-                ++a.tickCount;
-                a.oSpin = a.spin;
-                if (d.variant) a.spin = std::fmod(a.spin + (d.variant == 2 ? 1000.0f : 200.0f) / 200.0f, 360.0f);
+            case Kind::TrialSpawner: {  // TrialSpawner.tickClient: the spin slows by the time to the next spawn
+                if (d.variant) {
+                    const Data* data = dataAt(x, y, z);
+                    const double spawnDelay = double(std::max<i64>(0, (data ? data->nextMobSpawnsAt : 0) - levelTime_));
+                    a.oSpin = a.spin;
+                    a.spin = float(std::fmod(double(a.spin) + (d.variant == 2 ? 1000.0 : 200.0) / (spawnDelay + 200.0), 360.0));
+                }
                 // TrialSpawnerState.emitParticles by trial_spawner_state, and the ambient sound while it can spawn.
                 const std::string& n = registry_.name(block);
                 const bool ominous = n.find("ominous=true") != std::string::npos;
@@ -1567,7 +1579,8 @@ struct ModelEmit {
     const int* partTex = nullptr;  // per-part texture override (-1: tex)
     bool wave = false;            // banner flag: wave the "flag" part in the shader
     u32 wavePhase = 0;
-    float vScale = 1.0f;          // texture frame (animated textures: the first frame)
+    float vScale = 1.0f;          // texture frame (animated textures: one frame of the strip)
+    float vFrame = 0.0f;          // the frame's index in the strip
 
     void run() const {
         if (model < 0 || tex < 0) return;
@@ -1602,7 +1615,7 @@ struct ModelEmit {
                     const float v[3] = {g.pos[c][0] / 16.0f, g.pos[c][1] / 16.0f, g.pos[c][2] / 16.0f};
                     xform(mm, v, b.pos[c]);
                     b.uv[c][0] = r.u0 + g.uv[c][0] * r.du;
-                    b.uv[c][1] = r.v0 + g.uv[c][1] * r.dv * vScale;
+                    b.uv[c][1] = r.v0 + (vFrame + g.uv[c][1]) * r.dv * vScale;
                 }
                 b.normal = packNormal(mm, g.normal);
                 b.color = color, b.light = light, b.tex = kTexAtlas;
@@ -2158,13 +2171,17 @@ void BlockEntityRenderer::emitInstance(Emit& e, const Instance& in, const Data* 
             if (phase == 1) wind = mul(wind, rotX(kPi / 2));
             else if (phase == 2) wind = mul(wind, rotZ(kPi / 2));
             const int windTex = phase == 1 ? t_.conduitWindV : t_.conduitWind;
-            float vScale = 1.0f;
-            if (windTex >= 0) {  // animated texture: first 64x32 frame
+            float vScale = 1.0f, vFrame = 0.0f;
+            if (windTex >= 0) {  // animated texture (wind.png.mcmeta: 64x32 frames, frametime 3)
                 const ent::TexRect& r = assets_.rect(windTex);
-                if (r.h > r.w / 2) vScale = float(r.w / 2) / float(r.h);
+                if (r.h > r.w / 2) {
+                    const int frames = std::max(1, int(r.h / (r.w / 2)));
+                    vScale = 1.0f / float(frames);
+                    vFrame = float((gameTicks_ / 3) % frames);
+                }
             }
             ModelEmit w = model(0, m_.conduitWind, wind, windTex);
-            w.vScale = vScale;
+            w.vScale = vScale, w.vFrame = vFrame;
             w.run();
             w.root = mul(base, mul(mul(translate(0.5f, 0.5f, 0.5f), scale(0.875f)), mul(rotX(kPi), rotZ(kPi))));
             w.run();
