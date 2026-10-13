@@ -78,6 +78,7 @@ private:
     std::unordered_map<u64, Prediction> predictions_;  // block positions edited locally, awaiting an ack
     std::unordered_map<std::string, int> items_;        // item name -> network id
     int sequence_ = 0, gameMode_ = 0, entityId_ = 0;
+    int previousGameMode_ = -1;  // the login's previous game type, for the game when it attaches
     int portalCooldown_ = 0;  // the login's spawn info, for the player once attached
     bool instabuild_ = false;
     double tickClock_ = 0;

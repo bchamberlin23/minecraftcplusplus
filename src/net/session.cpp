@@ -62,6 +62,7 @@ bool Session::join(double timeoutSeconds, PlayerStart& start, Dimension& dimensi
                 levelStart_ = j->receivedAt;
                 entityId_ = j->entityId;
                 gameMode_ = j->gameMode;
+                previousGameMode_ = j->previousGameMode;
                 portalCooldown_ = j->portalCooldown;
                 instabuild_ = gameMode_ == 1;
                 continue;
@@ -173,6 +174,7 @@ void Session::frame(double dt) {
     syncHotbar();
     game_->instabuild = instabuild_;  // MultiPlayerGameMode: creative digging
     game_->gameMode = gameMode_;
+    game_->previousGameMode = previousGameMode_, ++game_->joinSerial;
     tickClock_ = std::min(tickClock_ + dt, 0.25);
     while (tickClock_ >= kTick) {
         tickClock_ -= kTick;
@@ -206,6 +208,7 @@ void Session::handle(Event& e) {
         levelStart_ = j->receivedAt;
         if (!j->respawn) entityId_ = j->entityId;
         gameMode_ = j->gameMode;
+        game_->previousGameMode = previousGameMode_ = j->previousGameMode, ++game_->joinSerial;
         game_->player().noClip = gameMode_ == 3;
         game_->player().portalCooldown = j->portalCooldown;  // handleRespawn: the new player's setPortalCooldown
         instabuild_ = gameMode_ == 1;

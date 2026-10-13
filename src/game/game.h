@@ -154,6 +154,8 @@ public:
     std::function<bool()> canDestroyInCreative;
     bool instabuild = true;  // Abilities.instabuild (creative); kept up to date by the session
     int gameMode = 1;        // 0 survival, 1 creative, 2 adventure, 3 spectator
+    int previousGameMode = -1;  // the login / respawn's previous game type (MultiPlayerGameMode.setLocalMode)
+    int joinSerial = 0;         // counts logins / respawns (previousGameMode was set again)
     // ClientLevel.addBreakingBlockEffects when a break starts: hit particles on the face, and the hit sound.
     std::function<void(int x, int y, int z, int face, bool sound)> onBreakingEffects;
     // Crack overlays (ClientLevel.destroyBlockProgress): by breaker entity id; stage 0..9, anything else removes.

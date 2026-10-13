@@ -5,6 +5,7 @@
 #include "assets/assets.h"
 #include "audio/audio.h"
 #include "ui/debug_screen.h"
+#include "ui/item_ui.h"
 #include "ui/ui_state.h"
 #include "world/world.h"
 
@@ -27,6 +28,7 @@ Bed bed;
 struct Switcher {
     bool f3Down = false, usedAsModifier = false;
     int lastMode = -1, previousMode = -1;  // MultiPlayerGameMode.previousPlayerMode
+    int joinSerial = -1;                   // the game's logins / respawns seen (each sets both modes)
     int hovered = 0;                       // GameModeIcon: creative, survival, adventure, spectator
     bool firstMouseSet = false;
     float firstMouse[2] = {};
@@ -43,8 +45,10 @@ int iconOf(int mode) {
     return 1;
 }
 
+bool mayChangeGameMode() { return permissionLevel() >= 2; }  // GameModeCommand.PERMISSION_CHECK (gamemasters)
+
 void sendGameMode(UiState& s, int mode) {  // ServerboundChangeGameModePacket
-    if (!s.online() || mode == s.gameMode()) return;
+    if (!s.online() || mode == s.gameMode() || !mayChangeGameMode()) return;
     net::Writer w;
     w.varInt(mode);
     s.client->sendPlay("change_game_mode", w);
@@ -110,7 +114,7 @@ void attached(UiState& s) {
     bed.sleeping = false;
     bed.counter = 0;
     if (s.game) s.game->sleeping = false;
-    sw.lastMode = sw.previousMode = -1;
+    sw.lastMode = sw.previousMode = -1, sw.joinSerial = -1;
 }
 
 // Camera.setup for a sleeping entity: at the bed (setPosToBed + the sleeping eye height 0.2), facing the bed's
@@ -141,6 +145,10 @@ void tick(UiState& s) {
     if (bed.sleeping) bed.counter = std::min(bed.counter + 1, 100);  // Player.tick
     else if (bed.counter > 0 && ++bed.counter >= 110) bed.counter = 0;
     const int mode = s.gameMode();
+    if (s.game && s.game->joinSerial != sw.joinSerial) {  // setLocalMode(gameType, previousGameType)
+        sw.joinSerial = s.game->joinSerial;
+        sw.previousMode = s.game->previousGameMode, sw.lastMode = mode;
+    }
     if (mode != sw.lastMode) {
         if (sw.lastMode >= 0) sw.previousMode = sw.lastMode;
         sw.lastMode = mode;
@@ -204,12 +212,14 @@ bool worldKey(UiState& s, const InputEvent& e) {
     }
     if (s.isKey(Key::DebugSwitchGameMode, e)) {  // GameModeSwitcherScreen
         sw.usedAsModifier = true;
-        if (s.online()) s.openScreen(Screen::GameModeSwitcher);
+        if (s.online() && mayChangeGameMode()) s.openScreen(Screen::GameModeSwitcher);
+        else debugFeedback(s, "debug.gamemodes.error");
         return true;
     }
     if (s.isKey(Key::DebugSpectate, e)) {  // spectator <-> the previous game mode
         sw.usedAsModifier = true;
-        if (s.gameMode() == 3) sendGameMode(s, sw.previousMode >= 0 && sw.previousMode != 3 ? sw.previousMode : 1);
+        if (!mayChangeGameMode()) debugFeedback(s, "debug.creative_spectator.error");
+        else if (s.gameMode() == 3) sendGameMode(s, sw.previousMode >= 0 ? sw.previousMode : 1);  // firstNonNull(previous, CREATIVE)
         else sendGameMode(s, 3);
         return true;
     }
@@ -308,7 +318,9 @@ void switcherDraw(UiState& s, Canvas& c) {
     blitTexture(c, s.sprites.texture("gui/container/gamemode_switcher"), float(W / 2 - 62), float(H / 2 - 31 - 27), 0, 0, 125,
                 75, 128, 128);
     s.drawCentered(c, Text(s.res.translate(kIconName[sw.hovered])), float(W / 2), float(H / 2 - 31 - 20), 0xFFFFFFFF);
-    const Text key = translatable("debug.gamemodes.select_next", {Text("F4", colorStyle(0x55FFFF))}, s.lang());
+    Text f4 = s.keyLabel(s.settings.key(Key::DebugSwitchGameMode));  // keyDebugSwitchGameMode.getTranslatedKeyMessage
+    for (Span& sp : f4.spans) sp.style = sp.style.over(colorStyle(0x55FFFF));
+    const Text key = translatable("debug.gamemodes.select_next", {f4}, s.lang());
     s.drawCentered(c, key, float(W / 2), float(H / 2 + 5), 0xFFFFFFFF);
     if (!sw.firstMouseSet) sw.firstMouse[0] = mx, sw.firstMouse[1] = my, sw.firstMouseSet = true;
     const bool sameAsFirst = sw.firstMouse[0] == mx && sw.firstMouse[1] == my;

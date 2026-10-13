@@ -721,7 +721,7 @@ bool Client::handlePlay(const std::string& name, Reader& r, bool& handled) {
         const std::string level(r.str());
         r.i64v();  // hashed seed
         e.gameMode = r.varInt();
-        r.u8v();                 // previous game mode
+        e.previousGameMode = i8(r.u8v());
         r.boolean(), r.boolean();  // debug, flat
         if (r.boolean()) r.str(), r.i64v();  // last death location
         e.portalCooldown = r.varInt();
