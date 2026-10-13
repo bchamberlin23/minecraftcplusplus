@@ -240,7 +240,9 @@ struct ItemModels::Impl {
         const std::string meta = resPath(key, "textures", ".png.mcmeta");
         ui::Sprites::Animation anim;
         const bool animatedTex = res->exists(meta) && ui::Sprites::parseAnimation(img, res->json(meta), anim);
-        int w = img.w, h = (img.h > img.w && img.h % img.w == 0) ? img.w : img.h;  // strips without .mcmeta: first frame
+        // strips without .mcmeta: first frame (entity textures are whole: the end crystal beam is 16 x 256)
+        const bool entityTex = key.compare(key.find(':') + 1, 7, "entity/") == 0;
+        int w = img.w, h = (!entityTex && img.h > img.w && img.h % img.w == 0) ? img.w : img.h;
         if (animatedTex) {
             w = anim.fw, h = anim.fh;
             anim.frameAt(img, 0, t.img.rgba);

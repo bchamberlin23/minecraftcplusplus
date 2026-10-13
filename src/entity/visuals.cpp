@@ -258,6 +258,8 @@ struct Visuals::Impl {
     void buildCracks(const PassContext& ctx);
     void buildFlames(const double cam[3], float pt);
     void buildBeams(const double cam[3], float pt);
+    void crystalBeam(const double start[3], const double delta[3], float time, u32 light, const double cam[3]);
+    std::unordered_map<int, int> dragonCrystal;  // EnderDragon.nearestCrystal (the client's own, checkCrystals)
     double lastTime = 0;
     float partial = 0;
     int glintRect = -1;
@@ -1860,6 +1862,37 @@ void Visuals::Impl::buildFlames(const double cam[3], float pt) {
 // and an end cap, coloured from purple to yellow by the attack scale, full bright (entityCutout, guardian_beam: the
 // texture repeats 2.5 times per block, so each strip is cut where it wraps).
 void Visuals::Impl::buildBeams(const double cam[3], float pt) {
+    auto lerpPos = [&](const Entity& e, double out[3]) {
+        for (int a = 0; a < 3; ++a) out[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt;
+    };
+    auto crystalY = [](float t) {  // EndCrystalRenderer.getY
+        float hh = std::sin(t * 0.2f) / 2.0f + 0.5f;
+        hh = (hh * hh + hh) * 0.4f;
+        return hh - 1.4f;
+    };
+    for (const auto& [id, e] : world.entities()) {
+        if (!e.info) continue;
+        double p[3], start[3], delta[3];
+        if (e.info->name == "minecraft:end_crystal" && dataFloat(e, "DATA_BEAM_TARGET") > 0.5f) {  // EndCrystalRenderer
+            const i64 packed = dataInt(e, "DATA_BEAM_TARGET");
+            const double target[3] = {double(packed >> 38) + 0.5, double(packed << 52 >> 52) + 0.5, double(packed << 26 >> 38) + 0.5};
+            lerpPos(e, p);
+            const float t = float(e.age) + pt;
+            for (int a = 0; a < 3; ++a) start[a] = target[a] + (a == 1 ? 2.0 : 0.0), delta[a] = p[a] - target[a];
+            delta[1] += crystalY(t);
+            crystalBeam(start, delta, t, lightAt(p[0], p[1], p[2]), cam);
+        } else if (e.info->name == "minecraft:ender_dragon") {  // EnderDragonRenderer: to the crystal healing it
+            auto c = dragonCrystal.find(id);
+            if (c == dragonCrystal.end()) continue;
+            auto ce = world.entities().find(c->second);
+            if (ce == world.entities().end()) continue;
+            double cp[3];
+            lerpPos(e, p), lerpPos(ce->second, cp);
+            cp[1] += crystalY(float(ce->second.age) + pt);
+            for (int a = 0; a < 3; ++a) start[a] = p[a] + (a == 1 ? 2.0 : 0.0), delta[a] = cp[a] - p[a];
+            crystalBeam(start, delta, float(e.age) + pt, lightAt(p[0], p[1], p[2]), cam);
+        }
+    }
     static int beamTex = -2;
     if (beamTex == -2) beamTex = models.texture("entity/guardian/guardian_beam");
     if (beamTex < 0 || !game) return;
@@ -1933,6 +1966,54 @@ void Visuals::Impl::buildBeams(const double cam[3], float pt) {
         worldLists.cut.add(xfTranslate(float(eye[0] - cam[0]), float(eye[1] - cam[1]), float(eye[2] - cam[2])), first, u32(dyn.size()) - first,
                            0xFFu | 512u, 0xFFFFFFFF, 1);  // full bright
     }
+}
+
+// EnderDragonRenderer.submitCrystalBeams: from `start` (already 2 up) along `delta`, an 8-sided cone (0.15 wide at the
+// start, 0.75 at the end) scrolling with the time, black at the start to white at the end (vertex colours: here
+// stepped along slices, also cut where the 16 x 256 texture wraps).
+void Visuals::Impl::crystalBeam(const double start[3], const double delta[3], float time, u32 light, const double cam[3]) {
+    static int beamTex = -2;
+    if (beamTex == -2) beamTex = models.texture("entity/end_crystal/end_crystal_beam");
+    if (beamTex < 0) return;
+    const ItemModels::Rect& tr = models.rect(beamTex);
+    const float dx = float(delta[0]), dy = float(delta[1]), dz = float(delta[2]);
+    const float horizontal = std::sqrt(dx * dx + dz * dz), length = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (length < 1e-4f) return;
+    const float yRot = -std::atan2(dz, dx) - kPi / 2, xRot = -std::atan2(horizontal, dy) - kPi / 2;
+    auto rotate = [&](float x, float y, float z, float out[3]) {
+        const float y1 = y * std::cos(xRot) - z * std::sin(xRot), z1 = y * std::sin(xRot) + z * std::cos(xRot);  // Axis.XP
+        out[0] = x * std::cos(yRot) + z1 * std::sin(yRot), out[1] = y1, out[2] = -x * std::sin(yRot) + z1 * std::cos(yRot);  // Axis.YP
+    };
+    const float v0 = -time * 0.01f, v1 = length / 32.0f - time * 0.01f;
+    std::vector<float> cuts = {0.0f, 1.0f};
+    for (int i = 1; i < 12; ++i) cuts.push_back(i / 12.0f);
+    for (float c = std::floor(std::min(v0, v1)) + 1.0f; c < std::max(v0, v1); c += 1.0f) cuts.push_back((c - v0) / (v1 - v0));
+    std::sort(cuts.begin(), cuts.end());
+    const u32 first = u32(dyn.size());
+    for (size_t k = 0; k + 1 < cuts.size(); ++k) {
+        const float ta = cuts[k], tb = cuts[k + 1];
+        if (tb - ta < 1e-5f) continue;
+        const float va = v0 + (v1 - v0) * ta, vb = v0 + (v1 - v0) * tb, cell = std::floor((va + vb) * 0.5f);
+        const float ra = 0.2f + 0.8f * ta, rb = 0.2f + 0.8f * tb;
+        const u32 g = u32(std::clamp((ta + tb) * 0.5f, 0.0f, 1.0f) * 255.0f + 0.5f);
+        float lastSin = 0.0f, lastCos = 0.75f, lastU = 0.0f;
+        for (int i = 1; i <= 8 && dyn.size() < kMaxDynamic; ++i) {
+            const float sn = std::sin(i * kPi * 2 / 8.0f) * 0.75f, cs = std::cos(i * kPi * 2 / 8.0f) * 0.75f, u = i / 8.0f;
+            const float p[4][3] = {{lastSin * ra, lastCos * ra, ta * length}, {lastSin * rb, lastCos * rb, tb * length},
+                                   {sn * rb, cs * rb, tb * length}, {sn * ra, cs * ra, ta * length}};
+            const float uv[4][2] = {{lastU, va - cell}, {lastU, vb - cell}, {u, vb - cell}, {u, va - cell}};
+            MeshQuad q{};
+            for (int c = 0; c < 4; ++c) {
+                rotate(p[c][0], p[c][1], p[c][2], q.pos[c]);
+                q.uv[c][0] = tr.u0 + uv[c][0] * tr.du, q.uv[c][1] = tr.v0 + uv[c][1] * tr.dv;
+            }
+            q.normal = packNormal(0, -1, 0), q.color = 0xFF000000u | g << 16 | g << 8 | g, q.tex = kTexItems, q.flags = kQuadNoShade;
+            dyn.push_back(q);
+            lastSin = sn, lastCos = cs, lastU = u;
+        }
+    }
+    worldLists.cut.add(xfTranslate(float(start[0] - cam[0]), float(start[1] - cam[1]), float(start[2] - cam[2])), first,
+                       u32(dyn.size()) - first, light | 512u, 0xFFFFFFFF, 1);
 }
 
 void Visuals::Impl::buildWorld(const PassContext& ctx) {
@@ -2852,6 +2933,23 @@ void Visuals::Impl::dragonTick(const Entity& e) {
     if (e.health <= 0) {
         particles->spawn("explosion", e.pos[0] + (R() - 0.5) * 8.0, e.pos[1] + 2.0 + (R() - 0.5) * 4.0, e.pos[2] + (R() - 0.5) * 8.0, 0, 0, 0);
         return;
+    }
+    {  // checkCrystals: drop a removed crystal; one tick in ten, the nearest within the box grown by 32
+        auto it = dragonCrystal.find(e.id);
+        if (it != dragonCrystal.end() && !world.entities().count(it->second)) dragonCrystal.erase(it);
+        if (R() < 0.1) {
+            int nearest = 0;
+            double best = 1e300;
+            for (const auto& [cid, c] : world.entities()) {
+                if (!c.info || c.info->name != "minecraft:end_crystal") continue;
+                const double dx = c.pos[0] - e.pos[0], dy = c.pos[1] - e.pos[1], dz = c.pos[2] - e.pos[2];
+                const double hw = e.info->width * 0.5 + 32.0 + c.info->width * 0.5;
+                if (std::abs(dx) >= hw || std::abs(dz) >= hw || dy <= -32.0 - c.info->height || dy >= e.info->height + 32.0) continue;
+                if (const double d2 = dx * dx + dy * dy + dz * dz; d2 < best) best = d2, nearest = cid;
+            }
+            if (nearest) dragonCrystal[e.id] = nearest;
+            else dragonCrystal.erase(e.id);
+        }
     }
     if (e.mobFlags & 1) return;  // NoAI: no flight history, no phase ticks
     // EnderDragonPhaseManager.setPhase on DATA_PHASE: a new phase begins with its counters at 0.
