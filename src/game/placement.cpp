@@ -501,6 +501,12 @@ Result placementState(const Context& c, u16 held, const int pos[3], bool replace
         r.state = with(c, s, "waterlogged", water ? "true" : "false");
         return r;
     }
+    if (n.ends_with("rail") && !reg.property(held, "shape").empty()) {
+        // BaseRailBlock.getStateForPlacement: straight along the look (updateDir does nothing on a client)
+        const bool eastWest = horiz == kEast || horiz == kWest;
+        r.state = with(c, with(c, held, "shape", eastWest ? "east_west" : "north_south"), "waterlogged", water ? "true" : "false");
+        return r;
+    }
     if (isSpeleothem(n)) {  // SpeleothemBlock.getStateForPlacement: tip against the look, or the other way if supported
         const int fallback = c.pitch < 0 ? kDown : kUp;  // getNearestLookingVerticalDirection().getOpposite()
         const int tip = speleothemValid(c, n, pos, fallback) ? fallback : speleothemValid(c, n, pos, opposite(fallback)) ? opposite(fallback) : -1;
