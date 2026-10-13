@@ -287,7 +287,6 @@ void videoBuild(UiState& s) {
                                      return optionLabel(*p, "options.simulationDistance",
                                                         Text(formatJava(p->res.translate("options.chunks"), {std::to_string(p->settings.simulationDistance)})));
                                  });
-        sim.active = !s.online() || s.fe->cfg.singleplayer;
         if (s.online()) sim.tooltip = [] { return Text("Applies the next time this world is opened"); };
         q.push_back(std::move(sim));
     }

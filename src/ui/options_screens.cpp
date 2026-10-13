@@ -236,6 +236,21 @@ void optionsListInput(UiState& s, const Window::InputEvent& e) {
     layout(s);
     if (e.type == E::Key && e.down && e.code == VK_ESCAPE) return optionsListBack(s);
     const float top = listTop(), bottom = listBottom(s);
+    if (e.type == E::Wheel && s.screen == Screen::Video && s.window->keyDown(VK_CONTROL)) {
+        // VideoSettingsScreen.mouseScrolled with Control: the GUI scale steps (Auto counting as the largest + 1), not
+        // past the largest or into Auto
+        int maxScale = 1;
+        const u32 w = s.window->width(), h = s.window->height();
+        while (w / u32(maxScale + 1) >= 320 && h / u32(maxScale + 1) >= 240) ++maxScale;
+        const int old = s.settings.guiScale == 0 ? maxScale + 1 : s.settings.guiScale;
+        const int nv = old + (e.code > 0 ? 1 : e.code < 0 ? -1 : 0);
+        if (nv != 0 && nv <= maxScale && nv >= 0 && nv != s.settings.guiScale) {
+            s.settings.guiScale = nv, g.scroll = 0;
+            s.settings.save();
+            s.buildButtons();
+        }
+        return;
+    }
     if (e.type == E::Wheel) {  // AbstractScrollArea.mouseScrolled: half a row per notch (with the mouse options)
         if (s.mouseY < top || s.mouseY >= bottom) return;
         const double notches = (s.settings.discreteMouseScroll ? (e.code > 0 ? 1.0 : -1.0) : double(e.code)) *
@@ -571,14 +586,13 @@ Button holdToggleButton(UiState& s, const char* keyName, bool* toggle) {  // Opt
 
 Button sprintWindowSlider(UiState& s) {  // Options.sprintWindow: IntRange(0, 10), 0 shows Off
     UiState* p = &s;
-    Button b = sliderButton(float(s.settings.sprintWindow) / 10.0f,
-                        [p] {
-                            const int v = p->settings.sprintWindow;
-                            return optionLabel(*p, "options.sprintWindow",
-                                               v == 0 ? Text(p->res.translate("options.off"))
-                                                      : translatable("options.value", {Text(std::to_string(v))}, p->lang()));
-                        },
-                        [p](float v) { p->settings.sprintWindow = int(std::lround(v * 10.0f)); });
+    Button b = rangeSlider(s, 0, 10, [p] { return p->settings.sprintWindow; }, [p](int v) { p->settings.sprintWindow = v; },
+                           [p] {
+                               const int v = p->settings.sprintWindow;
+                               return optionLabel(*p, "options.sprintWindow",
+                                                  v == 0 ? Text(p->res.translate("options.off"))
+                                                         : translatable("options.value", {Text(std::to_string(v))}, p->lang()));
+                           });
     b.tooltip = tooltipKey(s, "options.sprintWindow.tooltip");
     return b;
 }
@@ -608,14 +622,14 @@ void mouseBuild(UiState& s) {
                                       },
                                       [p](float v) { p->settings.sensitivity = v; });
     // mouseWheelSensitivity: IntRange(-200, 100) through logMouse (10^(v / 100)), shown with two decimals.
-    const int step = int(std::floor(std::log10(s.settings.mouseWheelSensitivity) * 100.0));
-    Button wheel = sliderButton(float(std::clamp(step, -200, 100) + 200) / 300.0f,
-                                [p] {
-                                    char buf[16];
-                                    std::snprintf(buf, sizeof(buf), "%.2f", p->settings.mouseWheelSensitivity);
-                                    return optionLabel(*p, "options.mouseWheelSensitivity", Text(buf));
-                                },
-                                [p](float v) { p->settings.mouseWheelSensitivity = std::pow(10.0, double(int(std::lround(v * 300.0f)) - 200) / 100.0); });
+    Button wheel = rangeSlider(
+        s, -200, 100, [p] { return int(std::lround(std::log10(p->settings.mouseWheelSensitivity) * 100.0)); },  // unlogMouse
+        [p](int v) { p->settings.mouseWheelSensitivity = std::pow(10.0, double(v) / 100.0); },             // logMouse
+        [p] {
+            char buf[16];
+            std::snprintf(buf, sizeof(buf), "%.2f", p->settings.mouseWheelSensitivity);
+            return optionLabel(*p, "options.mouseWheelSensitivity", Text(buf));
+        });
     l.halves({std::move(sensitivity), std::move(wheel), onOffButton(s, "options.discrete_mouse_scroll", &s.settings.discreteMouseScroll),
               onOffButton(s, "options.invertMouseX", &s.settings.invertMouseX),
               onOffButton(s, "options.invertMouseY", &s.settings.invertMouseY),
