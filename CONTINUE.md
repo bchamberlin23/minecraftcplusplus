@@ -124,7 +124,11 @@ depth, the camera's fluid (near plane), weather (biome precipitation data, insta
 render-distance fog cylinder follows the far-terrain fog distance, not the chunk setting (deliberate for the LOD
 terrain); a non-atmospheric environment can only shrink the sky fog end; decal armor trims use the normal pipeline.
 Lightmap (flicker, End flash), outline gating, particles (box collision, limits), conduit frames, the shulker box
-lid pushing the player done (other entities are the server's). Not ported: the bell's raider particles (showBellParticles), the
+lid pushing the player done (other entities are the server's). The level loading screen for respawns / dimension
+changes (LevelLoadTracker: event 13, the player's chunk, 30 s) and the 30 s read timeout are in; the end portal
+background is approximated (no END_PORTAL pipeline in the GUI). Network residuals: select_known_packs claims nothing
+(the server sends every registry in full), packets after a transfer in the same stream are dropped, the brand payload
+is read in the configuration phase only. Not ported: the bell's raider particles (showBellParticles), the
 darkness pulse on the player's own tick count, filtered sign text (needs the account's profanity filter flag). Toasts follow ToastInstance now (the
 server pack download toast shows its progress). Toast residuals: no toasts
 for world access / chunk load or save /
