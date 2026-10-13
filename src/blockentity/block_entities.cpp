@@ -1124,8 +1124,9 @@ void BlockEntityRenderer::tick() {
                                         ((ox == 0 && (ay == 2 || az == 2)) || (oy == 0 && (ax == 2 || az == 2)) ||
                                          (oz == 0 && (ax == 2 || ay == 2)))) {
                                         const std::string& n = registry_.name(world_.block(x + ox, y + oy, z + oz));
-                                        if (n.starts_with("minecraft:prismarine") || n.starts_with("minecraft:dark_prismarine") ||
-                                            n.starts_with("minecraft:sea_lantern"))
+                                        // #conduit_effect_block: prismarine, prismarine bricks, dark prismarine, sea lantern
+                                        if (n == "minecraft:prismarine" || n == "minecraft:prismarine_bricks" ||
+                                            n == "minecraft:dark_prismarine" || n == "minecraft:sea_lantern")
                                             ++frame;
                                     }
                                 }
