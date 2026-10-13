@@ -93,7 +93,9 @@ disk space, an empty list opening Create World), OptimizeWorldScreen, the Messag
 DisconnectedScreen / AlertScreen / ConfirmScreen, and tab list heads; note block instruments predicted (a table generated
 from Blocks.java); Create World (Allow Commands, debug states, flat preset parsing, the flat list, game rule styles);
 Statistics (loading tab, selection, sorting, Ctrl+Tab); the menu background blur (Canvas.markBlur + PostEffects.blur
-mid-UI, both with and without the UI layer; the pause menu and the menus use it, block editors the gradient). Tested against local mock status servers
+mid-UI, both with and without the UI layer; the pause menu and the menus use it, block editors the gradient); lily
+pads / frogspawn and mushrooms predicted; the death screen's title confirmation and score; game mode switching
+permissions and the previous mode; credits details; options sliders and Ctrl+wheel GUI scale. Tested against local mock status servers
 (a Python script: modern, no-version, legacy-only, silent and closing servers).
 
 ## Protocol / networking
@@ -159,8 +161,8 @@ mid-UI, both with and without the UI layer; the pause menu and the menus use it,
   fix them a moment later; rails are straight along the look as the Java client places them):
   repeater / comparator neighbours' power, and BlockItem.canPlace's canSurvive beyond the covered families
   (vegetation and wither roses by their tags, crops / stems on farmland, carpets, rails, diodes, pressure plates, door
-  bottoms, torches, signs, banners, lanterns, attached blocks, ladders, vines, dripstone, wire, mushrooms):
-  lily pads (placed on water), tall seagrass and the like (dry vegetation, nether plants, wart, bamboo, cactus, sugar cane,
+  bottoms, torches, signs, banners, lanterns, attached blocks, ladders, vines, dripstone, wire, mushrooms, lily pads and
+  frogspawn): tall seagrass and the like (dry vegetation, nether plants, wart, bamboo, cactus, sugar cane,
   kelp / seagrass, the growing vines and cocoa are in). The face sturdiness tests use collision boxes (Java: the
   support shape), which differ for leaves, scaffolding and a few others.
 - **WORLD-04**: Blender port (blending old pre-1.18 chunks with new generation). Low priority: it only affects
