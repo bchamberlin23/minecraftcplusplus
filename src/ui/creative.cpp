@@ -216,6 +216,9 @@ void buildTabs(UiState& s) {
                 ItemStack st = stack(e.c_str());
                 if (st.item >= 0) out.push_back(st);
             }
+            // CreativeModeTab.ItemDisplayBuilder.accept: items not enabled by the world's feature flags are left out
+            out.erase(std::remove_if(out.begin() + ptrdiff_t(before), out.end(), [&](const ItemStack& st) { return !s.items.itemEnabled(st.item); }),
+                      out.end());
             searchOut.insert(searchOut.end(), out.begin() + ptrdiff_t(before), out.end());
         }
         if (kTabDefs[t].kind == TabKind::Category && tabVisible(t))
@@ -246,18 +249,55 @@ int rowsBeyond() { return (int(g.shown.size()) + 8) / 9 - 5; }  // ItemPickerMen
 bool canScroll() { return tab().scrollBar && g.shown.size() > 45; }
 int firstRow() { return std::max(int(g.scroll * float(rowsBeyond()) + 0.5f), 0); }
 
+std::vector<std::string> g_visibleTags;  // the '#' search's matching item tags (search tab tooltips list them)
+
 void refreshSearch(UiState& s) {
     g.shown.clear();
+    g_visibleTags.clear();
     std::string q;
     for (char ch : s.search.value) q += char(std::tolower(u8(ch)));
-    for (const ItemStack& st : g.tabItems[g.selected]) {
-        if (!q.empty()) {
-            std::string display = s.items.displayName(st).plain();
-            for (char& ch : display) ch = char(std::tolower(u8(ch)));
-            if (display.find(q) == std::string::npos && shortName(s.items.name(st.item)).find(q) == std::string::npos) continue;
-        }
-        g.shown.push_back(st);
+    auto lower = [](std::string v) {
+        for (char& ch : v) ch = char(std::tolower(u8(ch)));
+        return v;
+    };
+    if (q.starts_with("#")) {  // CreativeModeInventoryScreen.updateVisibleTags: tags by namespace / path
+        const std::string query = q.substr(1);
+        const size_t colon = query.find(':');
+        if (const auto* tags = s.items.tags("minecraft:item"))
+            for (const auto& [id, members] : *tags) {
+                const size_t c = id.find(':');
+                const std::string ns = id.substr(0, c), path = id.substr(c + 1);
+                const bool match = colon == std::string::npos ? path.find(query) != std::string::npos
+                                                              : ns.find(query.substr(0, colon)) != std::string::npos &&
+                                                                    path.find(query.substr(colon + 1)) != std::string::npos;
+                if (match) g_visibleTags.push_back(id);
+            }
+        std::sort(g_visibleTags.begin(), g_visibleTags.end());
+        for (const ItemStack& st : g.tabItems[g.selected])
+            for (const std::string& t : g_visibleTags)
+                if (s.items.itemHasTag(st.item, t)) {
+                    g.shown.push_back(st);
+                    break;
+                }
+        g.scroll = 0;
+        return;
     }
+    // SessionSearchTrees: the item's tooltip lines and its full id (lower case, built once per tab contents)
+    static std::vector<std::string> text;
+    static const std::vector<ItemStack>* textOf = nullptr;
+    static size_t textCount = 0;
+    const std::vector<ItemStack>& items = g.tabItems[g.selected];
+    if (textOf != &items || textCount != items.size()) {
+        text.clear();
+        for (const ItemStack& st : items) {
+            std::string t = lower(s.items.name(st.item));
+            for (const Text& line : s.items.tooltip(st, false, true)) t += '|' + lower(line.plain());
+            text.push_back(std::move(t));
+        }
+        textOf = &items, textCount = items.size();
+    }
+    for (size_t i = 0; i < items.size(); ++i)
+        if (q.empty() || text[i].find(q) != std::string::npos) g.shown.push_back(items[i]);
     g.scroll = 0;
 }
 
@@ -484,6 +524,11 @@ void dropStack(UiState& s, const ItemStack& st) {  // handleCreativeModeItemDrop
 
 std::vector<Text> tooltipFor(UiState& s, const ItemStack& st, bool creativeSlot) {
     std::vector<Text> lines = s.items.tooltip(st, s.settings.advancedItemTooltips, creativeSlot);
+    if (tab().kind == TabKind::Search && creativeSlot && !lines.empty()) {  // the '#' search's matching tags, dark purple
+        int at = 1;
+        for (const std::string& t : g_visibleTags)
+            if (s.items.itemHasTag(st.item, t)) lines.insert(lines.begin() + at++, Text("#" + t, colorStyle(0xAA00AA)));
+    }
     if (tab().kind == TabKind::Category && creativeSlot) return lines;
     auto it = g.tabsOfItem.find(st.item);
     if (it != g.tabsOfItem.end() && !lines.empty()) {
@@ -508,8 +553,10 @@ std::vector<Text> tooltipFor(UiState& s, const ItemStack& st, bool creativeSlot)
 void build(UiState& s) {
     // CreativeModeTabs.tryRebuildTabContents: the contents follow hasPermissions (the operator tab).
     const bool opTab = s.settings.operatorItemsTab && s.creative() && permissionLevel() >= 2;
-    if (opTab != g_opTab) {
+    static std::vector<std::string> features;  // CreativeModeTabs.tryRebuildTabContents: the enabled features too
+    if (opTab != g_opTab || features != s.items.enabledFeatures()) {
         g_opTab = opTab;
+        features = s.items.enabledFeatures();
         g.built = false;
         for (int t = 0; t < kTabCount; ++t) g.tabItems[t].clear(), g.searchItems[t].clear();
         g.tabsOfItem.clear();

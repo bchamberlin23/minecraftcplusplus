@@ -172,6 +172,12 @@ public:
     bool itemHasTag(int item, std::string_view tag) const;
     void setEnabledFeatures(std::vector<std::string> features) { enabledFeatures_ = std::move(features); }
     bool itemEnabled(int item) const;  // Item.isEnabled(enabledFeatures)
+    const std::vector<std::string>& enabledFeatures() const { return enabledFeatures_; }
+    // The registry's tags: id -> member ids (e.g. "minecraft:item").
+    const std::unordered_map<std::string, std::vector<int>>* tags(std::string_view registry) const {
+        auto r = tags_.find(std::string(registry));
+        return r == tags_.end() ? nullptr : &r->second;
+    }
     int craftingRemainder(int item) const;  // Item.getCraftingRemainder (milk bucket: bucket), -1 none
     // The equippable component: EquipmentSlot id (0 main hand, 1..4 feet..head, 5 off hand, 6 body, 7 saddle) and the
     // entity types allowed (Equippable.canBeEquippedBy); -1 when the stack has none.
