@@ -220,7 +220,7 @@ void deleteWorld(State& s) {
                     } else {
                         LOG("ui: could not delete %s", utf8(dir).c_str());
                         // SystemToast.onWorldDeleteFailure (WORLD_ACCESS_FAILURE), then the reloaded list.
-                        showToast(tr(*p, "selectWorld.delete_failure"), Text(utf8(dir.filename())), "world_access_failure");
+                        showToast(tr(*p, "selectWorld.delete_failure"), Text(utf8(dir.filename())));  // SystemToast.add
                         openWorlds(*p);
                     }
                 },

@@ -323,11 +323,11 @@ void handlers(UiState& s, net::Client& client) {
                 g.advs[a.id] = std::move(a);
             }
             for (auto& [id, p] : u->progress) {
-                // ClientAdvancements.update: an advancement just done shows its toast (when the packet allows it).
+                // ClientAdvancements.update: a done advancement in the packet shows its toast (when the packet allows
+                // it), also one done before
                 const auto it = g.advs.find(id);
-                const bool wasDone = it != g.advs.end() && isDone(it->second);
                 g.progress[id] = std::move(p);
-                if (it != g.advs.end() && !u->reset && u->showToasts && !wasDone && isDone(it->second) &&
+                if (it != g.advs.end() && !u->reset && u->showToasts && isDone(it->second) &&
                     it->second.hasDisplay && it->second.showToast)
                     showAdvancementToast(it->second.title, it->second.type, it->second.icon);
             }

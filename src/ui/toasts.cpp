@@ -30,22 +30,23 @@ struct Toast {
     double timeToDisplay = 0;  // tutorial: seconds until it hides itself (0: until the tutorial hides it)
     int handle = 0;
     bool hideRequested = false;
-    std::string custom;  // Custom: its kind, width and drawing; restartAt: updated while up (its time runs from there)
+    std::string custom;  // Custom: its kind, width and drawing
     int width = 160;
     std::function<void(Canvas&, float, float, double)> draw;
-    double restartAt = -1;
     double displayTime = kDisplay;  // SystemToastId.displayTime (seconds, before the Notification Time option)
     double lastSmoothing = 0;       // TutorialToast.lastSmoothingTime (seconds fully visible)
-    double shownAt = -1;    // clock when it started sliding in (-1: queued)
+    bool changed = false;           // SystemToast / RecipeToast: updated (its time runs from lastChanged)
+    double lastChanged = 0;
     int slot = 0, slots = 1;
-    bool hiding = false;
-    double hideAt = 0;
+    // ToastManager.ToastInstance (seconds of the UI clock)
+    double animationStart = -1, becameFullyVisibleAt = -1, fullyVisibleFor = 0;
+    bool show = false, finished = false;  // visibility SHOW / hasFinishedRendering
+    float portion = 0;
 };
 
 std::deque<Toast> g_queue;
 std::vector<Toast> g_visible;
 int g_nextHandle = 1;
-double g_now = 0;  // the clock of the last drawn frame
 double g_displayScale = 1;  // the Notification Time option
 
 void play(const char* event) {
@@ -53,9 +54,6 @@ void play(const char* event) {
 }
 
 u32 alpha(u32 rgb, float a) { return (u32(std::clamp(a, 0.0f, 1.0f) * 255.0f) << 24) | (rgb & 0xFFFFFF); }
-
-// Fully visible for this long (the timers of AdvancementToast / SystemToast count from the end of the slide).
-double visibleFor(const Toast& t, double now) { return std::max(0.0, now - t.shownAt - kSlide); }
 
 // SystemToast: lines split at 200 px, 12 apart; height 20 + (title lines - 1) * 12 + max(message lines, 1) * 12
 std::vector<Text> systemLines(UiState& s, const Text& t) { return t.empty() ? std::vector<Text>{} : s.font.split(t, 200); }
@@ -101,7 +99,7 @@ void drawSystem(UiState& s, Canvas& c, const Toast& t, float x, float y, int wid
 }
 
 // AdvancementToast.extractRenderState
-void drawAdvancement(UiState& s, Canvas& c, const Toast& t, float x, float y, double now) {
+void drawAdvancement(UiState& s, Canvas& c, const Toast& t, float x, float y) {
     blitSprite(c, s.sprites.sprite("toast/advancement"), x, y, 160, 32);
     const std::vector<Text> lines = s.font.split(t.title, 125);
     const u32 titleColor = t.type == 1 ? 0xFF88FF : 0xFFFF00;
@@ -111,7 +109,7 @@ void drawAdvancement(UiState& s, Canvas& c, const Toast& t, float x, float y, do
         s.drawText(c, label, x + 30, y + 7, 0xFF000000 | titleColor, false);
         s.drawText(c, lines[0], x + 30, y + 18, 0xFFFFFFFF, false);
     } else {
-        const double ms = visibleFor(t, now) * 1000.0;
+        const double ms = t.fullyVisibleFor * 1000.0;
         if (ms < 1500.0) {
             s.drawText(c, label, x + 30, y + 11, alpha(titleColor, float((1500.0 - ms) / 300.0)), false);
         } else {
@@ -220,13 +218,50 @@ void drawToasts(UiState& s, Canvas& c) {
             }
         }
     }
-    g_now = now, g_displayScale = s.settings.notificationDisplayTime;
-    // ToastManager.update: queued toasts take the first run of free slots their height needs (32 px each); one
-    // visibility sound and one sound per toast kind at most per update
+    g_displayScale = s.settings.notificationDisplayTime;
+    // ToastManager.update: the visible toasts first (one visibility sound per update), then the queued ones take the
+    // first run of free slots their height needs (32 px each), one sound per toast kind at most.
     bool visibilitySound = false;
-    auto visibility = [&](const char* event) {
-        if (!visibilitySound) visibilitySound = true, play(event);
-    };
+    for (Toast& t : g_visible) {
+        const bool before = t.show;
+        // ToastInstance.update
+        if (t.animationStart < 0) t.animationStart = now, t.show = true;
+        if (t.show && now - t.animationStart <= kSlide) t.becameFullyVisibleAt = now;
+        t.fullyVisibleFor = now - t.becameFullyVisibleAt;
+        float f = float(std::clamp((now - t.animationStart) / kSlide, 0.0, 1.0));
+        f *= f;
+        t.portion = t.show ? f : 1.0f - f;
+        // Toast.update: the visibility each kind wants
+        const double vis = t.fullyVisibleFor;
+        bool wanted = true;
+        switch (t.kind) {
+            case Kind::System:
+            case Kind::Custom:  // SystemToast / RecipeToast: from the last change
+                if (t.changed) t.lastChanged = vis, t.changed = false;
+                wanted = !t.hideRequested && vis - t.lastChanged < (t.kind == Kind::System ? t.displayTime : kDisplay) * g_displayScale;
+                break;
+            case Kind::Advancement: wanted = vis < kDisplay * g_displayScale; break;
+            case Kind::Tutorial:
+                if (t.timeToDisplay > 0) {
+                    t.progress = t.smoothed = float(std::min(vis / t.timeToDisplay, 1.0));
+                    t.lastSmoothing = vis;
+                    if (vis > t.timeToDisplay) t.hideRequested = true;
+                } else if (t.progressable) {  // Mth.clampedLerp((visible - last) / 100 ms, ...)
+                    const float k = std::clamp(float((vis - t.lastSmoothing) * 1000.0 / 100.0), 0.0f, 1.0f);
+                    t.smoothed += (t.progress - t.smoothed) * k;
+                    t.lastSmoothing = vis;
+                }
+                wanted = !t.hideRequested;
+                break;
+        }
+        if (wanted != t.show) {
+            t.animationStart = now - (1.0f - t.portion) * kSlide;
+            t.show = wanted;
+        }
+        t.finished = !t.show && now - t.animationStart > kSlide;
+        if (t.show != before && !visibilitySound) visibilitySound = true, play(t.show ? "ui.toast.in" : "ui.toast.out");
+    }
+    std::erase_if(g_visible, [](const Toast& t) { return t.finished; });
     bool challengeSound = false;
     bool used[kSlots] = {};
     for (const Toast& t : g_visible)
@@ -244,44 +279,25 @@ void drawToasts(UiState& s, Canvas& c) {
         }
         Toast next = std::move(*it);
         it = g_queue.erase(it);
-        next.slot = at, next.slots = need, next.shownAt = now;
+        next.slot = at, next.slots = need;
         for (int i = at; i < at + need; ++i) used[i] = true;
         if (next.kind == Kind::Advancement && next.type == 1 && !challengeSound) challengeSound = true, play("ui.toast.challenge_complete");
-        visibility("ui.toast.in");
-        g_visible.push_back(std::move(next));
+        g_visible.push_back(std::move(next));  // its first update is the next one
     }
+    // ToastManager.extractRenderState: nothing with the HUD hidden; x from the visible portion, y = slot * height (yPos)
+    if (s.hudHidden) return;
     const int W = c.guiWidth();
     for (Toast& t : g_visible) {
-        if (t.kind == Kind::Tutorial && t.timeToDisplay > 0) {
-            t.progress = t.smoothed = float(std::min(visibleFor(t, now) / t.timeToDisplay, 1.0));
-            t.lastSmoothing = visibleFor(t, now);
-        } else if (t.kind == Kind::Tutorial && t.progressable) {  // Mth.clampedLerp((visible - last) / 100 ms, ...)
-            const float k = std::clamp(float((visibleFor(t, now) - t.lastSmoothing) * 1000.0 / 100.0), 0.0f, 1.0f);
-            t.smoothed += (t.progress - t.smoothed) * k;
-            t.lastSmoothing = visibleFor(t, now);
-        }
-        const double display = t.displayTime * g_displayScale;
-        const bool done = t.kind == Kind::Tutorial ? t.hideRequested || (t.timeToDisplay > 0 && visibleFor(t, now) > t.timeToDisplay)
-                          : t.restartAt >= 0     ? now - t.restartAt >= display
-                                                 : visibleFor(t, now) >= display;
-        if (!t.hiding && done) {
-            t.hiding = true, t.hideAt = now;
-            visibility("ui.toast.out");
-        }
-        float f = float(std::clamp((now - (t.hiding ? t.hideAt : t.shownAt)) / kSlide, 0.0, 1.0));
-        f *= f;
-        const float visible = t.hiding ? 1.0f - f : f;
+        if (t.animationStart < 0 || t.finished) continue;
         const int width = t.kind == Kind::System ? systemWidth(s, t) : t.width;
-        const float x = float(W) - float(width) * visible, y = float(t.slot * 32);
-        if (s.hudHidden) continue;  // ToastManager.extractRenderState: nothing with the HUD hidden
+        const float x = float(W) - float(width) * t.portion, y = float(t.slot * toastHeight(s, t));
         switch (t.kind) {
             case Kind::System: drawSystem(s, c, t, x, y, width); break;
-            case Kind::Advancement: drawAdvancement(s, c, t, x, y, now); break;
+            case Kind::Advancement: drawAdvancement(s, c, t, x, y); break;
             case Kind::Tutorial: drawTutorial(s, c, t, x, y); break;
-            case Kind::Custom: t.draw(c, x, y, now - t.shownAt); break;
+            case Kind::Custom: t.draw(c, x, y, t.fullyVisibleFor); break;
         }
     }
-    std::erase_if(g_visible, [&](const Toast& t) { return t.hiding && now - t.hideAt >= kSlide; });
 }
 
 const UiModuleRegistrar g_module({.name = "toasts", .drawTop = drawToasts});
@@ -297,16 +313,15 @@ Toast* byHandle(int handle) {
 }  // namespace
 
 void showToast(const Text& title, const Text& message, const std::string& id, double displaySeconds) {
-    if (!id.empty()) {
+    if (!id.empty()) {  // SystemToast.addOrUpdate: getToast (also one sliding out), then reset
         for (Toast& t : g_visible)
-            if (t.id == id && !t.hiding) {
-                t.title = title, t.message = message;
-                t.shownAt = g_now - kSlide;  // fully in, its display time starts over
+            if (t.id == id && t.kind == Kind::System) {
+                t.title = title, t.message = message, t.changed = true;
                 return;
             }
         for (Toast& t : g_queue)
-            if (t.id == id) {
-                t.title = title, t.message = message;
+            if (t.id == id && t.kind == Kind::System) {
+                t.title = title, t.message = message, t.changed = true;
                 return;
             }
     }
@@ -334,8 +349,20 @@ bool customToastActive(const char* kind) {
     for (const Toast& t : g_queue)
         if (t.kind == Kind::Custom && t.custom == kind) return true;
     for (const Toast& t : g_visible)
-        if (t.kind == Kind::Custom && t.custom == kind && !t.hiding) return true;
+        if (t.kind == Kind::Custom && t.custom == kind) return true;
     return false;
+}
+
+void forceHideToast(const std::string& id) {  // SystemToast.forceHide
+    for (Toast& t : g_visible)
+        if (t.id == id && t.kind == Kind::System) t.hideRequested = true;
+    for (Toast& t : g_queue)
+        if (t.id == id && t.kind == Kind::System) t.hideRequested = true;
+}
+
+void clearToasts() {  // ToastManager.clear (Hud.onDisconnected)
+    g_visible.clear();
+    g_queue.clear();
 }
 
 void showCustomToast(const char* kind, int width, std::function<void(Canvas& c, float x, float y, double shownFor)> draw) {
@@ -345,9 +372,9 @@ void showCustomToast(const char* kind, int width, std::function<void(Canvas& c, 
             return;
         }
     for (Toast& t : g_visible)
-        if (t.kind == Kind::Custom && t.custom == kind && !t.hiding) {
+        if (t.kind == Kind::Custom && t.custom == kind) {  // RecipeToast.addItem: changed (slides back in when going)
             t.draw = std::move(draw);
-            t.restartAt = std::max(t.shownAt + kSlide, g_now);
+            t.changed = true;
             return;
         }
     Toast t;

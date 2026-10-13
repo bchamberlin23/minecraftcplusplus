@@ -316,10 +316,12 @@ void Ui::State::drawTooltip(Canvas& c, const std::vector<Text>& lines, float mx,
 
 // --- HUD ----------------------------------------------------------------------------------------------------
 
-// PauseScreen.rendersNowPlayingToast: the Music Toast option shows it in the pause menu, with music audible.
+// PauseScreen.rendersNowPlayingToast: the Music Toast option shows it in the pause menu (not F3 + Esc's), with music
+// audible.
 bool Ui::State::rendersNowPlayingToast() const {
     const audio::AudioSystem* a = audio::instance();
-    return settings.musicToast != 0 && a && a->volume(audio::Category::Music) * a->volume(audio::Category::Master) > 0.0f;
+    return settings.musicToast != 0 && a && a->volume(audio::Category::Music) * a->volume(audio::Category::Master) > 0.0f &&
+           pauseMenuShown;
 }
 
 // Hud.extractSavingIndicator: "Saving world" bottom right while the local server saves (Autosave Indicator option).
