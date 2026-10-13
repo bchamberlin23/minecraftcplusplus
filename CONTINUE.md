@@ -118,7 +118,11 @@ the version line) and command suggestions. Then: name tags, advancements, boats 
 server ends the glide), item use (crossbow 72000, the unclamped counter, horn durations), the attack's item dip.
 Residuals noted by the audits: the first tick's lava guard (Entity.firstTick), the shield's block delay and head-yaw
 limit, the local nudge of a hit boat / minecart, the hurtClient rules of frames / paintings / cushions in adventure,
-a mount's Jump Boost, the camel passenger's sprint (held key only), horizontal wheel scrolling (no such input). Toasts follow ToastInstance now (the
+a mount's Jump Boost, the camel passenger's sprint (held key only), horizontal wheel scrolling (no such input).
+Later: armor (black dye, wings on piglins / drowned), riding / dead walk animation, spectator bodies, map label
+depth, the camera's fluid (near plane), weather (biome precipitation data, instant levels). Fog residuals: the
+render-distance fog cylinder follows the far-terrain fog distance, not the chunk setting (deliberate for the LOD
+terrain); a non-atmospheric environment can only shrink the sky fog end; decal armor trims use the normal pipeline. Toasts follow ToastInstance now (the
 server pack download toast shows its progress). Toast residuals: no toasts
 for world access / chunk load or save /
 file drop / pack load failures or periodic notifications; friend toasts have no face (this port's friends have no
