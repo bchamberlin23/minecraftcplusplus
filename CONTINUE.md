@@ -106,9 +106,10 @@ screens (tooltips while carrying, stonecutter / loom clicks, the merchant's acti
 
 ## Items / UI
 
-- **HashedStack component hashes**: container clicks send hash 0 for every component of a changed / carried stack
-  (Java hashes each component through its codec with HashOps), so the server resyncs such slots after each click.
-  Porting needs a canonical per-component encoding (DataComponents codecs) feeding CRC32C like HashOps.
+- **HashedStack component hashes** (items.cpp Items::componentHash): computed like the game for damage, max damage,
+  repair cost, max stack size, map id / colour, dyed colour, glint override, rarity, the unit components, names and
+  lore, (stored) enchantments and custom data (verified: no resync after clicks); every other component still sends 0
+  and the server resyncs that slot.
 
 
 ## Visuals / effects
