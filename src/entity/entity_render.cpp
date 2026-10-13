@@ -1983,6 +1983,11 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
                 if (r != RoleNone && ((roleSet >> r) & 1)) poses_[i] = rolePose[r];
             }
             hiddenRoles = baseHidden & ((1ull << LeftArm) | (1ull << RightArm));
+            if (const int g = m.part("goggles"); g >= 0 && d.anim == Anim::HappyGhast) {
+                // HappyGhastHarnessModel.setupAnim: the goggles over the eyes while ridden, up on the forehead else
+                if (e.passengerCount > 0) poses_[size_t(g)].xRot = 0.0f, poses_[size_t(g)].y = 14.0f;
+                else poses_[size_t(g)].xRot = -0.7854f, poses_[size_t(g)].y = 9.0f;
+            }
         } else if (living || d.anim != Anim::None) {
             AnimState sl = s;
             if (L.flags & Armor) sl.skinParts = 0x7F;

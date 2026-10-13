@@ -1145,6 +1145,7 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
                 if (other.vehicle == e.id) other.vehicle = -1;
             for (u32 i = 0; i < ev.count; ++i)
                 if (auto p = entities_.find(q.ints[ev.first + i]); p != entities_.end()) p->second.vehicle = e.id;
+            e.passengerCount = u8(std::min<u32>(ev.count, 255));
             if (verbose_) LOG("entities: %d now carries %u passenger(s)", e.id, ev.count);
             break;
         default: break;

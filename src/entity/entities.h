@@ -201,6 +201,7 @@ struct Entity {
     float flap = 0, oFlap = 0, flapSpeed = 0, oFlapSpeed = 0, flapping = 1;
     float bobOffset = 0;
     int vehicle = -1;
+    u8 passengerCount = 0;  // ClientboundSetPassengersPacket: how many ride this entity (ourselves included)
     bool dying = false;
     u8 livingFlags = 0;   // LivingEntity DATA_LIVING_ENTITY_FLAGS: 1 using an item, 2 with the off hand, 4 spin attack
     int useTicks = 0;     // ticks the current item use has lasted (getTicksUsingItem)
