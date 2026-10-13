@@ -810,6 +810,30 @@ void drawDebugCharts(UiState& s, Canvas& c, int W, int H) {
                   [&] { shadeText(s, c, fmt("%.1f tps", 1000.0 / mspt), float(left + 1), float(H - 60 + 1)); });
         }
     }
+    if (s.debug && g.lightmap && s.renderer) {  // the lightmap texture, 64 x 64 at the bottom right (x block, y sky light)
+        float lm[3][4];
+        s.renderer->lightmap().pack(lm);
+        auto curve = [](float l) {
+            const float f = std::clamp(l / 15.0f, 0.0f, 1.0f);
+            return f / (4.0f - 3.0f * f);
+        };
+        const float x0 = float(W - 64 - 2), y0 = float(H - 64 - 2);
+        c.fill(x0 - 1, y0 - 1, x0 + 65, y0 + 65, 0xFF000000);
+        for (int sky = 0; sky < 16; ++sky)
+            for (int b = 0; b < 16; ++b) {
+                const float bf = float(b) / 15.0f, mixF = 0.9f * (2.0f * bf - 1.0f) * (2.0f * bf - 1.0f);
+                float col[3];
+                for (int k = 0; k < 3; ++k)
+                    col[k] = std::clamp(lm[0][k] + lm[1][k] * curve(float(sky)) * lm[1][3] + (lm[2][k] + (1.0f - lm[2][k]) * mixF) * curve(float(b)) * lm[2][3], 0.0f, 1.0f);
+                const float m = std::max(col[0], std::max(col[1], col[2])), inv = 1.0f - m;
+                u32 argb = 0xFF000000;
+                for (int k = 0; k < 3; ++k) {
+                    const float notGamma = m > 0 ? col[k] * ((1.0f - inv * inv * inv * inv) / m) : col[k];
+                    argb |= u32(std::clamp(col[k] + (notGamma - col[k]) * lm[0][3], 0.0f, 1.0f) * 255.0f + 0.5f) << (16 - 8 * k);
+                }
+                c.fill(x0 + float(b * 4), y0 + float(sky * 4), x0 + float(b * 4 + 4), y0 + float(sky * 4 + 4), argb);
+            }
+    }
     if (s.debug && g.networkCharts && s.online()) {
         if (!s.fe->cfg.singleplayer)  // BandwidthDebugChart (not for the local server)
             chart(s, c, gc.bandwidth, 0, width, H, [](const auto& v) { return v[0] * 20; },
