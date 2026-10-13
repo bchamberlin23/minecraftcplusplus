@@ -948,12 +948,14 @@ void Ui::State::screenInput(const Window::InputEvent& e) {
                 if (isKey(Key(int(Key::Hotbar1) + i), e)) return containerClick(slot, i, Swap);
             if (isKey(Key::SwapOffhand, e)) return containerClick(slot, 40, Swap);
         }
+        if (slot >= 0 && size_t(slot) < m.slots.size() && !m.slots[size_t(slot)].empty() && isKey(Key::PickItem, e))
+            return containerClick(slot, 0, Clone);  // keyPickItem bound to a key
         if (slot >= 0 && size_t(slot) < m.slots.size() && !m.slots[size_t(slot)].empty() && isKey(Key::Drop, e))
             return containerClick(slot, window->keyDown(VK_CONTROL) ? 1 : 0, Throw);
         return;
     }
     if (e.type == E::Button && e.down) {
-        const bool cloning = e.code == 2 && creative();
+        const bool cloning = isKey(Key::PickItem, e) && creative();  // keyPickItem.matchesMouse && hasInfiniteMaterials
         const int slotId = outside ? -999 : slot;
         const double now = clock;
         doubleClick = slot == lastClickSlot && e.code == lastClickButton && now - lastClickTime < 0.25;
@@ -961,6 +963,11 @@ void Ui::State::screenInput(const Window::InputEvent& e) {
         skipNextRelease = false;
         if (e.code != 0 && e.code != 1 && !cloning) {
             lastClickSlot = slot;
+            if (slot >= 0 && carried.empty()) {  // checkHotbarMouseClicked: swap keys bound to mouse buttons
+                if (isKey(Key::SwapOffhand, e)) return containerClick(slot, 40, Swap);
+                for (int i = 0; i < 9; ++i)
+                    if (isKey(Key(int(Key::Hotbar1) + i), e)) return containerClick(slot, i, Swap);
+            }
             return;
         }
         if (slotId != -1 && !isQuickCrafting) {
@@ -1019,7 +1026,8 @@ void Ui::State::screenInput(const Window::InputEvent& e) {
                 for (int q : quickCraftSlots) containerClick(q, (1 & 3) | ((type & 3) << 2), QuickCraft);
                 containerClick(-999, (2 & 3) | ((type & 3) << 2), QuickCraft);
             } else if (!carried.empty()) {
-                if (e.code == 2 && creative()) {
+                static const int kButtons[5] = {VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2};
+                if (e.code >= 0 && e.code < 5 && settings.key(Key::PickItem) == kButtons[e.code] && creative()) {  // matchesMouse
                     containerClick(slotId, e.code, Clone);
                 } else {
                     const bool quick = slotId != -999 && shift;
