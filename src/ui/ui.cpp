@@ -718,6 +718,10 @@ void Ui::registerHandlers(net::Client& client) {
     const Items* items = &s->items;
     attachItemWorld(client);  // item model properties: dimension, spawn, last death (item_props.h)
 
+    client.onPlayPeek("ticking_state", [s](net::Reader& r) {  // the durations in tooltips and the effect list
+        const float rate = r.f32();
+        if (r.ok) s->post([rate] { setTickRate(rate); });
+    });
     client.onPlay("set_health", [s](net::Reader& r) {
         const float health = r.f32();
         const int food = r.varInt();

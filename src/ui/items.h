@@ -76,7 +76,8 @@ struct ItemStack {
     }
 };
 
-std::string tickDuration(int ticks);  // StringUtil.formatTickDuration at 20 ticks per second
+std::string tickDuration(int ticks);  // StringUtil.formatTickDuration at the server's tick rate
+void setTickRate(float rate);         // ClientboundTickingStatePacket's tick rate (20 normally)
 
 class Items {
 public:

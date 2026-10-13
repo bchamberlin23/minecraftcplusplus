@@ -53,9 +53,13 @@ std::string decimal(double v) {
 
 }  // namespace
 
-// StringUtil.formatTickDuration at 20 ticks per second.
+// The server's tick rate (ClientboundTickingStatePacket; TooltipContext.tickRate / Level.tickRateManager).
+float g_tickRate = 20.0f;
+void setTickRate(float rate) { g_tickRate = rate > 0 ? rate : 20.0f; }
+
+// StringUtil.formatTickDuration: seconds = floor(ticks / tick rate).
 std::string tickDuration(int ticks) {
-    int seconds = ticks / 20;
+    int seconds = int(std::floor(float(ticks) / g_tickRate));
     int minutes = seconds / 60;
     seconds %= 60;
     const int hours = minutes / 60;
@@ -252,7 +256,7 @@ void Items::addDetails(const ItemStack& s, bool advanced, bool creative, bool pl
     const std::string itemId = name(s.item), n = shortName(itemId);
     auto shown = [&](const char* component) {  // TooltipDisplay.shows
         const int t = componentType(component);
-        return std::find(s.hiddenTooltip.begin(), s.hiddenTooltip.end(), t) == s.hiddenTooltip.end();
+        return !s.hideTooltip && std::find(s.hiddenTooltip.begin(), s.hiddenTooltip.end(), t) == s.hiddenTooltip.end();
     };
     auto get = [&](const char* comp) {  // present and shown
         ComponentValue v = component(s, comp);
@@ -773,6 +777,7 @@ void Items::addDetails(const ItemStack& s, bool advanced, bool creative, bool pl
                         if (type == "linear")
                             return nbtNumber(lv->find("base"), 0) + nbtNumber(lv->find("per_level_above_first"), 0) * (level - 1);
                         if (type == "levels_squared") return double(level * level) + nbtNumber(lv->find("added"), 0);
+                        if (type == "exponent") return double(float(std::pow(calc(lv->find("base")), calc(lv->find("power")))));
                         if (type == "clamped")
                             return std::clamp(calc(lv->find("value")), nbtNumber(lv->find("min"), 0), nbtNumber(lv->find("max"), 0));
                         if (type == "fraction") {
@@ -922,9 +927,13 @@ void Items::addDetails(const ItemStack& s, bool advanced, bool creative, bool pl
                 if (NbtValue* sd = root.find("SpawnData"))
                     if (NbtValue* e = sd->find("entity"))
                         if (NbtValue* idv = e->find("id"); idv && idv->type == TagString) {
+                            // EntityType.CODEC: only a known entity type (else the spawner's description lines)
                             const std::string type = idv->s.find(':') == std::string::npos ? "minecraft:" + idv->s : idv->s;
-                            spawns = tr("entity." + type.substr(0, type.find(':')) + "." + shortName(type), {}, gray);
-                            has = true;
+                            const nlohmann::json& reg = reports_ ? reports_->registries() : nlohmann::json();
+                            if (reg.contains("minecraft:entity_type") && reg["minecraft:entity_type"]["entries"].contains(type)) {
+                                spawns = tr("entity." + type.substr(0, type.find(':')) + "." + shortName(type), {}, gray);
+                                has = true;
+                            }
                         }
         }
         if (has) {
@@ -981,7 +990,8 @@ void Items::addDetails(const ItemStack& s, bool advanced, bool creative, bool pl
     }
     if (advanced) {
         const int md = maxDamage(s);
-        if (s.damage > 0 && md > 0 && shown("damage"))
+        // isDamaged: damageable (max damage, damage, not unbreakable) with some damage
+        if (s.damage > 0 && md > 0 && !component(s, "unbreakable").present() && shown("damage"))
             out.push_back(tr("item.durability", {Text(std::to_string(md - s.damage)), Text(std::to_string(md))}));
         out.push_back(Text(itemId, fmt("dark_gray")));
         if (const int count = componentCount(s); count > 0) out.push_back(tr("item.components", {Text(std::to_string(count))}, fmt("dark_gray")));
