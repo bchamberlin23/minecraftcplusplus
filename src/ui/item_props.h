@@ -127,6 +127,13 @@ u32 effectColor(const std::string& effect);  // MobEffect.getColor (RGB), 0 unkn
 u32 potionColor(const Items& items, const ItemStack& s, u32 fallback);    // PotionContents.getColorOr (RGB)
 std::vector<u32> fireworkColors(const Items& items, const ItemStack& s);  // firework_explosion colours (RGB)
 std::string trimMaterial(const Items& items, const ItemStack& s);
+// EnchantmentHelper's value effects (e.g. "minecraft:crossbow_charge_time"): `base` through the stack's enchantments'
+// add / multiply / set / all_of effects with their level-based values.
+float enchantmentValue(const Items& items, const ItemStack& s, std::string_view effect, float base);
+int crossbowChargeTicks(const Items& items, const ItemStack& s);  // CrossbowItem.getChargeDuration (Quick Charge)
+// ItemStack.getUseAnimation (ItemUseAnimation id: 0 none .. 11 spear): the item classes, then the consumable /
+// blocks_attacks / kinetic_weapon components.
+int useAnimation(const Items& items, const ItemStack& s);
 // PaletteMapping over a texture: the key palette's colours become the target palette's (ids without textures/).
 bool palettedImage(const Resources& res, const std::string& texture, const std::string& paletteKey, const std::string& palette, Image& out);
 // EquipmentLayerRenderer.TrimTextureKey: the armour trim texture of a stack's trim on an equipment asset's layer type

@@ -8,6 +8,7 @@
 #include "game/game.h"
 #include "game/riding.h"
 #include "net/client.h"
+#include "ui/item_props.h"
 #include "ui/items.h"
 #include "ui/ui.h"
 #include "world/world.h"
@@ -799,6 +800,7 @@ int Gameplay::componentType(const char* name) {
 ItemRules::Use Gameplay::stackUse(const ui::ItemStack& s) {
     const std::string name = itemName(s.item);
     ItemRules::Use u = rules_.use(name);
+    if (name == "minecraft:crossbow" && ui_) u.duration = ui::crossbowChargeTicks(ui_->items(), s) + 3;  // CrossbowItem.getUseDuration
     const ItemRules::Components& d = rules_.components(name);
     auto present = [&](const char* type, bool fallback) {
         const int t = componentType(type);

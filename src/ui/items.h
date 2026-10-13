@@ -128,6 +128,10 @@ public:
     const std::vector<RegistryInfo>& registry(const std::string& name) const;  // jukebox_song, trim_material, ...
     bool registriesSet() const { return registriesSet_; }
     const std::vector<RegistryInfo>& enchantments() const { return enchantments_; }
+    const std::string* enchantmentNbt(const std::string& id) const {  // the enchantment's network NBT (effects)
+        auto it = enchantmentNbt_.find(id);
+        return it == enchantmentNbt_.end() ? nullptr : &it->second;
+    }
     const std::vector<RegistryInfo>& paintings() const { return paintings_; }
     const std::vector<RegistryInfo>& instruments() const { return instruments_; }
     const std::vector<std::string>& bannerPatterns() const { return bannerPatterns_; }

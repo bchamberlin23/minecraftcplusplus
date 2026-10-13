@@ -1872,15 +1872,20 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
                 if (item < 0) return ArmPose::Empty;
                 const std::string n = items_->itemName(item);
                 if (n == "crossbow" && (e.chargedCrossbow >> slot) & 1 && e.swingTime < 0) return ArmPose::CrossbowHold;
-                if ((e.livingFlags & 1) && ((e.livingFlags & 2) ? 1 : 0) == slot) {
-                    if (n == "shield") return ArmPose::Block;
-                    if (n == "bow") return ArmPose::BowAndArrow;
-                    if (n == "trident") return ArmPose::ThrowTrident;
-                    if (n == "crossbow") return ArmPose::CrossbowCharge;
-                    if (n == "spyglass") return ArmPose::Spyglass;
-                    if (n == "goat_horn") return ArmPose::TootHorn;
-                    if (n == "brush") return ArmPose::Brush;
-                    if (n.ends_with("_spear")) return ArmPose::Spear;
+                if ((e.livingFlags & 1) && ((e.livingFlags & 2) ? 1 : 0) == slot) {  // the use animation of the stack
+                    const ui::ItemStack* st = e.equipStack[slot].get();
+                    const int anim = st && items_->items() ? ui::useAnimation(*items_->items(), *st) : 0;
+                    switch (anim) {
+                        case 3: return ArmPose::Block;
+                        case 4: return ArmPose::BowAndArrow;
+                        case 5: return ArmPose::ThrowTrident;
+                        case 6: return ArmPose::CrossbowCharge;
+                        case 7: return ArmPose::Spyglass;
+                        case 8: return ArmPose::TootHorn;
+                        case 9: return ArmPose::Brush;
+                        case 11: return ArmPose::Spear;
+                        default: break;
+                    }
                 }
                 return spearPose(slot) ? ArmPose::Spear : ArmPose::Item;
             };
@@ -1893,6 +1898,10 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
             s.usingItem = (e.livingFlags & 1) != 0;
             s.useRight = ((e.livingFlags & 2) != 0) != rightHanded;
             s.useTicks = s.usingItem ? float(e.useTicks) + pt : 0.0f;
+            {  // HumanoidMobRenderer: maxCrossbowChargeDuration (CrossbowItem.getChargeDuration of the used stack)
+                const ui::ItemStack* used = e.equipStack[(e.livingFlags & 2) ? 1 : 0].get();
+                if (used && items_->items()) s.crossbowCharge = float(ui::crossbowChargeTicks(*items_->items(), *used));
+            }
         }
         if ((e.name == "Dinnerbone" || e.name == "Grumm") && (e.category != Category::Player || (e.skinParts & 1)))
             s.pitch = -s.pitch, s.headYaw = -s.headYaw;  // upside down

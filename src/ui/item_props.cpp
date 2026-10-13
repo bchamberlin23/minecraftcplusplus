@@ -492,7 +492,7 @@ float rangeValue(const Items& items, const json& n, const ItemStack& s, const It
     }
     if (prop == "crossbow/pull") {
         if (!(o.present && o.living) || selectValue(items, json{{"property", "charge_type"}}, s, c) != "none") return 0;
-        return o.usingThis ? o.useTicks / std::max(1.0f, o.chargeDuration) : 0.0f;
+        return o.usingThis ? o.useTicks / std::max(1.0f, float(crossbowChargeTicks(items, s))) : 0.0f;
     }
     if (prop == "use_cycle") {
         const float period = num(n.value("period", json()), 1.0f);
@@ -987,6 +987,99 @@ bool armorTrimImage(const Items& items, const Resources& res, const ItemStack& s
         meta["palette"]["base_palette"].is_string())
         paletteKey = idWithNs(meta["palette"]["base_palette"].get<std::string>());
     return palettedImage(res, base, paletteKey, palette, out);
+}
+
+namespace {
+// LevelBasedValue.calculate
+float levelValue(NbtValue* v, int level) {
+    if (!v) return 0;
+    if (v->type == TagFloat || v->type == TagDouble) return float(v->d);
+    if (v->type == TagInt || v->type == TagShort || v->type == TagByte || v->type == TagLong) return float(v->i);
+    if (v->type != TagCompound) return 0;
+    NbtValue* t = v->find("type");
+    const std::string type = t && t->type == TagString ? stripNs(t->s) : "";
+    auto f = [&](const char* k) { return levelValue(v->find(k), level); };
+    if (type == "linear") return f("base") + f("per_level_above_first") * float(level - 1);
+    if (type == "levels_squared") return float(level * level) + f("added");
+    if (type == "clamped") return std::clamp(f("value"), f("min"), f("max"));
+    if (type == "fraction") {
+        const float d = f("denominator");
+        return d == 0 ? 0 : f("numerator") / d;
+    }
+    if (type == "lookup") {
+        NbtValue* values = v->find("values");
+        if (values && values->type == TagList && level >= 1 && size_t(level) <= values->items.size()) return levelValue(&values->items[size_t(level - 1)], level);
+        return f("fallback");
+    }
+    return 0;
+}
+// EnchantmentValueEffect.process
+float valueEffect(NbtValue& e, int level, float value) {
+    NbtValue* t = e.find("type");
+    const std::string type = t && t->type == TagString ? stripNs(t->s) : "";
+    if (type == "add") return value + levelValue(e.find("value"), level);
+    if (type == "multiply") return value * levelValue(e.find("factor"), level);
+    if (type == "set") return levelValue(e.find("value"), level);
+    if (type == "all_of")
+        if (NbtValue* l = e.find("effects"); l && l->type == TagList)
+            for (NbtValue& x : l->items) value = valueEffect(x, level, value);
+    return value;
+}
+}  // namespace
+
+float enchantmentValue(const Items& items, const ItemStack& s, std::string_view effect, float base) {
+    const std::string* d = findComponent(items, s, "enchantments");
+    if (!d) return base;
+    net::Reader r = readerOf(*d);
+    float value = base;
+    for (i32 k = 0, n = r.varInt(); k < n && r.ok; ++k) {
+        const int id = r.varInt(), level = r.varInt();
+        if (!r.ok || id < 0 || size_t(id) >= items.enchantments().size()) continue;
+        const std::string* raw = items.enchantmentNbt(items.enchantments()[size_t(id)].id);
+        NbtValue nbt;
+        if (!raw || !nbtReadNetwork(reinterpret_cast<const u8*>(raw->data()), raw->size(), nbt)) continue;
+        NbtValue* effects = nbt.find("effects");
+        NbtValue* e = effects && effects->type == TagCompound ? effects->find(effect) : nullptr;
+        if (!e) continue;
+        if (e->type == TagCompound) value = valueEffect(*e, level, value);
+        else if (e->type == TagList)  // conditional effects ({effect, requirements}): the unconditional ones
+            for (NbtValue& c : e->items)
+                if (NbtValue* inner = c.find("effect"); inner && !c.find("requirements")) value = valueEffect(*inner, level, value);
+    }
+    return value;
+}
+
+int crossbowChargeTicks(const Items& items, const ItemStack& s) {
+    return int(std::floor(enchantmentValue(items, s, "minecraft:crossbow_charge_time", 1.25f) * 20.0f));
+}
+
+int useAnimation(const Items& items, const ItemStack& s) {
+    if (s.empty()) return 0;
+    const std::string n = stripNs(items.name(s.item));
+    if (n == "bow") return 4;  // BowItem, CrossbowItem, TridentItem, SpyglassItem, InstrumentItem, BrushItem, BundleItem
+    if (n == "crossbow") return 6;
+    if (n == "trident") return 5;
+    if (n == "spyglass") return 7;
+    if (n == "goat_horn") return 8;
+    if (n == "brush") return 9;
+    if (n == "bundle" || n.ends_with("_bundle")) return 10;
+    if (const std::string* c = findComponent(items, s, "consumable")) {  // Consumable: consume_seconds, animation
+        net::Reader r = readerOf(*c);
+        r.f32();
+        const int anim = r.varInt();
+        return r.ok ? std::clamp(anim, 0, 11) : 1;
+    }
+    if (hasComponent(items, s, "consumable")) {
+        const json& def = defaults(items, s.item);
+        static const char* kNames[12] = {"none", "eat", "drink", "block", "bow", "trident", "crossbow", "spyglass", "toot_horn", "brush", "bundle", "spear"};
+        const std::string a = def.contains("minecraft:consumable") && def["minecraft:consumable"].is_object()
+                                  ? def["minecraft:consumable"].value("animation", "eat") : "eat";
+        for (int i = 0; i < 12; ++i)
+            if (a == kNames[i]) return i;
+        return 1;
+    }
+    if (hasComponent(items, s, "blocks_attacks")) return 3;
+    return hasComponent(items, s, "kinetic_weapon") ? 11 : 0;
 }
 
 std::string trimMaterial(const Items& items, const ItemStack& s) {
