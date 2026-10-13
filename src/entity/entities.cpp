@@ -965,6 +965,15 @@ void recalcAttached(const EntityWorld& w, Entity& e, int kind) {
     if (kind == 1) std::copy(e.pos, e.pos + 3, e.codecBase);  // ItemFrame.recalculateBoundingBox: syncPacketPositionCodec
     e.stepCount = 0, e.remainingTicks = 0, e.linearRemaining = 0;
 }
+// Projectile.getPickRadius: 1 for the pickable projectiles (fireballs, shulker bullets, wind charges).
+double pickRadius(const Entity& e) {
+    if (!e.info) return 0;
+    const std::string& n = e.info->name;
+    return n == "minecraft:fireball" || n == "minecraft:small_fireball" || n == "minecraft:shulker_bullet" || n == "minecraft:wind_charge" ||
+                   n == "minecraft:breeze_wind_charge"
+               ? 1.0
+               : 0.0;
+}
 void placeAttached(const EntityWorld& w, Entity& e, int kind, const double at[3]) {
     for (int a = 0; a < 3; ++a) e.attachBlock[a] = int(std::floor(at[a]));
     recalcAttached(w, e, kind);
@@ -1849,6 +1858,8 @@ PickResult EntityWorld::pick(const double o[3], const double dir[3], double maxD
         double lo[3] = {c[0] - w / 2, c[1], c[2] - w / 2}, hi[3] = {c[0] + w / 2, c[1] + h, c[2] + w / 2};
         if (double blo[3], bhi[3]; attachedBox(*this, e, blo, bhi))
             for (int a = 0; a < 3; ++a) lo[a] = c[a] + blo[a], hi[a] = c[a] + bhi[a];
+        if (const double r = pickRadius(e); r > 0)  // the box inflated by getPickRadius
+            for (int a = 0; a < 3; ++a) lo[a] -= r, hi[a] += r;
         double t0 = 0, t1 = best.distance;
         bool hit = true;
         for (int a = 0; a < 3 && hit; ++a) {
@@ -1925,7 +1936,8 @@ PickResult EntityWorld::pickAttackRange(const double eye[3], const double dir[3]
         double w, h, c[3];
         entitySize(e, w, h);
         for (int a = 0; a < 3; ++a) c[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt;
-        const double lo[3] = {c[0] - w / 2, c[1], c[2] - w / 2}, hi[3] = {c[0] + w / 2, c[1] + h, c[2] + w / 2};
+        const double r = pickRadius(e);  // the box inflated by getPickRadius
+        const double lo[3] = {c[0] - w / 2 - r, c[1] - r, c[2] - w / 2 - r}, hi[3] = {c[0] + w / 2 + r, c[1] + h + r, c[2] + w / 2 + r};
         double hit[3];
         double t;
         const bool inside = from[0] >= lo[0] && from[0] <= hi[0] && from[1] >= lo[1] && from[1] <= hi[1] && from[2] >= lo[2] &&
