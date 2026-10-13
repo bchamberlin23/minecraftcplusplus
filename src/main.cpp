@@ -1373,6 +1373,7 @@ int wmain(int argc, wchar_t** argv) {
         sky.setViewEffects(ui.viewEffects());  // blindness, darkness, night vision, water vision (fog, lightmap)
         renderer.setFadeSeconds(float(ui.settings().chunkFade));  // Video Settings: Chunk Fade (chunkSectionFadeInTime)
         sky.update(cam, dt);
+        entities.piglinsZombify = sky.piglinsZombify();
         ui.endFrame();
         if (haveReports) packs::updatePlayer(renderer, ui, game.selectedSlot(), reports, registry);  // held light
         renderer.upscalers().setMenuActive(ui.menuOpen());  // frame generation pauses in menus

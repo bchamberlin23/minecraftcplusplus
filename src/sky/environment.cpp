@@ -372,7 +372,12 @@ bool Environment::load(const AssetSource& jar) {
     for (auto& [name, j] : dimJson) {
         DimensionInfo d;
         d.name = name;
-        if (j.contains("attributes")) parseAttributes(j["attributes"], d.attributes);
+        if (j.contains("attributes")) {
+            parseAttributes(j["attributes"], d.attributes);
+            if (const auto& a = j["attributes"]; a.is_object() && a.contains("minecraft:gameplay/piglins_zombify") &&
+                                                   a["minecraft:gameplay/piglins_zombify"].is_boolean())
+                d.piglinsZombify = a["minecraft:gameplay/piglins_zombify"].get<bool>();
+        }
         if (j.contains("timelines")) resolve(j["timelines"], d.timelines, 0);
         d.clock = j.contains("default_clock") ? withNamespace(j["default_clock"].get<std::string>()) : std::string{};
         const std::string box = j.value("skybox", std::string("overworld"));

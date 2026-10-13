@@ -87,6 +87,7 @@ public:
 
     // The game's item registry (data components of stacks); before the first mesh.
     void setItems(const ui::Items* items) { items_ = items; }
+    const ui::Items* items() const { return items_; }
     // Mesh of an item stack in a display context (ItemModelResolver.updateForTopItem): the item definition named by
     // the stack (item_model component) with its condition / select / range_dispatch properties, tints and special
     // renderers evaluated for the stack's components and the context. Never null; empty() when nothing is drawn.

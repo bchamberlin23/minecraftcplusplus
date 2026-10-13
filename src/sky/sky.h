@@ -53,6 +53,8 @@ public:
     // before start(). `reports` (optional) resolves the lightning bolt's entity type id for sky flashes.
     void attach(net::Client& client, const GameReports* reports = nullptr);
     void setBiomeLookup(BiomeLookup lookup);
+    // The current dimension's gameplay/piglins_zombify (piglins and hoglins shake while converting).
+    bool piglinsZombify() const { return !dimension_ || dimension_->piglinsZombify; }
     // Once per frame before Renderer::render: advances time, evaluates the attributes, sets the atmosphere.
     void update(const CameraState& cam, double dt);
     // The boss bars' flags (BossHealthOverlay.shouldDarkenScreen / shouldCreateWorldFog), before update():

@@ -80,6 +80,7 @@ struct DimensionInfo {
     std::string clock;  // default_clock ("" = none)
     Skybox skybox = Skybox::Overworld;
     bool hasSkylight = true, hasCeiling = false;
+    bool piglinsZombify = true;  // gameplay/piglins_zombify
     int minY = -64;
     bool canHaveWeather() const { return hasSkylight && !hasCeiling && skybox != Skybox::End; }
 };

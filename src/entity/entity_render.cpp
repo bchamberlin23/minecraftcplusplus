@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <random>
 #include <shared_mutex>
 
 #include "EntityCutoutMvPS.h"
@@ -1105,6 +1106,15 @@ int EntityRenderer::equipmentLayers(const Entity& e, const TypeDef& d, Layer* ou
                 out[n++] = {model, l.tex, color, u16(Armor | (glint ? Glint : 0))};
                 glint = false;
             }
+            const ui::ItemStack* stack = e.equipStack[slot].get();
+            const int maxDamage = stack && items_->items() ? items_->items()->maxDamage(*stack) : -1;
+            if (slot == 6 && name == "minecraft:wolf" && maxDamage > 0 && n < max) {
+                // WolfArmorLayer.maybeRenderCracks: Crackiness.WOLF_ARMOR by the armour's remaining durability
+                const float f = float(maxDamage - stack->damage) / float(maxDamage);
+                const char* crack = f < 0.32f ? "entity/wolf/wolf_armor_crackiness_high" : f < 0.69f ? "entity/wolf/wolf_armor_crackiness_medium"
+                                    : f < 0.95f ? "entity/wolf/wolf_armor_crackiness_low" : nullptr;
+                if (const int t = crack ? assets_.texture(crack) : -1; t >= 0) out[n++] = {model, t, kWhite, u16(Armor | Translucent | NoOverlay)};
+            }
         }
     }
     return n;
@@ -1113,10 +1123,12 @@ int EntityRenderer::equipmentLayers(const Entity& e, const TypeDef& d, Layer* ou
 namespace {
 // LivingEntityRenderer.isShaking and the overrides: fully frozen, converting zombies / skeletons / zombie villagers,
 // suffocating striders.
-bool isShaking(const Entity& e) {
+bool isShaking(const Entity& e, bool piglinsZombify) {
     if (fullyFrozen(e)) return true;
     if (!e.info) return false;
     const std::string& n = e.info->name;
+    if (n == "minecraft:piglin" || n == "minecraft:piglin_brute" || n == "minecraft:hoglin")  // isConverting
+        return piglinsZombify && !(e.mobFlags & 1) && dataInt(e, "DATA_IMMUNE_TO_ZOMBIFICATION") == 0;
     if (n == "minecraft:zombie" || n == "minecraft:husk" || n == "minecraft:drowned") return dataInt(e, "DATA_DROWNED_CONVERSION_ID") != 0;
     if (n == "minecraft:skeleton") return dataInt(e, "DATA_STRAY_CONVERSION_ID") != 0;
     if (n == "minecraft:zombie_villager") return dataInt(e, "DATA_CONVERTING_ID") != 0;
@@ -1571,6 +1583,11 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
 
     // Root transform (LivingEntityRenderer.submit / setupRotations, or the vehicle / projectile renderers).
     M34 root = translate(float(p[0]), float(p[1]), float(p[2]));
+    if (d.anim == Anim::Enderman && dataInt(e, "DATA_CREEPY") != 0) {  // EndermanRenderer.getRenderOffset: the creepy jitter
+        static std::mt19937 jitter(0x5EED);
+        std::normal_distribution<float> gauss(0.0f, 1.0f);
+        root = mul(root, translate(gauss(jitter) * 0.02f, 0, gauss(jitter) * 0.02f));
+    }
     AnimState s;
     s.pt = pt, s.entity = &e, s.assets = &assets_;
     s.age = float(e.age) + pt;
@@ -1666,7 +1683,7 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
             // LivingEntityRenderer.setupRotations (frozen / converting shaking, death roll, riptide spin, sleeping,
             // upside-down names) and the species' own (SquidRenderer replaces it).
             float bodyRot = d.special == SpShulker ? bodyYaw + 180.0f : bodyYaw;  // ShulkerRenderer.setupRotations
-            if (isShaking(e)) bodyRot += float(std::cos(std::floor(float(e.age) + pt) * 3.25f) * kPi * 0.4f);
+            if (isShaking(e, world_.piglinsZombify)) bodyRot += float(std::cos(std::floor(float(e.age) + pt) * 3.25f) * kPi * 0.4f);
             if (d.anim == Anim::Pufferfish) root = mul(root, translate(0, std::cos(s.age * 0.05f) * 0.08f, 0));
             const bool upsideDown = (e.name == "Dinnerbone" || e.name == "Grumm") && (!player || (e.skinParts & 1));
             if (d.anim == Anim::Squid) {  // SquidRenderer.setupRotations

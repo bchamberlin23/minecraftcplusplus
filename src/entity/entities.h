@@ -432,6 +432,8 @@ public:
     // (the command block minecart's editor) and the packet is still sent.
     std::function<void(const Entity& e)> onUse;
     std::function<void(const std::string& raw, double x, double y, double z, double vx, double vy, double vz)> spawnParticle;
+    // EnvironmentAttributes.PIGLINS_ZOMBIFY in the current dimension (piglins and hoglins shake while converting).
+    bool piglinsZombify = true;
     // A painting variant's size in blocks (the renderer's registry): false when unknown.
     std::function<bool(int variant, int& w, int& h)> paintingSize;
     std::function<u64()> meshSerial;
