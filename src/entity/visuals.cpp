@@ -2690,13 +2690,10 @@ void Visuals::Impl::dragonTick(const Entity& e) {
     const int now = int(dataInt(e, "DATA_PHASE"));
     if (now != phase) phase = now, ticks = 0;
     const bool sitting = phase >= 5 && phase <= 7;
-    auto hist = [&](int delay) { return e.sp.history[(std::max(e.sp.historyPos, 0) - delay) & 63]; };  // DragonFlightHistory.get
-    auto head = [&](double out[3]) {  // tickPart(head): y at its middle (getY(0.5)); yRotA stays 0 on the client
-        const float tilt = (hist(5)[0] - hist(10)[0]) * 10.0f * kDeg, yr = e.yaw * kDeg;
-        const float yOffset = sitting ? -1.0f : hist(5)[0] - hist(0)[0];
-        out[0] = e.pos[0] + std::sin(yr) * 6.5f * std::cos(tilt);
-        out[1] = e.pos[1] + yOffset + std::sin(tilt) * 6.5f + 0.5;
-        out[2] = e.pos[2] - std::cos(yr) * 6.5f * std::cos(tilt);
+    auto head = [&](double out[3]) {  // the head part's centre, at its middle height (getY(0.5))
+        double parts[8][6];
+        dragonPartBoxes(e, parts);
+        for (int a = 0; a < 3; ++a) out[a] = e.pos[a] + (parts[0][a] + parts[0][a + 3]) * 0.5;
     };
     auto look = [&](double out[3]) {  // getHeadLookVector(1)
         float xRot = e.pitch;

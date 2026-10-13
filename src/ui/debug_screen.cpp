@@ -6,6 +6,7 @@
 #include "assets/game_reports.h"
 #include "audio/audio.h"
 #include "entity/entities.h"
+#include "entity/species.h"
 #include "entity/item_models.h"
 #include "game/game.h"
 #include "net/client.h"
@@ -1038,23 +1039,48 @@ void debugLines(UiState& s, std::vector<LineVertex>& out, const CameraState& cam
     }
     if (debugEntryEnabled(s, "entity_hitboxes") && s.entities) {  // EntityHitboxDebugRenderer
         const float pt = s.entities->partialTick();
+        const bool firstPerson = s.game->cameraMode == 0;
+        // The point at the position, the box, the eye line (living) and the view arrow, for one entity.
+        auto show = [&](const double p[3], double w, double h, double eyeH, bool living, float yawDeg, float pitchDeg) {
+            box(p[0] - w / 2, p[1], p[2] - w / 2, p[0] + w / 2, p[1] + h, p[2] + w / 2, 0xFFFFFFFF, 2.5f);
+            box(p[0] - 0.02, p[1] - 0.02, p[2] - 0.02, p[0] + 0.02, p[1] + 0.02, p[2] + 0.02, 0xFFFFFFFF, 2.0f);  // Gizmos.point
+            const double eye = p[1] + eyeH;
+            if (living) box(p[0] - w / 2, eye - 0.01, p[2] - w / 2, p[0] + w / 2, eye + 0.01, p[2] + w / 2, 0xFFFF0000, 2.5f);
+            const float yaw = yawDeg * 3.14159265f / 180.0f, pitch = pitchDeg * 3.14159265f / 180.0f;
+            const double vx = -std::sin(yaw) * std::cos(pitch), vy = -std::sin(pitch), vz = std::cos(yaw) * std::cos(pitch);
+            line(p[0], eye, p[2], p[0] + vx * 2, eye + vy * 2, p[2] + vz * 2, 0xFF0000FF, 2.5f);  // the view vector
+        };
         for (const auto& [id, e] : s.entities->entities()) {
-            if (!e.info || (e.sharedFlags & 0x20) || id == s.entities->viewEntity) continue;  // invisible / the camera's
+            // invisible; the camera entity only in first person
+            if (!e.info || (e.sharedFlags & 0x20) || (id == s.entities->viewEntity && firstPerson)) continue;
             double w, h;
             ent::entitySize(e, w, h);
             double p[3];
             for (int a = 0; a < 3; ++a) p[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt;
             const double dx = p[0] - cam.x, dz = p[2] - cam.z;
             if (dx * dx + dz * dz > 64.0 * 64.0) continue;
-            box(p[0] - w / 2, p[1], p[2] - w / 2, p[0] + w / 2, p[1] + h, p[2] + w / 2, 0xFFFFFFFF, 2.5f);
-            if (e.category == ent::Category::Living || e.category == ent::Category::Player) {
-                const double eye = p[1] + e.info->eye * (h / std::max(0.01, double(e.info->height)));
-                box(p[0] - w / 2, eye - 0.01, p[2] - w / 2, p[0] + w / 2, eye + 0.01, p[2] + w / 2, 0xFFFF0000, 2.5f);
-                const float yaw = (e.prevHeadYaw + (e.headYaw - e.prevHeadYaw) * pt) * 3.14159265f / 180.0f;
-                const float pitch = (e.prevPitch + (e.pitch - e.prevPitch) * pt) * 3.14159265f / 180.0f;
-                const double vx = -std::sin(yaw) * std::cos(pitch), vy = -std::sin(pitch), vz = std::cos(yaw) * std::cos(pitch);
-                line(p[0], eye, p[2], p[0] + vx * 2, eye + vy * 2, p[2] + vz * 2, 0xFF0000FF, 2.5f);  // the view vector
+            const bool living = e.category == ent::Category::Living || e.category == ent::Category::Player;
+            const double eyeH = e.info->eye * (h / std::max(0.01, double(e.info->height)));
+            show(p, w, h, eyeH, living, living ? e.prevHeadYaw + (e.headYaw - e.prevHeadYaw) * pt : e.prevYaw + (e.yaw - e.prevYaw) * pt,
+                 e.prevPitch + (e.pitch - e.prevPitch) * pt);
+            if (e.vehicle >= 0)  // the riding position: a 1/16-high box (yellow)
+                if (const ent::Entity* v = s.entities->entity(e.vehicle); v && v->info) {
+                    double vw, vh;
+                    ent::entitySize(*v, vw, vh);
+                    const double half = std::min(vw, w) / 2;
+                    box(p[0] - half, p[1], p[2] - half, p[0] + half, p[1] + 0.0625, p[2] + half, 0xFFFFFF00, 2.5f);
+                }
+            if (e.info->name == "minecraft:ender_dragon") {  // the parts (yellow-green)
+                double parts[8][6];
+                ent::dragonPartBoxes(e, parts);
+                for (const auto& b : parts)
+                    box(p[0] + b[0], p[1] + b[1], p[2] + b[2], p[0] + b[3], p[1] + b[4], p[2] + b[5], 0xFF40FF00, 2.5f);
             }
+        }
+        if (!firstPerson && s.entities->viewEntity < 0) {  // ourselves in third person (not a tracked entity)
+            const Player& me = player(s);
+            const double h = Player::height(me.pose);
+            show(me.pos, 0.6, h, me.eyeHeight(), true, me.yaw * 180.0f / 3.14159265f, me.pitch * 180.0f / 3.14159265f);
         }
     }
 }

@@ -19,6 +19,35 @@ float wrapDegrees(float d) {
     return d;
 }
 
+}  // namespace
+
+void dragonPartBoxes(const Entity& e, double boxes[8][6]) {
+    const SpeciesState& s = e.sp;
+    auto hist = [&](int d) { return s.history[(std::max(s.historyPos, 0) - d) & 63]; };  // DragonFlightHistory.get
+    const int phase = int(dataInt(e, "DATA_PHASE"));
+    const bool sitting = phase >= 5 && phase <= 7;
+    const float tilt = (hist(5)[0] - hist(10)[0]) * 10.0f * kPi / 180.0f, ccTilt = std::cos(tilt), ssTilt = std::sin(tilt);
+    const float rot1 = e.yaw * kPi / 180.0f, ss1 = std::sin(rot1), cc1 = std::cos(rot1);
+    const float yOffset = sitting ? -1.0f : hist(5)[0] - hist(0)[0];  // getHeadYOffset
+    auto part = [&](int i, double x, double y, double z, double w, double h) {
+        const double b[6] = {x - w / 2, y, z - w / 2, x + w / 2, y + h, z + w / 2};
+        std::copy(b, b + 6, boxes[i]);
+    };
+    part(0, ss1 * 6.5f * ccTilt, yOffset + ssTilt * 6.5f, -cc1 * 6.5f * ccTilt, 1, 1);  // head
+    part(1, ss1 * 5.5f * ccTilt, yOffset + ssTilt * 5.5f, -cc1 * 5.5f * ccTilt, 3, 3);  // neck
+    part(2, ss1 * 0.5f, 0, -cc1 * 0.5f, 5, 3);                                         // body
+    for (int i = 0; i < 3; ++i) {                                                        // tails
+        const float* p0 = hist(12 + i * 2);
+        const float rot = rot1 + wrapDegrees(p0[1] - hist(5)[1]) * kPi / 180.0f, ss = std::sin(rot), cc = std::cos(rot);
+        const float dd = float(i + 1) * 2.0f;
+        part(3 + i, -(ss1 * 1.5f + ss * dd) * ccTilt, p0[0] - hist(5)[0] - (dd + 1.5f) * ssTilt + 1.5f, (cc1 * 1.5f + cc * dd) * ccTilt, 2, 2);
+    }
+    part(6, cc1 * 4.5f, 2, ss1 * 4.5f, 4, 2);    // wing1
+    part(7, -cc1 * 4.5f, 2, -ss1 * 4.5f, 4, 2);  // wing2
+}
+
+namespace {
+
 std::minstd_rand& rng() {
     static std::minstd_rand r(0x5eed);
     return r;

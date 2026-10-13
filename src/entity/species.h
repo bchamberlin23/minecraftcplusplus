@@ -69,6 +69,9 @@ enum SpeciesAnim : int {
 i64 dataInt(const Entity& e, const char* field, i64 def = 0);
 float dataFloat(const Entity& e, const char* field, float def = 0);
 bool dataSeen(const Entity& e, const char* field);
+// EnderDragon.aiStep's tickPart: the eight parts (head, neck, body, tail x 3, wing x 2) as boxes relative to the
+// dragon's position (min x y z, max x y z), from its flight history (the client's yRotA stays 0).
+void dragonPartBoxes(const Entity& e, double boxes[8][6]);
 
 // Client-side ticks (after the entity's own), entity events (ClientboundEntityEventPacket), synched data changes
 // (onSyncedDataUpdated) and jukebox notifications (LevelRenderer.notifyNearbyEntities).
