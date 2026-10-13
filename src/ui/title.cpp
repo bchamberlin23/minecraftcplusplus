@@ -75,15 +75,33 @@ void loadingLine(State& s, std::string line) {
     else if (line.starts_with("friends: connected to")) at(0.1f, "Connected to your friend");
     else if (line.starts_with("ui ")) at(0.2f, "");
     else if (line.starts_with("server ") && has("joined")) at(0.6f, s.res.translate("connect.joining"));
+    else if (line.starts_with("net: logged in as")) {  // ClientHandshakePacketListenerImpl: JOINING
+        at(0.5f, s.res.translate("connect.joining"));
+        f.connectStatus = f.loadingStatus;
+    }
+    else if (line.starts_with("net: joined")) at(0.75f, s.res.translate("multiplayer.downloadingTerrain"));
     else if (line.starts_with("world ")) at(0.75f, s.res.translate("multiplayer.downloadingTerrain"));
     else if (line.starts_with("lod ") || line.starts_with("detail ")) at(0.85f, "Building terrain...");
     else if (line.starts_with("total ")) at(0.95f, "");
 }
 
+// Joining a server (or a transfer): ConnectScreen until the terrain loads (its status line, Cancel, Esc ignored).
+bool connectScreen(const FrontEndState& f) { return f.loadingCancel && f.failBack == Screen::Servers && f.progress < 0.75f; }
+
 void buildLoading(State& s) {
     FrontEndState& f = *s.fe;
     State* p = &s;
     f.onBack = nullptr;
+    if (connectScreen(f)) {
+        addButton(s, float(s.guiW() / 2 - 100), float(s.guiH() / 4 + 120 + 12), 200, tr(s, "gui.cancel"), [p] {
+            FrontEndState& fe = *p->fe;
+            if (fe.child) fe.child->cancel(), fe.child.reset();
+            // setScreen(parent): the server list (from a world, a transfer's: the title instance's)
+            if (fe.cfg.menu) p->openScreen(Screen::Servers);
+            else requestTitle(*p, "servers");
+        });
+        return;  // shouldCloseOnEsc: false
+    }
     if (f.loadingCancel) {
         addButton(s, float(s.guiW() / 2 - 100), float(s.guiH() / 2 + 40), 200, tr(s, "gui.cancel"), [p] {
             FrontEndState& fe = *p->fe;
@@ -101,6 +119,11 @@ void drawLoading(State& s, Canvas& c) {
     FrontEndState& f = *s.fe;
     const int W = c.guiWidth(), H = c.guiHeight();
     menuBackground(s, c);
+    if (connectScreen(f)) {  // only the connection's own stages (not the instance's start-up)
+        s.drawCentered(c, f.connectStatus.empty() ? f.loadingTitle : Text(f.connectStatus), float(W / 2), float(H / 2 - 50), 0xFFFFFFFF);
+        s.drawButtons(c);
+        return;
+    }
     s.drawCentered(c, f.loadingTitle, float(W / 2), float(H / 2 - 30), 0xFFFFFFFF);
     std::string status = f.loadingStatus;
     if (f.progress < 0) {  // no steps to show: dots (LoadingDotsText)
@@ -314,6 +337,7 @@ void startChild(State& s, std::vector<std::wstring> args, Text title, Screen bac
     f.child = std::make_unique<launch::Child>();
     f.loadingTitle = std::move(title);
     f.loadingStatus.clear();
+    f.connectStatus.clear();
     f.progress = 0.02f;
     f.loadingStart = s.clock;
     f.loadingCancel = cancellable;
@@ -504,7 +528,9 @@ void Ui::State::frontEndInput(const Window::InputEvent& e) {
 void Ui::State::frontEndFrame() {
     FrontEndState& f = *fe;
     if (f.child) {
+        const bool connecting = connectScreen(f);
         for (const std::string& line : f.child->takeLines()) loadingLine(*this, line);
+        if (connecting != connectScreen(f) && screen == Screen::Loading) buildButtons();  // on to the terrain
         const launch::Child::State st = f.child->state();
         if (st == launch::Child::State::Ready && !f.handedOff) {
             // The next instance shows its window over this one: go.

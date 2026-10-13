@@ -123,6 +123,7 @@ struct FrontEndState {
     float progress = 0;
     double loadingStart = 0;
     bool loadingCancel = false;
+    std::string connectStatus;  // ConnectScreen's status line (empty: the title, "Connecting to the server...")
     std::function<void()> loadingCancelFn;  // Cancel on the loading screen when it is not a starting instance
     Screen failBack = Screen::Title;
     std::function<void()> failAction;  // instead of returning to failBack (a transfer: back to the server list)
