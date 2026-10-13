@@ -2442,7 +2442,9 @@ void EntityRenderer::emitRopes(const double cam[3], float pt, float projY) {
             entitySize(e, w, hgt);
             const double eye = eyeHeight(e);
             const V3 pos = lerpPos(e), hpos = lerpPos(*holder);
-            const u32 l0 = lightAt(pos + V3{0, eye, 0}), l1 = lightAt(hpos + V3{0, eyeHeight(*holder), 0});
+            // EntityRenderer.getBlockLightLevel: a burning end's block light is 15
+            auto burning = [](const Entity& x, u32 l) { return (x.sharedFlags & 0x01) ? (l & ~15u) | 15u : l; };
+            const u32 l0 = burning(e, lightAt(pos + V3{0, eye, 0})), l1 = burning(*holder, lightAt(hpos + V3{0, eyeHeight(*holder), 0}));
             const double rot = bodyRot(e);
             const bool holderQuad = hn == "minecraft:happy_ghast" || hn == "minecraft:ghast";
             const bool horse = n == "minecraft:horse" || n == "minecraft:donkey" || n == "minecraft:mule" || n == "minecraft:skeleton_horse" ||

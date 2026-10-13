@@ -1890,7 +1890,8 @@ void Visuals::Impl::buildFlames(const double cam[3], float pt) {
                            light, 0xFFFFFFFF, 1);
     };
     for (const auto& [id, e] : world.entities())
-        if (e.info && (e.sharedFlags & 0x01) && !(e.sharedFlags & 0x20)) flame(e);  // on fire, not invisible
+        // Entity.displayFireAnimation: on fire and not a spectator (invisible ones burn visibly too)
+        if (e.info && (e.sharedFlags & 0x01) && !(world.isSpectator && world.isSpectator(e))) flame(e);
     if (avatarReady && game->cameraMode != 0 && (avatar.sharedFlags & 0x01)) flame(avatar);
 }
 
@@ -2487,12 +2488,17 @@ void Visuals::Impl::buildTags(const PassContext& ctx) {
         if (e.baby && e.category == Category::Living) h *= 0.5f;
         if (e.pose == 2) h = 0.2f;  // sleeping (LivingEntity.SLEEPING_DIMENSIONS)
         const float x = float(p[0] - cam[0]), y = float(p[1] - cam[1]) + h + 0.5f, z = float(p[2] - cam[2]);
-        const float d2 = x * x + y * y + z * z;
+        // EntityRenderDispatcher.distanceToSqr: from the entity's position (not the tag's)
+        const float ox = float(p[0] - cam[0]), oy = float(p[1] - cam[1]), oz = float(p[2] - cam[2]);
+        const float d2 = ox * ox + oy * oy + oz * oz;
         if (d2 > 64.0f * 64.0f || (discrete && d2 >= 1024.0f)) continue;
         if (fwd[0] * x + fwd[1] * y + fwd[2] * z < -1.0f) continue;  // behind the camera
         // Entity.getDisplayName: the team's prefix, colour and suffix (members: a player's name, else the UUID).
         const u32 light = lightAt(p[0], p[1] + e.info->eye, p[2]) | 512u;
-        const u32 textHalf = 0x80FFFFFFu, bgColor = ui ? ui->textBackground(0.25f) : 0x3F000000u;  // white at 0.5, black
+        // SubmitNodeCollection.submitNameTag: background getBackgroundOpacity(0.25), text max((bg + 0.75) / 2, 0.5)
+        const u32 bgColor = ui ? ui->textBackground(0.25f) : 0x3F000000u;
+        const float textAlpha = std::max((float(bgColor >> 24) / 255.0f + 0.75f) * 0.5f, 0.5f);
+        const u32 textHalf = (u32(textAlpha * 255.0f + 0.5f) << 24) | 0xFFFFFFu;
         auto submit = [&](const Tag& t, float yUp) {  // EntityRenderer.submitNameTag at the attachment, raised by yUp
             if (t.first == UINT32_MAX) return;
             Xf m;
