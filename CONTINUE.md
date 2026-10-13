@@ -39,7 +39,6 @@ listening socket).
 ## Screens
 
 - Command suggestions in the command block editor (CommandSuggestions; the chat has them).
-- The structure block itself looked untextured in a test (check its block model / texture).
 - SocialInteractionsScreen (hide players' chat; the pause menu's Player Reporting icon is disabled meanwhile).
 - Compare TitleScreen with 26.3 (its icon buttons).
 

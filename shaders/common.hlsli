@@ -64,6 +64,13 @@ SamplerState gSampler : register(s0);
 SamplerState gAniso2 : register(s4);
 SamplerState gAniso4 : register(s5);
 SamplerState gAniso8 : register(s6);
+// SampleBias with the Mipmap Levels cap: SampleBias's clamp argument is a minimum LOD, so the cap scales the
+// derivatives instead (keeps anisotropic filtering): lod' = min(lod + bias, maxMip).
+float4 sampleCapped(SamplerState s, float3 uvl, float bias, float maxMip) {
+    float lod = gTextures.CalculateLevelOfDetailUnclamped(s, uvl.xy) + bias;
+    float k = exp2(bias + min(maxMip - lod, 0.0));
+    return gTextures.SampleGrad(s, uvl, ddx(uvl.xy) * k, ddy(uvl.xy) * k);
+}
 // texture_sampling.glsl sampleRGSS: four rotated-grid taps in the texel's footprint at the derivative mip, blended in
 // as texels get smaller than a pixel.
 float4 sampleRgss(float3 uvl, float bias, float maxMip) {
@@ -82,7 +89,7 @@ float4 sampleRgss(float3 uvl, float bias, float maxMip) {
         b += gTextures.SampleLevel(gSampler, p, hi);
     }
     float4 rgss = lerp(a, b, f) * 0.25;
-    float4 nearest = gTextures.SampleBias(gSampler, uvl, bias, int2(0, 0), maxMip);
+    float4 nearest = sampleCapped(gSampler, uvl, bias, maxMip);
     return lerp(nearest, rgss, blend);
 }
 float4 sampleBlock(float3 uvl) {
@@ -92,11 +99,11 @@ float4 sampleBlock(float3 uvl) {
     if (mode == 1) return sampleRgss(uvl, bias, maxMip);
     if (mode == 2) {
         uint a = (opts >> 5) & 3;
-        if (a <= 1) return gTextures.SampleBias(gAniso2, uvl, bias, int2(0, 0), maxMip);
-        if (a == 2) return gTextures.SampleBias(gAniso4, uvl, bias, int2(0, 0), maxMip);
-        return gTextures.SampleBias(gAniso8, uvl, bias, int2(0, 0), maxMip);
+        if (a <= 1) return sampleCapped(gAniso2, uvl, bias, maxMip);
+        if (a == 2) return sampleCapped(gAniso4, uvl, bias, maxMip);
+        return sampleCapped(gAniso8, uvl, bias, maxMip);
     }
-    return gTextures.SampleBias(gSampler, uvl, bias, int2(0, 0), maxMip);
+    return sampleCapped(gSampler, uvl, bias, maxMip);
 }
 
 // Coarse LOD faces (the vertex shader stores their layer as -(layer + 1)): like Distant Horizons, the texture's
