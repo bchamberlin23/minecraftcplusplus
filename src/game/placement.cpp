@@ -497,6 +497,39 @@ bool canSurviveHere(const Context& c, u16 state, const int p[3]) {
     if (n == "wheat" || n == "carrots" || n == "potatoes" || n == "beetroots" || n == "torchflower_crop" || n == "pumpkin_stem" ||
         n == "melon_stem")
         return b == "farmland";  // CropBlock / StemBlock (#supports_crops)
+    auto in = [&](std::initializer_list<std::string_view> names) { return std::find(names.begin(), names.end(), b) != names.end(); };
+    const bool sand = in({"sand", "red_sand", "suspicious_sand"});
+    const bool terracotta = b == "terracotta" || b.ends_with("_terracotta") && !b.ends_with("glazed_terracotta");
+    const bool nylium = in({"crimson_nylium", "warped_nylium"});
+    if (n == "dead_bush" || n == "short_dry_grass" || n == "tall_dry_grass")
+        return c.reg.property(state, "half") == "upper" || sand || terracotta || vegetationGround();  // #supports_dry_vegetation
+    if (n == "nether_sprouts" || n == "crimson_roots" || n == "warped_roots") return vegetationGround() || nylium || b == "soul_soil";
+    if (n == "crimson_fungus" || n == "warped_fungus") return vegetationGround() || nylium || b == "mycelium" || b == "soul_soil";
+    if (n == "nether_wart") return b == "soul_sand";
+    if (n == "bamboo" || n == "bamboo_sapling")  // #supports_bamboo
+        return sand || in({"bamboo", "bamboo_sapling", "gravel", "suspicious_gravel"}) || (vegetationGround() && b != "farmland");
+    auto water = [&](const int q[3]) {  // FluidState is #water (sources, flows, waterlogged blocks)
+        const u16 id = c.block(q[0], q[1], q[2]);
+        const BlockInfo& i = c.reg.infos()[id];
+        return i.waterlogged || (i.fluid && nameOf(c, id) == "minecraft:water");
+    };
+    if (n == "sugar_cane") {  // SugarCaneBlock: on cane, or on its ground beside water / frosted ice
+        if (b == "sugar_cane") return true;
+        if (!sand && !(vegetationGround() && b != "farmland")) return false;
+        for (int d = 2; d < 6; ++d) {
+            const int q[3] = {p[0] + kStep[d][0], p[1] - 1, p[2] + kStep[d][2]};
+            if (water(q) || nameOf(c, c.block(q[0], q[1], q[2])) == "minecraft:frosted_ice") return true;
+        }
+        return false;
+    }
+    if (n == "cactus") {  // CactusBlock: nothing solid or lava beside, on cactus or sand, no liquid above
+        for (int d = 2; d < 6; ++d) {
+            const u16 side = at(c, p, d);
+            if (solid(c.reg, side) || nameOf(c, side) == "minecraft:lava") return false;
+        }
+        const BlockInfo& above = c.reg.infos()[at(c, p, kUp)];
+        return (b == "cactus" || sand) && !above.fluid;
+    }
     if (n.ends_with("_carpet")) return below != 0;  // CarpetBlock: not over air
     if (n.ends_with("rail") || n == "repeater" || n == "comparator") return sturdy(c.reg, below, kUp);  // canSupportRigidBlock
     if (n.ends_with("_pressure_plate")) return sturdy(c.reg, below, kUp) || supportsCenter(c.reg, below, kUp);
