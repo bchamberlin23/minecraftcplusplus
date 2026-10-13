@@ -3,7 +3,6 @@
 // with armour / off-hand slots, the destroy-item slot and the player preview. Changes to the player's inventory go
 // to the server slot by slot (set_creative_mode_slot), like the game's CreativeInventoryListener.
 #include "assets/game_reports.h"
-#include "audio/audio.h"
 #include "ui/entity_preview.h"
 #include "ui/frontend.h"
 #include "ui/item_ui.h"
@@ -661,12 +660,10 @@ void draw(UiState& s, Canvas& c) {
         blitSprite(c, s.sprites.sprite("container/slot_highlight_front"), left + float(hovered->x) - 4, top + float(hovered->y) - 4, 24, 24);
     if (tab().showTitle) s.drawText(c, Text(s.res.translate(tab().title)), left + 8, top + 6, kLabel, false);
     s.drawEffectsInInventory(c, Screen::Creative, int(left), kW, int(top));  // CreativeModeInventoryScreen
-    // Carried item, tooltips.
+    // Carried item, tooltips (the item tooltips only with empty hands; the tab and bin ones always).
     if (!s.carried.empty()) {
         s.drawItem(c, s.carried, mx - 8, my - 8);
-        return;
-    }
-    if (g.hoveredGrid >= 0) {
+    } else if (g.hoveredGrid >= 0) {
         const ItemStack st = gridItem(g.hoveredGrid);
         if (!st.empty()) drawItemTooltip(s, c, st, tooltipFor(s, st, true), mx, my);
     } else if (g.hoveredInv >= 0 && !s.inventory.slots[size_t(g.hoveredInv)].empty()) {
@@ -782,7 +779,9 @@ void input(UiState& s, const InputEvent& e) {
             }
             return;
         }
-        if (hotbarKey()) {
+        // the search tab: only number keys swap (getNumericKeyValue: the digit row and the keypad)
+        const bool number = (e.code >= '0' && e.code <= '9') || (e.code >= VK_NUMPAD0 && e.code <= VK_NUMPAD9);
+        if (number && hotbarKey()) {
             g.ignoreText = true;
             return;
         }
@@ -802,7 +801,6 @@ void input(UiState& s, const InputEvent& e) {
             g.scrolling = false;
             for (int t = 0; t < kTabCount; ++t)
                 if (tabVisible(t) && overTab(t, rx, ry)) {
-                    if (t != g.selected) audio::playUiClick();
                     selectTab(s, t);
                     return;
                 }
@@ -826,11 +824,14 @@ void input(UiState& s, const InputEvent& e) {
         if (rx >= float(sl.x) - 1 && rx < float(sl.x) + 17 && ry >= float(sl.y) - 1 && ry < float(sl.y) + 17) hit = &sl;
     // hasClickedOutside: beyond the panel and not on the selected tab
     const bool inside = (rx >= 0 && ry >= 0 && rx < kW && ry < kH) || overTab(g.selected, rx, ry);
-    const int input = button == 2 ? Clone : shift ? QuickMove : Pickup;
-    if (button == 2 && !s.creative()) return;
+    const bool cloning = s.isKey(Key::PickItem, e) && s.creative();  // keyPickItem.matchesMouse && hasInfiniteMaterials
+    const int input = cloning ? Clone : shift ? QuickMove : Pickup;
+    if (button == 2 && !cloning) return;
     if (!hit) {
-        if (!inside && !s.carried.empty()) {  // clicked outside: drop
-            if (button == 0) dropStack(s, s.carried), s.carried = ItemStack{};
+        if (!inside && !s.carried.empty()) {  // clicked outside: drop (THROW; the inventory tab drops the whole stack)
+            if (tab().kind == TabKind::Inventory) {
+                if (input == Pickup) dropStack(s, s.carried), s.carried = ItemStack{};
+            } else if (button == 0) dropStack(s, s.carried), s.carried = ItemStack{};
             else if (button == 1) dropStack(s, s.carried.withCount(1)), s.carried = s.carried.withCount(s.carried.count - 1);
         }
         return;
