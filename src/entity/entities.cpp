@@ -1230,7 +1230,11 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
             break;
         }
         case EventType::Motion:
-            if (e.id != localControl_) {
+            if (e.id != localControl_ && e.info && e.info->name == "minecraft:player") {
+                // RemotePlayer.lerpMotion: spread over the update interval + 1 ticks (aiStep)
+                std::copy(ev.d, ev.d + 3, e.lerpVel);
+                e.lerpVelSteps = std::max(1, e.info->updateInterval) + 1;
+            } else if (e.id != localControl_) {
                 std::copy(ev.d, ev.d + 3, e.vel);
                 // AbstractArrow.lerpMotion: a moving arrow is no longer in the ground
                 const bool arrowLike = e.info && (e.info->name.ends_with("arrow") || e.info->name == "minecraft:trident");
@@ -1604,6 +1608,10 @@ void EntityWorld::tickEntity(Entity& e) {
         tickCloak(e, e.pos, bobbing ? std::min(0.1f, float(std::sqrt(dx * dx + dz * dz))) : 0.0f);
     }
     std::copy(e.pos, e.pos + 3, e.prevPos);
+    if (e.lerpVelSteps > 0) {  // RemotePlayer.aiStep: towards the last motion packet's velocity
+        for (int a = 0; a < 3; ++a) e.vel[a] += (e.lerpVel[a] - e.vel[a]) / e.lerpVelSteps;
+        --e.lerpVelSteps;
+    }
     e.prevYaw = e.yaw, e.prevPitch = e.pitch;
     e.prevHeadYaw = e.headYaw, e.prevBodyYaw = e.bodyYaw;
     if (e.pickupBy != INT_MIN) {  // flying to its collector: the visuals move it, nothing else changes

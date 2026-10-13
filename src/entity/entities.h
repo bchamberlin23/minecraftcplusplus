@@ -229,6 +229,8 @@ struct Entity {
     bool horizontalCollision = false, verticalCollisionBelow = false, simFirstTick = true;
     double waterHeight = 0, lavaHeight = 0;
     int orbTarget = INT_MIN;
+    double lerpVel[3] = {};  // remote players: RemotePlayer.lerpDeltaMovement over lerpVelSteps ticks
+    int lerpVelSteps = 0;
     std::string profileTextures;  // Mannequin DATA_PROFILE: its "textures" property; profileSkin 1 while it downloads
     std::string profileResolve;   // ... given only by name ("N" + name) or id ("U" + 16 bytes): profileSkin 4 meanwhile
     int profileSkin = 0;
