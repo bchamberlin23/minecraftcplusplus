@@ -6,6 +6,7 @@
 #include "assets/assets.h"
 #include "assets/game_reports.h"
 #include "entity/item_models.h"
+#include "game/player.h"
 #include "net/client.h"
 #include "net/protocol.h"
 #include "ui/resources.h"
@@ -411,7 +412,20 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
         if (onElderGuardian) onElderGuardian();
         return nullptr;
     }
-    if (live_.size() + spawnQueue_.size() >= kMaxParticles) return nullptr;
+    // ParticleGroup.isFull / ParticleEngine.add: 16384 at most, accepted ever less often above 12288; the spore
+    // blossom's air a group of its own (ParticleLimit.SPORE_BLOSSOM, 1000)
+    const size_t count = live_.size() + spawnQueue_.size();
+    if (count >= kMaxParticles) return nullptr;
+    if (count >= kMaxParticles * 3 / 4) {
+        const float room = float(kMaxParticles - count) / float(kMaxParticles / 4);
+        if (randf() >= room * room) return nullptr;
+    }
+    if (t.name == "spore_blossom_air") {
+        size_t spores = 0;
+        for (const Particle& q : live_) spores += q.type == u32(typeIndex) && !(q.flags & Removed);
+        for (const Particle& q : spawnQueue_) spores += q.type == u32(typeIndex);
+        if (spores >= 1000) return nullptr;
+    }
     if (t.kind == Kind::Item) {  // BreakingItemParticle: the item's particle texture, no sprite set
         if (t.name == "item") {
             if (!opt || opt->item < 0) return nullptr;
@@ -2155,24 +2169,17 @@ void Particles::move(Particle& p, double xa, double ya, double za) {
     if (p.flags & Stopped) return;
     const double ox = xa, oy = ya, oz = za;
     if ((p.flags & Physics) && (xa != 0 || ya != 0 || za != 0) && xa * xa + ya * ya + za * za < 10000.0) {
-        // Point collision against block collision boxes: vertical first, then the horizontal axes.
-        auto boxesAt = [&](double px, double py, double pz, Box& hit) {
-            const int bx = int(std::floor(px)), by = int(std::floor(py)), bz = int(std::floor(pz));
-            const BlockInfo& b = registry_.infos()[blockAt(bx, by, bz)];
-            for (u32 i = 0; i < b.collisionCount; ++i) {
-                const Box& s = registry_.box(b.collisionFirst + i);
-                const double lx = px - bx, ly = py - by, lz = pz - bz;
-                if (lx >= s.min[0] && lx <= s.max[0] && ly >= s.min[1] && ly < s.max[1] && lz >= s.min[2] && lz <= s.max[2]) {
-                    hit = {{s.min[0] + bx, s.min[1] + by, s.min[2] + bz}, {s.max[0] + bx, s.max[1] + by, s.max[2] + bz}};
-                    return true;
-                }
-            }
-            return false;
-        };
-        Box hit;
-        if (ya != 0 && boxesAt(p.x, p.y + ya, p.z, hit)) ya = ya < 0 ? std::min(0.0, hit.max[1] - p.y) : 0.0;
-        if (xa != 0 && boxesAt(p.x + xa, p.y + ya + 0.01, p.z, hit)) xa = 0;
-        if (za != 0 && boxesAt(p.x + xa, p.y + ya + 0.01, p.z + za, hit)) za = 0;
+        // Entity.collideBoundingBox: the particle's 0.2 x 0.2 box (setSize) swept through the block collision shapes,
+        // Y first, then the larger horizontal axis.
+        AABB box{{p.x - 0.1, p.y, p.z - 0.1}, {p.x + 0.1, p.y + 0.2, p.z + 0.1}};
+        AABB area = box;
+        const double in[3] = {xa, ya, za};
+        for (int a = 0; a < 3; ++a) (in[a] < 0 ? area.min[a] : area.max[a]) += in[a];
+        std::vector<AABB> boxes;
+        ::Physics(world_, registry_).collisionBoxes(area, boxes);
+        double out[3];
+        ::Physics::collideBoxes(boxes, box, out, in);
+        xa = out[0], ya = out[1], za = out[2];
     }
     p.x += xa, p.y += ya, p.z += za;
     if (std::abs(oy) >= 1.0e-5 && std::abs(ya) < 1.0e-5) p.flags |= Stopped;
@@ -3571,7 +3578,7 @@ void Particles::tick() {
 
     for (Particle& p : live_) {
         tickOne(p);
-        if (!(p.flags & Removed) && (ticks_ + u64(&p - live_.data())) % 4 == 0) p.light = lightAt(p.x, p.y, p.z);
+        if (!(p.flags & Removed)) p.light = lightAt(p.x, p.y, p.z);  // getLightCoords: the particle's block, as it moves
     }
     live_.erase(std::remove_if(live_.begin(), live_.end(), [](const Particle& p) { return (p.flags & Removed) != 0; }),
                 live_.end());
