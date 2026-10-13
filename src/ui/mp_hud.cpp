@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_set>
 #include <map>
 
 namespace ui {
@@ -565,6 +566,16 @@ void drawPlayerList(UiState& s, Canvas& c) {
         return lower(a->name) < lower(b->name);
     });
     if (list.size() > 80) list.resize(80);
+    // healthStates.keySet().removeIf: hearts of players no longer listed start over
+    std::erase_if(g.health, [&](const auto& kv) {
+        return std::none_of(list.begin(), list.end(), [&](const PlayerEntry* p) { return uuidKey(p->uuid) == kv.first; });
+    });
+    // level.getPlayerByUUID: the players loaded here (ourselves included)
+    std::unordered_set<std::string> loaded;
+    if (s.client) loaded.insert(s.client->playerUuid());
+    if (s.entities)
+        for (const auto& [id, en] : s.entities->entities())
+            if (en.info && en.info->name == "minecraft:player") loaded.insert(uuidKey(en.uuid));
 
     const int W = c.guiWidth();
     struct Entry {
@@ -600,12 +611,13 @@ void drawPlayerList(UiState& s, Canvas& c) {
     const int slots = int(list.size());
     int rows = slots, cols = 1;
     while (rows > 20) ++cols, rows = (slots + cols - 1) / cols;
-    // Heads: the game draws them only with an online-mode (authenticated) server; MCPP_TAB_HEADS=1 forces them.
+    // Heads: the game draws them only with an online-mode (authenticated) server, which its singleplayer server is
+    // (here the local server runs offline for want of the Microsoft login); MCPP_TAB_HEADS=1 forces them.
     static const bool forceHeads = [] {
         const char* v = std::getenv("MCPP_TAB_HEADS");
         return v && *v == '1';
     }();
-    const bool showHead = g.onlineMode || forceHeads;
+    const bool showHead = g.onlineMode || s.fe->cfg.singleplayer || forceHeads;
     const int widthForScore = listObj ? (listObj->renderType == 1 ? 90 : maxScore) : 0;
     const int slotWidth = std::min(cols * ((showHead ? 9 : 0) + maxName + widthForScore + 13), W - 50) / cols;
     const int xxo = W / 2 - (slotWidth * cols + (cols - 1) * 5) / 2;
@@ -638,7 +650,7 @@ void drawPlayerList(UiState& s, Canvas& c) {
         if (showHead) {  // PlayerFaceExtractor: face (8, 8) and hat (40, 8) of the 64x64 skin, upside down for
                          // Dinnerbone / Grumm (AvatarRenderer.isPlayerUpsideDown)
             const Sprite* skin = s.sprites.texture(p.skin);
-            const bool flip = p.name == "Dinnerbone" || p.name == "Grumm";
+            const bool flip = (p.name == "Dinnerbone" || p.name == "Grumm") && loaded.count(uuidKey(p.uuid));
             const float v = flip ? 16.0f : 8.0f, h = flip ? -8.0f : 8.0f;
             blitTexture(c, skin, float(xo), float(yo), 8, v, 8, h, 64, 64);
             if (p.showHat) blitTexture(c, skin, float(xo), float(yo), 40, v, 8, h, 64, 64);
