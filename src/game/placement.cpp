@@ -300,6 +300,25 @@ bool vineSupport(const Context& c, const int p[3], int d) {
     return nameOf(c, above) == "minecraft:vine" && hasFace(c, above, d);
 }
 
+// SpeleothemBlock (pointed dripstone, sulfur spikes): the tip direction (vertical_direction) and thickness
+bool isSpeleothem(const std::string& n) { return n == "minecraft:pointed_dripstone" || n == "minecraft:sulfur_spike"; }
+bool speleothemTowards(const Context& c, u16 s, int tip) {  // isSpeleothemWithDirection
+    return isSpeleothem(nameOf(c, s)) && faceByName(c.reg.property(s, "vertical_direction")) == tip;
+}
+bool speleothemValid(const Context& c, const std::string& n, const int p[3], int tip) {  // isValidSpeleothemPlacement
+    const u16 behind = at(c, p, opposite(tip));
+    return sturdy(c.reg, behind, tip) || (speleothemTowards(c, behind, tip) && nameOf(c, behind) == n);
+}
+std::string_view speleothemThickness(const Context& c, const std::string& n, const int p[3], int tip, bool merge) {
+    const u16 front = at(c, p, tip);
+    if (speleothemTowards(c, front, opposite(tip)) && nameOf(c, front) == n)
+        return !merge && c.reg.property(front, "thickness") != "tip_merge" ? "tip" : "tip_merge";
+    if (!speleothemTowards(c, front, tip)) return "tip";
+    const std::string_view ft = c.reg.property(front, "thickness");
+    if (ft != "tip" && ft != "tip_merge") return speleothemTowards(c, at(c, p, opposite(tip)), tip) ? "middle" : "base";
+    return "frustum";
+}
+
 // TripWireBlock.shouldConnectTo: a hook facing back along `dir` (from the wire to it), or more wire
 bool tripwireConnects(const Context& c, u16 id, int dir) {
     const std::string n = nameOf(c, id);
@@ -479,6 +498,14 @@ Result placementState(const Context& c, u16 held, const int pos[3], bool replace
         const int distance = scaffoldingDistance(c, pos);
         s = with(c, with(c, held, "distance", std::to_string(distance)), "bottom",
                  distance > 0 && nameOf(c, at(c, pos, kDown)) != n ? "true" : "false");
+        r.state = with(c, s, "waterlogged", water ? "true" : "false");
+        return r;
+    }
+    if (isSpeleothem(n)) {  // SpeleothemBlock.getStateForPlacement: tip against the look, or the other way if supported
+        const int fallback = c.pitch < 0 ? kDown : kUp;  // getNearestLookingVerticalDirection().getOpposite()
+        const int tip = speleothemValid(c, n, pos, fallback) ? fallback : speleothemValid(c, n, pos, opposite(fallback)) ? opposite(fallback) : -1;
+        if (tip < 0) return r;
+        s = with(c, with(c, held, "vertical_direction", kName[tip]), "thickness", speleothemThickness(c, n, pos, tip, !c.sneaking));
         r.state = with(c, s, "waterlogged", water ? "true" : "false");
         return r;
     }
@@ -763,6 +790,11 @@ void neighbourShapes(const Context& c, int x, int y, int z, u16 old, std::vector
             const int toUs = opposite(d);
             const bool connect = selfName == nn || selfName == "minecraft:chorus_flower" || (toUs == kDown && selfName == "minecraft:end_stone");
             updated = with(c, nb, kName[toUs], connect ? "true" : "false");
+        } else if (isSpeleothem(nn) && !horizontal(d)) {  // SpeleothemBlock.updateShape from above / below
+            const int tip = faceByName(reg.property(nb, "vertical_direction"));
+            const bool supportGone = opposite(d) == opposite(tip) && !speleothemValid(c, nn, q, tip);  // the server breaks it
+            if (tip >= 0 && !supportGone)
+                updated = with(c, nb, "thickness", speleothemThickness(c, nn, q, tip, reg.property(nb, "thickness") == "tip_merge"));
         } else if (isMultiface(nn)) {  // MultifaceBlock.updateShape: a face whose support went comes off
             const int toUs = opposite(d);
             bool any = false;
