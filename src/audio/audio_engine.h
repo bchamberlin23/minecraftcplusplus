@@ -39,6 +39,10 @@ public:
     void play(const PlayRequest& r);
     void stopHandle(u32 handle);
     void stopMatching(int event, int category);  // -1 = any
+    // SoundEngine.pauseAllExcept / resume: every voice outside the categories in `keepMask` (1 << category) halts in
+    // place until resume().
+    void pauseAllExcept(u32 keepMask);
+    void resume();
     void setPosition(u32 handle, const double pos[3]);
     void setVolume(u32 handle, float volume);
     void setPitch(u32 handle, float pitch);  // clamped to [0.5, 2]
@@ -67,7 +71,7 @@ public:
 
 private:
     struct Command {
-        enum Type : u8 { Play, Stop, StopMatching, Position, Volume, Pitch, Listener, Preload } type;
+        enum Type : u8 { Play, Stop, StopMatching, Position, Volume, Pitch, Listener, Preload, Pause, Resume } type;
         PlayRequest req;  // Play; handle/event/category/pos/volume reused by the others
         float dir[6] = {};  // Listener: forward, up
     };

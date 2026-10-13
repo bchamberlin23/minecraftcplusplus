@@ -196,6 +196,7 @@ struct Engine::Impl {
         float matrix[4] = {-1, -1, -1, -1};
         float pitchSet = -1;
         bool draining = false;  // stopped; waiting for XAudio2 to release its buffers
+        bool paused = false;    // pauseAllExcept: halted in place
     };
     struct LogEntry {
         double request, start;
@@ -359,6 +360,18 @@ void Engine::stopMatching(int event, int category) {
     r.file = category;
     std::lock_guard lock(mutex_);
     commands_.push_back({Command::StopMatching, r});
+}
+
+void Engine::pauseAllExcept(u32 keepMask) {
+    PlayRequest r;
+    r.file = int(keepMask);
+    std::lock_guard lock(mutex_);
+    commands_.push_back({Command::Pause, r});
+}
+
+void Engine::resume() {
+    std::lock_guard lock(mutex_);
+    commands_.push_back({Command::Resume, PlayRequest{}});
 }
 
 void Engine::setPosition(u32 handle, const double pos[3]) {
@@ -747,6 +760,14 @@ void Engine::run() {
                 for (auto& v : m.voices)
                     if ((c.req.event < 0 || v.req.event == c.req.event) && (c.req.file < 0 || int(v.req.category) == c.req.file))
                         beginStop(v);
+                break;
+            case Command::Pause:  // Channel.pause
+                for (auto& v : m.voices)
+                    if (v.sv && !v.draining && !v.paused && !((u32(c.req.file) >> int(v.req.category)) & 1)) v.sv->Stop(0), v.paused = true;
+                break;
+            case Command::Resume:  // Channel.unpause
+                for (auto& v : m.voices)
+                    if (v.sv && v.paused) v.sv->Start(0), v.paused = false;
                 break;
             case Command::Position:
                 for (auto& v : m.voices)

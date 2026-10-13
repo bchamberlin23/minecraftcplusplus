@@ -85,6 +85,9 @@ public:
     // Tickable sound instances (tickable_sounds.cpp): a playing sound's instance volume (times the sound's own volume,
     // clamped to [0, 1]), pitch and position; whether it is still playing.
     void setVolume(u32 handle, float volume) { engine_.setVolume(handle, volume); }
+    // Minecraft's pause: SoundManager.pauseAllExcept(MUSIC, UI), then resume() when the pause ends.
+    void pauseGameSounds() { engine_.pauseAllExcept((1u << int(Category::Music)) | (1u << int(Category::Ui))); }
+    void resumeGameSounds() { engine_.resume(); }
     void setPitch(u32 handle, float pitch) { engine_.setPitch(handle, pitch); }
     void setPosition(u32 handle, const double pos[3]) { engine_.setPosition(handle, pos); }
     bool finished(u32 handle) const { return std::find(finished_.begin(), finished_.end(), handle) != finished_.end(); }

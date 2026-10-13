@@ -246,6 +246,7 @@ void Ui::State::updatePause() {
     if (pause != paused) {
         paused = pause;
         if (fe->cfg.pauseServer) fe->cfg.pauseServer(pause);
+        if (audio::AudioSystem* a = audio::instance()) pause ? a->pauseGameSounds() : a->resumeGameSounds();
         LOG("ui: game %s", pause ? "paused" : "resumed");
     }
     game->paused = paused;
