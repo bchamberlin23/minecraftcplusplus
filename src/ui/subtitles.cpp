@@ -4,6 +4,7 @@
 #include "ui/subtitles.h"
 
 #include "audio/audio.h"
+#include "ui/frontend.h"
 #include "ui/modules.h"
 #include "ui/ui_state.h"
 
@@ -71,11 +72,26 @@ void frame(UiState& s) {  // the listener follows the option (SoundManager.addLi
     }
 }
 
-void drawHudTop(UiState& s, Canvas& c) {
-    if (s.screen == Screen::None || s.screen == Screen::Chat) drawSubtitles(s, c);
+// Screen.isInGameUi: container, sign, book and block editor screens show the subtitles over themselves.
+bool inGameUi(Screen sc) {
+    switch (sc) {
+        case Screen::Inventory: case Screen::Container: case Screen::Creative: case Screen::Sign: case Screen::BookEdit:
+        case Screen::BookView: case Screen::CommandBlockEdit: case Screen::MinecartCommandEdit: case Screen::JigsawEdit:
+        case Screen::StructureEdit: case Screen::TestBlockEdit: case Screen::TestInstanceEdit: return true;
+        default: return false;
+    }
 }
 
-const UiModuleRegistrar kModule({.name = "subtitles", .drawHudTop = drawHudTop, .frame = frame});
+// Hud.extractSubtitleOverlay: with the HUD, under any other screen (or none); deferred over in-game UI screens, which
+// show them even while F1 hides the HUD (drawTop).
+void drawHudTop(UiState& s, Canvas& c) {
+    if (!inGameUi(s.screen)) drawSubtitles(s, c);
+}
+void drawTop(UiState& s, Canvas& c) {
+    if (inGameUi(s.screen) && !s.fe->cfg.menu) drawSubtitles(s, c);
+}
+
+const UiModuleRegistrar kModule({.name = "subtitles", .drawHudTop = drawHudTop, .drawTop = drawTop, .frame = frame});
 
 }  // namespace
 

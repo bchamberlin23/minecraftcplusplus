@@ -635,10 +635,13 @@ void drawPlayerList(UiState& s, Canvas& c) {
         c.fill(float(xo), float(yo), float(xo + slotWidth), float(yo + 8), s.textBackground(0x20FFFFFFu));
         const PlayerEntry& p = *list[size_t(i)];
         const Entry& e = entries[size_t(i)];
-        if (showHead) {  // PlayerFaceExtractor: face (8, 8) and hat (40, 8) of the 64x64 skin
+        if (showHead) {  // PlayerFaceExtractor: face (8, 8) and hat (40, 8) of the 64x64 skin, upside down for
+                         // Dinnerbone / Grumm (AvatarRenderer.isPlayerUpsideDown)
             const Sprite* skin = s.sprites.texture(p.skin);
-            blitTexture(c, skin, float(xo), float(yo), 8, 8, 8, 8, 64, 64);
-            if (p.showHat) blitTexture(c, skin, float(xo), float(yo), 40, 8, 8, 8, 64, 64);
+            const bool flip = p.name == "Dinnerbone" || p.name == "Grumm";
+            const float v = flip ? 16.0f : 8.0f, h = flip ? -8.0f : 8.0f;
+            blitTexture(c, skin, float(xo), float(yo), 8, v, 8, h, 64, 64);
+            if (p.showHat) blitTexture(c, skin, float(xo), float(yo), 40, v, 8, h, 64, 64);
             xo += 9;
         }
         s.font.draw(c, e.name, float(xo), float(yo), p.gameMode == 3 ? 0x90FFFFFF : 0xFFFFFFFF, true);

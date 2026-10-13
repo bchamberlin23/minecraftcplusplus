@@ -282,8 +282,8 @@ void blitSpriteRegion(Canvas& c, const Sprite* s, int texW, int texH, int srcX, 
 
 void blitTexture(Canvas& c, const Sprite* s, float x, float y, float u, float v, float w, float h, int texW, int texH,
                  u32 color) {
-    if (!s) return;
-    part(c, s, x, y, x + w, y + h, u / texW, v / texH, (u + w) / texW, (v + h) / texH, color);
+    if (!s) return;  // a negative height flips the region vertically (blit with a negative region height)
+    part(c, s, x, y, x + w, y + std::abs(h), u / texW, v / texH, (u + w) / texW, (v + h) / texH, color);
 }
 
 }  // namespace ui
