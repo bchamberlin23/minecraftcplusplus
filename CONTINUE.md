@@ -119,7 +119,7 @@ listening socket).
 ## Gameplay / world
 
 - **Placement prediction (game/placement.cpp) residual**: not predicted client-side (the server's block updates
-  fix them a moment later): wall and redstone wire connections, rails' shapes, tripwire, vines / glow lichen /
+  fix them a moment later): redstone wire connections, rails' shapes, tripwire, vines / glow lichen /
   multiface blocks, chorus / mushroom stems, big dripleaf, pointed dripstone, scaffolding distance, note block
   instruments, repeater / comparator neighbours' power. The face sturdiness tests use collision boxes (Java: the
   support shape), which differ for leaves, scaffolding and a few others.

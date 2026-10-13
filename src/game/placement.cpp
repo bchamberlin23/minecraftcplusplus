@@ -66,7 +66,9 @@ std::array<int, 6> nearestLookingDirections(const Context& c, bool replaceClicke
 }
 
 // Shape tests on the collision boxes (the support shape of most blocks).
-bool faceCovered(const BlockRegistry& reg, u16 id, int dir, float lo, float hi) {
+// Whether the face `dir` of the block's collision shape covers the rectangle lo..hi of the face plane (coordinates
+// per axis, 0..1; the face's own axis is ignored).
+bool faceCovers(const BlockRegistry& reg, u16 id, int dir, const float lo[3], const float hi[3]) {
     const BlockInfo& b = reg.infos()[id];
     if (!b.collisionCount) return false;
     const int axis = axisOf(dir), a1 = (axis + 1) % 3, a2 = (axis + 2) % 3;
@@ -74,7 +76,8 @@ bool faceCovered(const BlockRegistry& reg, u16 id, int dir, float lo, float hi) 
     constexpr int kSamples = 6;
     for (int i = 0; i < kSamples; ++i)
         for (int j = 0; j < kSamples; ++j) {
-            const float u = lo + (hi - lo) * (float(i) + 0.5f) / kSamples, v = lo + (hi - lo) * (float(j) + 0.5f) / kSamples;
+            const float u = lo[a1] + (hi[a1] - lo[a1]) * (float(i) + 0.5f) / kSamples;
+            const float v = lo[a2] + (hi[a2] - lo[a2]) * (float(j) + 0.5f) / kSamples;
             bool covered = false;
             for (u32 k = 0; k < b.collisionCount && !covered; ++k) {
                 const Box& s = reg.box(b.collisionFirst + k);
@@ -86,6 +89,10 @@ bool faceCovered(const BlockRegistry& reg, u16 id, int dir, float lo, float hi) 
     return true;
 }
 // BlockState.isFaceSturdy(FULL) of the face `dir` of the block at the given state
+bool faceCovered(const BlockRegistry& reg, u16 id, int dir, float lo, float hi) {
+    const float l[3] = {lo, lo, lo}, h[3] = {hi, hi, hi};
+    return faceCovers(reg, id, dir, l, h);
+}
 bool sturdy(const BlockRegistry& reg, u16 id, int dir) { return faceCovered(reg, id, dir, 0.0f, 1.0f); }
 // Block.canSupportCenter: the face's 2 x 2 px centre column
 bool supportsCenter(const BlockRegistry& reg, u16 id, int dir) { return faceCovered(reg, id, dir, 7.0f / 16.0f, 9.0f / 16.0f); }
@@ -148,6 +155,49 @@ bool fenceConnects(const Context& c, const std::string& fence, u16 n, int face) 
 bool barsAttach(const Context& c, u16 n, int face) {
     const std::string nn = nameOf(c, n);
     return (!connectionException(c, n, nn) && sturdy(c.reg, n, face)) || isBars(nn) || isWall(nn);
+}
+
+// WallBlock.connectsTo: the neighbour seen from its face `face`
+bool wallConnects(const Context& c, u16 n, int face) {
+    const std::string nn = nameOf(c, n);
+    bool gate = false;
+    if (nn.ends_with("_fence_gate")) {
+        const int facing = faceByName(c.reg.property(n, "facing"));
+        gate = facing >= 0 && axisOf(facing) == axisOf(clockWise(face));
+    }
+    return isWall(nn) || (!connectionException(c, n, nn) && sturdy(c.reg, n, face)) || isBars(nn) || gate;
+}
+// BlockTags.WALL_POST_OVERRIDE
+bool postOverride(const std::string& n) {
+    return n == "minecraft:torch" || n == "minecraft:soul_torch" || n == "minecraft:redstone_torch" || n == "minecraft:copper_torch" ||
+           n == "minecraft:tripwire" || (n.ends_with("_sign") && !n.ends_with("hanging_sign")) || n.ends_with("_banner") ||
+           n.ends_with("_pressure_plate") || n == "minecraft:cactus_flower";
+}
+// WallBlock.updateShape(level, state, topPos, topNeighbour, north, east, south, west): the sides' heights and the post
+u16 wallShape(const Context& c, u16 state, const int p[3], const bool connected[6]) {
+    const u16 top = at(c, p, kUp);
+    auto covered = [&](float x0, float x1, float z0, float z1) {  // isCovered(aboveShape, test): the top's down face
+        const float lo[3] = {x0 / 16.0f, 0.0f, z0 / 16.0f}, hi[3] = {x1 / 16.0f, 1.0f, z1 / 16.0f};
+        return faceCovers(c.reg, top, kDown, lo, hi);
+    };
+    // TEST_SHAPES_WALL: a 2 px wide strip from the centre to each side
+    const bool tall[6] = {false, false, covered(7, 9, 0, 9), covered(7, 9, 7, 16), covered(0, 9, 7, 9), covered(7, 16, 7, 9)};
+    std::string_view side[6];
+    for (int d = 2; d < 6; ++d) {
+        side[d] = !connected[d] ? "none" : tall[d] ? "tall" : "low";
+        state = with(c, state, kName[d], side[d]);
+    }
+    // shouldRaisePost
+    bool post;
+    const std::string topName = nameOf(c, top);
+    if (isWall(topName) && c.reg.property(top, "up") == "true") post = true;
+    else {
+        const bool n = side[kNorth] == "none", s = side[kSouth] == "none", w = side[kWest] == "none", e = side[kEast] == "none";
+        if ((n && s && w && e) || n != s || w != e) post = true;
+        else if ((side[kNorth] == "tall" && side[kSouth] == "tall") || (side[kEast] == "tall" && side[kWest] == "tall")) post = false;
+        else post = postOverride(topName) || covered(7, 9, 7, 9);
+    }
+    return with(c, state, "up", post ? "true" : "false");
 }
 
 // StairBlock.getStairsShape of a stair state at p
@@ -469,6 +519,11 @@ Result placementState(const Context& c, u16 held, const int pos[3], bool replace
     }
     // Connections and shapes that getStateForPlacement computes from the neighbours.
     if (isStairs(n)) s = with(c, s, "shape", stairsShape(c, s, pos));
+    if (isWall(n) && !reg.property(s, "up").empty()) {
+        bool connected[6] = {};
+        for (int d = 2; d < 6; ++d) connected[d] = wallConnects(c, at(c, pos, d), opposite(d));
+        s = wallShape(c, s, pos, connected);
+    }
     if (isFence(n) || isBars(n)) {
         for (int d = 2; d < 6; ++d) {
             const u16 nb = at(c, pos, d);
@@ -494,6 +549,12 @@ void neighbourShapes(const Context& c, int x, int y, int z, std::vector<std::arr
         if (horizontal(d) && (isFence(nn) || isBars(nn))) {  // FenceBlock / IronBarsBlock.updateShape: the side facing us
             const bool connect = isFence(nn) ? fenceConnects(c, nn, self, d) : barsAttach(c, self, d);
             updated = with(c, nb, kName[opposite(d)], connect ? "true" : "false");
+        } else if (isWall(nn) && d != kUp && !reg.property(nb, "up").empty()) {
+            // WallBlock.updateShape: sideUpdate (the side facing us) or topUpdate (we are above it)
+            bool connected[6] = {};
+            for (int e = 2; e < 6; ++e) connected[e] = reg.property(nb, kName[e]) != "none";
+            if (horizontal(d)) connected[opposite(d)] = wallConnects(c, self, d);
+            updated = wallShape(c, nb, q, connected);
         } else if (horizontal(d) && isStairs(nn)) {  // StairBlock.updateShape
             updated = with(c, nb, "shape", stairsShape(c, nb, q));
         } else if (horizontal(d) && isChest(nn) && nn == selfName && reg.property(nb, "type") == "single") {
