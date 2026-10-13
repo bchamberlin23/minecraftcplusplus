@@ -72,6 +72,17 @@ cubes); then audits of weather, block breaking, music / ambient sound, sky / clo
 switch (automated runs never change the display mode) and the LAN publish from World Options (it would open a
 listening socket).
 
+Then (2026-10-13, later): client block placement prediction (game/placement.cpp: BlockItem.place's
+getStateForPlacement for the common families, stacking, scaffolding columns, walls, redstone wire, vines / multiface,
+dripstone, the neighbours' updateShape and the other halves of doors / plants / beds); the step-up of Entity.collide;
+the scale attribute for every living entity and the local player; client movement of items, XP orbs and falling blocks
+(entity/entity_physics.cpp); interpolated texture animations; inline painting variants and unsent synched data
+defaults (paintings, primed TNT, villagers, interactions with their size); block variants for displays / pistons;
+particle fixes from a full provider audit; widget tooltip positioning (MenuTooltipPositioner); chat trust levels and
+the Restrictions screen from chat; smooth lighting's second ring and fluid face occlusion; container drag / double
+click rules; riding input and camel / horse rules; the world border depth state. The Oct 11 backlog in
+docs/audit-26.3 was re-checked: most of it is done, its remaining items are folded into the sections below.
+
 ## Protocol / networking
 
 
