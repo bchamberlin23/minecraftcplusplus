@@ -1850,13 +1850,22 @@ void Particles::tickStarter(Starter& s) {
     }
 }
 
+// ClientLevel.addDestroyBlockEffect / addBreakingBlockEffect: not for an INVISIBLE render shape (barrier, light, structure
+// void, bubble column, end portal / gateway, moving piston) nor without terrain particles (barrier, structure void).
+static bool noTerrainParticles(const BlockRegistry& registry, u16 block) {
+    std::string_view n = registry.name(block);
+    n = n.substr(0, n.find('['));
+    return n == "minecraft:barrier" || n == "minecraft:light" || n == "minecraft:structure_void" || n == "minecraft:bubble_column" ||
+           n == "minecraft:end_portal" || n == "minecraft:end_gateway" || n == "minecraft:moving_piston";
+}
+
 // ClientLevel.addDestroyBlockEffect: a grid of shards over the block's shape boxes.
 void Particles::blockDestroyed(int x, int y, int z, u16 block) {
     if (!block) return;
     static int terrain = -2;
     if (terrain == -2) terrain = typeId("block");
     const BlockInfo& b = registry_.infos()[block];
-    if (b.kind == KindAir || (b.fluid && !b.waterlogged)) return;
+    if (b.kind == KindAir || (b.fluid && !b.waterlogged) || noTerrainParticles(registry_, block)) return;
     // Network state for the block: find it through the reports' key (the shards only need the sprite).
     Options opt;
     opt.block = -1;
@@ -1910,7 +1919,7 @@ void Particles::blockCrack(int x, int y, int z, int face) {
     static int terrain = -2;
     if (terrain == -2) terrain = typeId("block");
     const BlockInfo& b = registry_.infos()[block];
-    if (b.kind == KindAir || (b.fluid && !b.waterlogged)) return;
+    if (b.kind == KindAir || (b.fluid && !b.waterlogged) || noTerrainParticles(registry_, block)) return;
     u32 tint;
     const int sprite = blockSprite(block, tint);
     if (sprite < 0 || live_.size() + spawnQueue_.size() >= kMaxParticles) return;
