@@ -597,7 +597,7 @@ void Game::stopDestroyBlock() {
     dig_.active = false;
     dig_.progress = 0;
     destroyBlockProgress(kLocalBreaker, dig_.x, dig_.y, dig_.z, -1);
-    attackStrengthTicker = 0;
+    resetAttackStrengthTicker();
 }
 
 bool Game::continueDestroyBlock(int x, int y, int z, int face) {
@@ -658,7 +658,7 @@ bool Game::startAttack() {
         // MultiPlayerGameMode.attack -> resetAttackStrengthTicker (not for a weapon's out-of-range swing), and a
         // creative hit delays the next block breaking (destroyDelay 5)
         if (!entityAttackMissed || !entityAttackMissed()) {
-            attackStrengthTicker = 0;
+            resetAttackStrengthTicker();
             if (gameMode == 1) destroyDelay_ = 5;
         }
         if (onSwing) onSwing(0, swingType);
@@ -670,7 +670,7 @@ bool Game::startAttack() {
         endAttack = world_.block(target_.x, target_.y, target_.z) == 0;
     } else {
         if (!instabuild) missTime_ = 10;  // MultiPlayerGameMode.hasMissTime: survival-like modes
-        attackStrengthTicker = 0;         // resetAttackStrengthTicker
+        resetAttackStrengthTicker();         // resetAttackStrengthTicker
     }
     if (onSwing) onSwing(0, swingType);
     if (onPunch) onPunch();

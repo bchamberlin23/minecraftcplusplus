@@ -273,7 +273,7 @@ struct Visuals::Impl {
         std::string key;  // count and components but damage (ItemStack.matchesIgnoringComponents(ignoreSwapAnimation))
         float height = 0, oHeight = 0;
     } mainHand, offHand;
-    int itemSwapTicker = 0, lastMainItem = -2;
+    int itemSwapTicker = 0, lastMainItem = -2, lastSwapResets = 0;
     bool swinging = false;
     int swingTime = 0, swingTicks = 6;  // swingTicks: this swing's duration (the weapon's attack_animation)
     int swingHand = 0, swingType = 1;   // the swinging hand (0 main, 1 off) and its SwingAnimationType
@@ -1689,6 +1689,7 @@ void Visuals::Impl::tickLocal() {
     heldStack(36 + selected, nextMain, dyeMain, foilMain, &keyMain);
     heldStack(45, nextOff, dyeOff, foilOff, &keyOff);
     ++itemSwapTicker;
+    if (game->itemSwapResets != lastSwapResets) itemSwapTicker = 0, lastSwapResets = game->itemSwapResets;  // an attack
     if (nextMain != lastMainItem) {  // Player.tick: a different item resets the attack strength / swap tickers
         if (lastMainItem != -2) itemSwapTicker = 0;
         lastMainItem = nextMain;

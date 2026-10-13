@@ -250,6 +250,8 @@ public:
     void hurt(float dir) { hurtTime = hurtDuration = 10, hurtDir = dir; }  // LivingEntity.animateHurt
     void hurt() { hurtTime = hurtDuration = 10; }                         // handleDamageEvent / LocalPlayer.hurtTo
     int attackStrengthTicker = 0;
+    int itemSwapResets = 0;  // Player.resetAttackStrengthTicker also resets itemSwapTicker (the held item dips)
+    void resetAttackStrengthTicker() { attackStrengthTicker = 0, ++itemSwapResets; }
     float attackSpeed = 4.0f;          // the attack_speed attribute (with the held item)
     // The main hand's weapon components (gameplay layer): piercing_weapon (Minecraft.startAttack stabs instead:
     // ServerboundPlayerActionPacket STAB through onStab, no block breaking), minimum_attack_charge
