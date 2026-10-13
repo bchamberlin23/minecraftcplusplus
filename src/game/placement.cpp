@@ -286,6 +286,20 @@ u16 wireUpdate(const Context& c, u16 s, const int q[3], int dirToNeighbour) {
     return wireConnectionState(c, with(c, wireCrossState(c, s), kName[dirToNeighbour], side), q);
 }
 
+// MultifaceBlock (glow lichen, sculk veins, resin clumps) and VineBlock
+bool isMultiface(const std::string& n) { return n == "minecraft:glow_lichen" || n == "minecraft:sculk_vein" || n == "minecraft:resin_clump"; }
+bool hasFace(const Context& c, u16 s, int d) { return c.reg.property(s, kName[d]) == "true"; }
+// MultifaceBlock.canAttachTo: the neighbour's face toward us is full
+bool canAttach(const Context& c, int dir, u16 neighbour) { return sturdy(c.reg, neighbour, opposite(dir)); }
+// VineBlock.canSupportAtFace: a full face there, or (sideways) the vine above hanging on that side too
+bool vineSupport(const Context& c, const int p[3], int d) {
+    if (d == kDown) return false;
+    if (canAttach(c, d, at(c, p, d))) return true;
+    if (!horizontal(d)) return false;
+    const u16 above = at(c, p, kUp);
+    return nameOf(c, above) == "minecraft:vine" && hasFace(c, above, d);
+}
+
 // TripWireBlock.shouldConnectTo: a hook facing back along `dir` (from the wire to it), or more wire
 bool tripwireConnects(const Context& c, u16 id, int dir) {
     const std::string n = nameOf(c, id);
@@ -386,6 +400,16 @@ bool canBeReplaced(const Context& c, u16 held, u16 state, bool replacingClicked,
         for (std::string_view key : {"candles", "pickles", "eggs", "flower_amount", "segment_amount"})
             if (!c.reg.property(state, key).empty()) return intProp(c, state, key) < 4;
     }
+    if (same && name == "minecraft:vine") {  // VineBlock.canBeReplaced: fewer than all five faces
+        int faces = 0;
+        for (int d = 1; d < 6; ++d) faces += hasFace(c, state, d);
+        return faces < 5;
+    }
+    if (same && isMultiface(name)) {  // MultifaceBlock.canBeReplaced: hasAnyVacantFace
+        for (int d = 0; d < 6; ++d)
+            if (!hasFace(c, state, d)) return true;
+        return false;
+    }
     return c.reg.infos()[state].replaceable && !same;
 }
 
@@ -414,6 +438,37 @@ Result placementState(const Context& c, u16 held, const int pos[3], bool replace
                 r.state = with(c, existing, key, std::to_string(std::min(4, intProp(c, existing, key) + 1)));
                 return r;
             }
+    }
+
+    if (n == "minecraft:vine") {  // VineBlock.getStateForPlacement: a new face towards the nearest supported direction
+        const bool oldVine = nameOf(c, existing) == n;
+        u16 st = existing;
+        if (!oldVine) {
+            st = held;
+            for (int d = 1; d < 6; ++d) st = with(c, st, kName[d], "false");
+        }
+        for (int d : nearestLookingDirections(c, replaceClicked)) {
+            if (d == kDown || (oldVine && hasFace(c, existing, d)) || !vineSupport(c, pos, d)) continue;
+            r.state = with(c, st, kName[d], "true");
+            return r;
+        }
+        if (oldVine) r.state = existing;
+        return r;
+    }
+    if (isMultiface(n)) {  // MultifaceBlock.getStateForPlacement
+        const bool old = nameOf(c, existing) == n;
+        for (int d : nearestLookingDirections(c, replaceClicked)) {
+            if ((old && hasFace(c, existing, d)) || !canAttach(c, d, at(c, pos, d))) continue;
+            u16 st = existing;
+            if (!old) {
+                st = held;
+                for (int f = 0; f < 6; ++f) st = with(c, st, kName[f], "false");
+                st = with(c, st, "waterlogged", water ? "true" : "false");
+            }
+            r.state = with(c, st, kName[d], "true");
+            return r;
+        }
+        return r;
     }
 
     // StandingAndWallBlockItem: the first of the nearest looking directions with a form that survives there.
@@ -666,6 +721,20 @@ void neighbourShapes(const Context& c, int x, int y, int z, u16 old, std::vector
             const int toUs = opposite(d);
             const bool connect = selfName == nn || selfName == "minecraft:chorus_flower" || (toUs == kDown && selfName == "minecraft:end_stone");
             updated = with(c, nb, kName[toUs], connect ? "true" : "false");
+        } else if (isMultiface(nn)) {  // MultifaceBlock.updateShape: a face whose support went comes off
+            const int toUs = opposite(d);
+            bool any = false;
+            for (int f = 0; f < 6; ++f) any |= hasFace(c, nb, f);
+            if (!any) updated = 0;
+            else if (hasFace(c, nb, toUs) && !canAttach(c, toUs, self)) updated = with(c, nb, kName[toUs], "false");
+        } else if (nn == "minecraft:vine" && d != kUp) {  // VineBlock.updateShape (not from below): getUpdatedState
+            u16 st = nb;
+            if (hasFace(c, st, kUp)) st = with(c, st, "up", sturdy(c.reg, at(c, q, kUp), kUp) ? "true" : "false");  // (sic) its top face
+            for (int f = 2; f < 6; ++f)
+                if (hasFace(c, st, f)) st = with(c, st, kName[f], vineSupport(c, q, f) ? "true" : "false");
+            bool any = false;
+            for (int f = 1; f < 6; ++f) any |= hasFace(c, st, f);
+            updated = any ? st : u16(0);
         } else if (nn == "minecraft:tripwire" && horizontal(d)) {  // TripWireBlock.updateShape
             updated = with(c, nb, kName[opposite(d)], tripwireConnects(c, self, opposite(d)) ? "true" : "false");
         } else if (isWall(nn) && d != kUp && !reg.property(nb, "up").empty()) {

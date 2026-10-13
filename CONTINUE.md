@@ -120,8 +120,7 @@ listening socket).
 - **Test commands in 26.3**: block states in NBT are strings (`{block_state:"minecraft:stone"}`); the old
   `{Name:...}` compound is silently ignored (an air display).
 - **Placement prediction (game/placement.cpp) residual**: not predicted client-side (the server's block updates
-  fix them a moment later): rails' shapes, vines / glow lichen /
-  multiface blocks, big dripleaf, pointed dripstone, scaffolding distance, note block
+  fix them a moment later): rails' shapes, big dripleaf, pointed dripstone, scaffolding distance, note block
   instruments, repeater / comparator neighbours' power. The face sturdiness tests use collision boxes (Java: the
   support shape), which differ for leaves, scaffolding and a few others.
 - **WORLD-04**: Blender port (blending old pre-1.18 chunks with new generation). Low priority: it only affects
