@@ -777,7 +777,30 @@ void Game::buildOverlay() {
     // LevelRenderer.submitBlockOutline: the targeted block's selection shape (none outside the world border). High
     // contrast draws a 7 px black pass, then the aqua outline (0xFF57FFE1); otherwise ARGB.black(102). The width is
     // Window.appropriateLineWidth: max(2.5, width / 1920 * 2.5).
-    if (target_.hit && crosshairEntity < 0 && border.blockWithinBounds(target_.x, target_.z)) {
+    // GameRenderer.renderLevel: the outline needs the HUD shown; a spectator's only on blocks with a menu or portals
+    // (showAsInteractableInSpectatorMode); in adventure, only where the held item may break or place on
+    auto outlineShown = [&] {
+        if (hudHidden) return false;
+        const int tx = target_.x, ty = target_.y, tz = target_.z;
+        if (gameMode == 3) {
+            const std::string& full = registry_.name(world_.block(tx, ty, tz));
+            const std::string n = full.substr(0, full.find('['));
+            static const char* const kMenus[] = {"minecraft:barrel", "minecraft:furnace", "minecraft:blast_furnace", "minecraft:smoker",
+                                                 "minecraft:dispenser", "minecraft:dropper", "minecraft:hopper", "minecraft:brewing_stand",
+                                                 "minecraft:beacon", "minecraft:crafter", "minecraft:crafting_table",
+                                                 "minecraft:enchanting_table", "minecraft:cartography_table", "minecraft:grindstone",
+                                                 "minecraft:loom", "minecraft:smithing_table", "minecraft:stonecutter",
+                                                 "minecraft:nether_portal", "minecraft:end_portal", "minecraft:end_gateway"};
+            for (const char* m : kMenus)
+                if (n == m) return true;
+            return (n.ends_with("chest") && n != "minecraft:ender_chest") || n.ends_with("shulker_box") || n.ends_with("anvil") ||
+                   (n == "minecraft:lectern" && full.find("has_book=true") != std::string::npos);
+        }
+        if (gameMode == 2)  // !mayBuild: the held stack's can_break / can_place_on
+            return (adventureMayBreak && adventureMayBreak(tx, ty, tz)) || (adventureMayPlace && adventureMayPlace(tx, ty, tz));
+        return true;
+    };
+    if (target_.hit && crosshairEntity < 0 && border.blockWithinBounds(target_.x, target_.z) && outlineShown()) {
         const u16 targetId = world_.block(target_.x, target_.y, target_.z);
         const BlockInfo& b = registry_.infos()[targetId];
         std::vector<Box> shape;  // getShape: scaffolding is a full block while holding scaffolding

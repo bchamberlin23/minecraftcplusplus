@@ -50,6 +50,7 @@ Gameplay::Gameplay(World& world, BlockRegistry& registry, const GameReports& rep
         if (components[i] == "minecraft:charged_projectiles") chargedProjectilesType_ = int(i);
         if (components[i] == "minecraft:tool") toolType_ = int(i);
         if (components[i] == "minecraft:can_break") canBreakType_ = int(i);
+        if (components[i] == "minecraft:can_place_on") canPlaceType_ = int(i);
     }
     blockNames_ = registryNames(reports, "minecraft:block");
     soundNames_ = registryNames(reports, "minecraft:sound_event");
@@ -106,9 +107,13 @@ const ItemRules::Tool* Gameplay::heldTool(const ui::ItemStack* s) {
     return rules_.tool(itemName(s->item));
 }
 
-bool Gameplay::adventureMayBreak(int x, int y, int z) {
+bool Gameplay::adventureMayBreak(int x, int y, int z) { return adventurePredicate(canBreakType_, x, y, z); }
+bool Gameplay::adventureMayPlace(int x, int y, int z) { return adventurePredicate(canPlaceType_, x, y, z); }
+
+// AdventureModePredicate of the main hand's can_break / can_place_on component against a block.
+bool Gameplay::adventurePredicate(int componentType, int x, int y, int z) {
     const ui::ItemStack* s = mainHand();
-    if (!s || canBreakType_ < 0) return false;
+    if (!s || componentType < 0) return false;
     const std::string& state = registry_.name(world_.block(x, y, z));
     const std::string block = state.substr(0, state.find('['));
     auto property = [&](const std::string& name) -> std::optional<std::string> {  // the state's property value
@@ -131,7 +136,7 @@ bool Gameplay::adventureMayBreak(int x, int y, int z) {
         return a < b;
     };
     for (const ui::ItemStack::Component& c : s->added) {
-        if (c.type != canBreakType_) continue;
+        if (c.type != componentType) continue;
         net::Reader r(reinterpret_cast<const u8*>(c.data.data()), c.data.size());
         const i32 n = r.varInt();
         for (i32 i = 0; i < n && r.ok; ++i) {  // AdventureModePredicate.test: any BlockPredicate matches
@@ -637,6 +642,7 @@ void Gameplay::setPlayer(Game& game, ui::Ui& ui) {
         return !t || t->canDestroyInCreative;
     };
     game.adventureMayBreak = [this](int x, int y, int z) { return adventureMayBreak(x, y, z); };
+    game.adventureMayPlace = [this](int x, int y, int z) { return adventureMayPlace(x, y, z); };
     game.entityView = [this](int id, CameraState& c) {  // Camera.setup on an entity: its eyes, its view rotation
         const ent::Entity* e = entities_ ? entities_->entity(id) : nullptr;
         if (!e || !e->info) return false;

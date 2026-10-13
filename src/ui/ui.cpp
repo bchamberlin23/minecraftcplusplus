@@ -1443,6 +1443,7 @@ void Ui::beginFrame(double dt) {
         }
     }
     s.game->inputSuspended = s.screen != Screen::None;
+    s.game->hudHidden = s.hudHidden;
     s.game->sensitivity = s.settings.radiansPerPixel();
     s.applyControls();
     s.updatePause();

@@ -93,6 +93,8 @@ public:
     std::function<void(const EditAction&)> onEdit;
     // Adventure mode (Player.blockActionRestricted): the held item's can_break allows breaking this block.
     std::function<bool(int x, int y, int z)> adventureMayBreak;
+    std::function<bool(int x, int y, int z)> adventureMayPlace;  // the held item's can_place_on matches the block
+    bool hudHidden = false;  // F1 (Hud.isHidden): no block outline
     // Entity hook (multiplayer), called on clicks before blocks: returns true when an entity closer than
     // blockDistance (< 0: no block targeted) is under the crosshair; it then takes the click.
     std::function<bool(bool attack, bool use, double blockDistance)> onEntityClick;

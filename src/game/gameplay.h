@@ -84,6 +84,8 @@ private:
     const ItemRules::Tool* heldTool(const ui::ItemStack* s);
     // Player.blockActionRestricted in adventure mode: the held stack's can_break (AdventureModePredicate) allows it.
     bool adventureMayBreak(int x, int y, int z);
+    bool adventureMayPlace(int x, int y, int z);
+    bool adventurePredicate(int componentType, int x, int y, int z);
     // Item use prediction (Game::startUseItem): ItemStack.use / useOn results per hand, buckets, riptide.
     int predictItemUse(int hand, const struct RayHit* target);
     int predictUseOn(int hand, const struct RayHit& hit);
@@ -123,7 +125,7 @@ private:
     bool verbose_ = false;
     int loggedState_ = -1;
     int chargedProjectilesType_ = -1;  // data component type id of minecraft:charged_projectiles
-    int toolType_ = -1, canBreakType_ = -1;  // data component type ids of minecraft:tool / minecraft:can_break
+    int toolType_ = -1, canBreakType_ = -1, canPlaceType_ = -1;  // minecraft:tool / can_break / can_place_on ids
     std::vector<std::string> blockNames_;     // block registry by network id
     std::vector<std::string> soundNames_;     // sound_event registry by network id
     std::map<std::string, int, std::less<>> componentTypes_;
