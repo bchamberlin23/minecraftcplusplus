@@ -289,6 +289,8 @@ public:
     void setTextureNames(const std::vector<std::string>& names);
     // Animated block textures: layer -> current frame's layer (identity for static textures). Cheap when unchanged.
     void setTextureRemap(const std::vector<u32>& remap);
+    // Texture array layers rewritten from the next frame on (all mips, kTexLayerBytes each): interpolated animations.
+    void updateTextureLayers(const std::vector<u32>& layers, const std::vector<u8>& pixels);
     // Temporal upscaler for the shader pipeline (not owned; nullptr = the built-in TAA). See render/upscaler.h.
     void setUpscaler(Upscaler* upscaler) { upscaler_ = upscaler; }
     // Vendor upscalers / frame generation / low latency (render/upscalers/upscalers.h); created by init.
@@ -462,6 +464,12 @@ private:
     std::vector<std::string> textureNames_;
     Upscaler* upscaler_ = nullptr;
     static constexpr u32 kRemapCapacity = 16384;  // texture layers
+    static constexpr u32 kMaxLayerUploads = 128;  // texture layers rewritten per frame (interpolated animations)
+    std::vector<u32> pendingLayers_;
+    std::vector<u8> pendingPixels_;
+    ComPtr<ID3D12Resource> layerUpload_;           // upload ring: kMaxLayerUploads layers per frame
+    u8* layerUploadMapped_ = nullptr;
+    void recordTextureLayers(u32 fi);
     ComPtr<ID3D12Resource> remap_;                 // upload heap, one slice per frame
     u32* remapMapped_ = nullptr;
     std::vector<u32> remapCpu_;

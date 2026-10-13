@@ -1087,6 +1087,7 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     list_->Reset(allocators_[fi].Get(), nullptr);
     list_->EndQuery(timestamps_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, fi * 2);
     recordCopies();
+    recordTextureLayers(fi);
     ID3D12DescriptorHeap* heaps[] = {srvHeap_.Get()};
     list_->SetDescriptorHeaps(1, heaps);
     if (shaded) shading_->mark(list_.Get(), "begin");
@@ -1334,6 +1335,59 @@ u32 Renderer::renderWidth() const {
 u32 Renderer::renderHeight() const {
     if (packs_ && packs_->active()) return packs_->renderSize(true);
     return shading_ && shaderPreset_ != ShaderPreset::Off ? shading_->renderH_ : height_;
+}
+
+void Renderer::updateTextureLayers(const std::vector<u32>& layers, const std::vector<u8>& pixels) {
+    for (size_t i = 0; i < layers.size(); ++i) {
+        auto it = std::find(pendingLayers_.begin(), pendingLayers_.end(), layers[i]);
+        const size_t slot = it == pendingLayers_.end() ? pendingLayers_.size() : size_t(it - pendingLayers_.begin());
+        if (slot == pendingLayers_.size()) {
+            if (slot >= kMaxLayerUploads) continue;
+            pendingLayers_.push_back(layers[i]);
+            pendingPixels_.resize(pendingLayers_.size() * kTexLayerBytes);
+        }
+        std::memcpy(&pendingPixels_[slot * kTexLayerBytes], &pixels[i * kTexLayerBytes], kTexLayerBytes);
+    }
+}
+
+// The texture array layers updateTextureLayers queued: staged in this frame's slice of the upload ring and copied (all
+// mips), then into a shader pack's block atlas.
+void Renderer::recordTextureLayers(u32 fi) {
+    if (pendingLayers_.empty() || !texture_) return;
+    D3D12_RESOURCE_DESC td = texture_->GetDesc();
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp[kTexMips];
+    UINT rows[kTexMips];
+    UINT64 rowBytes[kTexMips], total = 0;
+    device_->GetCopyableFootprints(&td, 0, kTexMips, 0, fp, rows, rowBytes, &total);
+    const u64 stride = (total + D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT - 1) & ~u64(D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT - 1);
+    if (!layerUpload_) {
+        layerUpload_ = createBuffer(stride * kMaxLayerUploads * kFrames, D3D12_HEAP_TYPE_UPLOAD);
+        if (!layerUpload_) return pendingLayers_.clear(), pendingPixels_.clear();
+        layerUpload_->Map(0, nullptr, reinterpret_cast<void**>(&layerUploadMapped_));
+    }
+    transition(texture_.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+    for (size_t i = 0; i < pendingLayers_.size(); ++i) {
+        const u64 base = (u64(fi) * kMaxLayerUploads + i) * stride;
+        const u8* src = &pendingPixels_[i * kTexLayerBytes];
+        for (u32 m = 0; m < u32(kTexMips); ++m) {
+            const u32 size = u32(kTexSize) >> m;
+            for (u32 y = 0; y < size; ++y)
+                std::memcpy(layerUploadMapped_ + base + fp[m].Offset + size_t(y) * fp[m].Footprint.RowPitch,
+                            src + kTexMipOffset[m] + size_t(y) * size * 4, size * 4);
+            D3D12_TEXTURE_COPY_LOCATION dst{}, from{};
+            dst.pResource = texture_.Get();
+            dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            dst.SubresourceIndex = m + pendingLayers_[i] * u32(kTexMips);
+            from.pResource = layerUpload_.Get();
+            from.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+            from.PlacedFootprint = fp[m];
+            from.PlacedFootprint.Offset += base;
+            list_->CopyTextureRegion(&dst, 0, 0, 0, &from, nullptr);
+        }
+    }
+    transition(texture_.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    if (packs_ && packs_->active()) packs_->copyAtlasLayers(list_.Get(), pendingLayers_);
+    pendingLayers_.clear(), pendingPixels_.clear();
 }
 
 void Renderer::setTextureRemap(const std::vector<u32>& remap) {

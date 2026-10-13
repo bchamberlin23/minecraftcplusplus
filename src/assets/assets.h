@@ -134,6 +134,10 @@ public:
     // Animated textures (water, lava, fire, portal, sea lantern...): for game tick `tick`, remap[layer] = the layer
     // holding that texture's current frame (identity for static textures). False if nothing is animated.
     bool textureRemap(u64 tick, std::vector<u32>& remap) const;
+    // Interpolated animations (.mcmeta "interpolate"): their blend layers as animate_sprite_interpolate draws them at
+    // `tick` (the current and next frames mixed by the progress, every mip level). Only the layers whose blend changed
+    // since the last call; pixels: kTexLayerBytes per layer, in order.
+    void textureBlends(u64 tick, std::vector<u32>& layers, std::vector<u8>& pixels);
     std::vector<std::string> textureNames() const;  // by texture layer ("block/stone"); layer 0 = missing
     u16 textureLayer(std::string_view name) const;   // "block/water_flow" -> its layer (0: missing)
     const std::vector<u8>& texturePixels() const;  // textureCount() * kTexLayerBytes

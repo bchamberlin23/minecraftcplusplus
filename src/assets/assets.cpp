@@ -308,6 +308,8 @@ struct BlockRegistry::Impl {
         u32 layer, firstFrameLayer;                  // the texture's layer; its strip frames start here
         std::vector<std::pair<u16, u16>> sequence;   // (strip frame, ticks)
         u32 totalTicks;
+        u32 blendLayer = 0;                          // interpolated: the layer drawn (0: not interpolated)
+        u32 shown = ~0u;                             // the blend now in it: sequence index << 10 | progress
     };
     std::vector<Animation> animations;
     std::vector<u8> pixels;
@@ -655,6 +657,10 @@ bool BlockRegistry::textureRemap(u64 tick, std::vector<u32>& remap) const {
         for (u32 i = 0; i < im.texCount; ++i) remap[i] = i;
     }
     for (const Impl::Animation& a : im.animations) {
+        if (a.blendLayer) {
+            remap[a.layer] = a.blendLayer;
+            continue;
+        }
         u64 t = tick % std::max<u32>(1, a.totalTicks);
         for (const auto& [frame, ticks] : a.sequence) {
             if (t < ticks) {
@@ -665,6 +671,28 @@ bool BlockRegistry::textureRemap(u64 tick, std::vector<u32>& remap) const {
         }
     }
     return true;
+}
+void BlockRegistry::textureBlends(u64 tick, std::vector<u32>& layers, std::vector<u8>& pixels) {
+    layers.clear(), pixels.clear();
+    for (Impl::Animation& a : impl_->animations) {
+        if (!a.blendLayer || a.sequence.empty()) continue;
+        u64 t = tick % std::max<u32>(1, a.totalTicks);
+        size_t i = 0;
+        while (i + 1 < a.sequence.size() && t >= a.sequence[i].second) t -= a.sequence[i++].second;
+        // SpriteContents.AnimationState.drawToAtlas: the progress in thousandths
+        const int progress = int(float(t) / float(a.sequence[i].second) * 1000.0f);
+        const u32 key = u32(i) << 10 | u32(progress);
+        if (key == a.shown) continue;
+        a.shown = key;
+        const u8* cur = &impl_->pixels[size_t(a.firstFrameLayer + a.sequence[i].first) * kTexLayerBytes];
+        const u8* next = &impl_->pixels[size_t(a.firstFrameLayer + a.sequence[(i + 1) % a.sequence.size()].first) * kTexLayerBytes];
+        const float p = float(progress) / 1000.0f;
+        layers.push_back(a.blendLayer);
+        const size_t at = pixels.size();
+        pixels.resize(at + kTexLayerBytes);
+        for (size_t b = 0; b < kTexLayerBytes; ++b)  // animate_sprite_interpolate: mix(current, next, progress)
+            pixels[at + b] = u8(std::lround(float(cur[b]) * (1.0f - p) + float(next[b]) * p));
+    }
 }
 std::vector<std::string> BlockRegistry::textureNames() const {
     std::vector<std::string> names(impl_->texCount);
@@ -762,6 +790,7 @@ struct DecodedTexture {
     std::vector<u8> rgba;                       // 16x16 RGBA: the sequence's first frame
     std::vector<std::vector<u8>> frames;        // 16x16 RGBA per strip frame (animated textures)
     std::vector<std::pair<u16, u16>> sequence;  // (frame, ticks); empty: not animated
+    bool interpolate = false;                   // .mcmeta "interpolate": frames blended (an extra layer)
 };
 // One block texture resampled into the 16x16 layers. Animated textures are strips of frames (.mcmeta).
 void decodeBlockTexture(const AssetSource& src, const std::string& path, DecodedTexture& out) {
@@ -787,6 +816,7 @@ void decodeBlockTexture(const AssetSource& src, const std::string& path, Decoded
     std::vector<std::pair<u16, u16>> sequence;
     if (animJson.is_object()) {
         const int frametime = std::max(1, int(num(member(animJson, "frametime"), 1)));
+        if (const json& i = member(animJson, "interpolate"); i.is_boolean()) out.interpolate = i.get<bool>();
         if (const json& frames = member(animJson, "frames"); frames.is_array() && !frames.empty()) {
             for (const json& f : frames) {
                 const int index = f.is_object() ? int(num(member(f, "index"), 0)) : int(num(f, 0));
@@ -882,11 +912,11 @@ bool BlockRegistry::init(const fs::path& jarPath, const GameReports* reports) {
     u32 extra = 0;
     for (size_t i = 0; i < decoded.size(); ++i) {
         if (decoded[i].rgba.empty() || decoded[i].frames.empty()) continue;
-        if (layers + extra + decoded[i].frames.size() > kMaxLayers) {
+        if (layers + extra + decoded[i].frames.size() + decoded[i].interpolate > kMaxLayers) {
             decoded[i].frames.clear(), decoded[i].sequence.clear();
             continue;
         }
-        extra += u32(decoded[i].frames.size());
+        extra += u32(decoded[i].frames.size()) + decoded[i].interpolate;
     }
     const u32 mainLayers = layers;
     layers += extra;
@@ -926,6 +956,12 @@ bool BlockRegistry::init(const fs::path& jarPath, const GameReports* reports) {
             }
             a.sequence = std::move(decoded[i].sequence);
             for (const auto& [f, t] : a.sequence) a.totalTicks += t;
+            if (decoded[i].interpolate) {  // the blend layer textureBlends rewrites (the first frame until then)
+                a.blendLayer = extraLayer;
+                std::memcpy(&im.pixels[size_t(extraLayer) * kTexLayerBytes], base, kTexLayerBytes);
+                im.texClass[extraLayer] = im.texClass[layer];
+                ++extraLayer;
+            }
             im.animations.push_back(std::move(a));
         }
         ++layer;

@@ -1441,6 +1441,12 @@ int wmain(int argc, wchar_t** argv) {
         // Animated block textures advance with the game's 20 ticks per second.
         static std::vector<u32> textureRemap;
         if (registry.textureRemap(u64(now * 20.0), textureRemap)) renderer.setTextureRemap(textureRemap);
+        {  // interpolated animations: their blended frames (SpriteContents.AnimationState, every tick)
+            static std::vector<u32> blendLayers;
+            static std::vector<u8> blendPixels;
+            registry.textureBlends(u64(now * 20.0), blendLayers, blendPixels);
+            if (!blendLayers.empty()) renderer.updateTextureLayers(blendLayers, blendPixels);
+        }
         if (opt.profile && frame % 120 == 0) {
             size_t moved = 0;
             for (size_t i = 0; i < textureRemap.size(); ++i) moved += textureRemap[i] != i;

@@ -74,6 +74,8 @@ struct Renderer::Packs : PackSink {
     bool frameGenUi() const;
     u32 renderSize(bool height) const;  // the pack's render size (below the output size when upscaling)
     bool frameGenInputs(ID3D12Resource*& depth, ID3D12Resource*& motion) const;  // states: DEPTH_READ|SRV, SRV
+    // Texture array layers just rewritten (interpolated animations): into the block atlas's tiles.
+    void copyAtlasLayers(ID3D12GraphicsCommandList* list, const std::vector<u32>& layers);
 
     // PackSink (extension passes, during record).
     void draw(const PackDraw& d) override;

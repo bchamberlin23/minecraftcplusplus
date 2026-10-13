@@ -632,3 +632,28 @@ void Renderer::Packs::updateLayerTable(Pipe& p) {
             if (table[l * 4] != 0xFFFFFFFFu) LOG("pack layer %u %s -> %d", l, r.textureNames_[l].c_str(), int(table[l * 4]));
     }
 }
+
+void Renderer::Packs::copyAtlasLayers(ID3D12GraphicsCommandList* list, const std::vector<u32>& layers) {
+    if (!pipe_ || !r.texture_) return;
+    Pipe& p = *pipe_;
+    if (!p.atlas.res || p.atlas.res == p.white.res) return;
+    const u32 count = r.texture_->GetDesc().DepthOrArraySize;
+    r.transition(r.texture_.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    r.transition(p.atlas.res.Get(), kSrv, D3D12_RESOURCE_STATE_COPY_DEST);
+    for (const u32 l : layers) {
+        if (l >= count) continue;
+        for (u32 m = 0; m < u32(kTexMips); ++m) {  // as the atlas was built: one tile per layer
+            D3D12_TEXTURE_COPY_LOCATION dst{}, src{};
+            dst.pResource = p.atlas.res.Get();
+            dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            dst.SubresourceIndex = m;
+            src.pResource = r.texture_.Get();
+            src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            src.SubresourceIndex = m + l * u32(kTexMips);
+            const u32 size = u32(kTexSize) >> m;
+            list->CopyTextureRegion(&dst, (l % p.atlasTilesPerRow) * size, (l / p.atlasTilesPerRow) * size, 0, &src, nullptr);
+        }
+    }
+    r.transition(p.atlas.res.Get(), D3D12_RESOURCE_STATE_COPY_DEST, kSrv);
+    r.transition(r.texture_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+}
