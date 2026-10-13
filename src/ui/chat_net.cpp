@@ -253,8 +253,12 @@ void handlePlayerChat(UiState& s, PlayerChat& m) {
         if (m.signature) markProcessed(s, *m.signature, false);
         Style st = colorStyle(0xFF5555);
         st.italic = 1;
-        const Text error = translatable("chat.validation_error", {}, lang, st);
-        s.addChatMessage({decorate(m.bound.type.chat, m.bound, error, lang), s.guiTicks, {}, kTagError, 2});
+        const Text error = decorate(m.bound.type.chat, m.bound, translatable("chat.validation_error", {}, lang, st), lang);
+        UiState* sp = &s;
+        s.handleChatMessage([sp, error] {  // handleMessage: through the chat delay queue like other messages
+            sp->addChatMessage({error, sp->guiTicks, {}, kTagError, 2});
+            return true;
+        });
         return;
     }
     // ChatTrustLevel: our own messages in singleplayer are secure, unsigned ones are not.

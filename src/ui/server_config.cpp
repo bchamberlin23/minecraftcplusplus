@@ -679,7 +679,7 @@ void handle(State& s, net::CommonEvent& ev) {
         s.openScreen(Screen::CodeOfConduct);
     } else if (std::holds_alternative<net::ResetChatEvent>(ev)) {
         // The chat (messages and sent history) does not come back after this configuration.
-        s.chatLines.clear(), s.chatMessages.clear(), s.sentHistory.clear();
+        s.chatLines.clear(), s.chatMessages.clear(), s.sentHistory = UiState::persistedCommands();  // clearMessages(true)
     } else if (auto* t = std::get_if<net::TransferEvent>(&ev)) {
         transfer(s, *t);
     } else if (auto* c = std::get_if<net::ConfigurationEvent>(&ev)) {

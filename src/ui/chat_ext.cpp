@@ -75,7 +75,7 @@ Target chatTarget(UiState& s) {  // ChatScreen: CommandSuggestions(..., false, f
     Target t;
     t.field = &s.chatInput;
     t.originX = 4, t.innerW = s.guiW() - 4;
-    t.textY = s.guiH() - 12 + 2;
+    t.textY = s.guiH() - 12;
     return t;
 }
 struct Commands {  // the server's command tree (ClientboundCommandsPacket); kept over ChatExt resets

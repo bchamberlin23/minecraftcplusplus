@@ -637,7 +637,7 @@ void Ui::State::scrollChat(int lines) {
 }
 
 void Ui::State::addChat(const Text& message, int source) {
-    addChatMessage({message, guiTicks, {}, source == 0 ? kTagSystemSinglePlayer : kTagSystem, u8(source)});
+    addChatMessage({message, guiTicks, {}, kTagSystemSinglePlayer, u8(source)});  // add{Client,Server}SystemMessage
 }
 
 void Ui::State::addChatMessage(ChatMessage m) {
@@ -706,7 +706,7 @@ void Ui::State::tickChat() {  // ChatListener.tick
 // options, the message delay queue line and (focused) the restricted prompt and the scroll bar.
 void Ui::State::drawChat(Canvas& c, bool focused) {
     const bool restricted = focused && settings.chatVisibility != 0;
-    if (chatLines.empty() && !restricted && chatQueue.empty()) return;
+    if (chatLines.empty() && !restricted) return;  // nothing to show (a lone delay queue shows with its first line)
     const float scale = float(settings.chatScale);
     const int maxWidth = int(std::ceil(float(chatWidthPixels(settings.chatWidth)) / std::max(0.01f, scale)));
     const int chatBottom = int(std::floor(float(c.guiHeight() - 40) / std::max(0.01f, scale)));
@@ -779,9 +779,9 @@ bool chatSpecialClick(UiState& s, float mx, float my) {
     const int maxWidth = int(std::ceil(float(chatWidthPixels(s.settings.chatWidth)) / scale));
     if (x < -4 || x > float(maxWidth + 8)) return false;
     if (!s.chatQueue.empty() && y >= float(chatBottom) && y < float(chatBottom + 9)) {
-        auto fn = std::move(s.chatQueue.front());  // acceptNextDelayedMessage
+        auto fn = std::move(s.chatQueue.front());  // acceptNextDelayedMessage: a shown message restarts the delay
         s.chatQueue.pop_front();
-        fn();
+        if (fn()) s.previousMessageTime = s.clock;
         return true;
     }
     if (s.settings.chatVisibility != 0) {

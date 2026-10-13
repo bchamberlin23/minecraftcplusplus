@@ -275,6 +275,9 @@ struct Ui::State {
     std::deque<std::function<bool()>> chatQueue;
     double previousMessageTime = 0;
     std::vector<std::string> sentHistory;
+    // CommandHistory: the last 50 commands in command_history.txt, seeding sentHistory (ChatComponent.recentChat).
+    static std::vector<std::string> persistedCommands();
+    static void persistCommand(const std::string& command);
     int historyPos = -1;
     std::string historyDraft;
     int chatScroll = 0;

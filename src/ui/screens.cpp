@@ -697,7 +697,7 @@ void Ui::State::drawScreen(Canvas& c) {
         case Screen::Chat: {
             drawChat(c, true);
             c.fill(2, float(H - 14), float(W - 2), float(H - 2), textBackground(0x80000000u));
-            drawTextField(c, chatInput, 4, float(H - 12 + 2), float(W - 8), 0xFFE0E0E0, true, true);
+            drawTextField(c, chatInput, 4, float(H - 12), float(W - 4), 0xFFE0E0E0, true, true);  // EditBox(4, H - 12, W - 4), unbordered
             chatExtDraw(*this, c);  // mp_hud.h: command suggestions, hovered chat components
             return;
         }

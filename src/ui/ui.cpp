@@ -375,13 +375,55 @@ void Ui::State::closeScreen(bool sendClose) {
     window->setMouseCaptured(true);
 }
 
+namespace {
+fs::path commandHistoryPath() { return Settings::path().parent_path() / "command_history.txt"; }
+std::vector<std::string>& commandHistory() {
+    static std::vector<std::string> commands;
+    static bool loaded = false;
+    if (!loaded) {
+        loaded = true;
+        std::ifstream in(commandHistoryPath());
+        for (std::string line; std::getline(in, line);) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            commands.push_back(line);
+        }
+    }
+    return commands;
+}
+}  // namespace
+
+std::vector<std::string> Ui::State::persistedCommands() { return commandHistory(); }
+
+void Ui::State::persistCommand(const std::string& command) {  // CommandHistory.addCommand
+    std::vector<std::string>& h = commandHistory();
+    if (!h.empty() && h.back() == command) return;
+    if (h.size() >= 50) h.erase(h.begin());
+    h.push_back(command);
+    std::ofstream out(commandHistoryPath(), std::ios::trunc);
+    for (const std::string& c : h) out << c << '\n';
+}
+
 void Ui::State::sendChat(const std::string& raw) {
-    std::string text = raw;
+    // ChatScreen.normalizeChatMessage: trimmed, whitespace runs as one space, at most 256 characters
+    std::string text;
+    for (char ch : raw) {
+        const bool space = ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
+        if (space) {
+            if (!text.empty() && text.back() != ' ') text += ' ';
+        } else {
+            text += ch;
+        }
+    }
     while (!text.empty() && text.back() == ' ') text.pop_back();
-    while (!text.empty() && text.front() == ' ') text.erase(text.begin());
     if (text.empty()) return;
-    if (sentHistory.empty() || sentHistory.back() != text) sentHistory.push_back(text);
+    if (text.size() > 256) {  // StringUtil.truncateStringIfNecessary (whole UTF-8 characters)
+        size_t cut = 256;
+        while (cut > 0 && (u8(text[cut]) & 0xC0) == 0x80) --cut;
+        text.resize(cut);
+    }
+    if (sentHistory.empty() || sentHistory.back() != text) sentHistory.push_back(text);  // ChatComponent.addRecentChat
     if (sentHistory.size() > 100) sentHistory.erase(sentHistory.begin());
+    if (text[0] == '/') persistCommand(text);
     if (text[0] == '/' && nativeMods.command(text)) return;  // a native mod's command (mods/mcpp_mod.h)
     if (settings.chatVisibility == 2 || (settings.chatVisibility == 1 && text[0] != '/')) {  // ChatAbilities
         addChat(Text(res.translate("chat.disabled.options"), colorStyle(0xFF5555)));
@@ -512,6 +554,7 @@ bool Ui::loadImpl(const fs::path& jar, const fs::path& minecraftDir, const GameR
     s.reports = &reports;
     Timer t;
     s.settings.load();
+    s.sentHistory = Ui::State::persistedCommands();  // ChatComponent: recentChat starts from the command history
     if (!s.res.open(jar, minecraftDir)) return false;
     if (s.settings.lang != "en_us") s.res.setLanguage(s.settings.lang);
     s.guiAtlas.init(2048, 4096);
@@ -1114,8 +1157,9 @@ void Ui::State::runScript(double) {
         } else if (st.verb == "chat") {  // opens chat, types, sends
             openScreen(Screen::Chat);
             chatInput.value = arg(0);
-            sendChat(chatInput.value);
+            chatExit = 2;  // as Enter: sent, no draft kept
             closeScreen();
+            sendChat(arg(0));
         } else if (st.verb == "move" || st.verb == "click" || st.verb == "release") {  // GUI coordinates
             int px, py;
             toPixels(float(std::atof(arg(0).c_str())), float(std::atof(arg(1).c_str())), px, py);
