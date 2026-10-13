@@ -559,6 +559,8 @@ void Riding::livingTick(ent::Entity& e) {
     if (horse) {
         strafe *= 0.5;
         if (forward <= 0) forward *= 0.25;
+        // AbstractHorse.isImmobile: an eating (16) or rearing (32) horse does not move under its rider
+        if (!isCamel(n) && (ent::dataInt(e, "DATA_ID_FLAGS") & (16 | 32))) strafe = forward = 0;
     } else {
         strafe = 0, forward = 1;
     }
@@ -577,7 +579,8 @@ void Riding::livingTick(ent::Entity& e) {
     if (horse && vehicleOnGround_) {
         if (pendingJump_ > 0 && isCamel(n)) {  // Camel.executeRidersJump: the dash along the look, up a little
             const double jumpStrength = gameplay_.entityAttribute(vehicle_, "jump_strength", 0.42);
-            const double h = 22.2222 * pendingJump_ * speed;  // x the block speed factor (1)
+            // the movement_speed attribute (not the sprinting ridden speed) x the block speed factor (1)
+            const double h = 22.2222 * pendingJump_ * gameplay_.entityAttribute(vehicle_, "movement_speed", 0.09);
             e.vel[0] += -std::sin(e.yaw * kDegf) * h;
             e.vel[2] += std::cos(e.yaw * kDegf) * h;
             e.vel[1] += 1.4285 * pendingJump_ * jumpStrength;
@@ -716,6 +719,14 @@ void Riding::swimFlyTick(ent::Entity& e) {
     const Physics physics(gameplay_.world(), gameplay_.registry());
     const AABB body{{e.pos[0] - width / 2, e.pos[1], e.pos[2] - width / 2}, {e.pos[0] + width / 2, e.pos[1] + height, e.pos[2] + width / 2}};
     const bool inFluid = physics.inFluid(body);
+    bool inLava = false;  // Entity.isInLava: lava over the box (the rest of inFluid is water)
+    for (int x = int(std::floor(body.min[0] + 0.001)); x <= int(std::ceil(body.max[0] - 0.001)) - 1 && !inLava; ++x)
+        for (int y = int(std::floor(body.min[1] + 0.001)); y <= int(std::ceil(body.max[1] - 0.001)) - 1 && !inLava; ++y)
+            for (int z = int(std::floor(body.min[2] + 0.001)); z <= int(std::ceil(body.max[2] - 0.001)) - 1 && !inLava; ++z) {
+                const Physics::Fluid f = physics.fluid(x, y, z);
+                inLava = f.type == 2 && y + physics.fluidHeight(x, y, z, f) >= body.min[1] + 0.001;
+            }
+    const bool inWater = inFluid && !inLava;
     auto move = [&] {
         double d[3] = {e.vel[0], e.vel[1], e.vel[2]};
         collideMove(e, width, height, step, d, vehicleOnGround_, vehicleHCollision_);
@@ -727,7 +738,7 @@ void Riding::swimFlyTick(ent::Entity& e) {
         const double k = 3.9 * flying;
         moveRelative(flying * 5.0 / 3.0, strafe * k, up * k, forward * k);
         move();
-        const double drag = inFluid ? 0.8 : 0.91;  // water 0.8 (lava 0.5), air 0.91
+        const double drag = inWater ? 0.8 : inLava ? 0.5 : 0.91;  // travelFlying: water 0.8, lava 0.5, air 0.91
         for (double& v : e.vel) v *= drag;
         return;
     }
@@ -736,12 +747,19 @@ void Riding::swimFlyTick(ent::Entity& e) {
     if (pendingJump_ > 0) {
         const double cp = std::cos(riderPitch * kDegf), sp = std::sin(riderPitch * kDegf);
         const double look[3] = {-std::sin(riderYaw * kDegf) * cp, -sp, std::cos(riderYaw * kDegf) * cp};
-        const double dash = (inFluid ? 1.2 : 0.5) * pendingJump_ * ms;
+        const double dash = (inWater ? 1.2 : 0.5) * pendingJump_ * ms;
         for (int a = 0; a < 3; ++a) e.vel[a] += look[a] * dash;
         dashCooldown_ = 40;
     }
     pendingJump_ = 0;
-    if (inFluid) {  // travelInWater: no gravity, 0.9 drag
+    if (inLava) {  // LivingEntity.travelInLava (AbstractNautilus overrides only the water travel)
+        moveRelative(0.02, strafe, up, forward);
+        move();
+        for (double& v : e.vel) v *= 0.5;
+        e.vel[1] -= gameplay_.entityAttribute(vehicle_, "gravity", 0.08) / 4.0;
+        return;
+    }
+    if (inWater) {  // travelInWater: no gravity, 0.9 drag
         moveRelative(0.0325 * ms, strafe, up, forward);
         move();
         for (double& v : e.vel) v *= 0.9;
