@@ -558,12 +558,14 @@ void BlockEntityRenderer::build(const PassContext& ctx) {
         float misc[4];  // x = 1: shader pipeline (pipeline-aware output); y = last frame's banner wave time; z = GameTime
         float shadowMat[4][16];
         float endSky[4], endPortal[4];  // atlas rects
+        float fogRender[4];             // the render distance fog: start, end
     } k{};
     static_assert(sizeof(Constants) <= kConstBytes);
     std::memcpy(k.lightmap, ctx.lightmap, sizeof(k.lightmap));
     std::memcpy(k.viewProj, ctx.viewProj, sizeof(k.viewProj));
     std::memcpy(k.fogColor, ctx.fogColor, sizeof(k.fogColor));
     k.fogParams[0] = ctx.fogStart, k.fogParams[1] = ctx.fogEnd, k.fogParams[2] = ctx.daylight;
+    k.fogRender[0] = ctx.fogRenderStart, k.fogRender[1] = ctx.fogRenderEnd;
     const float wave = float(gameTicks_ % 100) + partial_;
     k.fogParams[3] = wave;
     const float l0[3] = {0.2f, 1.0f, -0.7f}, l1[3] = {-0.2f, 1.0f, 0.7f};

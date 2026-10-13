@@ -16,7 +16,9 @@ cbuffer Frame : register(b0) {
     float4x4 gShadowMat[4];  // shadow cascades (camera-relative -> light clip)
     float4 gEndSky;          // atlas rects (u0, v0, du, dv) of environment/end_sky and entity/end_portal/end_portal
     float4 gEndPortal;
+    float4 gFogRender;       // the render distance fog (cylindrical): x = start, y = end
 };
+#include "fog.hlsli"
 #include "lightmap.hlsli"
 cbuffer Draw : register(b1) {
     uint gListBase;   // static: first visible-section entry; dynamic: first quad
@@ -153,7 +155,7 @@ VSOut BlockEntityVS(uint vid : SV_VertexID) {
     }
     o.light = l;
     o.lightBits = q.light;
-    o.fog = saturate((length(rel) - gFogParams.x) / max(gFogParams.y - gFogParams.x, 1e-3));
+    o.fog = vanillaFog(rel, gFogParams.xy, gFogRender.xy);
     return o;
 }
 

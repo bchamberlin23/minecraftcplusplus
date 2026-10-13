@@ -13,8 +13,10 @@ cbuffer Frame : register(b0) {
     float4 gLightmap[3]; // the game's lightmap inputs (lightmap.hlsli)
     float4 gFade;        // x = fade clock (seconds), y = 1 / fade duration, z = frame index, w = temporal AA on
     float4 gShade[2];    // CardinalLighting by face: down up north south, west east
+    float4 gFogRender;   // the render distance fog (cylindrical): x = start, y = end (gFogParams.xy: environmental)
 };
 #include "lightmap.hlsli"
+#include "fog.hlsli"
 
 struct DrawConstants {
     uint quadOffset;
@@ -141,7 +143,7 @@ float3 lightColorLevels(float skyLevel, float blockLevel) {  // fractional level
 float3 lightColor(uint packed) { return lightColorLevels(float(packed >> 4), float(packed & 15)); }
 
 float fogFactor(float3 rel) {
-    return saturate((length(rel) - gFogParams.x) / max(gFogParams.y - gFogParams.x, 1e-3));
+    return vanillaFog(rel, gFogParams.xy, gFogRender.xy);
 }
 
 float4 shadePixel(VSOut i) {

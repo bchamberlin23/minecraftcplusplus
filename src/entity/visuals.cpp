@@ -75,6 +75,7 @@ struct FrameCb {
     float prevViewProj[16];  // shader pipeline: this frame's camera-relative position -> previous clip (unjittered)
     float motion[4];         // PassContext::motionScale
     float shadowMat[4][16];  // shadow cascades
+    float fogRender[4];      // the render distance fog: start, end
 };
 static_assert(sizeof(FrameCb) <= kCbBytes);
 
@@ -1023,6 +1024,7 @@ void Visuals::Impl::writeCb(int slot, const PassContext& ctx, const float* viewP
     std::memcpy(k.lightmap, ctx.lightmap, sizeof(k.lightmap));
     std::memcpy(k.fogColor, ctx.fogColor, sizeof(k.fogColor));
     k.fogParams[0] = ctx.fogStart, k.fogParams[1] = ctx.fogEnd, k.fogParams[2] = ctx.daylight;
+    k.fogRender[0] = ctx.fogRenderStart, k.fogRender[1] = ctx.fogRenderEnd;
     k.fogParams[3] = pipeline ? 1.0f : 0.0f;
     const float l0[3] = {0.2f, 1.0f, -0.7f}, l1[3] = {-0.2f, 1.0f, 0.7f};
     const float n0 = 1.0f / std::sqrt(0.04f + 1.0f + 0.49f);
@@ -2161,7 +2163,7 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
     if (frameType == -2)
         frameType = assets.typeId("minecraft:item_frame"), glowFrameType = assets.typeId("minecraft:glow_item_frame"),
         paintingType = assets.typeId("minecraft:painting");
-    const float maxDist = std::min(ctx.fogEnd, 128.0f);
+    const float maxDist = std::min({ctx.fogEnd, ctx.fogRenderEnd, 128.0f});
     auto vp = [&](int r, int c) { return ctx.viewProj[c * 4 + r]; };
     float planes[5][4];
     for (int c = 0; c < 4; ++c) {

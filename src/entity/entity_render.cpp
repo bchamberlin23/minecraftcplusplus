@@ -3018,7 +3018,7 @@ void EntityRenderer::build(const PassContext& ctx) {
     }
     const double cam[3] = {ctx.camX, ctx.camY, ctx.camZ};
     const float pt = std::clamp(world_.partialTick(), 0.0f, 1.0f);
-    const float maxDist = ctx.fogEnd;
+    const float maxDist = std::min(ctx.fogEnd, ctx.fogRenderEnd);
     const u32 shadowMask = pack_ || !ctx.shadowMats ? 0u : ctx.shadowMask;
     World& world = world_.world();
     std::shared_lock lock(world.mutex());
@@ -3289,8 +3289,10 @@ void EntityRenderer::build(const PassContext& ctx) {
         float prevViewProj[16];
         float motion[4];
         float shadowMat[4][16];
+        float fogRender[4];
     } k{};
     static_assert(sizeof(Constants) <= kOutlineConstOffset);
+    k.fogRender[0] = ctx.fogRenderStart, k.fogRender[1] = ctx.fogRenderEnd;
     std::memcpy(k.lightmap, ctx.lightmap, sizeof(k.lightmap));
     std::memcpy(k.viewProj, ctx.viewProj, sizeof(k.viewProj));
     std::memcpy(k.fogColor, ctx.fogColor, sizeof(k.fogColor));

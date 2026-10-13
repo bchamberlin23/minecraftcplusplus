@@ -673,8 +673,8 @@ void Sky::update(const CameraState& cam, double dt) {
     f.fogColor[3] = 1.0f;
     std::copy(a[int(Attr::SkyColor)].begin(), a[int(Attr::SkyColor)].begin() + 3, f.skyColor);
     f.skyEnd = std::min(float(renderDistance_ * 16), a[int(Attr::SkyFogEnd)][0]);
-    // FogRenderer.setupFog: the first applicable environment sets the fog distances. The atmosphere's own are beyond
-    // the view distance except under a boss bar's world fog (start <= 10, end <= 96, sky end = end).
+    // FogRenderer.setupFog: the first applicable environment sets the environmental (spherical) fog distances; the
+    // renderer adds the render distance's own (cylindrical) fog.
     const float renderDistance = float(renderDistance_ * 16);
     float envStart = 1e30f, envEnd = 1e30f, skyEnd = 1e30f;
     // LevelRenderer.addSkyPass: no sky in lava or powder snow, or with blindness / darkness.
@@ -698,8 +698,22 @@ void Sky::update(const CameraState& cam, double dt) {
         envStart = a[int(Attr::WaterFogStart)][0];
         envEnd = a[int(Attr::WaterFogEnd)][0] * std::max(0.25f, fx_.waterVision);
         skyEnd = envEnd;
-    } else if (bossFog_) {  // AtmosphericFogEnvironment under a boss bar's world fog
-        envStart = 10.0f, envEnd = std::min(96.0f, f.skyEnd), skyEnd = envEnd, hideSky = true;
+    } else {  // AtmosphericFogEnvironment: the dimension / biome distances, closed in by rain
+        {  // updateRainFogState: rain at the camera under open sky (half where the biome has no precipitation)
+            const int bx = int(std::floor(cam.x)), by = int(std::floor(cam.y)), bz = int(std::floor(cam.z));
+            float skyLight = 15.0f;
+            if (world_ && by >= world_->minSectionY() * 16 && by < (world_->maxSectionY() + 1) * 16)
+                skyLight = float(world_->light(bx >> 4, by >> 4, bz >> 4).sky4(bx & 15, by & 15, bz & 15));
+            const int biome = biomeAtQuart(bx >> 2, by >> 2, bz >> 2);
+            const bool rains = biome < 0 || env_.biomeInfo(biome).precipitation;
+            const float target = rain * std::clamp((skyLight - 8.0f) / 7.0f, 0.0f, 1.0f) * (rains ? 1.0f : 0.5f);
+            rainFog_ += (target - rainFog_) * std::min(float(dt * tickRate_) * 0.2f, 1.0f);
+        }
+        envStart = a[int(Attr::FogStart)][0] - 160.0f * rainFog_;
+        envEnd = std::max(std::min(96.0f, a[int(Attr::FogEnd)][0]), a[int(Attr::FogEnd)][0] - 256.0f * rainFog_);
+        if (bossFog_) {  // a boss bar's world fog: start <= 10, end <= 96, the sky and clouds end with it
+            envStart = std::min(envStart, 10.0f), envEnd = std::min(envEnd, 96.0f), skyEnd = envEnd, hideSky = true;
+        }
     }
     f.skyEnd = std::min(f.skyEnd, skyEnd);
     cloudFogLimit_ = skyEnd;  // FogData.cloudEnd follows the sky end in every environment but the plain atmosphere

@@ -51,7 +51,7 @@ struct PassContext {
     const float* viewProj;      // 4x4 row-major; multiplies (world position - camera position, 1) as a column
     double camX, camY, camZ;    // camera position
     float fogColor[4];          // linear 0..1
-    float fogStart, fogEnd;     // blocks from the camera
+    float fogStart, fogEnd;     // environmental (spherical) fog, blocks from the camera (and fogRender* below)
     float daylight;             // 0..1 sky light scale
     D3D12_GPU_DESCRIPTOR_HANDLE blockTextures;  // Texture2DArray of 16x16 block textures (BlockInfo layers)
     // Shader pipeline on: World / AfterTranslucent / Sky passes draw into LDR layers (same R8G8B8A8_UNORM format
@@ -66,6 +66,7 @@ struct PassContext {
     // An OptiFine / Iris shader pack is active (render/packs): passes that support it hand vanilla-style geometry to
     // the pack's gbuffers programs (render/pack_sink.h); others draw as usual into a layer the pack merges.
     class PackSink* pack = nullptr;
+    float fogRenderStart = 0, fogRenderEnd = 1e30f;  // the render distance's (cylindrical) fog
 
     // ---- shader pipeline extras (zero / null otherwise) ----
     // Projection jitter of this frame (NDC offsets added to the projection's x / y): passes with their own

@@ -610,7 +610,6 @@ void Renderer::Shading::prepare(const FrameInput& in) {
         for (int c = 0; c < 3; ++c) k.ambient[c] = (l + (k.ambient[c] - l) * 0.5f) * 1.2f;
     }
     k.ambient[3] = skyScale;
-    k.skyHorizon[3] = std::min(in.viewDistance * 0.6f, r.fogLimit_[0]);  // vanilla fog start / end (fog environments)
     const float blockColor[3] = {1.0f, 0.56f, 0.26f};
     for (int c = 0; c < 3; ++c) k.blockColor[c] = blockColor[c];
     {  // Minimum (cave) light: the game's lightmap at light level 0 (the dimension's ambient light colour with the
@@ -654,7 +653,6 @@ void Renderer::Shading::prepare(const FrameInput& in) {
     k.misc[0] = set.exposure;
     k.misc[1] = set.bloom;
     k.misc[2] = 1.6f;  // emissive strength
-    k.misc[3] = std::min(in.viewDistance, r.fogLimit_[1]);
 
     // View rays: camera-relative position = viewZ * (rayZ + ndc.x * rayX + ndc.y * rayY) for the jittered ndc.
     const float tanY = std::tan(cam.fovY * 0.5f), tanX = tanY * w / std::max(h, 1.0f);

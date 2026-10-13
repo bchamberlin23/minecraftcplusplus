@@ -45,6 +45,8 @@ const AttrDef kDefs[kAttrCount] = {
     {"minecraft:visual/water_fog_end_distance", Type::Float, {96}, 0, kInf},
     {"minecraft:visual/night_vision_color", Type::Rgb, {0.6f, 0.6f, 0.6f, 1}, -kInf, kInf},
     {"minecraft:gameplay/sky_light_level", Type::Float, {15}, 0, 15},
+    {"minecraft:visual/fog_start_distance", Type::Float, {0}, -kInf, kInf},
+    {"minecraft:visual/fog_end_distance", Type::Float, {1024}, 0, kInf},
 };
 const char* const kMoonPhases[8] = {"full_moon",       "waning_gibbous",  "third_quarter", "waning_crescent",
                                     "new_moon",        "waxing_crescent", "first_quarter", "waxing_gibbous"};

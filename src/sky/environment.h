@@ -36,6 +36,8 @@ enum class Attr : u8 {
     WaterFogEnd,
     NightVisionColor,
     SkyLightLevel,  // gameplay/sky_light_level
+    FogStart,       // visual/fog_start_distance (AtmosphericFogEnvironment)
+    FogEnd,         // visual/fog_end_distance
     Count
 };
 constexpr int kAttrCount = int(Attr::Count);

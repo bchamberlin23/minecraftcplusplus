@@ -131,6 +131,7 @@ private:
     std::unordered_map<std::string, float> clockRates_;
     double gameTime_ = 0;  // drives cloud drift and rain animation
     float rain_ = 0, thunder_ = 0;              // displayed levels (thunder not multiplied by rain)
+    float rainFog_ = 0;                         // AtmosphericFogEnvironment.rainFogMultiplier
     float rainTarget_ = 0, thunderTarget_ = 0;  // latest values from the server / save
     bool connected_ = false, loggedTime_ = false;
     struct Bolt {  // LightningBolt's client-side flash pattern

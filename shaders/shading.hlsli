@@ -22,8 +22,8 @@ cbuffer Shade : register(b2) {
     float4 gJitter;              // xy = jitter (NDC); zw = camera world x, z modulo 2048
     float4 gTime;                // x = seconds (wrapped), y = rain, z = thunder, w = camera world y
     float4 gSkyZenith;           // linear sky colour (HDR)
-    float4 gSkyHorizon;          // linear fog colour (HDR); w = vanilla fog start
-    float4 gShadeMisc;                // x = exposure compensation, y = bloom strength, z = emissive strength, w = vanilla fog end
+    float4 gSkyHorizon;          // linear fog colour (HDR)
+    float4 gShadeMisc;                // x = exposure compensation, y = bloom strength, z = emissive strength
     float4 gMoonDir;             // towards the moon; w = night factor (0 day .. 1 night)
     float4 gOutput;              // output (swap chain) resolution: xy = size, zw = 1 / size
     uint4 gOpts;                 // x = cascades, y = shadow taps, z = ssr steps, w = volumetric steps
@@ -258,9 +258,7 @@ float3 shadeSurface(Surface s, float3 rel, float2 pixel) {
 float3 applyFog(float3 c, float3 rel, float3 skyBehind) {
     float t = exp(-fogDepth(rel));
     c = lerp(skyBehind, c, t);
-    float dist = length(rel);
-    float vanilla = saturate((dist - gSkyHorizon.w) / max(gShadeMisc.w - gSkyHorizon.w, 1e-3));
-    return lerp(c, skyBehind, vanilla);
+    return lerp(c, skyBehind, fogFactor(rel));
 }
 
 // Vanilla LDR (sRGB) sky stage colour -> linear HDR.

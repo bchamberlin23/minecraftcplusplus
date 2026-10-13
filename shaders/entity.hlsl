@@ -14,8 +14,10 @@ cbuffer Frame : register(b0) {
     float4x4 gPrevViewProj;  // shader pipeline: camera-relative position (this frame) -> previous clip, unjittered
     float4 gMotion;          // curUv = SV_Position.xy * gMotion.xy + gMotion.zw (PassContext::motionScale)
     float4x4 gShadowMat[4];  // shadow cascades (camera-relative -> light clip)
+    float4 gFogRender;       // the render distance fog (cylindrical): x = start, y = end
 };
 #include "lightmap.hlsli"
+#include "fog.hlsli"
 cbuffer Draw : register(b1) {
     uint gRefBase;
     uint gCascade;  // shadow caster draws
@@ -108,7 +110,7 @@ VSOut finish(float3 rel, float3 n, float2 uv, uint layer, uint color, uint light
     o.lightBits = light;
     float red = float(overlay & 255) / 255.0, white = float((overlay >> 8) & 255) / 255.0;
     o.overlay = white > 0 ? float4(1, 1, 1, white) : float4(1, 0, 0, red);
-    o.fog = saturate((length(rel) - gFogParams.x) / max(gFogParams.y - gFogParams.x, 1e-3));
+    o.fog = vanillaFog(rel, gFogParams.xy, gFogRender.xy);
     o.rawUv = 0;
     o.prevClip = 0;
     o.rect = 0;

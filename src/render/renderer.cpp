@@ -51,8 +51,9 @@ struct FrameConstants {
     float lightmap[3][4];
     float fade[4];  // x = fade clock (seconds), y = 1 / fade duration
     float shade[2][4];  // cardinal shade by face: down up north south, west east
+    float fogRender[4];  // render distance fog (cylindrical): start, end
 };
-static_assert(sizeof(FrameConstants) == 480);
+static_assert(sizeof(FrameConstants) == 496);
 
 struct GpuSection {
     i32 origin[4];  // xyz in blocks, w = LOD level
@@ -976,8 +977,11 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     fc.camBlock[0] = i32(bx), fc.camBlock[1] = i32(by), fc.camBlock[2] = i32(bz);
     fc.camFrac[0] = float(cam.x - bx), fc.camFrac[1] = float(cam.y - by), fc.camFrac[2] = float(cam.z - bz);
     std::memcpy(fc.fogColor, fogColor_, sizeof(fogColor_));
-    fc.fogParams[0] = std::min(viewDistance * 0.6f, fogLimit_[0]);
-    fc.fogParams[1] = std::min(viewDistance, fogLimit_[1]);
+    // FogRenderer.setupFog: the environment's spherical fog, then the render distance's cylindrical fog over its last
+    // tenth (4..64 blocks); fog.glsl takes the larger.
+    fc.fogParams[0] = fogLimit_[0];
+    fc.fogParams[1] = fogLimit_[1];
+    fc.fogRender[0] = viewDistance - std::clamp(viewDistance / 10.0f, 4.0f, 64.0f), fc.fogRender[1] = viewDistance;
     fc.fogParams[2] = std::min(viewDistance, fogLimit_[1]);
     fc.fogParams[3] = daylight_;
     lightmap_.pack(fc.lightmap);
@@ -1113,6 +1117,7 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     PassContext pc{list_.Get(), fi, width_, height_, fc.viewProj, cam.x, cam.y, cam.z, {}, fc.fogParams[0],
                    fc.fogParams[1], fc.fogParams[3], srvHeap_->GetGPUDescriptorHandleForHeapStart()};
     std::memcpy(pc.fogColor, fogColor_, sizeof(fogColor_));
+    pc.fogRenderStart = fc.fogRender[0], pc.fogRenderEnd = fc.fogRender[1];
     pc.viewProjNoJitter = vpNoJitter.m;
     pc.shading = shaded;
     pc.textureRemap = remapVa;
