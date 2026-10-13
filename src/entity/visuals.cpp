@@ -231,6 +231,7 @@ struct Visuals::Impl {
     std::vector<Emitter> emitters;
     std::mt19937 fxRandom{0xC0FFEEu};
     void entityEffect(const Entity& e, int event, bool animate);
+    void mobTick(const Entity& e);  // the client-side particles / sounds of entity ticks (aiStep's isClientSide parts)
     bool emit(Emitter& em);  // TrackingEmitter.tick; false when the emitter is done
     void tickEmitters();
     bool crackDraw = false;
@@ -1716,10 +1717,12 @@ void Visuals::Impl::update() {
         static std::normal_distribution<double> gauss;
         static std::mt19937 rng(17);
         std::shared_lock lock(world.world().mutex());
-        for (const auto& [id, e] : world.entities())
+        for (const auto& [id, e] : world.entities()) {
             if (e.info && e.info->name == "minecraft:firework_rocket")
                 particles->spawn("firework", e.pos[0], e.pos[1], e.pos[2], gauss(rng) * 0.05, -(e.pos[1] - e.prevPos[1]) * 0.5,
                                  gauss(rng) * 0.05);
+            mobTick(e);
+        }
     }
     if (particles) {
         // ClientLevel.getMarkerParticleTarget: a creative player holding a barrier or a light marks those blocks.
@@ -2325,6 +2328,74 @@ void Visuals::Impl::entityEffect(const Entity& e, int event, bool animate) {
             const double z = e.prevPos[2] + (e.pos[2] - e.prevPos[2]) * d + (u(fxRandom) - 0.5) * w * 2.0;
             particles->spawn("portal", x, y, z, xa, ya, za);
         }
+    }
+}
+
+void Visuals::Impl::mobTick(const Entity& e) {
+    if (!e.info || e.dying) return;
+    const std::string& n = e.info->name;
+    float w, h;
+    entityBox(e, w, h);
+    std::uniform_real_distribution<double> uni(0.0, 1.0);
+    std::normal_distribution<double> gau(0.0, 1.0);
+    auto R = [&] { return uni(fxRandom); };
+    auto G = [&] { return gau(fxRandom); };
+    auto rx = [&](double s) { return e.pos[0] + (2 * R() - 1) * w * s; };  // Entity.getRandomX / Y / Z
+    auto ry = [&] { return e.pos[1] + h * R(); };
+    auto rz = [&](double s) { return e.pos[2] + (2 * R() - 1) * w * s; };
+    audio::AudioSystem* a = e.silent ? nullptr : audio::instance();
+    auto sound = [&](const char* id, audio::Category c, double x, double y, double z, float vol, float pitch) {
+        if (a) a->play(id, c, x, y, z, vol, pitch);
+    };
+    if (n == "minecraft:blaze") {  // Blaze.aiStep
+        if (int(fxRandom() % 24) == 0)
+            sound("minecraft:entity.blaze.burn", audio::Category::Hostile, e.pos[0] + 0.5, e.pos[1] + 0.5, e.pos[2] + 0.5, float(1 + R()), float(R() * 0.7 + 0.3));
+        for (int i = 0; i < 2; ++i) particles->spawn("large_smoke", rx(0.5), ry(), rz(0.5), 0, 0, 0);
+    } else if (n == "minecraft:enderman" || n == "minecraft:endermite") {  // Enderman / Endermite.aiStep
+        const double dy = n == "minecraft:enderman" ? -0.25 : 0.0;
+        for (int i = 0; i < 2; ++i) particles->spawn("portal", rx(0.5), ry() + dy, rz(0.5), (R() - 0.5) * 2.0, -R(), (R() - 0.5) * 2.0);
+    } else if (n == "minecraft:glow_squid") {  // GlowSquid.aiStep
+        particles->spawn("glow", rx(0.6), ry(), rz(0.6), 0, 0, 0);
+    } else if (n == "minecraft:dolphin") {  // Dolphin.tick: the trail while swimming fast
+        const double v2 = e.vel[0] * e.vel[0] + e.vel[1] * e.vel[1] + e.vel[2] * e.vel[2];
+        if (e.inWater && v2 > 0.03) {
+            const float yaw = e.yaw * kDeg, pitch = e.pitch * kDeg;
+            const double vx = -std::sin(yaw) * std::cos(pitch), vy = -std::sin(pitch), vz = std::cos(yaw) * std::cos(pitch);
+            const float c = std::cos(yaw) * 0.3f, s = std::sin(yaw) * 0.3f, mult = 1.2f - float(R()) * 0.7f;
+            for (int i = 0; i < 2; ++i) {
+                particles->spawn("dolphin", e.pos[0] - vx * mult + c, e.pos[1] - vy, e.pos[2] - vz * mult + s, 0, 0, 0);
+                particles->spawn("dolphin", e.pos[0] - vx * mult - c, e.pos[1] - vy, e.pos[2] - vz * mult - s, 0, 0, 0);
+            }
+        }
+    } else if (n == "minecraft:bee") {  // Bee.tick: nectar drips while it carries some
+        if ((dataInt(e, "DATA_FLAGS_ID") & 8) && R() < 0.05) {
+            const int count = int(fxRandom() % 2) + 1;
+            for (int i = 0; i < count; ++i)
+                particles->spawn("falling_nectar", e.pos[0] - 0.3 + R() * 0.6, e.pos[1] + h * 0.5, e.pos[2] - 0.3 + R() * 0.6, 0, 0, 0);
+        }
+    } else if (n == "minecraft:phantom") {  // Phantom.tick: the flap sound at the top of the beat, mycelium off the wings
+        const float off = float(e.id * 3);
+        const float anim = std::cos((off + float(e.age)) * 7.448451f * kDeg + kPi);
+        const float next = std::cos((off + float(e.age) + 1.0f) * 7.448451f * kDeg + kPi);
+        if (anim > 0.0f && next <= 0.0f)
+            sound("minecraft:entity.phantom.flap", audio::Category::Hostile, e.pos[0], e.pos[1], e.pos[2], float(0.95 + R() * 0.05), float(0.95 + R() * 0.05));
+        const float width = w * 1.48f;
+        const float c = std::cos(e.yaw * kDeg) * width, s = std::sin(e.yaw * kDeg) * width;
+        const float hh = (0.3f + anim * 0.45f) * h * 2.5f;
+        particles->spawn("mycelium", e.pos[0] + c, e.pos[1] + hh, e.pos[2] + s, 0, 0, 0);
+        particles->spawn("mycelium", e.pos[0] - c, e.pos[1] + hh, e.pos[2] - s, 0, 0, 0);
+    } else if (n == "minecraft:wither") {  // WitherBoss.aiStep: smoke at the heads, powered / invulnerable sparkles
+        const bool powered = e.health <= 150.0f;
+        for (int i = 0; i < 3; ++i) {
+            const float angle = (e.bodyYaw + 180.0f * float(i - 1)) * kDeg;
+            const double hx = i == 0 ? e.pos[0] : e.pos[0] + std::cos(angle) * 1.3, hz = i == 0 ? e.pos[2] : e.pos[2] + std::sin(angle) * 1.3;
+            const double hy = e.pos[1] + (i == 0 ? 3.0 : 2.2);
+            particles->spawn("smoke", hx + G() * 0.3, hy + G() * 0.3, hz + G() * 0.3, 0, 0, 0);
+            if (powered && fxRandom() % 4 == 0) particles->spawnColored("entity_effect", hx + G() * 0.3, hy + G() * 0.3, hz + G() * 0.3, 0, 0, 0, 0xFFB3B380);
+        }
+        if (dataInt(e, "DATA_ID_INV") > 0)
+            for (int i = 0; i < 3; ++i)
+                particles->spawnColored("entity_effect", e.pos[0] + G(), e.pos[1] + R() * 3.3, e.pos[2] + G(), 0, 0, 0, 0xFFB3B3E6);
     }
 }
 

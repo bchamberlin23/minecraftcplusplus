@@ -1651,6 +1651,12 @@ void Particles::spawn(std::string_view type, double x, double y, double z, doubl
     add(typeId(type), x, y, z, vx, vy, vz);
 }
 
+void Particles::spawnColored(std::string_view type, double x, double y, double z, double vx, double vy, double vz, u32 argb) {
+    Options o;
+    o.hasColor = true, o.color = argb;
+    add(typeId(type), x, y, z, vx, vy, vz, &o);
+}
+
 bool Particles::readEncoded(net::Reader& r, std::string& raw) const {
     const u8* start = r.p;
     const int type = r.varInt();
