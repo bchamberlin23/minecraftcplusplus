@@ -7,7 +7,10 @@
 #include "world/nbt_dom.h"
 
 #include <algorithm>
+#include <deque>
 #include <fstream>
+#include <functional>
+#include <mutex>
 #include <thread>
 
 namespace ui {
@@ -41,14 +44,46 @@ void saveAll(State& s, const std::string* direct = nullptr) {
     std::ofstream(f.cfg.serversFile, std::ios::trunc) << j.dump(2) << "\n";
 }
 
-void refreshPings(State& s) {
+void refreshPings(State& s) { s.fe->pings = std::make_shared<PingBoard>(); }
+
+// ServerSelectionList.THREAD_POOL: five pinger threads taking the pings in order. Detached: a slow server never holds
+// up the menu (the board outlives the screen).
+void submitPing(std::function<void()> job) {
+    static std::mutex mutex;
+    static std::deque<std::function<void()>> queue;
+    static int running = 0;
+    std::lock_guard lock(mutex);
+    queue.push_back(std::move(job));
+    if (running >= 5) return;
+    ++running;
+    std::thread([] {
+        for (;;) {
+            std::function<void()> next;
+            {
+                std::lock_guard l(mutex);
+                if (queue.empty()) {
+                    --running;
+                    return;
+                }
+                next = std::move(queue.front());
+                queue.pop_front();
+            }
+            next();
+        }
+    }).detach();
+}
+
+// OnlineServerEntry.extractContent: an entry starts its ping the first time it is drawn.
+void startPing(State& s, const std::string& ip) {
     FrontEndState& f = *s.fe;
-    f.pings = std::make_shared<PingBoard>();
-    for (const ServerEntry& e : f.servers) {
-        if (f.pings->results.count(e.ip)) continue;
-        f.pings->results[e.ip] = {};
-        // Detached: a slow server never holds up the menu (the board outlives the screen).
-        std::thread([board = f.pings, ip = e.ip, protocol = f.protocol] {
+    if (!f.pings) return;
+    {
+        std::lock_guard lock(f.pings->mutex);
+        if (f.pings->results.count(ip)) return;
+        f.pings->results[ip] = {};
+    }
+    {
+        submitPing([board = f.pings, ip, protocol = f.protocol] {
             net::ServerStatus st = net::pingServer(ip, protocol);
             LOG("ping: %s -> %s", ip.c_str(),
                 st.ok ? (std::to_string(st.pingMs) + " ms, " + std::to_string(st.online) + "/" + std::to_string(st.max) +
@@ -57,7 +92,7 @@ void refreshPings(State& s) {
             std::lock_guard lock(board->mutex);
             board->results[ip].status = std::move(st);
             board->results[ip].done = true;
-        }).detach();
+        });
     }
 }
 
@@ -362,6 +397,7 @@ void drawServers(State& s, Canvas& c) {
             continue;
         }
         const ServerEntry& e = f.servers[size_t(row)];
+        startPing(s, e.ip);
         const auto it = results.find(e.ip);
         const bool done = it != results.end() && it->second.done;
         const net::ServerStatus* st = done ? &it->second.status : nullptr;
