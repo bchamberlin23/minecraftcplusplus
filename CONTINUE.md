@@ -48,7 +48,12 @@ container key / mouse bindings, and the sounds the server leaves to the acting p
 buttons, comparators, buckets, bottles, block transformers, shears, dye, allays, milking, igniting creepers), the
 sound engine's pause / distance delay / canStartSilent / music volume, the camera_distance attribute and FOV (death
 zoom, hand at 70), burning entity flames, the guardian beam and invisible entities (armour shown, the body for
-spectators / teammates). ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
+spectators / teammates), the end crystal beams (healing the dragon, beam targets), the renderers' block light
+overrides (blazes, vexes, fireballs, XP orbs, glow squids), the shulker bullet halo, XP orbs (icon by value, colour
+cycle, translucent), block-attached entities kept on their block (frames / paintings / leash knots, with real pick
+boxes), item frame name tags, the renderers' name tag rules (holograms, team name tag visibility), no block outline
+behind an entity, the text background opacity on name tags, the dropped item copy seeds, the boat water patch and
+bubble-column rocking, display entity shadows and hidden falling blocks inside their block. ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
 switch (automated runs never change the display mode) and the LAN publish from World Options (it would open a
 listening socket).
 
