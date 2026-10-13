@@ -1555,32 +1555,35 @@ bool EntityRenderer::boatUnderWater(const Entity& e) const {
 }
 
 bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, const double cam[3], u32 light) {
-    Layer layers[16];
+    constexpr int kMaxLayers = 64;  // Java has no limit: many stuck arrows still leave room for the parrots
+    Layer layers[kMaxLayers];
     int layerCount = 0;
     if (d.kind == Kind::Mob) layerCount = resolve(e, d, layers);
     if (!layerCount) return false;
-    layerCount = speciesLayers(e, d, pt, layers, layerCount, 16);
-    if (d.waterPatch && waterPatchModel_ >= 0 && layerCount < 16 && !pack_ && !shadowOnly_ && !boatUnderWater(e))
+    if (d.special == SpTrident && dataInt(e, "ID_FOIL")) layers[0].flags |= Glint;  // ThrownTridentRenderer: foil
+    layerCount = speciesLayers(e, d, pt, layers, layerCount, kMaxLayers);
+    if (d.waterPatch && waterPatchModel_ >= 0 && layerCount < kMaxLayers && !pack_ && !shadowOnly_ && !boatUnderWater(e))
         layers[layerCount++] = {waterPatchModel_, layers[0].tex, kWhite, u16(NoOverlay)};
     if (e.category == Category::Living || e.category == Category::Player)
-        layerCount += equipmentLayers(e, d, layers + layerCount, 16 - layerCount);
+        layerCount += equipmentLayers(e, d, layers + layerCount, kMaxLayers - layerCount);
     // CapeLayer: the profile's cape unless invisible, hidden in the skin options or under an elytra (WINGS layer).
     bool capeOverArmor = false;
-    if (d.special == SpPlayer && e.cape >= 0 && capeModel_ >= 0 && (e.skinParts & 1) && !(e.sharedFlags & 0x20) && layerCount < 16) {
+    if (d.special == SpPlayer && e.cape >= 0 && capeModel_ >= 0 && (e.skinParts & 1) && !(e.sharedFlags & 0x20) && layerCount < kMaxLayers) {
         const int chest = e.equipment[4];
         const bool wings = chest >= 0 && items_ && !items_->itemLayers(chest, 3).empty();
         capeOverArmor = chest >= 0 && items_ && !items_->itemLayers(chest, 0).empty();
         if (!wings) layers[layerCount++] = {capeModel_, e.cape, kWhite, u16(Cape | NoOverlay)};
     }
     // AvatarRenderer's other player layers: deadmau5's ears, stuck arrows and bee stingers, parrots on the shoulders.
-    if (d.special == SpPlayer && !(e.sharedFlags & 0x20)) {
-        if (e.name == "deadmau5" && earsModel_ >= 0 && layerCount < 16 && layerCount > 0)  // Deadmau5EarsLayer: the skin
+    // (only the ears hide when invisible: the stuck items and parrots show, LivingEntityRenderer submits every layer)
+    if (d.special == SpPlayer) {
+        if (e.name == "deadmau5" && !(e.sharedFlags & 0x20) && earsModel_ >= 0 && layerCount < kMaxLayers && layerCount > 0)  // Deadmau5EarsLayer: the skin
             layers[layerCount++] = {earsModel_, layers[0].tex, kWhite, u16(Armor)};
-        for (int k = 0; k < e.arrowCount && arrowModel_ >= 0 && layerCount < 16; ++k) {
+        for (int k = 0; k < e.arrowCount && arrowModel_ >= 0 && layerCount < kMaxLayers; ++k) {
             layers[layerCount] = {arrowModel_, arrowTex_, kWhite, u16(Stuck | NoOverlay)};
             layers[layerCount++].scroll[0] = float(k);
         }
-        for (int k = 0; k < e.stingerCount && stingerModel_ >= 0 && layerCount < 16; ++k) {
+        for (int k = 0; k < e.stingerCount && stingerModel_ >= 0 && layerCount < kMaxLayers; ++k) {
             layers[layerCount] = {stingerModel_, stingerTex_, kWhite, u16(Stuck | NoOverlay)};
             layers[layerCount].scroll[0] = float(k), layers[layerCount++].scroll[1] = 1;
         }
@@ -1588,7 +1591,7 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
                                           "parrot/parrot_grey"};
         for (int side = 0; side < 2 && parrotModel_ >= 0; ++side) {
             const int v = e.shoulderParrot[side];
-            if (v < 0 || v > 4 || layerCount >= 16) continue;
+            if (v < 0 || v > 4 || layerCount >= kMaxLayers) continue;
             const int t = assets_.texture(std::string("entity/") + kParrots[v]);
             if (t < 0) continue;
             layers[layerCount] = {parrotModel_, t, kWhite, u16(Shoulder | NoOverlay)};
@@ -1596,7 +1599,7 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         }
     }
     // SpinAttackEffectLayer: the riptide swirl around a spinning player.
-    if (d.special == SpPlayer && (e.livingFlags & 4) && spinModel_ >= 0 && spinTex_ >= 0 && layerCount < 16)
+    if (d.special == SpPlayer && (e.livingFlags & 4) && spinModel_ >= 0 && spinTex_ >= 0 && layerCount < kMaxLayers)
         layers[layerCount++] = {spinModel_, spinTex_, kWhite, SpinFx};
     double p[3];
     for (int a = 0; a < 3; ++a) p[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt - cam[a];
@@ -1646,7 +1649,10 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         root = mul(root, translate(0, -0.25f, 0));
     } else if (d.special == SpArrow || d.special == SpTrident) {
         root = mul(root, rotY((yaw - 90.0f) * kDeg));
-        root = mul(root, rotZ((pitch + (d.special == SpTrident ? 90.0f : 0.0f)) * kDeg));
+        // ArrowModel.setupAnim: an arrow that just stuck shakes, -sin(shake * 3) * shake degrees (shake = shakeTime - pt)
+        const float shake = d.special == SpArrow ? float(e.sp.t[0]) - pt : 0.0f;
+        const float pow = shake > 0.0f ? -std::sin(shake * 3.0f) * shake : 0.0f;
+        root = mul(root, rotZ((pitch + pow + (d.special == SpTrident ? 90.0f : 0.0f)) * kDeg));
     } else if (d.special == SpObject) {  // the projectile / decoration renderers' own transforms
         if (d.anim == Anim::EvokerFangs) {  // EvokerFangsRenderer: drawn once the bite started
             if (!e.sp.t[1]) return true;
@@ -2237,7 +2243,7 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         float alpha = appearanceAlpha_;
         if (living && (e.sharedFlags & 0x20)) {
             if (li == 0 && seeInvisible && seeInvisible(e)) alpha = 38.0f / 255.0f;
-            else if (li == 0 || !(L.flags & (Armor | Emissive | Elytra | Glint | Scroll))) continue;
+            else if (li == 0 || !(L.flags & (Armor | Emissive | Elytra | Glint | Scroll | Stuck | Shoulder))) continue;
         }
         const TexRect& tr = assets_.rect(L.tex);
         const u32 layerColor = alpha >= 0 ? u32(alpha * 255.0f) << 24 | (L.color & 0xFFFFFF) : L.color;
@@ -2826,8 +2832,18 @@ void EntityRenderer::freeEntity(const Entity& e, const TypeDef& d, float pt, con
         // ThrownItemRenderer: a camera-facing item sprite (GROUND transform: 0.5 blocks, centre 2/16 up).
         const TexRect& t = assets_.rect(d.sprite);
         const float size = 0.5f * d.spriteScale;
-        const float up[3] = {camRight[3], camRight[4], camRight[5]};
-        const float c[3] = {float(p[0]), float(p[1]) + 0.125f * d.spriteScale, float(p[2])};
+        float up[3] = {camRight[3], camRight[4], camRight[5]};
+        const std::string& type = e.info ? e.info->name : std::string();
+        // FishingHookRenderer: the hook quad centred on the entity (no GROUND lift)
+        const float lift = type == "minecraft:fishing_bobber" ? 0.0f : 0.125f * d.spriteScale;
+        if (type == "minecraft:firework_rocket" && dataInt(e, "DATA_SHOT_AT_ANGLE")) {
+            // FireworkEntityRenderer: shot at an angle, the camera-facing item turned by Z180 Y180 X90 (local y -> the
+            // camera's forward axis)
+            const float* r = camRight;
+            up[0] = r[4] * r[2] - r[5] * r[1], up[1] = r[5] * r[0] - r[3] * r[2], up[2] = r[3] * r[1] - r[4] * r[0];  // up x right
+        }
+        // the GROUND transform's lift is in the turned item space: along the quad's up axis
+        const float c[3] = {float(p[0]) + up[0] * lift, float(p[1]) + up[1] * lift, float(p[2]) + up[2] * lift};
         float pos[4][3];
         const float sx[4] = {-0.5f, 0.5f, 0.5f, -0.5f}, sy[4] = {-0.5f, -0.5f, 0.5f, 0.5f};
         for (int k = 0; k < 4; ++k)
