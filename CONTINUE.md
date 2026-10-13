@@ -17,7 +17,7 @@ in-world game rules (NET-13) and Restrictions, waypoints and the locator bar (NE
 (ITEM-09) with structure / test boxes (VIS-13), area effect cloud particles (VIS-04), all level events and
 jukebox songs (FX-06), the tickable sounds (FX-10: minecarts, riding, elytra, bees, guardian, sniffer, underwater,
 bubble columns), terrain textures with shaders off (a min-LOD clamp bug), the 26.3 title screen layout, the spectator
-menu / HUD / spectate click (PLAY-08). ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
+menu / HUD / spectate click (PLAY-08), glowing entity outlines (VIS-06). ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
 switch (automated runs never change the display mode) and the LAN publish from World Options (it would open a
 listening socket).
 
@@ -32,7 +32,8 @@ listening socket).
 
 ## Visuals / effects
 
-- **VIS-06**: glowing outlines, capes.
+- **VIS-06 residual**: capes (they come with profile textures: see VIS-07); glowing outlines under a shader pack
+  (entities go through the pack's gbuffers there) and of dropped items (drawn by the visuals pass).
 - **VIS-07 / VIS-14**: profile skins and custom player heads.
 - **FX-05**: trail particle params, sulfur/gas particles.
 - **FX-07**: post-effect chains (creeper/spider/enderman spectator views etc.).
