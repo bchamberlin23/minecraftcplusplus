@@ -2405,7 +2405,7 @@ void Visuals::Impl::buildTags(const PassContext& ctx) {
         u32 background;
         int opacity;
         displayTextColors(e, pt, background, opacity);
-        if (e.display.style & 4) background = u32(int(0.25f * 255.0f)) << 24;  // default background: text background opacity
+        if (e.display.style & 4) background = ui ? ui->textBackground(0.25f) : 0x3F000000u;  // the default background
         u32 alpha = u8(opacity);
         if ((alpha & 0xFC) == 0) alpha = 255;  // Font.adjustColor
         const u32 first = u32(dyn.size());
@@ -2454,7 +2454,7 @@ void Visuals::Impl::buildTags(const PassContext& ctx) {
                       e.uuid[13], e.uuid[14], e.uuid[15]);
         const std::string member = player ? e.name : std::string(uuidText);
         const u32 light = lightAt(p[0], p[1] + e.info->eye, p[2]) | 512u;
-        const u32 textHalf = 0x80FFFFFFu, bgColor = 0x40000000u;  // ABGR: white at 0.5, black at 0.25
+        const u32 textHalf = 0x80FFFFFFu, bgColor = ui ? ui->textBackground(0.25f) : 0x3F000000u;  // white at 0.5, black
         auto submit = [&](const Tag& t, float yUp) {  // EntityRenderer.submitNameTag at the attachment, raised by yUp
             if (t.first == UINT32_MAX) return;
             Xf m;
