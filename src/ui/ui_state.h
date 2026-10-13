@@ -267,6 +267,10 @@ struct Ui::State {
     double fps = 0, frameMs = 0;
     std::deque<float> frameTimes;
     int heartBlinkEnd = 0, lastHealthInt = 20, displayHealth = 20;
+    // LocalPlayer.hurtTo: damageCooldownTime (20 hurt, 10 healed; counted down each tick) after a set_health once the
+    // first one of this player entity came (flashOnSetHealth)
+    int damageCooldown = 0;
+    bool flashOnSetHealth = false;
     double lastHealthTime = 0;
     float fovModifier = 1, oldFovModifier = 1;  // Camera.tickFov
 

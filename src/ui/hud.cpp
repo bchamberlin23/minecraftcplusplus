@@ -170,11 +170,11 @@ void Ui::State::tickHud() {
     }
     // Health blink (Hud.extractPlayerHealth bookkeeping).
     const int hp = int(std::ceil(health));
-    if (hp < lastHealthInt) heartBlinkEnd = guiTicks + 20;
-    else if (hp > lastHealthInt) heartBlinkEnd = guiTicks + 10;
-    if (hp != lastHealthInt) lastHealthTime = clock;
-    if (clock - lastHealthTime > 1.0) displayHealth = hp;
+    if (hp < lastHealthInt && damageCooldown > 0) heartBlinkEnd = guiTicks + 20, lastHealthTime = clock;
+    else if (hp > lastHealthInt && damageCooldown > 0) heartBlinkEnd = guiTicks + 10, lastHealthTime = clock;
+    if (clock - lastHealthTime > 1.0) displayHealth = hp, lastHealthTime = clock;
     lastHealthInt = hp;
+    if (damageCooldown > 0) --damageCooldown;  // LivingEntity.baseTick
     // Camera.tickFov with AbstractClientPlayer.getFieldOfViewModifier: flying, and the movement speed attribute
     // (the server's value with effects and equipment, x1.3 sprinting) against the ability's walking speed.
     // The FOV Effects option scales the change (Mth.lerp(effectScale, 1, modifier)), except the spyglass's 0.1; a

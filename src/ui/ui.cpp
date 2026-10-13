@@ -724,6 +724,11 @@ void Ui::registerHandlers(net::Client& client) {
         const float sat = r.f32();
         if (std::getenv("MCPP_UI_VERBOSE")) LOG("ui: set_health %.1f food %d sat %.1f", health, food, sat);
         s->post([s, health, food, sat] {
+            if (s->flashOnSetHealth) {  // LocalPlayer.hurtTo
+                if (health < s->health) s->damageCooldown = 20;
+                else if (health > s->health) s->damageCooldown = 10;
+            }
+            s->flashOnSetHealth = true;
             s->health = health, s->food = food, s->saturation = sat;
             Player& pl = s->game->player();
             pl.foodSprint = food > 6;
@@ -864,6 +869,7 @@ void Ui::registerHandlers(net::Client& client) {
         r.varInt(), r.varInt(), r.varInt();  // max players, chunk radius, simulation distance
         const bool reduced = r.boolean(), deathScreen = r.boolean(), limited = r.boolean();
         if (r.ok) s->post([s, hardcore, reduced, deathScreen, limited] {
+            s->flashOnSetHealth = false, s->damageCooldown = 0;  // a new LocalPlayer
             s->hardcore = hardcore, s->reducedDebugInfo = reduced, s->showDeathScreen = deathScreen, s->limitedCrafting = limited;
             s->difficulty = 2, s->difficultyLocked = false;  // ClientLevelData starts at NORMAL; the server sends its own
         });
@@ -892,6 +898,7 @@ void Ui::registerHandlers(net::Client& client) {
         s->post([s] {
             s->effects.clear();
             s->onFire = false;
+            s->flashOnSetHealth = false, s->damageCooldown = 0;  // a new LocalPlayer
             s->air = s->maxAir;
             if (s->screen == Screen::Death || s->screen == Screen::Container || s->screen == Screen::Inventory)
                 s->closeScreen(false);
