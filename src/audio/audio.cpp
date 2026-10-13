@@ -310,7 +310,11 @@ void AudioSystem::onBlockChanged(bool place, int x, int y, int z, u16 state) {
     const BlockSoundType& t = game_.type(b.type);
     // LevelEventHandler 2001 (break) / BlockItem.place: (volume + 1) / 2, pitch * 0.8, at the block centre.
     const double pos[3] = {x + 0.5, y + 0.5, z + 0.5};
-    play(place ? t.place : t.breakSound, Category::Block, pos, (t.volume + 1.0f) / 2.0f, t.pitch * 0.8f, rng_.nextLong());
+    int event = place ? t.place : t.breakSound;
+    // SolidBucketItem.getPlaceSound: powder snow is placed from its bucket alone (no block item), with the bucket's sound
+    if (place && registry_ && registry_->name(state).starts_with("minecraft:powder_snow"))
+        event = bank_.eventId("minecraft:item.bucket.empty_powder_snow");
+    play(event, Category::Block, pos, (t.volume + 1.0f) / 2.0f, t.pitch * 0.8f, rng_.nextLong());
 }
 
 void AudioSystem::blockHit(int x, int y, int z) {
