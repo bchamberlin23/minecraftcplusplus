@@ -40,7 +40,9 @@ sounds (brushing with its dust, spyglass, goat horns, flint and steel), and the 
 Filtering / Mipmaps / Anisotropy, Simulation Distance, the rain particles' Weather Radius) and the other options
 that were only stored (splash texts, auto suggestions, hidden LAN addresses, hide matched names, lastServer, the
 first-server Social Interactions toast, rotate with minecarts, startedCleanly), and the Mojang Studios loading
-overlay (start-up, F3 + T, server packs). ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
+overlay (start-up, F3 + T, server packs), block entity client ticks (spawner flames, trial spawner / vault
+particles and ambience, note block notes), team-formatted name tags with the below-name score, screenshot names /
+links, pick block on entities (Ctrl: with data) and the fuller F3 + B hitboxes. ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
 switch (automated runs never change the display mode) and the LAN publish from World Options (it would open a
 listening socket).
 
