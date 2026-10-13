@@ -1477,6 +1477,17 @@ void EntityRenderer::blockDecorations(const Entity& e, const TypeDef& d, const M
 }
 
 // Mob arm poses: HumanoidMobRenderer.getArmPose (spears; the skeletons' bow, the drowned's trident), PiglinArmPose,
+// #minecraft:piglin_loved (PiglinAi.isLovedItem)
+static bool lovedByPiglins(std::string_view n) {
+    static const std::string_view kLoved[] = {
+        "gold_ore", "nether_gold_ore", "deepslate_gold_ore", "gold_block", "gilded_blackstone", "light_weighted_pressure_plate",
+        "gold_ingot", "bell", "clock", "golden_carrot", "glistering_melon_slice", "golden_apple", "enchanted_golden_apple",
+        "golden_helmet", "golden_chestplate", "golden_leggings", "golden_boots", "golden_horse_armor", "golden_nautilus_armor",
+        "golden_sword", "golden_spear", "golden_pickaxe", "golden_shovel", "golden_axe", "golden_hoe", "raw_gold",
+        "raw_gold_block", "golden_dandelion"};
+    return std::find(std::begin(kLoved), std::end(kLoved), n) != std::end(kLoved);
+}
+
 // IllagerArmPose; the guardian's eye target (GuardianRenderer.getEntityToLookAt).
 void EntityRenderer::mobPoses(const Entity& e, const TypeDef& d, const double cam[3], AnimState& s) const {
     const auto& names = assets_.itemNames();
@@ -1515,12 +1526,24 @@ void EntityRenderer::mobPoses(const Entity& e, const TypeDef& d, const double ca
         const bool meleeAttack = aggressive && melee(main);
         if (n == "minecraft:piglin_brute") s.mobPose = meleeAttack ? 1 : 0;
         else if (dataInt(e, "DATA_IS_DANCING")) s.mobPose = 5;
-        else if (off.find("gold") != std::string_view::npos || off == "bell" || off == "clock" ||
-                 off == "glistering_melon_slice" || off == "light_weighted_pressure_plate")
+        else if (lovedByPiglins(off))
             s.mobPose = 4;  // PiglinAi.isLovedItem
         else if (meleeAttack) s.mobPose = 1;
         else if (dataInt(e, "DATA_IS_CHARGING_CROSSBOW")) s.mobPose = 3;
-        else s.mobPose = (main == "crossbow" || off == "crossbow") && aggressive ? 2 : 0;  // a charged crossbow
+        else {  // CROSSBOW_HOLD: holding a crossbow and the weapon (main hand) charged (CrossbowItem.isCharged)
+            bool charged = false;
+            const ui::Items* items = items_ ? items_->items() : nullptr;
+            if (items && e.equipStack[0]) {
+                static int type = -2;
+                if (type == -2) type = items->componentType("charged_projectiles");
+                for (const auto& comp : e.equipStack[0]->added) {
+                    if (comp.type != type) continue;
+                    net::Reader r(reinterpret_cast<const u8*>(comp.data.data()), comp.data.size());
+                    charged = r.varInt() > 0;
+                }
+            }
+            s.mobPose = (main == "crossbow" || off == "crossbow") && charged ? 2 : 0;
+        }
         s.useTicks = float(e.useTicks) + s.pt;
     } else if (d.anim == Anim::Illager) {  // Pillager / Vindicator / SpellcasterIllager / Illusioner.getArmPose
         const bool casting = dataInt(e, "DATA_SPELL_CASTING_ID") > 0, celebrating = dataInt(e, "IS_CELEBRATING") != 0;
