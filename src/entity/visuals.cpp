@@ -3825,7 +3825,11 @@ void Visuals::Impl::buildCracks(const PassContext& ctx) {
                 for (int a = 0; a < 3; ++a) q.pos[k][a] = p[k][a] + n[a] * 0.002f;  // polygon offset
                 const float x = std::clamp(p[k][0] - cell[0], 0.0f, 1.0f), y = std::clamp(p[k][1] - cell[1], 0.0f, 1.0f),
                             z = std::clamp(p[k][2] - cell[2], 0.0f, 1.0f);
-                const float u = axis == 1 ? x : axis == 2 ? x : z, v = axis == 1 ? z : 1.0f - y;
+                // SheetedDecalTextureGenerator: the block-local position turned by rotateY(pi), rotateX(-pi/2) and the
+                // nearest direction's rotation, (u, v) = -(x, y) (repeating)
+                const bool pos = n[axis] > 0;
+                const float u = axis == 1 ? x : axis == 2 ? (pos ? x : 1.0f - x) : (pos ? z : 1.0f - z);
+                const float v = axis == 1 ? (pos ? z : 1.0f - z) : 1.0f - y;
                 q.uv[k][0] = r.u0 + u * r.du, q.uv[k][1] = r.v0 + v * r.dv;
             }
             q.normal = packNormal(n[0], n[1], n[2]);
