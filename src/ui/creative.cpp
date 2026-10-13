@@ -58,7 +58,11 @@ Creative g;
 // CreativeModeTab.shouldDisplay: the operator tab has items only with the Operator Items Tab option on and
 // Player.canUseGameMasterBlocks (creative and permission level 2).
 bool g_opTab = false;
-bool tabVisible(int i) { return g_opTab || std::string(kTabDefs[i].title) != "itemGroup.op"; }
+// CreativeModeTabs.tabs: the operator tab only when allowed; CreativeModeTab.shouldDisplay: a category tab with items
+bool tabVisible(int i) {
+    if (!g_opTab && std::string(kTabDefs[i].title) == "itemGroup.op") return false;
+    return kTabDefs[i].kind != TabKind::Category || !g.built || !g.tabItems[i].empty();
+}
 
 void buildTabs(UiState& s) {
     if (g.built) return;
@@ -260,21 +264,29 @@ void refreshSearch(UiState& s) {
         for (char& ch : v) ch = char(std::tolower(u8(ch)));
         return v;
     };
-    if (q.starts_with("#")) {  // CreativeModeInventoryScreen.updateVisibleTags: tags by namespace / path
-        const std::string query = q.substr(1);
-        const size_t colon = query.find(':');
+    auto trim = [](std::string v) {
+        const size_t a = v.find_first_not_of(' '), b = v.find_last_not_of(' ');
+        return a == std::string::npos ? std::string() : v.substr(a, b - a + 1);
+    };
+    // A namespace:path matcher (the parts trimmed), or the path alone without a colon
+    auto idMatch = [&](const std::string& id, const std::string& query) {
+        const size_t c = id.find(':'), colon = query.find(':');
+        const std::string ns = id.substr(0, c), path = id.substr(c + 1);
+        if (colon == std::string::npos) return path.find(query) != std::string::npos;
+        return ns.find(trim(query.substr(0, colon))) != std::string::npos && path.find(trim(query.substr(colon + 1))) != std::string::npos;
+    };
+    if (q.starts_with("#")) {
+        // updateVisibleTags (the term as typed, for the tooltips), creativeTagSearch (lower case: the results)
+        const std::string raw = s.search.value.substr(1), query = q.substr(1);
+        std::vector<std::string> matching;
         if (const auto* tags = s.items.tags("minecraft:item"))
             for (const auto& [id, members] : *tags) {
-                const size_t c = id.find(':');
-                const std::string ns = id.substr(0, c), path = id.substr(c + 1);
-                const bool match = colon == std::string::npos ? path.find(query) != std::string::npos
-                                                              : ns.find(query.substr(0, colon)) != std::string::npos &&
-                                                                    path.find(query.substr(colon + 1)) != std::string::npos;
-                if (match) g_visibleTags.push_back(id);
+                if (idMatch(id, raw)) g_visibleTags.push_back(id);
+                if (idMatch(id, query)) matching.push_back(id);
             }
         std::sort(g_visibleTags.begin(), g_visibleTags.end());
         for (const ItemStack& st : g.tabItems[g.selected])
-            for (const std::string& t : g_visibleTags)
+            for (const std::string& t : matching)
                 if (s.items.itemHasTag(st.item, t)) {
                     g.shown.push_back(st);
                     break;
@@ -282,22 +294,40 @@ void refreshSearch(UiState& s) {
         g.scroll = 0;
         return;
     }
-    // SessionSearchTrees: the item's tooltip lines and its full id (lower case, built once per tab contents)
-    static std::vector<std::string> text;
+    // SessionSearchTrees.creativeNameSearch (FullTextSearchTree): plain text matches a tooltip line (each on its own,
+    // lower case, trimmed); namespace:path needs the namespace and the path in the id path or a tooltip line
+    static std::vector<std::vector<std::string>> lines;
+    static std::vector<std::string> ids;
     static const std::vector<ItemStack>* textOf = nullptr;
     static size_t textCount = 0;
     const std::vector<ItemStack>& items = g.tabItems[g.selected];
     if (textOf != &items || textCount != items.size()) {
-        text.clear();
+        lines.clear(), ids.clear();
         for (const ItemStack& st : items) {
-            std::string t = lower(s.items.name(st.item));
-            for (const Text& line : s.items.tooltip(st, false, true)) t += '|' + lower(line.plain());
-            text.push_back(std::move(t));
+            std::vector<std::string> l;
+            for (const Text& line : s.items.tooltip(st, false, true)) l.push_back(trim(lower(line.plain())));
+            lines.push_back(std::move(l));
+            ids.push_back(s.items.name(st.item));
         }
         textOf = &items, textCount = items.size();
     }
-    for (size_t i = 0; i < items.size(); ++i)
-        if (q.empty() || text[i].find(q) != std::string::npos) g.shown.push_back(items[i]);
+    auto inLines = [&](size_t i, const std::string& t) {
+        for (const std::string& l : lines[i])
+            if (l.find(t) != std::string::npos) return true;
+        return false;
+    };
+    const size_t colon = q.find(':');
+    for (size_t i = 0; i < items.size(); ++i) {
+        bool match = q.empty();
+        if (!match && colon == std::string::npos) match = inLines(i, q);
+        else if (!match) {
+            const std::string nsq = trim(q.substr(0, colon)), pathq = trim(q.substr(colon + 1));
+            const size_t c = ids[i].find(':');
+            match = ids[i].substr(0, c).find(nsq) != std::string::npos &&
+                    (ids[i].substr(c + 1).find(pathq) != std::string::npos || inLines(i, pathq));
+        }
+        if (match) g.shown.push_back(items[i]);
+    }
     g.scroll = 0;
 }
 
@@ -734,10 +764,16 @@ void input(UiState& s, const InputEvent& e) {
             }
             if (hotbarKey()) return;
             if (s.isKey(Key::Inventory, e)) return s.closeScreen();
-            if (s.isKey(Key::Drop, e) && s.carried.empty()) {
+            if (s.isKey(Key::PickItem, e)) {  // keyPickItem (a key binding: the mouse button comes as a click): CLONE
+                if (g.hoveredGrid >= 0) gridClick(s, g.hoveredGrid, 0, Clone);
+                else if (g.hoveredInv >= 0) localInventoryClick(s, g.hoveredInv, 0, Clone);
+                return;
+            }
+            if (s.isKey(Key::Drop, e)) {  // keyDrop over a slot with an item: THROW (the menu's own throw needs empty hands)
                 const bool all = s.window->keyDown(VK_CONTROL);
                 if (g.hoveredGrid >= 0) gridClick(s, g.hoveredGrid, all ? 1 : 0, Throw);
-                else if (g.hoveredInv >= 0 && !s.inventory.slots[size_t(g.hoveredInv)].empty()) {
+                else if (g.hoveredInv >= 0 && !s.inventory.slots[size_t(g.hoveredInv)].empty() &&
+                         (tab().kind == TabKind::Inventory || s.carried.empty())) {
                     ItemStack& st = s.inventory.slots[size_t(g.hoveredInv)];
                     const ItemStack drop = st.withCount(all ? st.count : 1);
                     dropStack(s, drop);
@@ -779,8 +815,7 @@ void input(UiState& s, const InputEvent& e) {
         for (int t = 0; t < kTabCount; ++t)
             if (tabVisible(t) && overTab(t, rx, ry)) return;  // selected on release
         if (tab().kind != TabKind::Inventory && rx >= 175 && rx < 189 && ry >= 18 && ry < 130) {
-            g.scrolling = canScroll();
-            if (g.scrolling) g.scroll = std::clamp((ry - 18 - 7.5f) / (112 - 15.0f), 0.f, 1.f);
+            g.scrolling = canScroll();  // the thumb moves with the drag (mouseDragged), not on the press
             return;
         }
     }
@@ -789,7 +824,8 @@ void input(UiState& s, const InputEvent& e) {
     const std::vector<VSlot> slots = slotsOf();
     for (const VSlot& sl : slots)
         if (rx >= float(sl.x) - 1 && rx < float(sl.x) + 17 && ry >= float(sl.y) - 1 && ry < float(sl.y) + 17) hit = &sl;
-    const bool inside = rx >= 0 && ry >= 0 && rx < kW && ry < kH;
+    // hasClickedOutside: beyond the panel and not on the selected tab
+    const bool inside = (rx >= 0 && ry >= 0 && rx < kW && ry < kH) || overTab(g.selected, rx, ry);
     const int input = button == 2 ? Clone : shift ? QuickMove : Pickup;
     if (button == 2 && !s.creative()) return;
     if (!hit) {
