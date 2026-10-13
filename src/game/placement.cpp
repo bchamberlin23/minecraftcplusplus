@@ -527,6 +527,11 @@ bool canSurviveHere(const Context& c, u16 state, const int p[3]) {
     if (n == "nether_sprouts" || n == "crimson_roots" || n == "warped_roots") return vegetationGround() || nylium || b == "soul_soil";
     if (n == "crimson_fungus" || n == "warped_fungus") return vegetationGround() || nylium || b == "mycelium" || b == "soul_soil";
     if (n == "nether_wart") return b == "soul_sand";
+    if (n == "lily_pad" || n == "frogspawn") {  // LilyPadBlock / FrogspawnBlock.mayPlaceOn: water (ice for pads), no fluid here
+        const BlockInfo& here = c.reg.infos()[c.block(p[0], p[1], p[2])];
+        const bool water = c.waterSource && c.waterSource(p[0], p[1] - 1, p[2]);
+        return (water || (n == "lily_pad" && (b == "ice" || b == "frosted_ice"))) && !here.fluid && !here.waterlogged;
+    }
     if (n == "brown_mushroom" || n == "red_mushroom")  // MushroomBlock: #overrides_mushroom_light_requirement, else dim on solid
         return in({"mycelium", "podzol", "crimson_nylium", "warped_nylium"}) ||
                ((!c.brightness || c.brightness(p[0], p[1], p[2]) < 13) && c.reg.infos()[below].occludes);

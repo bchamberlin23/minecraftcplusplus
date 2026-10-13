@@ -406,7 +406,7 @@ int Game::useItemOn(int hand) {
     action.hand = hand;
     action.inside = target_.inside;
     auto send = [&](int result) {
-        if (onEdit) onEdit(action);
+        if (onEdit && !placeOnly_) onEdit(action);
         return result;
     };
     if (gameMode == 3) return send(kUseConsume);
@@ -415,9 +415,12 @@ int Game::useItemOn(int hand) {
     // NoteBlock.useItemOn: a head (#noteblock_top_instruments) on the top face goes on to the item's own use
     const bool headOnNoteBlock = target_.face == 1 && handInTag && handInTag(hand, "minecraft:noteblock_top_instruments") &&
                                  registry_.name(world_.block(target_.x, target_.y, target_.z)).starts_with("minecraft:note_block[");
-    if (!suppressUsingBlock && !headOnNoteBlock && onInteract && onInteract(target_.x, target_.y, target_.z)) return send(kUseConsume);
+    if (!placeOnly_ && !suppressUsingBlock && !headOnNoteBlock && onInteract && onInteract(target_.x, target_.y, target_.z))
+        return send(kUseConsume);
     const u16 held = hand == 0 ? hotbar_[selected_] : offhandBlock_;
     if (!has(hand) || (handOnCooldown && handOnCooldown(hand))) return send(kUsePass);
+    if (!placeOnly_ && held && (registry_.name(held).starts_with("minecraft:lily_pad") || registry_.name(held).starts_with("minecraft:frogspawn")))
+        return send(kUsePass);  // PlaceOnWaterBlockItem.useOn: PASS (its use places it)
     if (!held) return send(predictUseOn ? predictUseOn(hand, target_) : kUsePass);  // not a block: Item.useOn
     // BlockItem.place: BlockPlaceContext (the clicked block when it can be replaced, else the cell in front of it).
     const BlockInfo* infos = registry_.infos();
@@ -463,6 +466,14 @@ int Game::useItemOn(int hand) {
         swingTicks = attackSwing;
     }
     return kUseConsume;
+}
+
+int Game::placeFromUse(int hand, const RayHit& hit) {
+    const RayHit saved = target_;
+    target_ = hit, placeOnly_ = true;
+    const int r = useItemOn(hand);
+    target_ = saved, placeOnly_ = false;
+    return r;
 }
 
 float Game::useFovModifier() const {

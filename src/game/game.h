@@ -195,6 +195,9 @@ public:
     std::function<void()> predictRelease;
     void setOffhandBlock(u16 id) { offhandBlock_ = id; }  // the off hand's block (0: not a block item)
     void predictBlock(int x, int y, int z, u16 id) { edit(x, y, z, id); }  // a client-side block change of an item use
+    // BlockItem.useOn from an item's use (PlaceOnWaterBlockItem: the block above a SOURCE_ONLY hit): the placement
+    // prediction for `hit`, without the block's own use or a ServerboundUseItemOnPacket (the use packet went out).
+    int placeFromUse(int hand, const RayHit& hit);
     // --- Item cooldowns: Player.getCooldowns (ItemCooldowns) by cooldown group ("minecraft:ender_pearl"), set by the
     // server's cooldown packets and counted in player ticks. While the main hand's group cools down, a right click
     // does not predict its use (MultiPlayerGameMode.useItemOn / useItem pass). ---
@@ -332,6 +335,7 @@ private:
     bool escWasDown_ = false;
     bool useConsumed_ = false;  // the last use press placed a block, used the targeted block or failed
     bool placedLast_ = false;   // the last useItemOn placed a block
+    bool placeOnly_ = false;  // placeFromUse: useItemOn places only
     u16 offhandBlock_ = 0;
     bool usingItem_ = false;    // onUseItem sent, the use key not yet released
     bool crouchToggled_ = false, sprintToggled_ = false, attackToggled_ = false, useToggled_ = false;

@@ -1080,6 +1080,27 @@ int Gameplay::predictItemUse(int hand, const RayHit* target) {
         return result;
     }
     if (name == "bundle" || name.ends_with("_bundle")) return start();
+    if (name == "lily_pad" || name == "frogspawn") {  // PlaceOnWaterBlockItem.use: the cell above a SOURCE_ONLY hit
+        const CameraState c = game_->camera();
+        const double eye[3] = {c.x, c.y, c.z}, cp = std::cos(c.pitch);
+        const double dir[3] = {-std::sin(c.yaw) * cp, -std::sin(c.pitch), std::cos(c.yaw) * cp};
+        RayHit hit = game_->physics().raycast(eye, dir, game_->blockReach);
+        const double limit = hit.hit ? hit.distance : game_->blockReach;
+        for (double t = 0; t < limit; t += 0.01) {  // a fluid source before the block
+            const double py = eye[1] + dir[1] * t;
+            const int x = int(std::floor(eye[0] + dir[0] * t)), y = int(std::floor(py)), z = int(std::floor(eye[2] + dir[2] * t));
+            const Physics::Fluid f = game_->physics().fluid(x, y, z);
+            if (!f.type || !f.source || py > y + game_->physics().fluidHeight(x, y, z, f)) continue;
+            hit = RayHit{};
+            hit.hit = true, hit.x = x, hit.y = y, hit.z = z, hit.distance = t;
+            hit.face = dir[1] < 0 && py >= y + game_->physics().fluidHeight(x, y, z, f) - 0.02 ? 1 : 0;
+            hit.point[0] = eye[0] + dir[0] * t, hit.point[1] = py, hit.point[2] = eye[2] + dir[2] * t;
+            break;
+        }
+        if (!hit.hit) return Game::kUsePass;
+        hit.y += 1;  // withPosition(getBlockPos().above())
+        return game_->placeFromUse(hand, hit);
+    }
     if (name == "glass_bottle") {  // BottleItem.use: a water source in reach fills it (BOTTLE_FILL, the user's own)
         const CameraState c = game_->camera();
         const double eye[3] = {c.x, c.y, c.z}, cp = std::cos(c.pitch);
