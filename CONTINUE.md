@@ -43,7 +43,8 @@ first-server Social Interactions toast, rotate with minecarts, startedCleanly), 
 overlay (start-up, F3 + T, server packs), block entity client ticks (spawner flames, trial spawner / vault
 particles and ambience, note block notes), team-formatted name tags with the below-name score, screenshot names /
 links, pick block on entities (Ctrl: with data), the fuller F3 + B hitboxes, the happy ghast harness goggles, F3 + Esc
-(pause without the menu) and the window icon. ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
+(pause without the menu), the window icon, the quick-craft drag preview, mouse editing in text fields and the
+container key / mouse bindings. ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
 switch (automated runs never change the display mode) and the LAN publish from World Options (it would open a
 listening socket).
 
@@ -51,6 +52,10 @@ listening socket).
 
 
 ## Items / UI
+
+- **HashedStack component hashes**: container clicks send hash 0 for every component of a changed / carried stack
+  (Java hashes each component through its codec with HashOps), so the server resyncs such slots after each click.
+  Porting needs a canonical per-component encoding (DataComponents codecs) feeding CRC32C like HashOps.
 
 
 ## Visuals / effects
