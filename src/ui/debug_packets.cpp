@@ -333,7 +333,7 @@ void handlers(UiState& s, net::Client& client) {
             });
     });
     client.onPlay("low_disk_space_warning", [sp](net::Reader&) {
-        sp->post([sp] { showToast(tr(*sp, "chunk.toast.lowDiskSpace"), tr(*sp, "chunk.toast.lowDiskSpace.description")); });
+        sp->post([sp] { showToast(tr(*sp, "chunk.toast.lowDiskSpace"), tr(*sp, "chunk.toast.lowDiskSpace.description"), "low_disk_space", 10.0); });
     });
     client.onPlay("game_test_highlight_pos", [sp](net::Reader& r) {
         int x, y, z, rx, ry, rz;

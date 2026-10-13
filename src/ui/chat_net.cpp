@@ -5,6 +5,7 @@
 // There is no profile key: messages and commands go unsigned, as the game sends them without one.
 #include "ui/frontend.h"
 #include "ui/mp_hud.h"
+#include "ui/toasts.h"
 #include "ui/ui_state.h"
 #include "world/nbt_dom.h"
 
@@ -323,9 +324,13 @@ void registerHandlers(UiState& s, net::Client& client) {
     client.onPlayPeek("login", [sp](net::Reader& r) {  // ClientboundLoginPacket ends with enforcesSecureChat
         if (r.left() < 1) return;
         const bool enforces = r.end[-1] != 0;
-        sp->post([enforces] {
+        sp->post([sp, enforces] {
             g = ChatNet{};  // a new LastSeenMessagesTracker, MessageSignatureCache and chat index
             g.enforcesSecureChat = enforces;
+            // handleLogin: on a server (not singleplayer) without secure chat, the warning toast (10 s), once
+            if (!sp->fe->cfg.singleplayer && !enforces)
+                showToast(tr(*sp, "multiplayer.unsecureserver.toast.title"), tr(*sp, "multiplayer.unsecureserver.toast"),
+                          "unsecure_server_warning", 10.0);
         });
     });
     client.onPlay("system_chat", [sp, lang](net::Reader& r) {

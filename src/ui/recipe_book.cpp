@@ -254,7 +254,8 @@ void recipeToast(UiState& s, const RecipeDisplay& d) {
         s.drawText(c, translatable("recipe.toast.title", {}, s.lang()), x + 30, y + 7, 0xFF500050, false);
         s.drawText(c, translatable("recipe.toast.description", {}, s.lang()), x + 30, y + 18, 0xFF000000, false);
         if (g_toastItems.empty()) return;
-        const double per = std::max(1.0, 5.0 / double(g_toastItems.size()));
+        // RecipeToast: the shown recipe changes every max(1 ms, 5 s x Notification Time / count)
+        const double per = std::max(0.001, 5.0 * s.settings.notificationDisplayTime / double(g_toastItems.size()));
         const auto& [station, result] = g_toastItems[size_t(shownFor / per) % g_toastItems.size()];
         c.push();
         c.translate(x, y);

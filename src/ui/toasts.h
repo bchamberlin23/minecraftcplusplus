@@ -16,7 +16,7 @@ class Canvas;
 struct ItemStack;
 
 // id: SystemToast.addOrUpdate (a toast with the same id shows the new text and starts its time again).
-void showToast(const Text& title, const Text& message = Text(), const std::string& id = {});
+void showToast(const Text& title, const Text& message = Text(), const std::string& id = {}, double displaySeconds = 5.0);
 // type: AdvancementType (0 task, 1 challenge, 2 goal).
 void showAdvancementToast(const Text& title, int type, const ItemStack& icon);
 // icon: a "toast/<icon>" sprite ("movement_keys", "mouse", "tree", "recipe_book", "wooden_planks"). Returns a handle.
