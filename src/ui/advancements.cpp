@@ -206,7 +206,7 @@ void sendSeen(UiState& s, const std::string* tab) {  // ServerboundSeenAdvanceme
 }
 
 void selectTab(UiState& s, const std::string& root, bool tellServer) {  // ClientAdvancements.setSelectedTab
-    if (tellServer && !root.empty() && root != g.selected) sendSeen(s, &root);
+    if (tellServer && !root.empty()) sendSeen(s, &root);  // every time, changed or not
     g.selected = root;
 }
 
@@ -395,7 +395,15 @@ void build(UiState& s) {
     done.onPress = [sp] { close(*sp); };
     s.buttons.push_back(std::move(done));
     if (g.dirty) rebuild(s);
-    if (!g.selected.empty()) sendSeen(s, &g.selected);  // init: setSelectedTab(..., true)
+    // AdvancementsScreen.init: new tabs (centred again), the first one selected (onAdvancementsUpdated tells the
+    // server, then init once more)
+    for (Tab& t : g.tabs) t.centered = false, t.scrollX = t.scrollY = 0;
+    g.hovered = -1, g.fade = 0;
+    if (!g.tabs.empty()) {
+        g.selected = g.tabs[0].root;
+        sendSeen(s, &g.selected);
+        sendSeen(s, &g.selected);
+    }
 }
 
 void closed(UiState& s) {
@@ -445,7 +453,7 @@ void drawWidgets(UiState& s, Canvas& c, const Tab& t, int i, int ox, int oy) {
 }
 
 // AdvancementWidget.extractHover (relative to the window inside at ox, oy).
-void drawHover(UiState& s, Canvas& c, const Widget& w, int xo, int yo, int screenX) {
+void drawHover(UiState& s, Canvas& c, const Widget& w, int xo, int yo, int screenX, int insideY) {
     const Adv& a = *w.adv;
     const int titleBarHeight = 9 * int(w.titleLines.size()) + 9 + 8;
     const int titleTop = yo + w.y + (26 - titleBarHeight) / 2, titleBarBottom = titleTop + titleBarHeight;
@@ -459,7 +467,7 @@ void drawHover(UiState& s, Canvas& c, const Widget& w, int xo, int yo, int scree
         hasProgress = true;
     }
     const int progressWidth = hasProgress ? s.font.width(progressText) : 0;
-    const bool topSide = titleBarBottom + descHeight >= kInH;
+    const bool topSide = titleBarBottom - insideY + descHeight >= kInH;  // relative to the window's inside
     const float amount = percent(a);
     int firstHalfWidth = int(std::floor(amount * float(w.width)));
     bool firstObt, secondObt, iconObt;
@@ -578,7 +586,7 @@ void draw(UiState& s, Canvas& c) {
     if (t) {
         c.fill(float(inX), float(inY), float(inX + kInW), float(inY + kInH), u32(std::floor(g.fade * 255.0f)) << 24);
         if (g.hovered >= 0 && size_t(g.hovered) < t->widgets.size())
-            drawHover(s, c, t->widgets[size_t(g.hovered)], inX + int(std::floor(t->scrollX)), inY + int(std::floor(t->scrollY)), -9);
+            drawHover(s, c, t->widgets[size_t(g.hovered)], inX + int(std::floor(t->scrollX)), inY + int(std::floor(t->scrollY)), -9, inY);
     }
     if (g.tabs.size() > 1)
         for (const Tab& tb : g.tabs) {
