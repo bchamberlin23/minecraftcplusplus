@@ -195,11 +195,35 @@ float Riding::vehicleHealth() const {
     return e ? e->health : 0.0f;
 }
 
+// LocalPlayer.modifyInput for a passenger: the normalized move vector (KeyboardInput) x 0.98, stretched to the unit
+// square (modifyInputSpeedForSquareMovement); no item or sneak slowdown while riding.
+static void riddenMove(const PlayerInput& in, double& strafe, double& forward) {
+    strafe = in.strafe, forward = in.forward;
+    const double len = std::sqrt(strafe * strafe + forward * forward);
+    if (len <= 0) return;
+    strafe = strafe / len * 0.98, forward = forward / len * 0.98;
+    const double l = std::sqrt(strafe * strafe + forward * forward);
+    const double ax = std::abs(strafe / l), ay = std::abs(forward / l);
+    const double tan = ay > ax ? ax / ay : ay / ax;
+    const double stretched = std::min(l * std::sqrt(1.0 + tan * tan), 1.0);
+    strafe = strafe / l * stretched, forward = forward / l * stretched;
+}
+
+// Camel.refuseToMove: sitting (LAST_POSE_CHANGE_TICK < 0) or still standing up / sitting down (isInPoseTransition)
+static bool camelRefusesToMove(const ent::Entity& e, i64 gameTime) {
+    const i64 last = ent::dataInt(e, "LAST_POSE_CHANGE_TICK");
+    const bool sitting = last < 0;
+    return sitting || gameTime - std::abs(last) < (sitting ? 40 : 52);
+}
+
 void Riding::rideTick(const PlayerInput& in) {
     input_ = in;
     Player& p = game_.player();
     std::copy(p.pos, p.pos + 3, p.prev);
-    p.sneaking = false, p.sprinting = false, p.onGround = false;
+    // LocalPlayer: a passenger sprints only on a vehicle that can sprint (a camel: forward with the sprint key)
+    const ent::Entity* mount = entity();
+    p.sneaking = false, p.onGround = false;
+    p.sprinting = mount && mount->info && isCamel(shortName(mount->info->name)) && in.sprint && in.forward > 0;
     std::fill(p.vel, p.vel + 3, 0.0);
     // LocalPlayer.aiStep: the jump bar charges while jump is held and fires on release.
     if (jumpable() && jumpCooldown() == 0) {
@@ -209,7 +233,8 @@ void Riding::rideTick(const PlayerInput& in) {
             const int amount = int(std::floor(jumpScale_ * 100.0f));
             // AbstractHorse.onPlayerJump -> getPlayerJumpPendingScale (Camel.onPlayerJump: only on the ground)
             pendingJump_ = amount >= 90 ? 1.0f : 0.4f + 0.4f * float(std::max(amount, 0)) / 90.0f;
-            if (isCamel(shortName(typeName_)) && !vehicleOnGround_) pendingJump_ = 0;
+            allowStandSliding_ = true;  // AbstractHorse.onPlayerJump
+            if (isCamel(shortName(typeName_)) && (!vehicleOnGround_ || dashCooldown_ > 0)) pendingJump_ = 0;
             if (client_) {
                 net::Writer w;
                 w.varInt(gameplay_.entityId());
@@ -555,18 +580,23 @@ void Riding::livingTick(ent::Entity& e) {
     e.bodyYaw = e.headYaw = e.yaw;
     // getRiddenInput: the rider's input (LocalPlayer.modifyInput: x 0.98); horses strafe at half, back off at a quarter;
     // pigs and striders always walk forward.
-    double strafe = input_.strafe * 0.98, forward = input_.forward * 0.98;
+    double strafe, forward;
+    riddenMove(input_, strafe, forward);
     if (horse) {
         strafe *= 0.5;
         if (forward <= 0) forward *= 0.25;
-        // AbstractHorse.isImmobile: an eating (16) or rearing (32) horse does not move under its rider
-        if (!isCamel(n) && (ent::dataInt(e, "DATA_ID_FLAGS") & (16 | 32))) strafe = forward = 0;
+        // AbstractHorse.getRiddenInput: a rearing horse (flag 32) on the ground stays put, unless the rider's jump
+        // reared it (allowStandSliding) or a jump is pending; a camel refuses while sitting or getting up / down
+        const bool standing = (ent::dataInt(e, "DATA_ID_FLAGS") & 32) != 0;
+        if (!standing) allowStandSliding_ = false;
+        if (!isCamel(n) && vehicleOnGround_ && pendingJump_ == 0 && standing && !allowStandSliding_) strafe = forward = 0;
+        if (isCamel(n) && entities_ && camelRefusesToMove(e, entities_->gameTime())) strafe = forward = 0, pendingJump_ = 0;
     } else {
         strafe = 0, forward = 1;
     }
     // getRiddenSpeed
     double speed = gameplay_.entityAttribute(vehicle_, "movement_speed", horse ? 0.225 : n == "pig" ? 0.25 : 0.175);
-    if (isCamel(n) && input_.sprint && dashCooldown_ == 0) speed += 0.1;  // Camel.getRiddenSpeed
+    if (isCamel(n) && game_.player().sprinting && dashCooldown_ == 0) speed += 0.1;  // Camel.getRiddenSpeed
     // ItemBasedSteering.boostFactor: up to 2.15 over the boost (a carrot / warped fungus on a stick)
     const double boost = boosting_ && boostSeen_ > 0 ? 1.0 + 1.15 * std::sin(double(float(boostTime_) / float(boostSeen_)) * kPi) : 1.0;
     if (n == "pig") speed *= 0.225 * boost;
@@ -578,9 +608,16 @@ void Riding::livingTick(ent::Entity& e) {
     // AbstractHorse.tickRidden: the charged jump on the ground (executeRidersJump).
     if (horse && vehicleOnGround_) {
         if (pendingJump_ > 0 && isCamel(n)) {  // Camel.executeRidersJump: the dash along the look, up a little
-            const double jumpStrength = gameplay_.entityAttribute(vehicle_, "jump_strength", 0.42);
-            // the movement_speed attribute (not the sprinting ridden speed) x the block speed factor (1)
-            const double h = 22.2222 * pendingJump_ * gameplay_.entityAttribute(vehicle_, "movement_speed", 0.09);
+            const int bx = int(std::floor(e.pos[0])), bz = int(std::floor(e.pos[2]));
+            const Physics ph(gameplay_.world(), gameplay_.registry());
+            const float jumpHere = ph.jumpFactor(bx, int(std::floor(e.pos[1])), bz);
+            const float jumpFactor = jumpHere == 1.0f ? ph.jumpFactor(bx, int(std::floor(e.pos[1] - 0.500001)), bz) : jumpHere;
+            const float speedHere = ph.speedFactor(bx, int(std::floor(e.pos[1])), bz);
+            const float speedFactor = speedHere == 1.0f ? ph.speedFactor(bx, int(std::floor(e.pos[1] - 0.500001)), bz) : speedHere;
+            // getJumpPower: jump_strength x the block jump factor
+            const double jumpStrength = gameplay_.entityAttribute(vehicle_, "jump_strength", 0.42) * jumpFactor;
+            // the movement_speed attribute (not the sprinting ridden speed) x the block speed factor
+            const double h = 22.2222 * pendingJump_ * gameplay_.entityAttribute(vehicle_, "movement_speed", 0.09) * speedFactor;
             e.vel[0] += -std::sin(e.yaw * kDegf) * h;
             e.vel[2] += std::cos(e.yaw * kDegf) * h;
             e.vel[1] += 1.4285 * pendingJump_ * jumpStrength;
@@ -693,7 +730,8 @@ void Riding::swimFlyTick(ent::Entity& e) {
     e.pitch = riderPitch * 0.5f;
     e.bodyYaw = e.headYaw = e.yaw;
     // getRiddenInput: strafe, and forward / up along the rider's pitch (backwards at half); the ghast also rises with jump.
-    const double strafe = input_.strafe * 0.98, zza = input_.forward * 0.98;
+    double strafe, zza;
+    riddenMove(input_, strafe, zza);
     double forward = 0, up = 0;
     if (zza != 0) {
         double f = std::cos(riderPitch * kDegf), u = -std::sin(riderPitch * kDegf);
@@ -747,7 +785,11 @@ void Riding::swimFlyTick(ent::Entity& e) {
     if (pendingJump_ > 0) {
         const double cp = std::cos(riderPitch * kDegf), sp = std::sin(riderPitch * kDegf);
         const double look[3] = {-std::sin(riderYaw * kDegf) * cp, -sp, std::cos(riderYaw * kDegf) * cp};
-        const double dash = (inWater ? 1.2 : 0.5) * pendingJump_ * ms;
+        const int bx = int(std::floor(e.pos[0])), bz = int(std::floor(e.pos[2]));
+        const Physics ph(gameplay_.world(), gameplay_.registry());
+        const float here = ph.speedFactor(bx, int(std::floor(e.pos[1])), bz);  // getBlockSpeedFactor
+        const float speedFactor = here == 1.0f ? ph.speedFactor(bx, int(std::floor(e.pos[1] - 0.500001)), bz) : here;
+        const double dash = (inWater ? 1.2 : 0.5) * pendingJump_ * ms * speedFactor;
         for (int a = 0; a < 3; ++a) e.vel[a] += look[a] * dash;
         dashCooldown_ = 40;
     }

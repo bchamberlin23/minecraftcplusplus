@@ -85,6 +85,7 @@ private:
     bool wasJumping_ = false;
     int jumpRidingTicks_ = 0;
     float jumpScale_ = 0, pendingJump_ = 0;
+    bool allowStandSliding_ = false;  // AbstractHorse.allowStandSliding: the rider's jump reared it
     int dashCooldown_ = 0;  // camel (55 ticks) / nautilus (40 ticks) after a dash
     // ItemBasedSteering (pigs / striders): a boost starts when DATA_BOOST_TIME arrives (onSynced), lasting its value.
     i64 boostSeen_ = 0;

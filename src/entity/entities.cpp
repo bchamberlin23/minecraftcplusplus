@@ -1279,6 +1279,10 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
             if (ev.a == 3 && e.category == Category::Living) e.dying = true;  // death
             if (ev.a == 2 && (e.kineticHitTicks < 0 || e.kineticHitTicks > 10)) e.kineticHitTicks = 0;  // KINETIC_HIT
             if (ev.a == 70 && e.info && e.info->name == "minecraft:tnt_minecart") e.fuse = 80;  // MinecartTNT.primeFuse
+            if ((ev.a == 71 || ev.a == 72) && e.id == localControl_) {  // AbstractBoat.handleBubbleColumnEffect (we drive it)
+                if (ev.a == 71) e.vel[1] -= 0.7;
+                else e.vel[1] = 0.6;
+            }
             speciesEvent(e, ev.a);
             if (onEntityEvent) onEntityEvent(e, ev.a);
             break;
