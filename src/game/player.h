@@ -135,8 +135,10 @@ public:
     float yaw = 0, pitch = 0;  // radians
     bool onGround = false, flying = true, sneaking = false, inWater = false, inLava = false;
     bool sprinting = false;          // LocalPlayer sprint state (sprint key or a double-tapped forward key)
-    bool canSprint = true;           // food > 6 (or may fly), set from the server's health updates
+    bool canSprint = true;           // Player.hasEnoughFoodToSprint: foodSprint or may fly
+    bool foodSprint = true;          // food > 6 (the server's health updates)
     bool mayFly = true;              // Abilities.mayfly (double-tapping jump toggles flight only then)
+    bool asleep = false;             // isSleeping (Game::sleeping): no forced crouch under a low ceiling
     float flyingSpeed = 0.05f;       // Abilities flying / walking speed (the server's player_abilities)
     float walkingSpeed = 0.1f;
     bool noClip = false;             // spectator: flies through blocks

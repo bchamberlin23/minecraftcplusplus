@@ -230,8 +230,10 @@ void Game::frame(Window& w, double dt) {
         player_.useBlocksSprint = use.active && !use.canSprint;
         eyeHeightOld_ = eyeHeight_;
         eyeHeight_ += ((sleeping ? 0.2 : player_.eyeHeight()) - eyeHeight_) * 0.5;  // Camera.tick (SLEEPING_DIMENSIONS: 0.2)
+        player_.asleep = sleeping;
         if (riding()) {  // a passenger does not move itself (LocalPlayer.rideTick)
             player_.lastInput = input;
+            player_.sneaking = false;  // LocalPlayer.aiStep: crouching needs !isPassenger
             rideTick(input);
         } else if (cameraEntity >= 0) {  // spectating another entity: the keys reach the server, the player stays
             player_.tick(physics_, PlayerInput{});

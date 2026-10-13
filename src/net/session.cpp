@@ -215,6 +215,7 @@ void Session::handle(Event& e) {
         p.flying = ab->flying || (ab->mayFly && p.flying);
         if (!ab->mayFly) p.flying = false;
         p.mayFly = ab->mayFly;
+        p.canSprint = p.foodSprint || p.mayFly;  // hasEnoughFoodToSprint
         p.flyingSpeed = ab->flyingSpeed, p.walkingSpeed = ab->walkingSpeed;
         sentFlying_ = p.flying;  // the server's own state
         instabuild_ = ab->instabuild;

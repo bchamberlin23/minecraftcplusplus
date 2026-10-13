@@ -541,23 +541,33 @@ void Player::move(const Physics& physics, double dx, double dy, double dz, bool 
     AABB b = start;
     collide(boxes, b, out, in);
 
-    // Step up (0.6 blocks) when blocked horizontally while on the ground.
+    // Entity.collide: blocked sideways on (or onto) the ground, try the step heights the colliders offer (their
+    // bottoms and tops above the feet, up to the step height) from the lowest; the first that goes further wins.
     const bool blockedH = out[0] != dx || out[2] != dz;
-    if (blockedH && (onGround || (out[1] != dy && dy < 0)) && !flying) {
-        double stepOut[3];
-        AABB s = start;
-        const double up[3] = {0, attr.stepHeight, 0};
-        double upOut[3];
-        collide(boxes, s, upOut, up);
-        const double h[3] = {dx, 0, dz};
-        collide(boxes, s, stepOut, h);
-        const double down[3] = {0, -(upOut[1]) + dy, 0};
-        double downOut[3];
-        collide(boxes, s, downOut, down);
-        if (stepOut[0] * stepOut[0] + stepOut[2] * stepOut[2] > out[0] * out[0] + out[2] * out[2] + 1e-9) {
-            b = s;
-            out[0] = stepOut[0], out[2] = stepOut[2];
-            out[1] = upOut[1] + downOut[1];
+    const bool groundAfter = out[1] != dy && dy < 0;
+    if (attr.stepHeight > 0 && (groundAfter || onGround) && blockedH) {
+        AABB grounded = start;
+        if (groundAfter) grounded.min[1] += out[1], grounded.max[1] += out[1];
+        const float maxStep = float(attr.stepHeight), skip = float(out[1]);
+        std::vector<float> candidates;
+        for (const AABB& c : boxes)
+            for (const double coord : {c.min[1], c.max[1]}) {
+                const float rel = float(coord - grounded.min[1]);
+                if (rel >= 0.0f && rel != skip && rel <= maxStep) candidates.push_back(rel);
+            }
+        std::sort(candidates.begin(), candidates.end());
+        candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+        for (const float h : candidates) {
+            AABB s = grounded;
+            const double mv[3] = {dx, double(h), dz};
+            double stepOut[3];
+            collide(boxes, s, stepOut, mv);
+            if (stepOut[0] * stepOut[0] + stepOut[2] * stepOut[2] > out[0] * out[0] + out[2] * out[2]) {
+                const double toGround = start.min[1] - grounded.min[1];
+                b = s;
+                out[0] = stepOut[0], out[1] = stepOut[1] - toGround, out[2] = stepOut[2];
+                break;
+            }
         }
     }
 
@@ -932,7 +942,8 @@ void Player::travel(const Physics& physics, const PlayerInput& input, bool jumpi
         const double beforeMove[2] = {pos[0], pos[2]};
         move(physics, vel[0], vel[1], vel[2]);
         updateAutoJump(physics, pos[0] - beforeMove[0], pos[2] - beforeMove[1], lastInput, walk);
-        if ((horizontalCollision || jumping) && (climbing || (wasInPowderSnow_ && attr.powderSnowWalker))) vel[1] = 0.2;
+        // after the move: onClimbable where the move ended (LivingEntity.travelInAir)
+        if ((horizontalCollision || jumping) && (onClimbable(physics) || (wasInPowderSnow_ && attr.powderSnowWalker))) vel[1] = 0.2;
         double y = vel[1];
         if (attr.levitation >= 0) y += (0.05 * (attr.levitation + 1) - vel[1]) * 0.2;
         else y -= gravity;
@@ -1057,7 +1068,7 @@ void Player::tick(const Physics& physics, const PlayerInput& rawInput) {
     if (sprintTriggerTime_ > 0) --sprintTriggerTime_;
     const bool wasJumping = wasJumping_, wasShift = wasShift_, hadForwardImpulse = hadForwardImpulse_;
     // crouching: the sneak key (or no room to stand) with room to crouch, not flying or swimming.
-    sneaking = !flying && !swimming && fits(physics, Pose::Crouching) && (rawInput.sneak || !fits(physics, Pose::Standing));
+    sneaking = !flying && !swimming && fits(physics, Pose::Crouching) && (rawInput.sneak || (!asleep && !fits(physics, Pose::Standing)));
     PlayerInput input = rawInput;
     lastInput = rawInput;
     bool wasAutoJump = false;

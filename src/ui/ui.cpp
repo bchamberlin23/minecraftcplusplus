@@ -708,7 +708,9 @@ void Ui::registerHandlers(net::Client& client) {
         if (std::getenv("MCPP_UI_VERBOSE")) LOG("ui: set_health %.1f food %d sat %.1f", health, food, sat);
         s->post([s, health, food, sat] {
             s->health = health, s->food = food, s->saturation = sat;
-            s->game->player().canSprint = food > 6 || s->creative() || s->spectator();  // hasEnoughFoodToSprint
+            Player& pl = s->game->player();
+            pl.foodSprint = food > 6;
+            pl.canSprint = pl.foodSprint || pl.mayFly;  // Player.hasEnoughFoodToSprint: or abilities.mayfly
             if (health <= 0 && s->showDeathScreen && s->screen != Screen::Death) s->openScreen(Screen::Death);
         });
     });
