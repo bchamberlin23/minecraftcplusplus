@@ -10,10 +10,15 @@
 #include "world/nbt_dom.h"
 
 #include <array>
+#include <unordered_set>
 #include <chrono>
 #include <random>
 
 namespace ui {
+
+// Senders of signed chat this session (the chat log behind SocialInteractionsPlayerList's ordering).
+std::unordered_set<std::string> g_signedSenders;
+bool sentSignedChat(const std::string& uuid) { return g_signedSenders.contains(uuid); }
 
 namespace {
 
@@ -301,6 +306,7 @@ void handlePlayerChat(UiState& s, PlayerChat& m) {
         shown = true;
     }
     if (signature) markProcessed(s, *signature, shown);
+    if (signature) g_signedSenders.insert(m.sender);  // ChatLog: a signed message of theirs
 }
 
 // ChatComponent.deleteMessageOrDelay: true when done (replaced, or no such message).
@@ -326,6 +332,7 @@ void registerHandlers(UiState& s, net::Client& client) {
         const bool enforces = r.end[-1] != 0;
         sp->post([sp, enforces] {
             g = ChatNet{};  // a new LastSeenMessagesTracker, MessageSignatureCache and chat index
+            g_signedSenders.clear();
             g.enforcesSecureChat = enforces;
             // handleLogin: on a server (not singleplayer) without secure chat, the warning toast (10 s), once
             if (!sp->fe->cfg.singleplayer && !enforces)

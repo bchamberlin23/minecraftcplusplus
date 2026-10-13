@@ -33,6 +33,7 @@ std::vector<PlayerInfoView> playerInfos();
 std::vector<PlayerInfoView> seenPlayers();  // ClientPacketListener.getSeenPlayers: every player seen this session
 // Social Interactions (social_screen.cpp): players whose chat is hidden this session (PlayerSocialManager), by UUID.
 bool socialHidden(const std::string& uuid);
+bool sentSignedChat(const std::string& uuid);  // chat_net.cpp: a signed chat message of theirs this session
 // Entity name tags: PlayerTeam.formatNameForTeam by the team member (a player's name, other entities' UUID text), and
 // Entity.belowNameDisplay (the BELOW_NAME objective's score: "<value> <objective name>"); false without one.
 Text teamFormattedName(const std::string& member, const Text& name);

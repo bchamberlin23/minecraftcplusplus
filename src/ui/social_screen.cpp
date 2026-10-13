@@ -27,6 +27,9 @@ struct State {
     Field search;
     std::string filter;
     float scroll = 0;
+    int hoverId = -1;  // the row button hovered (row * 2 + report), for the tooltip delay
+    double hoverSince = 0;
+    bool hoverSeen = false;
     std::vector<Entry> entries;
     std::unordered_set<std::string> hidden;  // PlayerSocialManager.hiddenPlayers
     Screen back = Screen::None;
@@ -60,11 +63,17 @@ void collect(UiState& s) {  // SocialInteractionsPlayerList.updatePlayerList, so
         for (const PlayerInfoView& p : online)
             if (g.hidden.contains(p.uuid)) add(p, false);
     }
-    auto rank = [&](const Entry& e) {
+    auto rank = [&](const Entry& e) {  // local, (a draft report: none here), recent signed chat, others, NPC (UUID v2)
         if (isLocal(s, e.p.uuid)) return 0;
+        if (sentSignedChat(e.p.uuid)) return 2;
         return e.p.uuid.size() == 16 && (u8(e.p.uuid[6]) >> 4) == 2 ? 4 : 3;
     };
-    auto nameClass = [](const std::string& n) { return !n.empty() && (std::isalnum(u8(n[0])) || n[0] == '_') ? 0 : 1; };
+    auto nameClass = [](const std::string& n) {  // the first code point: _, a-z, A-Z, 0-9 first; blank names after
+        const size_t a = n.find_first_not_of(" \t");
+        if (a == std::string::npos) return 1;
+        const char ch = n[0];
+        return ch == '_' || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') ? 0 : 1;
+    };
     std::stable_sort(g.entries.begin(), g.entries.end(), [&](const Entry& a, const Entry& b) {
         if (rank(a) != rank(b)) return rank(a) < rank(b);
         if (nameClass(a.p.name) != nameClass(b.p.name)) return nameClass(a.p.name) < nameClass(b.p.name);
@@ -134,8 +143,7 @@ void toggleHidden(UiState& s, const Entry& e) {  // PlayerEntry: hidePlayer / sh
     else g.hidden.erase(e.p.uuid);
     const Text msg = translatable(hide ? "gui.socialInteractions.hidden_in_chat" : "gui.socialInteractions.shown_in_chat", {Text(e.p.name)}, s.lang());
     s.addChatMessage({msg, s.guiTicks, {}, {}, 0});
-    narrator::say(msg.plain(), true);
-    if (g.page == 1) collect(s);
+    narrator::say(msg.plain(), true);  // the row stays (only its buttons and status change)
 }
 
 void draw(UiState& s, Canvas& c) {
@@ -150,7 +158,7 @@ void draw(UiState& s, Canvas& c) {
     if (online.size() != g.onlineCount) g.onlineCount = online.size(), collect(s);  // players joined / left
     std::string server = s.fe->cfg.singleplayer ? s.fe->cfg.worldName : s.fe->cfg.serverAddress;
     if (server.empty() && s.fe->cfg.singleplayer) server = s.fe->cfg.worldDir.filename().string();
-    const Text label = translatable(online.size() == 1 ? "gui.socialInteractions.server_label.single" : "gui.socialInteractions.server_label.multiple",
+    const Text label = translatable(online.size() > 1 ? "gui.socialInteractions.server_label.multiple" : "gui.socialInteractions.server_label.single",
                                     {Text(server), Text(std::to_string(online.size()))}, s.lang());
     s.drawText(c, label, float(mx + 8), 35, 0xFFFFFFFF, false);
     std::vector<Text> tooltip;
@@ -192,13 +200,29 @@ void draw(UiState& s, Canvas& c) {
             const bool hov = over(b.hideX);
             blitSprite(c, s.sprites.sprite(std::string(hidden ? "social_interactions/unmute_button" : "social_interactions/mute_button") + (hov ? "_highlighted" : "")),
                        b.hideX, b.y, 20, 20);
-            if (hov) tooltip = {tr(s, hidden ? "gui.socialInteractions.tooltip.show" : "gui.socialInteractions.tooltip.hide")};
+            // setTooltipDelay(500 ms): a button's tooltip once it has been hovered that long
+            auto delayed = [&](int key) {
+                const int id = int(i) * 2 + key;
+                if (g.hoverId != id) g.hoverId = id, g.hoverSince = s.clock;
+                return s.clock - g.hoverSince >= 0.5;
+            };
+            bool anyHover = false;
+            if (hov) {
+                anyHover = true;
+                if (delayed(0)) tooltip = {tr(s, hidden ? "gui.socialInteractions.tooltip.show" : "gui.socialInteractions.tooltip.hide")};
+            }
             blitSprite(c, s.sprites.sprite("social_interactions/report_button_disabled"), b.reportX, b.y, 20, 20);
-            if (over(b.reportX)) tooltip = {tr(s, "gui.socialInteractions.tooltip.report.disabled")};
+            if (over(b.reportX)) {
+                anyHover = true;
+                if (delayed(1)) tooltip = {tr(s, "gui.socialInteractions.tooltip.report.disabled")};
+            }
+            if (anyHover) g.hoverSeen = true;
         }
         c.popScissor();
+        if (!g.hoverSeen) g.hoverId = -1;
+        g.hoverSeen = false;
         if (const float ms = maxScroll(s); ms > 0) {
-            const float x = rowLeft(s) + 220 + 4, top = float(kListTop + 4), h = float(le) - top;
+            const float x = rowLeft(s) + 220 + 6 + 2, top = float(kListTop + 4), h = float(le) - top;
             const float bar = std::max(32.0f, h * h / (h + ms)), by = top + (h - bar) * g.scroll / ms;
             blitSprite(c, s.sprites.sprite("widget/scroller_background"), x, top, 6, h);
             blitSprite(c, s.sprites.sprite("widget/scroller"), x, by, 6, bar);
@@ -267,9 +291,8 @@ bool worldKey(UiState& s, const InputEvent& e) {
     return true;
 }
 
-void attached(UiState&) { g.hidden.clear(); }  // per session
-
-const UiModuleRegistrar kModule({.name = "social", .attached = attached, .worldKey = worldKey});
+// The hidden players stay for the whole launch (Minecraft's one PlayerSocialManager), across worlds and servers.
+const UiModuleRegistrar kModule({.name = "social", .worldKey = worldKey});
 
 }  // namespace
 
