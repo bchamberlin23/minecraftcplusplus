@@ -323,7 +323,8 @@ void drawServers(State& s, Canvas& c) {
     s.drawCentered(c, tr(s, "multiplayer.title"), float(W / 2), 12, 0xFFFFFFFF);
     const float top = float(kHeader), bottom = float(H - kFooter);
     listBackground(s, c, top, bottom);
-    const float rowLeft = float(W / 2 - kRowW / 2 + 2), right = rowLeft + kRowW - 6;
+    // the entries' content box: 2 in from the 305-wide row (getContentX / getContentRight)
+    const float rowLeft = float(W / 2 - kRowW / 2 + 2), right = rowLeft + kRowW - 4;
     f.serverScroll = std::clamp(f.serverScroll, 0.0f, maxScroll(s));
     std::vector<Text> tooltip;
     std::unordered_map<std::string, PingBoard::Result> results;
@@ -342,24 +343,22 @@ void drawServers(State& s, Canvas& c) {
             c.fill(rowLeft - 2, y - 2, rowLeft + kRowW - 2, y + kRowH - 2, 0xFFFFFFFF);
             c.fill(rowLeft - 1, y - 1, rowLeft + kRowW - 3, y + kRowH - 3, 0xFF000000);
         }
-        if (row == n) {  // LANHeader: scanning, with LoadingDotsText
+        if (row == n) {  // LANHeader: a LoadingDotsWidget (28 high) at the content's top, frames of 300 ms
             static const char* dots[] = {"O o o", "o O o", "o o O", "o O o"};
-            s.drawCentered(c, tr(s, "lanServer.scanning"), float(W / 2), y + 1, 0xFFFFFFFF);
-            s.drawCentered(c, Text(dots[int(s.clock * 3.0) % 4]), float(W / 2), y + 12, 0xFF808080);
+            const Text label = tr(s, "lanServer.scanning");
+            const int middle = int(rowLeft) + (kRowW - 4) / 2, wx = middle - s.font.width(label) / 2, cx = wx + s.font.width(label) / 2;
+            s.drawText(c, label, float(cx - s.font.width(label) / 2), y + 2, 0xFFFFFFFF, true);
+            const Text d(dots[i64(s.clock * 1000.0) / 300 % 4]);
+            s.drawText(c, d, float(cx - s.font.width(d) / 2), y + 28 - 9 - 2, 0xFF808080, true);
             continue;
         }
         if (row > n) {  // NetworkServerEntry
+            // NetworkServerEntry: no icon or join overlay; the motd unclipped, "Address Hidden" with Hide Server Address on
             const net::LanListener::Entry& lan = f.lanWorlds[size_t(row - n - 1)];
-            blitTexture(c, s.sprites.texture("misc/unknown_server"), rowLeft, y, 0, 0, 32, 32, 32, 32);
             s.drawText(c, tr(s, "lanServer.title"), rowLeft + 35, y + 1, 0xFFFFFFFF, true);
-            s.drawText(c, Text(fitText(s.font, lan.motd, kRowW - 40)), rowLeft + 35, y + 12, 0xFF808080, true);
-            // NetworkServerEntry: "Address Hidden" with Hide Server Address on
+            s.drawText(c, Text(lan.motd), rowLeft + 35, y + 12, 0xFF808080, true);
             s.drawText(c, s.settings.hideServerAddress ? tr(s, "selectServer.hiddenAddress") : Text(lan.address), rowLeft + 35, y + 23, 0xFF808080,
                        true);
-            if (hovered) {
-                c.fill(rowLeft, y, rowLeft + 32, y + 32, 0xA0909090);
-                blitSprite(c, s.sprites.sprite(s.mouseX < rowLeft + 32 ? "server_list/join_highlighted" : "server_list/join"), rowLeft, y, 32, 32);
-            }
             continue;
         }
         const ServerEntry& e = f.servers[size_t(row)];
@@ -385,26 +384,34 @@ void drawServers(State& s, Canvas& c) {
                         if (bits >= 8) bits -= 8, png.push_back(u8(acc >> bits));
                     }
                 }
+                // FaviconTexture.upload: 64 x 64 only (anything else is dropped from the list)
                 Image img;
-                if (decodeImage(png, img)) icon = iconSprite(s, key, img, e.icon);
+                if (decodeImage(png, img) && img.w == 64 && img.h == 64) icon = iconSprite(s, key, img, e.icon);
             }
         }
         if (icon) blitSprite(c, icon, rowLeft, y, 32, 32);
         else blitTexture(c, s.sprites.texture("misc/unknown_server"), rowLeft, y, 0, 0, 32, 32, 32, 32);
-        s.drawText(c, Text(fitText(s.font, e.name, kRowW - 110)), rowLeft + 35, y + 1, 0xFFFFFFFF, true);
+        s.drawText(c, Text(e.name), rowLeft + 35, y + 1, 0xFFFFFFFF, true);
         // MOTD (two lines), status icon and player count / version.
         const char* statusSprite = nullptr;
         Text status, motd;
         Text statusTip;
         std::vector<Text> playersTip;
-        if (!done) {
-            const int frame = int(s.clock * 10.0 + row * 2) & 7;
+        // ServerData.State.PINGING: the animated icon (100 ms frames, two apart per row); it stays so when the
+        // connection opened without a status (onPingFailed: "can't connect") or the pong never came
+        const bool pinging = !done || (!st->ok && st->connected) || (st->ok && !st->legacy && st->pingMs < 0);
+        if (pinging) {
+            const int frame = int(i64(s.clock * 1000.0) / 100 + row * 2) & 7;
             const int k = frame > 4 ? 8 - frame : frame;
-            static const char* pinging[] = {"server_list/pinging_1", "server_list/pinging_2", "server_list/pinging_3",
-                                            "server_list/pinging_4", "server_list/pinging_5"};
-            statusSprite = pinging[k];
-            motd = Text(s.res.translate("multiplayer.status.pinging"), colorStyle(0x808080));
+            static const char* frames[] = {"server_list/pinging_1", "server_list/pinging_2", "server_list/pinging_3",
+                                           "server_list/pinging_4", "server_list/pinging_5"};
+            statusSprite = frames[k];
             statusTip = tr(s, "multiplayer.status.pinging");
+        }
+        if (!done) {
+            motd = Text(s.res.translate("multiplayer.status.pinging"), colorStyle(0x808080));
+        } else if (!st->ok && st->connected) {
+            motd = Text(s.res.translate("multiplayer.status.cannot_connect"), colorStyle(0xFF0000));
         } else if (!st->ok) {
             statusSprite = "server_list/unreachable";
             motd = Text(s.res.translate(st->error == "unknown host" ? "multiplayer.status.cannot_resolve"
@@ -413,24 +420,33 @@ void drawServers(State& s, Canvas& c) {
             statusTip = tr(s, "multiplayer.status.no_connection");
         } else {
             motd = st->description.is_null() ? Text() : parseJsonComponent(st->description, s.lang());
-            if (st->protocol != f.protocol && f.protocol) {
-                statusSprite = "server_list/incompatible";
-                status = Text(st->versionName, colorStyle(0xFF5555));
-                statusTip = tr(s, "multiplayer.status.incompatible");
+            // no version: "(old)" and protocol 0; the legacy ping always shows incompatible
+            const Text version = st->hasVersion ? Text(st->versionName) : tr(s, "multiplayer.status.old");
+            const bool incompatible = st->legacy || (f.protocol && (st->hasVersion ? st->protocol : 0) != f.protocol);
+            if (st->hasPlayers) {  // ServerStatusPinger.formatPlayerCount: the numbers gray in dark gray
+                status = trf(s, "multiplayer.status.player_count",
+                             {Text(std::to_string(st->online), colorStyle(0xAAAAAA)), Text(std::to_string(st->max), colorStyle(0xAAAAAA))});
+                for (Span& sp : status.spans) sp.style = sp.style.over(colorStyle(0x555555));
             } else {
-                statusSprite = pingSprite(st->pingMs);
-                statusTip = trf(s, "multiplayer.status.ping", {Text(std::to_string(std::max(0, st->pingMs)))});
+                status = Text(s.res.translate("multiplayer.status.unknown"), colorStyle(0x555555));
             }
-            if (st->online >= 0 && status.empty()) {
-                status = Text(std::to_string(st->online), colorStyle(0xAAAAAA));
-                status.append("/", colorStyle(0x555555));
-                status.append(std::to_string(st->max), colorStyle(0xAAAAAA));
+            if (incompatible) {
+                Text red = version;
+                for (Span& sp : red.spans) sp.style = sp.style.over(colorStyle(0xFF5555));
+                status = red;
             }
-            for (const std::string& name : st->sample) playersTip.push_back(Text(name));
-            if (st->online > int(st->sample.size()) && !st->sample.empty())
-                playersTip.push_back(trf(s, "multiplayer.status.and_more", {Text(std::to_string(st->online - int(st->sample.size())))}));
+            if (!pinging) {  // refreshStatus
+                statusSprite = incompatible ? "server_list/incompatible" : pingSprite(st->pingMs);
+                statusTip = incompatible ? tr(s, "multiplayer.status.incompatible")
+                                         : trf(s, "multiplayer.status.ping", {Text(std::to_string(st->pingMs))});
+                for (size_t i = 0; i < st->sample.size(); ++i)  // the anonymous profile is translated
+                    playersTip.push_back(i < st->sampleAnonymous.size() && st->sampleAnonymous[i] ? tr(s, "multiplayer.status.anonymous_player")
+                                                                                               : Text(st->sample[i]));
+                if (!st->sample.empty() && int(st->sample.size()) < st->online)
+                    playersTip.push_back(trf(s, "multiplayer.status.and_more", {Text(std::to_string(st->online - int(st->sample.size())))}));
+            }
         }
-        const std::vector<Text> lines = s.font.split(motd, kRowW - 32 - 2 - 6);
+        const std::vector<Text> lines = s.font.split(motd, kRowW - 4 - 32 - 2);  // getContentWidth() - 34
         for (size_t i = 0; i < std::min<size_t>(lines.size(), 2); ++i)
             s.drawText(c, lines[i], rowLeft + 35, y + 12 + 9 * float(i), 0xFF808080, true);
         const float iconX = right - 10 - 5;
@@ -478,6 +494,14 @@ void serversInput(State& s, const Window::InputEvent& e) {
         f.serverScroll = std::clamp(f.serverScroll - float(e.code) * kRowH / 2, 0.0f, maxScroll(s));
         return;
     }
+    if (e.type == E::Key && e.down && e.code == VK_F5) return openServers(s);  // JoinMultiplayerScreen: refresh
+    // OnlineServerEntry.keyPressed: Shift+Up / Down moves the selected server
+    if (e.type == E::Key && e.down && (e.code == VK_UP || e.code == VK_DOWN) && s.window->keyDown(VK_SHIFT) &&
+        f.serverSel >= 0 && f.serverSel < n) {
+        const int to = f.serverSel + (e.code == VK_DOWN ? 1 : -1);
+        if (to >= 0 && to < n) moveServer(s, f.serverSel, e.code == VK_DOWN ? 1 : -1);
+        return;
+    }
     if (e.type == E::Key && e.down && (e.code == VK_UP || e.code == VK_DOWN)) {
         int row = f.serverSel;
         do row += e.code == VK_DOWN ? 1 : -1;
@@ -501,8 +525,8 @@ void serversInput(State& s, const Window::InputEvent& e) {
         const bool dbl = doubleClicked(s, row);
         if (row < n && rx >= 0 && rx < 16 && ry >= 0 && ry < 16 && row > 0) return moveServer(s, row, -1);
         if (row < n && rx >= 0 && rx < 16 && ry >= 16 && ry < 32 && row < n - 1) return moveServer(s, row, 1);
-        if (dbl || (rx >= 16 && rx < 32 && ry >= 0 && ry < 32) || (row > n && rx >= 0 && rx < 32 && ry >= 0 && ry < 32))
-            joinSelected(s);
+        // a LAN entry joins on a double click only
+        if (dbl || (row < n && rx >= 16 && rx < 32 && ry >= 0 && ry < 32)) joinSelected(s);
         return;
     }
     s.buttonsInput(e);

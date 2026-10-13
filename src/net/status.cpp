@@ -218,6 +218,58 @@ ServerAddress resolveAddress(const ServerAddress& a) {
     return out;
 }
 
+// LegacyServerPinger: FE 01 FA "MC|PingHost" (protocol 127, host, port); the kick (FF) answers
+// "\u00a71", protocol, version, motd, players and max, NUL-separated, in UTF-16BE.
+void legacyPing(const ServerAddress& a, double timeout, ServerStatus& st) {
+    Socket s;
+    std::string error;
+    if (!s.connect(a.host, a.port, timeout, error)) return;
+    std::vector<u8> out{0xFE, 0x01, 0xFA};
+    auto legacyString = [](std::vector<u8>& b, const std::string& str) {  // the length in chars, then UTF-16BE
+        const std::wstring w = fs::path(std::u8string(str.begin(), str.end())).wstring();
+        b.push_back(u8(w.size() >> 8)), b.push_back(u8(w.size()));
+        for (wchar_t ch : w) b.push_back(u8(ch >> 8)), b.push_back(u8(ch));
+    };
+    legacyString(out, "MC|PingHost");
+    std::vector<u8> payload{127};
+    legacyString(payload, a.host);
+    for (int k = 3; k >= 0; --k) payload.push_back(u8(u32(a.port) >> (k * 8)));
+    out.push_back(u8(payload.size() >> 8)), out.push_back(u8(payload.size()));
+    out.insert(out.end(), payload.begin(), payload.end());
+    u8 b0, hi, lo;
+    if (!s.send(out) || !s.readByte(b0) || b0 != 0xFF || !s.readByte(hi) || !s.readByte(lo)) return;
+    std::wstring text;
+    for (int n = (hi << 8) | lo; n > 0; --n) {
+        u8 c0, c1;
+        if (!s.readByte(c0) || !s.readByte(c1)) return;
+        text.push_back(wchar_t((c0 << 8) | c1));
+    }
+    std::vector<std::string> parts;  // Splitter.on('\0').limit(6)
+    size_t at = 0;
+    while (parts.size() < 5) {
+        const size_t z = text.find(L'\0', at);
+        if (z == std::wstring::npos) break;
+        const std::u8string u = fs::path(text.substr(at, z - at)).u8string();
+        parts.emplace_back(u.begin(), u.end()), at = z + 1;
+    }
+    const std::u8string rest = fs::path(text.substr(at)).u8string();
+    parts.emplace_back(rest.begin(), rest.end());
+    if (parts.size() < 6 || parts[0] != "\xC2\xA7" "1") return;
+    auto num = [](const std::string& v, int fallback) {  // Mth.getInt
+        try {
+            size_t used = 0;
+            const int n = std::stoi(v, &used);
+            return used == v.size() ? n : fallback;
+        } catch (...) {
+            return fallback;
+        }
+    };
+    st.ok = st.legacy = st.hasVersion = st.hasPlayers = true;
+    st.protocol = num(parts[1], 0), st.versionName = parts[2], st.description = parts[3];
+    st.online = num(parts[4], -1), st.max = num(parts[5], -1);
+    st.error.clear();
+}
+
 ServerStatus pingServer(const std::string& address, int protocol, double timeout) {
     winsock();
     ServerStatus st;
@@ -228,6 +280,13 @@ ServerStatus pingServer(const std::string& address, int protocol, double timeout
     }
     Socket s;
     if (!s.connect(a.host, a.port, timeout, st.error)) return st;
+    st.connected = true;
+    // ServerStatusPinger.onDisconnect without a status: "can't connect", then the legacy ping
+    auto failed = [&](const char* why) {
+        st.error = why;
+        legacyPing(a, timeout, st);
+        return st;
+    };
     std::vector<u8> hs;
     putVarInt(hs, 0);  // intention
     putVarInt(hs, u32(protocol));
@@ -235,34 +294,31 @@ ServerStatus pingServer(const std::string& address, int protocol, double timeout
     hs.push_back(u8(a.port >> 8)), hs.push_back(u8(a.port));
     putVarInt(hs, 1);  // status
     std::vector<u8> request{0};
-    if (!s.send(frame(hs)) || !s.send(frame(request))) {
-        st.error = "connection lost";
-        return st;
-    }
+    if (!s.send(frame(hs)) || !s.send(frame(request))) return failed("connection lost");
     std::vector<u8> p;
     size_t i = 0;
     u32 id = 0, len = 0;
-    if (!s.readPacket(p) || !getVarInt(p, i, id) || id != 0 || !getVarInt(p, i, len) || i + len > p.size()) {
-        st.error = "no response";
-        return st;
-    }
+    if (!s.readPacket(p) || !getVarInt(p, i, id) || id != 0 || !getVarInt(p, i, len) || i + len > p.size()) return failed("no response");
     const nlohmann::json j = nlohmann::json::parse(p.begin() + std::ptrdiff_t(i), p.begin() + std::ptrdiff_t(i + len), nullptr, false);
-    if (!j.is_object()) {
-        st.error = "invalid response";
-        return st;
-    }
+    if (!j.is_object()) return failed("invalid response");
     st.ok = true;
     if (j.contains("description")) st.description = j["description"];
     if (j.contains("version") && j["version"].is_object()) {
+        st.hasVersion = true;
         st.versionName = j["version"].value("name", "");
         st.protocol = j["version"].value("protocol", -1);
     }
     if (j.contains("players") && j["players"].is_object()) {
         const auto& pl = j["players"];
+        st.hasPlayers = true;
         st.online = pl.value("online", -1), st.max = pl.value("max", -1);
         if (pl.contains("sample") && pl["sample"].is_array())
             for (const auto& e : pl["sample"])
-                if (e.is_object()) st.sample.push_back(e.value("name", ""));
+                if (e.is_object()) {
+                    st.sample.push_back(e.value("name", ""));
+                    st.sampleAnonymous.push_back(st.sample.back() == "Anonymous Player" &&
+                                                 e.value("id", "") == "00000000-0000-0000-0000-000000000000");
+                }
     }
     if (j.contains("favicon") && j["favicon"].is_string()) {
         const std::string f = j["favicon"].get<std::string>();

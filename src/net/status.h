@@ -32,8 +32,12 @@ struct ServerStatus {
     std::string error;           // why not
     nlohmann::json description;  // MOTD: a text component (JSON)
     std::string versionName;
+    bool hasVersion = false, hasPlayers = false;  // ServerStatus.version() / players() present
     int protocol = -1, online = -1, max = -1;
     std::vector<std::string> sample;  // player names from the status
+    std::vector<bool> sampleAnonymous;  // MinecraftServer.ANONYMOUS_PLAYER_PROFILE (nil id, "Anonymous Player")
+    bool connected = false;  // not ok: the connection opened but no status came (Java keeps pinging, "can't connect")
+    bool legacy = false;     // ok: answered only the pre-1.7 ping (LegacyServerPinger: shown incompatible)
     std::vector<u8> favicon;          // PNG
     std::string faviconBase64;        // as sent (servers.dat keeps it this way)
     int pingMs = -1;
