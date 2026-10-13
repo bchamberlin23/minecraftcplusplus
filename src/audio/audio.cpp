@@ -695,7 +695,8 @@ void AudioSystem::tick() {
         if (bossMusicDef_.event < 0) bossMusicDef_ = MusicDef{bank_.eventId("music.dragon"), 0, 0, true};
         if (bossMusicDef_.event >= 0) situational = &bossMusicDef_;
     }
-    tickMusic(musicEnv, info_.gameMode == 1, underwater, situational ? 1.0f : musicVolume, situational);
+    // Minecraft.getMusicVolume: 1 under a screen with its own music (credits), else the environment's music_volume
+    tickMusic(musicEnv, info_.gameMode == 1, underwater, screenMusic_.event >= 0 ? 1.0f : musicVolume, situational);
     tickAmbient(ambientEnv ? &ambientEnv->ambient : nullptr);
 }
 
