@@ -1238,7 +1238,9 @@ void EntityRenderer::speciesRotations(const Entity& e, const TypeDef& d, float p
         case Anim::Drowned: {  // DrownedRenderer: swimming tilt about the middle of the body
             const float swim = e.swimAmountO + (e.swimAmount - e.swimAmountO) * pt;
             if (swim > 0) {
-                const float h = (e.info ? e.info->height : 1.95f) * (e.baby ? 0.5f : 1.0f) / 2.0f;
+                double bw, bh;
+                entitySize(e, bw, bh);
+                const float h = float(bh) / 2.0f / e.scale;  // boundingBoxHeight / 2 / entityScale
                 root = mul(mul(mul(root, translate(0, h, 0)), rotX(swim * (-10.0f - pitch) * kDeg)), translate(0, -h, 0));
             }
             break;
@@ -1702,9 +1704,10 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         // LivingEntityRenderer.submit: a sleeping entity lies with its head on the bed's pillow.
         static constexpr int kBedStep[4][2] = {{0, 1}, {-1, 0}, {0, -1}, {1, 0}};  // Direction 2D: S, W, N, E
         if (sleeping && e.bedFacing >= 0) {
-            const float headOffset = (e.info ? e.info->eye : 1.62f) - 0.1f;
+            const float headOffset = (e.info ? e.info->eye : 1.62f) * ageScale(e) * e.scale - 0.1f;  // getEyeHeight(STANDING)
             root = mul(root, translate(-kBedStep[e.bedFacing][0] * headOffset, 0, -kBedStep[e.bedFacing][1] * headOffset));
         }
+        root = mul(root, scale(e.scale, e.scale, e.scale));  // LivingEntityRenderer.submit: state.scale
         if (d.special == SpArmorStand) {  // ArmorStandRenderer.setupRotations: a hit makes it wiggle
             root = mul(root, rotY((180.0f - yaw) * kDeg));
             const float wiggle = e.sp.t[1] ? float(e.age - e.sp.t[0]) + pt : 99.0f;
@@ -1737,7 +1740,9 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
                 root = mul(root, rotZ(d.flip * kDeg));
                 root = mul(root, rotY(270.0f * kDeg));
             } else if (upsideDown) {
-                root = mul(root, translate(0, (e.info ? e.info->height : 1.8f) + 0.1f, 0));
+                double bw, bh;
+                entitySize(e, bw, bh);
+                root = mul(root, translate(0, (float(bh) + 0.1f) / e.scale, 0));  // (boundingBoxHeight + 0.1) / entityScale
                 root = mul(root, rotZ(kPi));
             }
             speciesRotations(e, d, pt, pitch, *reinterpret_cast<Mat34*>(&root));
@@ -2496,7 +2501,7 @@ void EntityRenderer::emitRopes(const double cam[3], float pt, float projY) {
             else if (n == "minecraft:sulfur_cube") off = {0, hgt / 2.0, 0};
             else if (isBoat(n)) off = {0, 0.88 * hgt, 0.64 * w};
             else if (n == "minecraft:camel" || n == "minecraft:camel_husk") {  // getBodyAnchorAnimationYOffset (settled poses)
-                const double scale = e.baby ? 0.6 : 1.0;
+                const double scale = (e.baby ? 0.6 : 1.0) * e.scale;
                 const bool sitting = e.pose == 10;  // Pose.SITTING
                 const double dimsH = e.info->height * scale - (sitting ? 1.43 * scale : 0.0);
                 off = {0, dimsH - (e.baby ? 0.09375 : 0.375) + (sitting ? 0.2 * scale : 0.0) - 0.2 * scale, e.info->width * scale * 0.56};
@@ -3059,7 +3064,7 @@ void EntityRenderer::build(const PassContext& ctx) {
         // invisible: still drawn (equipment, eyes; the body for spectators / teammates), see modelEntity
         float w = e.info->width, h = e.info->height;
         if (d.special == SpSlime || d.special == SpSulfurCube) w *= float(e.size), h *= float(e.size);
-        sphere[3] = std::max(w, h) * 0.75f * d.scale + 0.5f;
+        sphere[3] = std::max(w, h) * 0.75f * d.scale * e.scale + 0.5f;
         if (d.special == SpDisplay) {  // bounds of the transformed block (rotations keep lengths)
             const DisplayState::Xform& x = e.display.to;
             const float s = std::max({std::abs(x.s[0]), std::abs(x.s[1]), std::abs(x.s[2])});
@@ -3161,8 +3166,14 @@ void EntityRenderer::build(const PassContext& ctx) {
             // getShadowRadius: slimes by size, mobs by their scale and age (babies half), items and orbs weaker.
             const std::string& id = e.info->name;
             float radius = shadowRadiusOf(id), strength = 1.0f;
-            if (d.special == SpSlime || d.special == SpSulfurCube) radius = 0.25f * float(e.size);
-            else if (e.baby) radius *= 0.5f;
+            if (d.special == SpSlime || d.special == SpSulfurCube) radius = 0.25f * float(e.size);  // AbstractCubeMobRenderer
+            else if (d.anim == Anim::Pufferfish) radius = 0.1f + 0.1f * float(dataInt(e, "PUFF_STATE"));
+            else if (e.category == Category::Living || e.category == Category::Player) {
+                radius *= e.scale;  // LivingEntityRenderer
+                if (e.category == Category::Living && d.special != SpArmorStand) radius *= ageScale(e);  // MobRenderer
+                if (e.baby && (id == "minecraft:strider" || id == "minecraft:villager")) radius *= 0.5f;
+                else if (e.baby && id == "minecraft:turtle") radius *= 0.83f;
+            }
             if (id == "minecraft:item" || id == "minecraft:experience_orb") strength = 0.75f;
             if (e.display.is) displayShadow(e, pt, radius, strength);
             if (radius > 0)

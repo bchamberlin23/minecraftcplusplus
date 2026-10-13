@@ -187,14 +187,17 @@ public:
     void tickPistons(Physics& physics);
     // Riptide: TridentItem.releaseUsing on the client (push along the look, spin for 20 ticks, a hop off the ground).
     void riptide(const Physics& physics, float strength);
+    // LivingEntity.getDimensions: the pose's dimensions scaled by getScale (the scale attribute).
+    double scale = 1.0;
     AABB box() const { return boxAt(pos, pose); }
-    static AABB boxAt(const double p[3], Pose pose = Pose::Standing) {
-        const double h = height(pose);
-        return {{p[0] - kWidth / 2, p[1], p[2] - kWidth / 2}, {p[0] + kWidth / 2, p[1] + h, p[2] + kWidth / 2}};
+    AABB boxAt(const double p[3], Pose pose = Pose::Standing) const {
+        const double h = height(pose), w = width() / 2;
+        return {{p[0] - w, p[1], p[2] - w}, {p[0] + w, p[1] + h, p[2] + w}};
     }
-    static double height(Pose p) { return p == Pose::Standing ? kHeight : p == Pose::Crouching ? 1.5 : 0.6; }
+    double width() const { return kWidth * scale; }
+    double height(Pose p) const { return (p == Pose::Standing ? kHeight : p == Pose::Crouching ? 1.5 : 0.6) * scale; }
     double eyeHeight() const {
-        return pose == Pose::Standing ? kEyeHeight : pose == Pose::Crouching ? kSneakEyeHeight : 0.4;
+        return (pose == Pose::Standing ? kEyeHeight : pose == Pose::Crouching ? kSneakEyeHeight : 0.4) * scale;
     }
     bool underWater() const { return wasEyeInWater && inWater; }  // Entity.isUnderWater
     bool onClimbable(const Physics& physics) const;  // LivingEntity.onClimbable

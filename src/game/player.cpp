@@ -710,10 +710,10 @@ void Player::updateAutoJump(const Physics& physics, double xa, double za, const 
     const double ahead = std::max(speed * 7.0, 1.0 / double(inv));
     const double b0[3] = {pos[0], pos[1], pos[2]};
     const double e0[3] = {pos[0] + xa + dx * ahead, pos[1], pos[2] + za + dz * ahead};
-    AABB test{{std::min(b0[0], e0[0]) - kWidth, b0[1], std::min(b0[2], e0[2]) - kWidth},
-              {std::max(b0[0], e0[0]) + kWidth, b0[1] + height(pose), std::max(b0[2], e0[2]) + kWidth}};
+    AABB test{{std::min(b0[0], e0[0]) - width(), b0[1], std::min(b0[2], e0[2]) - width()},
+              {std::max(b0[0], e0[0]) + width(), b0[1] + height(pose), std::max(b0[2], e0[2]) + width()}};
     // Two segments half a body width left and right of the path, 0.51 above the feet.
-    const double rx = -dz * kWidth * 0.5, rz = dx * kWidth * 0.5;  // moveDir x up, scaled
+    const double rx = -dz * width() * 0.5, rz = dx * width() * 0.5;  // moveDir x up, scaled
     auto segBox = [&](double side) {
         const double ax = b0[0] + rx * side, az = b0[2] + rz * side, ex = e0[0] + rx * side, ez = e0[2] + rz * side;
         const double y = b0[1] + 0.51;
@@ -894,7 +894,7 @@ void Player::applyEffectsFromBlocks(const Physics& physics) {
                 if (n == "honey_block" && !honeyed) {  // HoneyBlock.isSlidingDown / doSlideMovement
                     const double old = vel[1] / double(0.98f) + 0.08;  // getOldDeltaY
                     const double dx = std::abs(x + 0.5 - pos[0]), dz = std::abs(z + 0.5 - pos[2]);
-                    const double overlap = 0.4375 + kWidth / 2.0;
+                    const double overlap = 0.4375 + width() / 2.0;
                     if (!onGround && pos[1] <= y + 0.9375 - 1e-7 && old < -0.08 && (dx + 1e-7 > overlap || dz + 1e-7 > overlap)) {
                         honeyed = true;
                         if (old < -0.13) {
@@ -1079,7 +1079,7 @@ void Player::tick(const Physics& physics, const PlayerInput& rawInput) {
     }
     if (!noClip) {
         static constexpr double kCorners[4][2] = {{-0.35, 0.35}, {-0.35, -0.35}, {0.35, -0.35}, {0.35, 0.35}};
-        for (const auto& c : kCorners) moveTowardsClosestSpace(physics, pos[0] + kWidth * c[0], pos[2] + kWidth * c[1]);
+        for (const auto& c : kCorners) moveTowardsClosestSpace(physics, pos[0] + width() * c[0], pos[2] + width() * c[1]);
     }
     const bool forwardImpulse = input.forward > 1e-5f;  // ClientInput.hasForwardImpulse
     const bool crawling = pose == Pose::Swimming && !swimming;  // isVisuallyCrawling

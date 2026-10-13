@@ -1964,11 +1964,13 @@ void Visuals::Impl::buildBeams(const double cam[3], float pt) {
         double target[3];
         if (auto t = world.entities().find(e.attackTarget); t != world.entities().end() && t->second.info) {
             for (int a = 0; a < 3; ++a) target[a] = t->second.prevPos[a] + (t->second.pos[a] - t->second.prevPos[a]) * pt;
-            target[1] += t->second.info->height * 0.5;
+            double tw, th;
+            entitySize(t->second, tw, th);
+            target[1] += th * 0.5;
         } else if (e.attackTarget == world.selfId) {  // ourselves
             const Player& p = game->player();
             for (int a = 0; a < 3; ++a) target[a] = p.prev[a] + (p.pos[a] - p.prev[a]) * pt;
-            target[1] += Player::height(p.pose) * 0.5;
+            target[1] += p.height(p.pose) * 0.5;
         } else {
             continue;
         }
@@ -2524,11 +2526,9 @@ void Visuals::Impl::buildTags(const PassContext& ctx) {
             p[0] += kStepXZ[dir][0] * 0.3, p[1] -= 0.25, p[2] += kStepXZ[dir][1] * 0.3;
         }
         const bool discrete = e.pose == 5;  // crouching
-        float h = e.info->height;
-        if (player && discrete) h = 1.5f;
-        if (player && (e.pose == 1 || e.pose == 3 || e.pose == 4)) h = 0.6f;  // gliding, swimming / crawling, riptide
-        if (e.baby && e.category == Category::Living) h *= 0.5f;
-        if (e.pose == 2) h = 0.2f;  // sleeping (LivingEntity.SLEEPING_DIMENSIONS)
+        double bw, bh;  // the current dimensions (poses, sleeping, age and scale): the name tag attachment's height
+        entitySize(e, bw, bh);
+        const float h = float(bh);
         const float x = float(p[0] - cam[0]), y = float(p[1] - cam[1]) + h + 0.5f, z = float(p[2] - cam[2]);
         // EntityRenderDispatcher.distanceToSqr: from the entity's position (not the tag's)
         const float ox = float(p[0] - cam[0]), oy = float(p[1] - cam[1]), oz = float(p[2] - cam[2]);
@@ -2714,8 +2714,9 @@ void Visuals::Impl::buildBolts(const PassContext& ctx) {
 
 namespace {
 void entityBox(const Entity& e, float& w, float& h) {
-    w = e.info ? e.info->width : 0.6f, h = e.info ? e.info->height : 1.8f;
-    if (e.baby && e.category == Category::Living) w *= 0.5f, h *= 0.5f;
+    double dw, dh;
+    entitySize(e, dw, dh);
+    w = float(dw), h = float(dh);
 }
 }  // namespace
 

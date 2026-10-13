@@ -1079,8 +1079,8 @@ void debugLines(UiState& s, std::vector<LineVertex>& out, const CameraState& cam
         }
         if (!firstPerson && s.entities->viewEntity < 0) {  // ourselves in third person (not a tracked entity)
             const Player& me = player(s);
-            const double h = Player::height(me.pose);
-            show(me.pos, 0.6, h, me.eyeHeight(), true, me.yaw * 180.0f / 3.14159265f, me.pitch * 180.0f / 3.14159265f);
+            const double h = me.height(me.pose);
+            show(me.pos, me.width(), h, me.eyeHeight(), true, me.yaw * 180.0f / 3.14159265f, me.pitch * 180.0f / 3.14159265f);
         }
     }
 }

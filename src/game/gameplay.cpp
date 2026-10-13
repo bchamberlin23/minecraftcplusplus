@@ -40,6 +40,8 @@ Gameplay::Gameplay(World& world, BlockRegistry& registry, const GameReports& rep
     : world_(world), registry_(registry), reports_(reports) {
     itemNames_ = registryNames(reports, "minecraft:item");
     attributeNames_ = registryNames(reports, "minecraft:attribute");
+    for (size_t i = 0; i < attributeNames_.size(); ++i)
+        if (attributeNames_[i] == "minecraft:scale") scaleAttribute_ = int(i);
     effectNames_ = registryNames(reports, "minecraft:mob_effect");
     const char* v = std::getenv("MCPP_GAMEPLAY_VERBOSE");
     verbose_ = v && *v == '1';
@@ -160,6 +162,11 @@ bool Gameplay::adventureMayBreak(int x, int y, int z) {
 }
 
 Gameplay::~Gameplay() = default;
+
+void Gameplay::setEntities(ent::EntityWorld* entities) {
+    entities_ = entities;
+    if (entities_) entities_->scaleAttribute = scaleAttribute_;
+}
 
 double Gameplay::entityAttribute(int entity, std::string_view name, double fallback) const {
     auto it = entityAttributes_.find(entity);
@@ -666,6 +673,7 @@ void Gameplay::frame() {
     a.movementEfficiency = attribute("movement_efficiency", 0.0);
     a.frictionModifier = attribute("friction_modifier", 1.0), a.airDragModifier = attribute("air_drag_modifier", 1.0);
     a.bounciness = attribute("bounciness", 0.0);
+    game_->player().scale = std::clamp(attribute("scale", 1.0), 0.0625, 16.0);  // LivingEntity.getScale
     {  // Camera.setup's third-person distance: camera_distance x getScale, the player's or its mount's if larger
         double dist = attribute("camera_distance", 4.0) * attribute("scale", 1.0);
         if (auto it = entityAttributes_.find(game_->vehicleId); game_->vehicleId >= 0 && it != entityAttributes_.end()) {

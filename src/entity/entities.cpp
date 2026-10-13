@@ -760,7 +760,32 @@ void EntityWorld::attach(net::Client& client) {
         e.count = u32(q.ints.size()) - e.first;
         if (r.ok) q.events.push_back(e);
     });
-    on("update_attributes", [](net::Reader&, EventQueue&) {});  // not needed for drawing
+    on("update_attributes", [this](net::Reader& r, EventQueue& q) {  // the scale attribute (AttributeInstance.getValue)
+        Event e;
+        e.type = EventType::Attributes;
+        e.id = r.varInt();
+        const int scaleId = scaleAttribute.load();
+        const i32 n = r.varInt();
+        for (i32 i = 0; i < n && r.ok; ++i) {
+            const int id = r.varInt();
+            const double base = r.f64();
+            double add = 0, mulBase = 0, mulTotal = 1;
+            const i32 mods = r.varInt();
+            for (i32 m = 0; m < mods && r.ok; ++m) {  // AttributeModifier: id, amount, operation
+                r.str();
+                const double amount = r.f64();
+                const int op = r.varInt();
+                if (op == 0) add += amount;
+                else if (op == 1) mulBase += amount;
+                else mulTotal *= 1 + amount;
+            }
+            if (id != scaleId || scaleId < 0) continue;
+            const double v = base + add;
+            e.flag = true;
+            e.f[0] = float(std::clamp((v + v * mulBase) * mulTotal, 0.0625, 16.0));  // RangedAttribute: 0.0625 .. 16
+        }
+        if (r.ok && e.flag) q.events.push_back(e);
+    });
     client.onPlayPeek("set_time", [this](net::Reader& r) {  // the game time (species animations)
         const i64 t = r.i64v();
         if (r.ok) netGameTime_ = t;
@@ -1234,6 +1259,15 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
         case EventType::Animate:
             if (onAnimate) onAnimate(e, ev.a);
             break;
+        case EventType::Attributes: {  // LivingEntity.getScale: sanitizeScale
+            const std::string& n = e.info ? e.info->name : std::string();
+            float s = ev.f[0];
+            if (n == "minecraft:happy_ghast") s = std::min(s, 1.0f);
+            else if (n == "minecraft:shulker") s = std::min(s, 3.0f);
+            else if (n == "minecraft:ender_dragon") s = 1.0f;
+            e.scale = s;
+            break;
+        }
         case EventType::Passengers:
             for (auto& [id, other] : entities_)
                 if (other.vehicle == e.id) other.vehicle = -1;
@@ -1857,17 +1891,37 @@ void EntityWorld::tickEntity(Entity& e) {
 // ---------------------------------------------------------------------------------------------------------
 // Picking and interaction.
 
+float ageScale(const Entity& e) {
+    if (!e.baby || e.category != Category::Living || !e.info) return 1.0f;
+    const std::string& n = e.info->name;
+    if (n == "minecraft:armadillo" || n == "minecraft:camel") return 0.6f;
+    if (n == "minecraft:dolphin") return 0.65f;
+    if (n == "minecraft:goat") return 0.55f;
+    if (n == "minecraft:happy_ghast") return 0.2375f;
+    if (n == "minecraft:turtle") return 0.3f;
+    return 0.5f;
+}
+
+// LivingEntity.getDimensions: SLEEPING_DIMENSIONS, else the default dimensions (the type's by the age scale, slime
+// sizes, phantom sizes, small armour stands, player poses) scaled by getScale.
 void entitySize(const Entity& e, double& w, double& h) {
     w = e.info ? e.info->width : 0.6, h = e.info ? e.info->height : 1.8;
     if (!e.info) return;
-    if (e.baby && e.category == Category::Living) w *= 0.5, h *= 0.5;
-    if (e.info->dataId("ID_SIZE") >= 0) w *= e.size, h *= e.size;
+    const bool living = e.category == Category::Living || e.category == Category::Player;
+    if (living && e.pose == 2) {
+        w = h = 0.2;
+        return;
+    }
+    const double age = ageScale(e);
+    w *= age, h *= age;
+    if (e.info->name == "minecraft:phantom") w *= 1.0 + 0.15 * e.size, h *= 1.0 + 0.15 * e.size;  // Phantom
+    else if (e.info->dataId("ID_SIZE") >= 0) w *= e.size, h *= e.size;                            // Slime
     if (e.info->name == "minecraft:armor_stand" && (e.standFlags & 1)) w *= 0.5, h *= 0.5;
     if (e.category == Category::Player) {
         if (e.pose == 5) h = 1.5;
         else if (e.pose == 1 || e.pose == 3 || e.pose == 4) h = 0.6;
-        else if (e.pose == 2) w = h = 0.2;
     }
+    if (living) w *= e.scale, h *= e.scale;
 }
 
 // Entity.isPickable: living entities and players (not spectators), vehicles, falling blocks / primed TNT, the block

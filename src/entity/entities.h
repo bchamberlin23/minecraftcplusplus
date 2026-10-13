@@ -41,7 +41,7 @@ struct MetaValue {
 enum class EventType : u8 {
     Add, Remove, Move, PositionSync, Teleport, Motion, HeadRot, Data, Equipment, PlayerInfo, PlayerRemove, Swing,
     Hurt, Damage, EntityEvent, TakeItem, Passengers, Animate, Jukebox, ProjectilePower, EntityLink, TransientBlock,
-    MinecartSteps, MobAppearance
+    MinecartSteps, MobAppearance, Attributes
 };
 
 struct Step {
@@ -193,6 +193,7 @@ struct Entity {
     int direction = 0;          // add_entity data: facing of hanging entities (Direction 3D value)
     int attachBlock[3] = {};    // BlockAttachedEntity.pos: the block of item frames, paintings and leash knots
     int painting = 0;           // painting_variant network id (unsent: the registry's first, VariantUtils.getAny)
+    float scale = 1.0f;         // LivingEntity.getScale: the scale attribute (sanitizeScale per type)
     bool nameVisible = false;   // DATA_CUSTOM_NAME_VISIBLE
 
     // Animation timers (ticks).
@@ -444,6 +445,8 @@ public:
     std::function<void(const std::string& raw, double x, double y, double z, double vx, double vy, double vz)> spawnParticle;
     // EnvironmentAttributes.PIGLINS_ZOMBIFY in the current dimension (piglins and hoglins shake while converting).
     bool piglinsZombify = true;
+    // The minecraft:attribute network id of minecraft:scale (update_attributes; -1 unknown).
+    std::atomic<int> scaleAttribute{-1};
     // A painting variant's size in blocks (the renderer's registry): false when unknown.
     std::function<bool(int variant, int& w, int& h)> paintingSize;
     // Painting variants sent inline (a direct holder): variant kInlinePainting + index.
@@ -491,6 +494,8 @@ void tickCloak(Entity& e, const double pos[3], float tBob);
 // The entity's bounding box size (EntityDimensions with the baby / slime size / small armor stand scales, player
 // poses): width and height.
 void entitySize(const Entity& e, double& w, double& h);
+// LivingEntity.getAgeScale: babies 0.5, a few species their own size.
+float ageScale(const Entity& e);
 // BedBlock.getBedOrientation at a block (Direction 2D data value, -1 if it is not a bed). Caller holds the world lock.
 int bedFacingAt(const World& world, const BlockRegistry& registry, int x, int y, int z);
 // LivingEntity.isFullyFrozen.

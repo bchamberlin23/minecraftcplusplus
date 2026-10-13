@@ -188,9 +188,9 @@ void drawScreenEffects(Ui::State& s, Canvas& c) {
     if (!s.spectator()) {
         const double eye = p.pos[1] + p.eyeHeight();
         for (int i = 0; i < 8; ++i) {
-            const double x = p.pos[0] + ((i & 1) - 0.5) * Player::kWidth * 0.8;
+            const double x = p.pos[0] + ((i & 1) - 0.5) * p.width() * 0.8;
             const double y = eye + (((i >> 1) & 1) - 0.5) * 0.1;
-            const double z = p.pos[2] + (((i >> 2) & 1) - 0.5) * Player::kWidth * 0.8;
+            const double z = p.pos[2] + (((i >> 2) & 1) - 0.5) * p.width() * 0.8;
             const BlockInfo& info = s.registry->infos()[s.world->block(int(std::floor(x)), int(std::floor(y)), int(std::floor(z)))];
             if (!info.occludes) continue;
             static std::vector<std::string> textureNames;

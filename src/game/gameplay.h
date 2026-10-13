@@ -50,7 +50,7 @@ public:
               const fs::path& componentReports);
     void attach(net::Client& client);       // before Client::start
     void setPlayer(Game& game, ui::Ui& ui);  // installs the Game hooks
-    void setEntities(ent::EntityWorld* entities) { entities_ = entities; }  // before setPlayer (riding)
+    void setEntities(ent::EntityWorld* entities);  // before setPlayer (riding)
     void frame();                            // main thread, before Game::frame
 
     int entityId() const { return entityId_; }
@@ -132,6 +132,7 @@ private:
     std::map<std::string, double, std::less<>> attributes_;  // name -> value
     std::unordered_map<int, std::map<std::string, double, std::less<>>> entityAttributes_;  // other entities
     ent::EntityWorld* entities_ = nullptr;
+    int scaleAttribute_ = -1;  // minecraft:scale's attribute id
     net::Client* client_ = nullptr;
     std::unique_ptr<Riding> riding_;
 
