@@ -37,7 +37,10 @@ parrots, deadmau5's ears), the totem activation animation, break cracks on block
 with their sound, hover tooltips in books, the dolphin / composter / elder guardian particles, the user's own item
 sounds (brushing with its dust, spyglass, goat horns, flint and steel), and the video options that did nothing
 (Particles, Vignette, Distortion Effects with the nausea overlay, Darkness Pulsing, Glint Speed / Strength, Texture
-Filtering / Mipmaps / Anisotropy, Simulation Distance, the rain particles' Weather Radius). ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
+Filtering / Mipmaps / Anisotropy, Simulation Distance, the rain particles' Weather Radius) and the other options
+that were only stored (splash texts, auto suggestions, hidden LAN addresses, hide matched names, lastServer, the
+first-server Social Interactions toast, rotate with minecarts, startedCleanly), and the Mojang Studios loading
+overlay (start-up, F3 + T, server packs). ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
 switch (automated runs never change the display mode) and the LAN publish from World Options (it would open a
 listening socket).
 
