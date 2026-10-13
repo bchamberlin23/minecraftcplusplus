@@ -97,7 +97,8 @@ mid-UI, both with and without the UI layer; the pause menu and the menus use it,
 pads / frogspawn and mushrooms predicted; the death screen's title confirmation and score; game mode switching
 permissions and the previous mode; credits details; options sliders and Ctrl+wheel GUI scale; repeater locking; the
 death message's hover / links; books (lengths, truncation, lectern click events, silent key page turns) and the sign
-preview in the world; the recipe book (narrow windows, overlay, resets, id searches, ghosts, toast list). Tested against local mock status servers
+preview in the world; the recipe book (narrow windows, overlay, resets, id searches, ghosts, toast list); station
+screens (tooltips while carrying, stonecutter / loom clicks, the merchant's active offer, mount slots). Tested against local mock status servers
 (a Python script: modern, no-version, legacy-only, silent and closing servers).
 
 ## Protocol / networking
@@ -143,6 +144,9 @@ preview in the world; the recipe book (narrow windows, overlay, resets, id searc
   server upgrades on start, without Java's "upgradeWorld.done / joinNow" confirmation; Optimize World shows one bar and
   the total from the server's log (no per-dimension bars or converted / skipped counts); a failed backup's toast has
   no reason line.
+- Station residuals: the loom's banner preview is a flat quad (Java: the 3D BannerFlagModel); the smithing armor
+  stand shows no item model on its head for head items without an equippable asset; selecting a trade does not
+  pre-fill the payment slots before the server's sync (MerchantMenu.tryMoveItems).
 - Pack screens: Options' Resource Packs and Create World's Data Packs are this port's Mods & Packs manager (one list
   of switches) rather than PackSelectionScreen's Available / Selected lists.
 - SystemToasts without a trigger here: PACK_LOAD_FAILURE, FILE_DROP_FAILURE, CHUNK_LOAD/SAVE_FAILURE (the server
