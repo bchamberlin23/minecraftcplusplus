@@ -590,6 +590,12 @@ void AudioSystem::handleNet(const NetSound& s) {
         // SimpleSoundInstance.forJukeboxSong: records, volume 4, linear, at the block's centre
         const double pos[3] = {s.pos[0] + 0.5, s.pos[1] + 0.5, s.pos[2] + 0.5};
         if (const u32 h = event >= 0 ? play(event, Category::Record, pos, 4.0f, 1.0f, rng_.nextLong()) : 0) jukeboxes_[key] = h;
+        if (const NbtValue* d = nbt.find("description")) {  // Hud.setNowPlaying(song.description())
+            std::vector<u8> bytes;
+            nbtWriteNetwork(*d, bytes);
+            jukeboxDescription_.assign(bytes.begin(), bytes.end());
+            ++jukeboxSongs_;
+        }
         break;
     }
     case NetSound::Stop:  // SoundManager.stop(name, source)

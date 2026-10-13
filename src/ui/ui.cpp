@@ -483,6 +483,7 @@ float Ui::fovRadians() const {  // Camera.calculateFov: the option scaled by the
 }
 
 bool Ui::onFire() const { return s_->onFire; }
+void Ui::setSkyLight(int skyDarken, float ambientLight) { s_->skyDarken = skyDarken, s_->ambientLight = ambientLight; }
 u32 Ui::textBackground(float defaultOpacity) const { return s_->textBackground(defaultOpacity); }
 float Ui::handFovRadians() const { return s_->fovDeathOrFluid(70.0f) * kPi / 180.0f; }  // Camera.calculateHudFov
 bool Ui::hudHidden() const { return s_->hudHidden; }

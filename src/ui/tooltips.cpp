@@ -51,6 +51,8 @@ std::string decimal(double v) {
     return s;
 }
 
+}  // namespace
+
 // StringUtil.formatTickDuration at 20 ticks per second.
 std::string tickDuration(int ticks) {
     int seconds = ticks / 20;
@@ -63,6 +65,8 @@ std::string tickDuration(int ticks) {
     else std::snprintf(buf, sizeof(buf), "%02d:%02d", minutes, seconds);
     return buf;
 }
+
+namespace {
 
 const char* const kSlotGroups[] = {"any", "mainhand", "offhand", "hand", "feet", "legs", "chest", "head", "armor", "body", "saddle"};
 int slotGroupId(std::string_view name) {

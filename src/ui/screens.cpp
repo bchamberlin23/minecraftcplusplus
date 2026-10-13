@@ -857,6 +857,7 @@ void Ui::State::drawScreen(Canvas& c) {
     }
     recipeBookTooltip(*this, c, m, hoveredSlot);  // item_ui.h
     if (station && station->drawTop) station->drawTop(*this, c, m, l, left, top);
+    if (m.type < 0) drawEffectsInInventory(c, Screen::Inventory, int(left), l.width, int(top));  // InventoryScreen
 }
 
 // --- screen input -------------------------------------------------------------------------------------------

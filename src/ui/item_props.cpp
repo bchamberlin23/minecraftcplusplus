@@ -845,9 +845,7 @@ void potDecorations(const Items& items, const ItemStack& s, int out[4]) {
         }
 }
 
-u32 potionColor(const Items& items, const ItemStack& s, u32 fallback) {
-    const std::string* d = findComponent(items, s, "potion_contents");
-    if (!d) return fallback;
+u32 effectColor(const std::string& effect) {
     static const std::unordered_map<std::string, u32> kEffectColors = {
         {"speed", 0x33EBFF}, {"slowness", 0x8BAFE0}, {"haste", 0xD9C043}, {"mining_fatigue", 0x4A4217},
         {"strength", 0xFFC700}, {"instant_health", 0xF82423}, {"instant_damage", 0xA9656A}, {"jump_boost", 0xFDFF84},
@@ -860,6 +858,14 @@ u32 potionColor(const Items& items, const ItemStack& s, u32 fallback) {
         {"hero_of_the_village", 0x44FF44}, {"darkness", 0x292721}, {"trial_omen", 0x16A6A6}, {"raid_omen", 0xDE4058},
         {"wind_charged", 0xBDC9FF}, {"weaving", 0x78695A}, {"oozing", 0x99FFA3}, {"infested", 0x8C9B8C},
         {"breath_of_the_nautilus", 0x00FFEE}};
+    auto it = kEffectColors.find(effect);
+    return it == kEffectColors.end() ? 0 : it->second;
+}
+
+u32 potionColor(const Items& items, const ItemStack& s, u32 fallback) {
+    const std::string* d = findComponent(items, s, "potion_contents");
+    if (!d) return fallback;
+
     struct E {
         const char* effect;
         int amplifier;
@@ -891,10 +897,10 @@ u32 potionColor(const Items& items, const ItemStack& s, u32 fallback) {
     // getAllEffects: the potion's, then the custom effects; visible ones weighted by amplifier + 1.
     int red = 0, green = 0, blue = 0, total = 0;
     auto add = [&](const std::string& effect, int amplifier, bool visible) {
-        auto it = kEffectColors.find(effect);
-        if (!visible || it == kEffectColors.end()) return;
+        const u32 color = effectColor(effect);
+        if (!visible || color == 0) return;
         const int a = amplifier + 1;
-        red += a * int((it->second >> 16) & 255), green += a * int((it->second >> 8) & 255), blue += a * int(it->second & 255);
+        red += a * int((color >> 16) & 255), green += a * int((color >> 8) & 255), blue += a * int(color & 255);
         total += a;
     };
     if (potion >= 0)

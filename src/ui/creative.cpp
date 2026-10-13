@@ -579,6 +579,7 @@ void draw(UiState& s, Canvas& c) {
     if (hovered)
         blitSprite(c, s.sprites.sprite("container/slot_highlight_front"), left + float(hovered->x) - 4, top + float(hovered->y) - 4, 24, 24);
     if (tab().showTitle) s.drawText(c, Text(s.res.translate(tab().title)), left + 8, top + 6, kLabel, false);
+    s.drawEffectsInInventory(c, Screen::Creative, int(left), kW, int(top));  // CreativeModeInventoryScreen
     // Carried item, tooltips.
     if (!s.carried.empty()) {
         s.drawItem(c, s.carried, mx - 8, my - 8);

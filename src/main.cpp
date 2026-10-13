@@ -1375,6 +1375,7 @@ int wmain(int argc, wchar_t** argv) {
         sky.update(cam, dt);
         entities.piglinsZombify = sky.piglinsZombify();
         blockEntityRenderer.setView(std::min(ui.settings().renderDistance, opt.detail), game.scoping());
+        ui.setSkyLight(sky.skyDarken(), session ? session->dimension().ambientLight : 0.0f);
         ui.endFrame();
         if (haveReports) packs::updatePlayer(renderer, ui, game.selectedSlot(), reports, registry);  // held light
         renderer.upscalers().setMenuActive(ui.menuOpen());  // frame generation pauses in menus

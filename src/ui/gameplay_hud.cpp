@@ -29,23 +29,24 @@ void drawCameraOverlays(Ui::State& s, Canvas& c) {
     drawPortalOverlay(s, c);
 }
 
-// Hud.extractVignette, the world border warning: red as the camera nears the border (or a moving border's reach
-// within its warning time). The vignette's darkness from the light level (vignetteBrightness) is not drawn natively,
-// so it is drawn only while warning, as at full light (brightness 0).
+// Hud.extractVignette: darker corners by the camera's light level (vignetteBrightness), turning red as the camera
+// nears the world border (or a moving border's reach within its warning time).
 static void drawVignette(Ui::State& s, Canvas& c) {
     const WorldBorder& b = s.game->border;
     const Player& p = s.game->player();
     const float dist = float(b.distanceToBorder(p.pos[0], p.pos[2]));
     const double moving = std::min(b.lerpSpeed() * b.warningTime, std::abs(b.lerpTarget() - b.size()));
     const double warning = std::max(double(b.warningBlocks), moving);
-    if (!(dist < warning)) return;
-    const float strength = std::clamp(1.0f - float(dist / warning), 0.0f, 1.0f);
+    const float strength = dist < warning ? std::clamp(1.0f - float(dist / warning), 0.0f, 1.0f) : 0.0f;
     const Sprite* tex = s.sprites.texture("misc/vignette");
-    if (!tex || strength <= 0.0f) return;
+    if (!tex) return;
+    const float brightness = std::clamp(s.vignetteBrightness, 0.0f, 1.0f);
+    float red = brightness, greenBlue = brightness;
+    if (strength > 0.0f) red = brightness * (1.0f - strength), greenBlue = brightness + (1.0f - brightness) * strength;
     const int gw = c.guiWidth(), gh = c.guiHeight();
-    const int gb = int(strength * 255.0f + 0.5f);  // red: brightness * (1 - strength), green / blue: strength
-    c.setBlend(3);
-    blitTexture(c, tex, 0, 0, 0, 0, float(gw), float(gh), gw, gh, argb(255, 0, gb, gb));
+    c.setBlend(3);  // ZERO, ONE_MINUS_SRC_COLOR
+    blitTexture(c, tex, 0, 0, 0, 0, float(gw), float(gh), gw, gh,
+                argb(255, int(red * 255.0f + 0.5f), int(greenBlue * 255.0f + 0.5f), int(greenBlue * 255.0f + 0.5f)));
     c.setBlend(0);
 }
 
@@ -116,7 +117,8 @@ void drawHotbarAttackIndicator(Ui::State& s, Canvas& c) {
     if (s.settings.attackIndicator != 2) return;  // AttackIndicatorStatus.HOTBAR (Hud.extractItemHotbar)
     const float scale = s.game->attackStrengthScale(0.0f);
     if (scale >= 1.0f) return;
-    const int y = c.guiHeight() - 20, x = c.guiWidth() / 2 + 91 + 6;  // beside the hotbar, away from the off hand (left)
+    // beside the hotbar, away from the off hand
+    const int y = c.guiHeight() - 20, x = s.settings.mainHand == 1 ? c.guiWidth() / 2 + 91 + 6 : c.guiWidth() / 2 - 91 - 22;
     const int progress = int(scale * 19.0f);
     blitSprite(c, s.sprites.sprite("hud/hotbar_attack_indicator_background"), float(x), float(y), 18, 18);
     if (progress > 0)

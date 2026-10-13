@@ -61,6 +61,58 @@ void backdrop(UiState& s, Canvas& c, float x, float y, int width, u32 textColor)
 
 }  // namespace
 
+// MobEffectInstance.compareTo: not ambient first, then not infinite, then by duration and colour (long ambient
+// effects: by ambience and colour only).
+std::vector<const Ui::State::Effect*> Ui::State::sortedEffects(bool descending) const {
+    std::vector<const Effect*> out;
+    for (const auto& [id, e] : effects) out.push_back(&e);
+    auto cmp = [](const Effect* a, const Effect* b) -> int {
+        auto c3 = [](auto x, auto y) { return x < y ? -1 : x > y ? 1 : 0; };
+        const i64 ca = effectColor(a->name), cb = effectColor(b->name);
+        if ((a->duration <= 32147 || b->duration <= 32147) && !(a->ambient && b->ambient)) {
+            if (int r = c3(a->ambient, b->ambient)) return r;
+            if (int r = c3(a->duration == -1, b->duration == -1)) return r;
+            if (int r = c3(a->duration, b->duration)) return r;
+            return c3(ca, cb);
+        }
+        if (int r = c3(a->ambient, b->ambient)) return r;
+        return c3(ca, cb);
+    };
+    std::stable_sort(out.begin(), out.end(), [&](const Effect* a, const Effect* b) { return descending ? cmp(a, b) > 0 : cmp(a, b) < 0; });
+    return out;
+}
+
+void Ui::State::drawEffectsInInventory(Canvas& c, Screen self, int leftPos, int imageWidth, int topPos) {
+    const int x0 = leftPos + imageWidth + 2, available = c.guiWidth() - x0;
+    effectsShownBy = available >= 32 ? self : Screen::None;  // canSeeEffects
+    if (effects.empty() || available < 32) return;
+    const int maxWidth = available >= 120 ? available - 7 : 32;
+    const int yStep = effects.size() > 5 ? 132 / int(effects.size() - 1) : 33;
+    int y0 = topPos;
+    for (const Effect* e : sortedEffects(false)) {
+        std::string name = res.translate("effect.minecraft." + e->name);
+        if (e->amplifier >= 1 && e->amplifier <= 9) name += " " + res.translate("enchantment.level." + std::to_string(e->amplifier + 1));
+        const Text effectText(name);
+        const Text duration = e->duration == -1 ? Text(res.translate("effect.duration.infinite")) : Text(tickDuration(e->duration));
+        const int textureWidth = std::min(maxWidth, std::max(32 + font.width(effectText) + 7, 32 + font.width(duration) + 7));
+        blitSprite(c, sprites.sprite(e->ambient ? "container/inventory/effect_background_ambient" : "container/inventory/effect_background"),
+                   float(x0), float(y0), float(textureWidth), 32);
+        const int maxTextWidth = textureWidth - 32 - 7;
+        bool compact = true;
+        if (maxTextWidth > 0) {
+            const bool clip = font.width(effectText) > maxTextWidth;  // ComponentRenderUtils.clipText: "..." at the end
+            const Text shown = clip ? Text(font.headByWidth(name, maxTextWidth - font.width("...")) + "...") : effectText;
+            font.draw(c, shown, float(x0 + 32), float(y0 + 7), 0xFFFFFFFF, true);
+            font.draw(c, duration, float(x0 + 32), float(y0 + 16), 0xFF808080, true);
+            compact = clip;
+        }
+        if (const Sprite* icon = sprites.texture("mob_effect/" + e->name)) blitTexture(c, icon, float(x0 + 7), float(y0 + 7), 0, 0, 18, 18, 18, 18);
+        if (compact && mouseX >= x0 && mouseX <= x0 + textureWidth && mouseY >= y0 && mouseY <= y0 + yStep)
+            drawTooltip(c, {effectText, duration}, mouseX, mouseY);
+        y0 += yStep;
+    }
+}
+
 // --- per tick -----------------------------------------------------------------------------------------------
 
 void Ui::State::tickHud() {
@@ -80,11 +132,28 @@ void Ui::State::tickHud() {
         toolHighlightTimer = 0;
     } else if (lastToolHighlight.empty() || selected.item != lastToolHighlight.item ||
                !(items.displayName(selected) == items.displayName(lastToolHighlight))) {
-        toolHighlightTimer = 40;  // 40 * notificationDisplayTime (1.0)
+        toolHighlightTimer = int(40.0 * settings.notificationDisplayTime);
     } else if (toolHighlightTimer > 0) {
         --toolHighlightTimer;
     }
     lastToolHighlight = selected;
+    if (audio::AudioSystem* a = audio::instance(); a && a->jukeboxSongs() != jukeboxSongsSeen) {  // Hud.setNowPlaying
+        jukeboxSongsSeen = a->jukeboxSongs();
+        const Text song = parseComponent(a->jukeboxDescription(), lang());
+        actionbar = translatable("record.nowPlaying", {song}, lang()), actionbarTime = 60, actionbarAnimated = true;
+    }
+    {  // Hud.updateVignetteBrightness: the camera's light level, smoothed
+        const CameraState cam = game->camera();
+        const int x = int(std::floor(cam.x)), y = int(std::floor(cam.y)), z = int(std::floor(cam.z));
+        int raw = 15;
+        if (y >= world->minSectionY() * 16 && y < (world->maxSectionY() + 1) * 16) {
+            const u8 l = world->light(x >> 4, y >> 4, z >> 4).at(x & 15, y & 15, z & 15);
+            raw = std::max(int(l >> 4) - skyDarken, int(l & 15));  // getMaxLocalRawBrightness
+        }
+        const float v = float(raw) / 15.0f, curved = v / (4.0f - 3.0f * v);
+        const float level = ambientLight + (1.0f - ambientLight) * curved;  // Lightmap.getBrightness
+        vignetteBrightness += (std::clamp(1.0f - level, 0.0f, 1.0f) - vignetteBrightness) * 0.01f;
+    }
     // Air supply, simulated locally like LivingEntity.baseTick (the server's entity data is not decoded).
     // Entity.isEyeInFluid(WATER): the player's fluid tracker (the eyes under the water's surface).
     const Player& p = game->player();
@@ -262,20 +331,24 @@ void Ui::State::drawHud(Canvas& c) {
         blitSprite(c, sprites.sprite("hud/hotbar"), float(center - 91), H - 22, 182, 22);
         blitSprite(c, sprites.sprite("hud/hotbar_selection"), float(center - 91 - 1 + game->selectedSlot() * 20), H - 23, 24, 23);
         const ItemStack& offhand = inventory.slots[45];
-        if (!offhand.empty()) blitSprite(c, sprites.sprite("hud/hotbar_offhand_left"), float(center - 91 - 29), H - 23, 29, 24);
+        const bool offhandLeft = settings.mainHand == 1;  // the off hand opposite the main arm
+        if (!offhand.empty()) {
+            if (offhandLeft) blitSprite(c, sprites.sprite("hud/hotbar_offhand_left"), float(center - 91 - 29), H - 23, 29, 24);
+            else blitSprite(c, sprites.sprite("hud/hotbar_offhand_right"), float(center + 91), H - 23, 29, 24);
+        }
         for (int i = 0; i < 9; ++i)
             drawItem(c, inventory.slots[size_t(36 + i)], float(center - 90 + i * 20 + 2), H - 16 - 3, true, nullptr, 36 + i);
-        if (!offhand.empty()) drawItem(c, offhand, float(center - 91 - 26), H - 16 - 3, true, nullptr, 45);
+        if (!offhand.empty()) drawItem(c, offhand, float(offhandLeft ? center - 91 - 26 : center + 91 + 10), H - 16 - 3, true, nullptr, 45);
         drawHotbarAttackIndicator(*this, c);  // gameplay_hud.cpp
     }
     // Status effect icons (Hud.extractEffects), top right: beneficial first row, the rest below.
-    if (screen != Screen::Inventory) {
+    if (screen == Screen::None || screen != effectsShownBy) {
         static const char* kHarmful[] = {"slowness", "mining_fatigue", "instant_damage", "nausea", "blindness", "hunger",
                                          "weakness", "poison", "wither", "levitation", "unluck", "darkness", "wind_charged",
                                          "weaving", "oozing", "infested", "bad_omen", "trial_omen", "raid_omen", "glowing"};
         int good = 0, bad = 0;
-        for (auto it = effects.rbegin(); it != effects.rend(); ++it) {
-            const Effect& e = it->second;
+        for (const Effect* ep : sortedEffects(true)) {
+            const Effect& e = *ep;
             if (!e.showIcon) continue;
             bool harmful = false;
             for (const char* h : kHarmful) harmful |= e.name == h;
@@ -319,7 +392,7 @@ void Ui::State::drawHud(Canvas& c) {
         }
         // Hearts.
         const std::string hc = hardcore ? "hardcore_" : "";
-        const std::string heartType = hasEffect("poison") ? "poisoned" : hasEffect("wither") ? "withered" : "";
+        const std::string heartType = hasEffect("poison") ? "poisoned" : hasEffect("wither") ? "withered" : ticksFrozen >= 140 ? "frozen" : "";
         const int regenIndex = hasEffect("regeneration") ? guiTicks % int(std::ceil(maxH + 5.0f)) : -1;
         const int containers = int(std::ceil(maxH / 2.0)), absorbContainers = int(std::ceil(absorb / 2.0));
         for (int idx = containers + absorbContainers - 1; idx >= 0; --idx) {
@@ -339,7 +412,7 @@ void Ui::State::drawHud(Canvas& c) {
             const int halves = idx * 2;
             if (idx >= containers) {
                 const int ah = halves - containers * 2;
-                if (ah < absorb) heart("absorbing", ah + 1 == absorb, false);
+                if (ah < absorb) heart(heartType == "withered" ? heartType : "absorbing", ah + 1 == absorb, false);
             }
             if (blink && halves < displayHealth) heart(heartType, halves + 1 == displayHealth, true);
             if (halves < current) heart(heartType, halves + 1 == current, false);
@@ -361,7 +434,8 @@ void Ui::State::drawHud(Canvas& c) {
         const u16 eye = world->block(int(std::floor(cam.x)), int(std::floor(cam.y)), int(std::floor(cam.z)));
         const bool underWater = registry->name(eye).starts_with("minecraft:water");
         if (underWater || cur < maxA) {
-            const int yAir = yBase - 20;
+            // getAirBubbleYLine: above the food, or above the ridden mount's heart rows
+            const int yAir = mountHearts == 0 ? yBase - 10 : yBase - 10 - (int(std::ceil(mountHearts / 10.0)) - 1) * 10;
             auto bubble = [&](int ticks, int offset) { return int(std::ceil(float((ticks + offset) * 10) / float(maxA))); };
             const int full = bubble(cur, -2), popping = bubble(cur, 0);
             const int empty = 10 - bubble(cur, cur != 0 && underWater ? 1 : 0);
@@ -380,7 +454,10 @@ void Ui::State::drawHud(Canvas& c) {
                         }
                     }
                 }
-                else if (b > 10 - empty) blitSprite(c, sprites.sprite("hud/air_empty"), bx, float(yAir), 9, 9);
+                else if (b > 10 - empty) {  // all empty: a wobble on even ticks
+                    const int wobble = empty == 10 && guiTicks % 2 == 0 ? rnd.nextInt(2) : 0;
+                    blitSprite(c, sprites.sprite("hud/air_empty"), bx, float(yAir + wobble), 9, 9);
+                }
             }
         }
     }

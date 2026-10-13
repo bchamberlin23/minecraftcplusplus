@@ -123,6 +123,7 @@ struct ProfileInfo {
 };
 bool profile(const Items& items, const ItemStack& s, ProfileInfo& out);
 void potDecorations(const Items& items, const ItemStack& s, int out[4]);  // back, left, right, front item ids (-1)
+u32 effectColor(const std::string& effect);  // MobEffect.getColor (RGB), 0 unknown
 u32 potionColor(const Items& items, const ItemStack& s, u32 fallback);    // PotionContents.getColorOr (RGB)
 std::vector<u32> fireworkColors(const Items& items, const ItemStack& s);  // firework_explosion colours (RGB)
 std::string trimMaterial(const Items& items, const ItemStack& s);        // trim material key, "" none / inline

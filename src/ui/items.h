@@ -76,6 +76,8 @@ struct ItemStack {
     }
 };
 
+std::string tickDuration(int ticks);  // StringUtil.formatTickDuration at 20 ticks per second
+
 class Items {
 public:
     bool init(const GameReports& reports, const Resources& res);

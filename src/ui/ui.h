@@ -248,6 +248,8 @@ public:
     float fovRadians() const;
     float handFovRadians() const;  // the first-person hand's: 70 degrees, only by death or fluid
     bool onFire() const;  // our shared flag 0 (Entity.isOnFire): the third-person avatar's flames
+    // Each frame: Level.getSkyDarken and the dimension's ambient light (the HUD vignette's light level).
+    void setSkyLight(int skyDarken, float ambientLight);
     u32 textBackground(float defaultOpacity) const;  // Options.getBackgroundOpacity as a black ARGB colour
     bool hudHidden() const;  // F1
     bool inBed() const;      // sleeping (the bed screen is up)

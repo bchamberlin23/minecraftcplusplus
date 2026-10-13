@@ -242,6 +242,15 @@ struct Ui::State {
     // "post_effects", "day_count"): their line, "" none (set by main).
     std::function<std::string(std::string_view what)> engineInfo;  // presses of Toggle Spectator Shader Effects (GameRenderer.toggleSpectatorPostEffect)
     int toolHighlightTimer = 0;
+    int jukeboxSongsSeen = 0;           // audio's jukebox song counter (Hud.setNowPlaying)
+    float vignetteBrightness = 1.0f;    // Hud.vignetteBrightness (smoothed darkness of the camera's light)
+    int skyDarken = 0;                  // Level.getSkyDarken
+    float ambientLight = 0;             // DimensionType.ambientLight
+    Screen effectsShownBy = Screen::None;  // the screen drew the effects itself (showsActiveEffects)
+    // MobEffectInstance.compareTo order (descending for the HUD: Ordering.natural().reverse()).
+    std::vector<const Effect*> sortedEffects(bool descending) const;
+    // EffectsInInventory: the effects right of a container screen, when 32 px fit (showsActiveEffects).
+    void drawEffectsInInventory(Canvas& c, Screen self, int leftPos, int imageWidth, int topPos);
     ItemStack lastToolHighlight;
     int lastSelected = -1;
     double fps = 0, frameMs = 0;
