@@ -808,7 +808,7 @@ void filterBiomes(State& s) {
     for (size_t i = 0; i < g.biomes.size(); ++i) {
         std::string n = lang(s, langKey("biome", g.biomes[i]), g.biomes[i]);
         for (char& ch : n) ch = char(std::tolower(u8(ch)));
-        if (q.empty() || n.find(q) != std::string::npos || g.biomes[i].find(q) != std::string::npos) g.view.push_back(int(i));
+        if (q.empty() || n.find(q) != std::string::npos) g.view.push_back(int(i));  // the localised name only
     }
     g.scroll = 0;
 }
