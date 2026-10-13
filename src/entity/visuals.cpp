@@ -1579,6 +1579,10 @@ void Visuals::Impl::tickLocal() {
     ++e.age;
     const double move[3] = {p.pos[0] - p.prev[0], p.pos[1] - p.prev[1], p.pos[2] - p.prev[2]};
     tickPoseAnimation(e, move, p.pose == Player::Pose::FallFlying, p.pose == Player::Pose::Crouching);
+    // LocalPlayer: the cloak from the position before the move, the bob, the walked distance (LocalPlayer.move).
+    const float horizontal = float(std::sqrt(move[0] * move[0] + move[2] * move[2]));
+    tickCloak(e, p.prev, p.onGround && !p.swimming ? std::min(0.1f, horizontal) : 0.0f);
+    e.walkDist += horizontal * 0.6f;
 }
 
 void Visuals::Impl::update() {
@@ -1632,7 +1636,7 @@ void Visuals::Impl::update() {
         e.swingHand = swingHand, e.swingType = swingType;
         e.kineticHitTicks = game->kineticHitTicks;
         e.mainArm = ui ? ui->settings().mainHand : 1;
-        if (const PlayerInfo* info = world.playerNamed(playerName)) e.skin = info->skin, e.slim = info->slim;
+        if (const PlayerInfo* info = world.playerNamed(playerName)) e.skin = info->skin, e.slim = info->slim, e.cape = info->cape;
         else if (e.skin < 0) e.skin = assets.texture("entity/player/wide/steve"), e.slim = false;
         auto equip = [&](int slot, int menuSlot) {
             bool foil;

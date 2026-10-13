@@ -204,6 +204,7 @@ struct Entity {
     int attackTarget = 0;    // Guardian DATA_ID_ATTACK_TARGET (0 none) and clientSideAttackTime
     int attackTime = 0;
     int snifferState = 0;    // Sniffer DATA_STATE (Sniffer.State id)
+    int cape = -1;                // the profile's cape (atlas texture), -1 none
     std::string profileTextures;  // Mannequin DATA_PROFILE: its "textures" property; profileSkin 1 while it downloads
     int profileSkin = 0;
     bool staysStill = false; // happy ghast: STAYS_STILL (holding still: its rider does not steer)
@@ -215,6 +216,10 @@ struct Entity {
     // the delta movement of this and the previous tick (fall-flying body turn), the bed (SLEEPING_POS_ID).
     float swimAmount = 0, swimAmountO = 0;
     int fallFlyTicks = 0;
+    // ClientAvatarState (players, mannequins): the cloak trailing the position, the walking bob and walk distance (the
+    // cape's flap and lean).
+    double cloak[3] = {}, cloakO[3] = {};
+    float bob = 0, bobO = 0, walkDist = 0, walkDistO = 0;
     float elytraRot[3] = {}, elytraRotO[3] = {};
     float move[3] = {}, moveO[3] = {};
     bool inWater = false;
@@ -237,6 +242,7 @@ struct PlayerInfo {
     int skin = -1;
     bool slim = false;
     std::string textures;  // the profile's "textures" property (skin / cape URLs), "" none
+    int cape = -1;         // the profile's cape (atlas texture), -1 none
     int skinState = 0;     // 0 default skin, 1 the profile skin downloading, 2 applied, 3 failed
 };
 
@@ -418,6 +424,8 @@ int defaultSkinIndex(const u8 uuid[16]);
 // ElytraAnimationState.tick. move: this tick's delta movement; fallFlying: shared flag 7 (the local player's own
 // state for the avatar).
 void tickPoseAnimation(Entity& e, const double move[3], bool fallFlying, bool crouching);
+// ClientAvatarState.moveCloak (the position before this tick's move) and updateBob (tBob: AbstractClientPlayer.updateBob).
+void tickCloak(Entity& e, const double pos[3], float tBob);
 // The entity's bounding box size (EntityDimensions with the baby / slime size / small armor stand scales, player
 // poses): width and height.
 void entitySize(const Entity& e, double& w, double& h);

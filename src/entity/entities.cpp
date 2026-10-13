@@ -748,47 +748,38 @@ void EntityWorld::clear() {
 }
 
 void EntityWorld::updateProfileSkins() {
-    auto skinSlot = [&](const ProfileTextures& t, const std::vector<u8>& rgba, int w, int h) {  // one slot per texture
-        int& slot = skinSlots_[profileTextureHash(t.skinUrl)];
+    // A profile texture's atlas slot: -2 while it downloads, -1 when there is none; one slot per texture.
+    auto textureSlot = [&](const std::string& url, bool skin) {
+        if (url.empty()) return -1;
+        std::vector<u8> rgba;
+        int w = 0, h = 0;
+        const int state = fetchProfileTexture(url, skin, &rgba, &w, &h);
+        if (state == 1) return -2;
+        if (state != 2) return -1;
+        int& slot = skinSlots_[profileTextureHash(url)];
         if (slot <= 0) {
             slot = assets_.allocSlot();
             if (slot > 0) assets_.writeSlot(slot, rgba.data(), w, h);
         }
-        return slot;
+        return slot > 0 ? slot : -1;
     };
-    for (auto& [id, e] : entities_) {  // mannequins' profiles
-        if (e.profileSkin != 1) continue;
+    // Skin and cape of a textures property: false while either still downloads.
+    auto resolve = [&](const std::string& property, int& skin, bool& slim, int& cape) {
         ProfileTextures t;
-        if (!parseProfileTextures(e.profileTextures, t) || t.skinUrl.empty()) {
-            e.profileSkin = 3;
-            continue;
-        }
-        std::vector<u8> rgba;
-        int w = 0, h = 0;
-        const int state = fetchProfileTexture(t.skinUrl, true, &rgba, &w, &h);
-        if (state == 1) continue;
-        e.profileSkin = 3;
-        if (state != 2) continue;
-        if (const int slot = skinSlot(t, rgba, w, h); slot > 0) e.skin = slot, e.slim = t.slim, e.profileSkin = 2;
-    }
+        if (!parseProfileTextures(property, t)) return true;
+        const int s = textureSlot(t.skinUrl, true), c = textureSlot(t.capeUrl, false);
+        if (s == -2 || c == -2) return false;
+        if (s > 0) skin = s, slim = t.slim;
+        if (c > 0) cape = c;
+        return true;
+    };
+    for (auto& [id, e] : entities_)  // mannequins' profiles
+        if (e.profileSkin == 1 && resolve(e.profileTextures, e.skin, e.slim, e.cape)) e.profileSkin = 2;
     for (auto& [key, p] : players_) {
-        if (p.skinState != 1) continue;
-        ProfileTextures t;
-        if (!parseProfileTextures(p.textures, t) || t.skinUrl.empty()) {
-            p.skinState = 3;
-            continue;
-        }
-        std::vector<u8> rgba;
-        int w = 0, h = 0;
-        const int state = fetchProfileTexture(t.skinUrl, true, &rgba, &w, &h);
-        if (state == 1) continue;
-        p.skinState = 3;
-        if (state != 2) continue;
-        const int slot = skinSlot(t, rgba, w, h);
-        if (slot <= 0) continue;
-        p.skin = slot, p.slim = t.slim, p.skinState = 2;
+        if (p.skinState != 1 || !resolve(p.textures, p.skin, p.slim, p.cape)) continue;
+        p.skinState = 2;
         for (auto& [id, e] : entities_)
-            if (e.category == Category::Player && uuidKey(e.uuid) == key) e.skin = p.skin, e.slim = p.slim;
+            if (e.category == Category::Player && uuidKey(e.uuid) == key) e.skin = p.skin, e.slim = p.slim, e.cape = p.cape;
     }
 }
 
@@ -953,7 +944,7 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
             static const char* kSkins[9] = {"alex", "ari", "efe", "kai", "makena", "noor", "steve", "sunny", "zuri"};
             e.slim = skin < 9;
             e.skin = assets_.texture(std::string("entity/player/") + (e.slim ? "slim/" : "wide/") + kSkins[skin % 9]);
-            if (it != players_.end()) e.name = it->second.name, e.skin = it->second.skin, e.slim = it->second.slim;
+            if (it != players_.end()) e.name = it->second.name, e.skin = it->second.skin, e.slim = it->second.slim, e.cape = it->second.cape;
         }
         static std::minstd_rand rng(1234);
         e.bobOffset = float(rng() % 10000) / 10000.0f * kPi * 2.0f;
@@ -1323,7 +1314,25 @@ void EntityWorld::tick() {
     }
 }
 
+void tickCloak(Entity& e, const double pos[3], float tBob) {
+    e.walkDistO = e.walkDist;
+    for (int a = 0; a < 3; ++a) {
+        e.cloakO[a] = e.cloak[a];
+        const double d = pos[a] - e.cloak[a];
+        if (d > 10.0 || d < -10.0) e.cloak[a] = e.cloakO[a] = pos[a];  // teleported: the cloak jumps along
+        else e.cloak[a] += d * 0.25;
+    }
+    e.bobO = e.bob;
+    e.bob += (tBob - e.bob) * 0.4f;
+}
+
 void EntityWorld::tickEntity(Entity& e) {
+    if (e.category == Category::Player) {  // AbstractClientPlayer.tick / ClientMannequin.tick, before the move
+        const double dx = e.pos[0] - e.prevPos[0], dz = e.pos[2] - e.prevPos[2];
+        const bool player = e.info && e.info->name == "minecraft:player";  // mannequins do not bob
+        const bool bobbing = player && e.onGround && !e.dying && e.pose != 3;
+        tickCloak(e, e.pos, bobbing ? std::min(0.1f, float(std::sqrt(dx * dx + dz * dz))) : 0.0f);
+    }
     std::copy(e.pos, e.pos + 3, e.prevPos);
     e.prevYaw = e.yaw, e.prevPitch = e.pitch;
     e.prevHeadYaw = e.headYaw, e.prevBodyYaw = e.bodyYaw;

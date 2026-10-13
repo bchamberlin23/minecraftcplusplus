@@ -48,6 +48,7 @@ enum LayerFlags : u16 {
     Scroll = 256,     // texture coordinates wrap within the texture, scrolled by Layer::scroll (breeze wind, energy swirl)
     NoOverlay = 512,  // OverlayTexture.NO_OVERLAY (no hurt tint)
     SpinFx = 1024,    // the riptide swirl (SpinAttackEffectLayer)
+    Cape = 2048,      // CapeLayer (PlayerCapeModel): posed like the base model, the cape swinging
 };
 enum Special : u8 {
     SpNone, SpCow, SpPig, SpChicken, SpSheep, SpWolf, SpCat, SpHorse, SpLlama, SpRabbit, SpParrot, SpFox, SpAxolotl,
@@ -393,6 +394,7 @@ void EntityRenderer::buildDefs() {
     }
     elytraModel_ = M("elytra#main"), elytraBabyModel_ = M("elytra_baby#main");
     spinModel_ = M("spin_attack#main"), spinTex_ = T("trident/trident_riptide");
+    capeModel_ = M("player#cape");
     u32 boxes = 0;
     std::string names;
     for (size_t i = 0; i < defs_.size(); ++i)
@@ -1049,8 +1051,10 @@ int EntityRenderer::equipmentLayers(const Entity& e, const TypeDef& d, Layer* ou
     const int elytra = smallModel ? elytraBabyModel_ : elytraModel_;
     if (chest >= 0 && elytra >= 0 &&
         (d.anim == Anim::Humanoid || d.anim == Anim::Zombie || d.anim == Anim::Skeleton || d.anim == Anim::ArmorStand)) {
+        // WingsLayer.getPlayerElytraTexture: a player's cape (when shown) instead of the elytra's own texture
+        const int capeTex = d.special == SpPlayer && e.cape >= 0 && (e.skinParts & 1) ? e.cape : -1;
         for (const EquipmentLayer& l : items_->itemLayers(chest, 3))
-                if (l.tex >= 0 && n < max) out[n++] = {elytra, l.tex, kWhite, u16(Elytra | ((e.equipFoil & 16) ? Glint : 0))};
+            if (l.tex >= 0 && n < max) out[n++] = {elytra, capeTex >= 0 ? capeTex : l.tex, kWhite, u16(Elytra | ((e.equipFoil & 16) ? Glint : 0))};
     }
     // SimpleEquipmentLayer / LlamaDecorLayer: body armour, carpets and saddles (posed like the base model).
     if (e.info && d.anim != Anim::Humanoid && d.anim != Anim::Zombie && d.anim != Anim::Skeleton) {
@@ -1482,6 +1486,14 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
     layerCount = speciesLayers(e, d, pt, layers, layerCount, 16);
     if (e.category == Category::Living || e.category == Category::Player)
         layerCount += equipmentLayers(e, d, layers + layerCount, 16 - layerCount);
+    // CapeLayer: the profile's cape unless invisible, hidden in the skin options or under an elytra (WINGS layer).
+    bool capeOverArmor = false;
+    if (d.special == SpPlayer && e.cape >= 0 && capeModel_ >= 0 && (e.skinParts & 1) && !(e.sharedFlags & 0x20) && layerCount < 16) {
+        const int chest = e.equipment[4];
+        const bool wings = chest >= 0 && items_ && !items_->itemLayers(chest, 3).empty();
+        capeOverArmor = chest >= 0 && items_ && !items_->itemLayers(chest, 0).empty();
+        if (!wings) layers[layerCount++] = {capeModel_, e.cape, kWhite, u16(Cape | NoOverlay)};
+    }
     // SpinAttackEffectLayer: the riptide swirl around a spinning player.
     if (d.special == SpPlayer && (e.livingFlags & 4) && spinModel_ >= 0 && spinTex_ >= 0 && layerCount < 16)
         layers[layerCount++] = {spinModel_, spinTex_, kWhite, SpinFx};
@@ -1829,6 +1841,45 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
             const float wy = s.crouching ? 3.0f : 0.0f;
             if (lw >= 0) poses_[size_t(lw)].y = wy, poses_[size_t(lw)].xRot = r[0], poses_[size_t(lw)].yRot = r[1], poses_[size_t(lw)].zRot = r[2];
             if (rw >= 0) poses_[size_t(rw)].y = wy, poses_[size_t(rw)].xRot = r[0], poses_[size_t(rw)].yRot = -r[1], poses_[size_t(rw)].zRot = -r[2];
+        } else if ((L.flags & Cape) && roleSet) {  // PlayerCapeModel.setupAnim: the player's pose, then the cape
+            if (capeOverArmor) layerRoot = mul(root, translate(0, -0.053125f, 0.06875f));
+            for (size_t i = 0; i < parts; ++i) {
+                const Role r = m.parts[i].role;
+                if (r != RoleNone && ((roleSet >> r) & 1)) poses_[i] = rolePose[r];
+            }
+            // AvatarRenderer.extractCapeState: the cloak's lag behind the body, the walking bob.
+            const float yBody = lerpAngle(pt, e.prevBodyYaw, e.bodyYaw) * kDeg;
+            double dl[3];
+            for (int a = 0; a < 3; ++a)
+                dl[a] = (e.cloakO[a] + (e.cloak[a] - e.cloakO[a]) * pt) - (e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt);
+            const double fx = std::sin(yBody), fz = -std::cos(yBody);
+            const float ft = (e.sharedFlags & 0x80) ? float(e.fallFlyTicks) + pt : 0.0f;
+            const float fallFlyingScale = std::clamp(ft * ft / 100.0f, 0.0f, 1.0f);
+            float flap = std::clamp(float(dl[1]) * 10.0f, -6.0f, 32.0f);
+            const float lean = std::clamp(float(dl[0] * fx + dl[2] * fz) * 100.0f * (1.0f - fallFlyingScale), 0.0f, 150.0f);
+            const float lean2 = std::clamp(float(dl[0] * fz - dl[2] * fx) * 100.0f, -20.0f, 20.0f);
+            const float bob = e.bobO + (e.bob - e.bobO) * pt, walk = e.walkDistO + (e.walkDist - e.walkDistO) * pt;
+            flap += std::sin(walk * 6.0f) * 32.0f * bob;
+            const int capePart = m.part("cape");
+            if (capePart >= 0) {  // rotateBy: Ry(pi) * Ry(-pi) Rx(a) Rz(b) Ry(c) = Rx(a) Rz(b) Ry(c), as ZYX Euler angles
+                const float a = (6.0f + lean / 2.0f + flap) * kDeg, b = lean2 / 2.0f * kDeg, cc = (180.0f - lean2 / 2.0f) * kDeg;
+                const float ca = std::cos(a), sa = std::sin(a), cb = std::cos(b), sb = std::sin(b), cy = std::cos(cc), sy = std::sin(cc);
+                // Rx(a) * Rz(b) * Ry(c), row-major
+                const float rz[3][3] = {{cb, -sb, 0}, {sb, cb, 0}, {0, 0, 1}};
+                const float ry[3][3] = {{cy, 0, sy}, {0, 1, 0}, {-sy, 0, cy}};
+                const float rx[3][3] = {{1, 0, 0}, {0, ca, -sa}, {0, sa, ca}};
+                float t[3][3] = {}, R[3][3] = {};
+                for (int i = 0; i < 3; ++i)
+                    for (int j = 0; j < 3; ++j)
+                        for (int k = 0; k < 3; ++k) t[i][j] += rx[i][k] * rz[k][j];
+                for (int i = 0; i < 3; ++i)
+                    for (int j = 0; j < 3; ++j)
+                        for (int k = 0; k < 3; ++k) R[i][j] += t[i][k] * ry[k][j];
+                PartPose& cp = poses_[size_t(capePart)];  // R = Rz(z) Ry(y) Rx(x)
+                cp.yRot = std::asin(std::clamp(-R[2][0], -1.0f, 1.0f));
+                cp.xRot = std::atan2(R[2][1], R[2][2]);
+                cp.zRot = std::atan2(R[1][0], R[0][0]);
+            }
         } else if ((L.flags & Armor) && roleSet) {  // HumanoidModel.copyPropertiesTo: the parent's pose by part
             for (size_t i = 0; i < parts; ++i) {
                 const Role r = m.parts[i].role;
