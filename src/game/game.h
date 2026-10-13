@@ -95,6 +95,7 @@ public:
     // blockDistance (< 0: no block targeted) is under the crosshair; it then takes the click.
     std::function<bool(bool attack, bool use, double blockDistance)> onEntityClick;
     std::function<bool()> entityUsePassed;  // the last entity click's interactions passed (EntityWorld)
+    std::function<bool()> entityAttackMissed;  // the last entity attack was only a swing (out of the weapon's range)
     // Sound hooks (audio): a block the player broke (its old state) or placed (the new state), once
     // applied; and the end of every 20 Hz player tick.
     std::function<void(bool place, int x, int y, int z, u16 state)> onBlockChanged;

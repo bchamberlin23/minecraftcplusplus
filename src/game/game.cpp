@@ -312,7 +312,7 @@ void Game::handleClicks(Window& w, double dt, int rightPresses, int middlePresse
     // are busy (paddling).
     // Held: Minecraft.handleKeybinds repeats startUseItem every 4 ticks (rightClickDelay), not while an item is in use.
     const bool doPlace = (ev.right > 0 || (rightHeld && repeatTimer_ <= 0 && !use.active)) && !dig_.active && !handsBusy;
-    if (doPlace) repeatTimer_ = ev.right > 0 ? 0.3 : 0.2;
+    if (doPlace) repeatTimer_ = 0.2;  // rightClickDelay 4 (ticks)
     if (ev.middle && spectatorInput && spectatorInput(2, 0)) ev.middle = 0;
     if (ev.middle && onPickEntity && onPickEntity(target_.hit ? blockDistance_ : -1.0)) {
         // Minecraft.pickBlockOrEntity: the entity under the crosshair
@@ -328,7 +328,7 @@ void Game::handleClicks(Window& w, double dt, int rightPresses, int middlePresse
         if (onReleaseUseItem) onReleaseUseItem();
     }
     if (doPlace && onEntityClick && onEntityClick(false, ev.right > 0, blockDistance_)) {
-        repeatTimer_ = 0.3;
+        repeatTimer_ = 0.2;
         if (ev.right > 0 && entityUsePassed && !entityUsePassed()) {  // consumed (InteractionResult.SUCCESS): a swing
             if (onSwing) {
                 const int attackSwing = swingTicks;
@@ -633,7 +633,12 @@ bool Game::startAttack() {
     }
     // An entity in front of the targeted block takes the press (the attack packet carries its own punch).
     if (onEntityClick && onEntityClick(true, false, blockDistance_)) {
-        attackStrengthTicker = 0;  // MultiPlayerGameMode.attack -> resetAttackStrengthTicker
+        // MultiPlayerGameMode.attack -> resetAttackStrengthTicker (not for a weapon's out-of-range swing), and a
+        // creative hit delays the next block breaking (destroyDelay 5)
+        if (!entityAttackMissed || !entityAttackMissed()) {
+            attackStrengthTicker = 0;
+            if (gameMode == 1) destroyDelay_ = 5;
+        }
         if (onSwing) onSwing(0, swingType);
         return false;
     }
@@ -653,7 +658,8 @@ bool Game::startAttack() {
 void Game::continueAttack(bool down) {
     if (!down) missTime_ = 0;
     if (missTime_ > 0 || use.active || heldPiercing) return;  // piercing weapons do not break blocks
-    if (down && target_.hit && world_.block(target_.x, target_.y, target_.z) != 0) {
+    // Minecraft.continueAttack: only while the hit result is the block (an entity in front stops the breaking)
+    if (down && target_.hit && crosshairEntity < 0 && world_.block(target_.x, target_.y, target_.z) != 0) {
         if (continueDestroyBlock(target_.x, target_.y, target_.z, target_.face)) {
             if (onSwing) onSwing(0, swingType);
             if (onPunch) onPunch();

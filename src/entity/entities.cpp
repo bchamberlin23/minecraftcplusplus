@@ -1924,6 +1924,7 @@ bool EntityWorld::attackInRange(const double eye[3], const double dir[3], double
                                 double forward, const BlockRay& blockRay) {
     const PickResult p = pickAttackRange(eye, dir, minReach, maxReach, margin, forward, blockRay);
     if (verbose_) LOG("entities: attack range %.2f..%.2f margin %.2f -> %d", minReach, maxReach, margin, p.id);
+    lastAttackMissed = false;
     if (p.id < 0) {  // a miss: only the swing goes out
         if (client_ && client_->alive()) client_->sendPlay("punch", net::Writer{});
         return true;
@@ -2016,8 +2017,10 @@ bool EntityWorld::click(const double eye[3], const double dir[3], bool attack, b
     if (verbose_)
         LOG("entities: click attack=%d use=%d block=%.2f -> entity %d at %.2f", attack, use, blockDistance, p.id, p.distance);
     if (p.id < 0) return false;
+    lastAttackMissed = false;
     if (attack && p.distance < minReach) {  // AttackRange.isInRange: too close for the weapon, only the swing goes out
         if (client_ && client_->alive()) client_->sendPlay("punch", net::Writer{});
+        lastAttackMissed = true;
         return true;
     }
     lastUsePassed = false;

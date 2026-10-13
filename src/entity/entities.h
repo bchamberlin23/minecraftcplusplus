@@ -435,7 +435,8 @@ public:
     // Player.interactOn on the client (Entity.interact, then ItemStack.interactLivingEntity): 1 when the held item's
     // interaction with the entity consumes the click, 0 when it passes, -1 when the hand is empty (and passes).
     std::function<int(const Entity& e, int hand)> interactionResult;
-    bool lastUsePassed = false;  // the last click's interactions all passed: the held items' turn (Minecraft.startUseItem)
+    bool lastUsePassed = false;
+    bool lastAttackMissed = false;  // the last attack click only swung (out of the weapon's attack range)  // the last click's interactions all passed: the held items' turn (Minecraft.startUseItem)
     // A player in spectator mode (the player list): not pickable.
     std::function<bool(const Entity& e)> isSpectator;
     // The local player attacked an entity (after the packets): Player.attack's client-side part.
