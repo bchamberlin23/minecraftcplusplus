@@ -1084,7 +1084,7 @@ int EntityRenderer::equipmentLayers(const Entity& e, const TypeDef& d, Layer* ou
             if (l.tex < 0 || n >= max) continue;
             u32 color = kWhite;
             if (l.dyeable) {
-                const i32 dye = e.equipDye[slot] > 0 ? e.equipDye[slot] : l.undyed;
+                const i32 dye = e.equipDye[slot] >= 0 ? e.equipDye[slot] : l.undyed;  // black (0) is a dye too
                 if (dye < 0) continue;  // getColorForLayer: 0 = not drawn
                 color = abgr(u32(dye));
             }
@@ -1096,7 +1096,10 @@ int EntityRenderer::equipmentLayers(const Entity& e, const TypeDef& d, Layer* ou
     const int chest = e.equipment[4];
     const int elytra = smallModel ? elytraBabyModel_ : elytraModel_;
     if (chest >= 0 && elytra >= 0 &&
-        (d.anim == Anim::Humanoid || d.anim == Anim::Zombie || d.anim == Anim::Skeleton || d.anim == Anim::ArmorStand)) {
+        // WingsLayer: HumanoidMobRenderer's mobs (piglins and drowned too, not the giant) and armor stands
+        (d.anim == Anim::Humanoid || d.anim == Anim::Zombie || d.anim == Anim::Skeleton || d.anim == Anim::ArmorStand ||
+         d.anim == Anim::Piglin || d.anim == Anim::ZombifiedPiglin || d.anim == Anim::Drowned) &&
+        !(e.info && e.info->name == "minecraft:giant")) {
         // WingsLayer.getPlayerElytraTexture: a player's cape (when shown) instead of the elytra's own texture
         const int capeTex = d.special != SpPlayer ? -1 : e.elytraTexture >= 0 ? e.elytraTexture : e.cape >= 0 && (e.skinParts & 1) ? e.cape : -1;
         for (const EquipmentLayer& l : items_->itemLayers(chest, 3))
@@ -1121,7 +1124,7 @@ int EntityRenderer::equipmentLayers(const Entity& e, const TypeDef& d, Layer* ou
                 if (l.tex < 0 || n >= max) continue;
                 u32 color = kWhite;
                 if (l.dyeable) {
-                    const i32 dye = e.equipDye[slot] > 0 ? e.equipDye[slot] : l.undyed;
+                    const i32 dye = e.equipDye[slot] >= 0 ? e.equipDye[slot] : l.undyed;  // black (0) is a dye too
                     if (dye < 0) continue;
                     color = abgr(u32(dye));
                 }
