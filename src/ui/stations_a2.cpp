@@ -200,8 +200,8 @@ void stoneLayout(const Menu&, Layout& l) {
 }
 void stoneOpened(UiState&, Menu&) { stone = StonecutterState{}; }
 
-void stoneSync(const Menu& m) {  // containerChanged when the input changes
-    const int in = m.slots[0].empty() ? -1 : m.slots[0].item;
+void stoneSync(const Menu& m) {  // slotUpdateListener: every change of the input slot (the count too)
+    const int in = m.slots[0].empty() ? -1 : m.slots[0].item * 1024 + std::min(m.slots[0].count, 1023);
     if (in == stone.lastInput) return;
     stone.lastInput = in;
     stone.scrollOffs = 0, stone.startIndex = 0;
@@ -243,7 +243,7 @@ void stoneDrawBg(UiState& s, Canvas& c, Menu& m, const Layout&, float left, floa
 }
 
 void stoneDrawTop(UiState& s, Canvas& c, Menu& m, const Layout&, float left, float top) {  // extractTooltip
-    if (m.slots[0].empty() || !s.carried.empty()) return;
+    if (m.slots[0].empty()) return;
     const std::vector<int> vis = visibleRecipes(s, m);
     for (int index = stone.startIndex; index < stone.startIndex + 12 && index < int(vis.size()); ++index) {
         const int pos = index - stone.startIndex;
@@ -269,16 +269,18 @@ bool stoneInput(UiState& s, const InputEvent& e, Menu& m, const Layout&, float l
         return true;
     }
     if (e.type == InputEvent::Button && !e.down && e.code == 0) stone.scrolling = false;
+    if (e.type == InputEvent::Button && e.down && display)  // mouseClicked: any button
+        for (int index = stone.startIndex; index < stone.startIndex + 12; ++index) {
+            const int pos = index - stone.startIndex;
+            if (!inRect(s.mouseX, s.mouseY, left + 52 + float(pos % 4 * 16), top + 14 + float(pos / 4 * 18), 16, 18)) continue;
+            // StonecutterMenu.clickMenuButton: false only for the selected recipe again (an empty cell still clicks)
+            if (index == m.data[0]) return true;
+            if (index < int(vis.size())) m.data[0] = index;
+            uiSound("minecraft:ui.stonecutter.select_recipe");
+            sendContainerButton(s, index);
+            return true;
+        }
     if (e.type != InputEvent::Button || !e.down || e.code != 0 || !display) return false;
-    for (int index = stone.startIndex; index < stone.startIndex + 12; ++index) {
-        const int pos = index - stone.startIndex;
-        if (!inRect(s.mouseX, s.mouseY, left + 52 + float(pos % 4 * 16), top + 14 + float(pos / 4 * 18), 16, 18)) continue;
-        if (index >= int(vis.size())) return false;  // StonecutterMenu.clickMenuButton: a valid recipe index
-        m.data[0] = index;
-        uiSound("minecraft:ui.stonecutter.select_recipe");
-        sendContainerButton(s, index);
-        return true;
-    }
     if (inRect(s.mouseX, s.mouseY, left + 119, top + 9, 12, 54)) {
         stone.scrolling = true;
         return true;
@@ -527,7 +529,7 @@ void loomDrawBg(UiState& s, Canvas& c, Menu& m, const Layout& l, float left, flo
 }
 
 void loomDrawTop(UiState& s, Canvas& c, Menu& m, const Layout&, float left, float top) {
-    if (!loom.displayPatterns || !s.carried.empty()) return;
+    if (!loom.displayPatterns) return;
     const std::vector<int> sel = selectablePatterns(s, m);
     for (int row = 0; row < 4; ++row)
         for (int col = 0; col < 4; ++col) {
@@ -552,7 +554,7 @@ bool loomInput(UiState& s, const InputEvent& e, Menu& m, const Layout&, float le
         return true;
     }
     if (e.type == InputEvent::Button && !e.down && e.code == 0) loom.scrolling = false;
-    if (e.type != InputEvent::Button || !e.down || e.code != 0 || !loom.displayPatterns) return false;
+    if (e.type != InputEvent::Button || !e.down || !loom.displayPatterns) return false;  // any button picks a pattern
     for (int row = 0; row < 4; ++row)
         for (int col = 0; col < 4; ++col) {
             if (!inRect(s.mouseX, s.mouseY, left + 60 + float(col * 14), top + 13 + float(row * 14), 14, 14)) continue;
@@ -563,6 +565,7 @@ bool loomInput(UiState& s, const InputEvent& e, Menu& m, const Layout&, float le
             sendContainerButton(s, index);
             return true;
         }
+    if (e.code != 0) return false;
     if (inRect(s.mouseX, s.mouseY, left + 119, top + 9, 12, 56)) {
         loom.scrolling = true;
         return true;

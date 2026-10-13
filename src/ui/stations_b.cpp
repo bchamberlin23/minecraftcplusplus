@@ -88,6 +88,8 @@ void merchantOpened(State&, Menu& m) {
     g_merchant.shopItem = 0, g_merchant.scrollOff = 0, g_merchant.dragging = false;
 }
 bool merchantCanScroll() { return g_merchant.offers.size() > 7; }
+int activeOffer(const Menu& m);
+
 void merchantDrawBg(State& s, Canvas& c, Menu& m, const Layout&, float left, float top) {
     MerchantState& g = g_merchant;
     if (g.offers.empty()) return;
@@ -155,7 +157,8 @@ void merchantDrawBg(State& s, Canvas& c, Menu& m, const Layout&, float left, flo
             const float mult = 102.0f / float(maxXp - minXp);
             const int w = std::min(int(std::floor(mult * float(g.xp - minXp))), 102);
             blitSpriteRegion(c, s.sprites.sprite("container/villager/experience_bar_current"), 102, 5, 0, 0, left + 136, top + 16, float(w), 5);
-            const int future = m.slots.size() > 2 && !m.slots[2].empty() ? g.offers[size_t(g.shopItem)].xp : 0;
+            const int active = activeOffer(m);  // getFutureTraderXp: the active offer's experience
+            const int future = active >= 0 ? g.offers[size_t(active)].xp : 0;
             if (future > 0) {
                 const int fw = std::min(int(std::floor(float(future) * mult)), 102 - w);
                 blitSpriteRegion(c, s.sprites.sprite("container/villager/experience_bar_result"), 102, 5, w, 0, left + 136 + float(w),
@@ -164,6 +167,30 @@ void merchantDrawBg(State& s, Canvas& c, Menu& m, const Layout&, float left, flo
         }
     }
 }
+// MerchantContainer.updateSellItem: the offer the payment satisfies (MerchantOffers.getRecipeFor with the selected
+// trade as the hint when it is not the first; then the payment swapped when none or out of stock); -1 none.
+int activeOffer(const Menu& m) {
+    const MerchantState& g = g_merchant;
+    if (m.slots.size() < 2) return -1;
+    ItemStack a = m.slots[0], b = m.slots[1];
+    if (a.empty()) a = b, b = ItemStack{};
+    if (a.empty()) return -1;
+    const int n = int(g.offers.size());
+    auto find = [&](const ItemStack& x, const ItemStack& y) {  // MerchantOffer.satisfiedBy
+        auto sat = [&](const Offer& o) {
+            if (x.empty() || x.item != o.costA.item || x.count < o.costA.count) return false;
+            return o.costB.empty() ? y.empty() : !y.empty() && y.item == o.costB.item && y.count >= o.costB.count;
+        };
+        if (g.shopItem > 0 && g.shopItem < n) return sat(g.offers[size_t(g.shopItem)]) ? g.shopItem : -1;
+        for (int i = 0; i < n; ++i)
+            if (sat(g.offers[size_t(i)])) return i;
+        return -1;
+    };
+    int i = find(a, b);
+    if (i < 0 || g.offers[size_t(i)].outOfStock) i = find(b, a);
+    return i >= 0 && !g.offers[size_t(i)].outOfStock ? i : -1;
+}
+
 void merchantDrawFg(State& s, Canvas& c, Menu& m, const Layout& l, float left, float top) {
     const MerchantState& g = g_merchant;
     Text title = m.title;
@@ -175,7 +202,7 @@ void merchantDrawFg(State& s, Canvas& c, Menu& m, const Layout& l, float left, f
 }
 void merchantDrawTop(State& s, Canvas& c, Menu&, const Layout&, float left, float top) {
     const MerchantState& g = g_merchant;
-    if (!s.carried.empty() || s.hoveredSlot >= 0 || g.offers.empty()) return;
+    if (s.hoveredSlot >= 0 || g.offers.empty()) return;
     const int n = int(g.offers.size());
     for (int i = 0; i < 7 && i < n; ++i) {
         const float bx = left + 5, by = top + 18 + float(i * 20);
@@ -190,7 +217,7 @@ void merchantDrawTop(State& s, Canvas& c, Menu&, const Layout&, float left, floa
     }
     if (g.shopItem >= 0 && g.shopItem < n && g.offers[size_t(g.shopItem)].outOfStock && inRect(s, left + 186, top + 35, 22, 21) &&
         g.canRestock)
-        s.drawTooltip(c, s.font.split(Text(s.res.translate("merchant.deprecated")), 200), s.mouseX, s.mouseY);
+        s.drawTooltip(c, {Text(s.res.translate("merchant.deprecated"))}, s.mouseX, s.mouseY);  // one line, unwrapped
 }
 bool merchantInput(State& s, const InputEvent& e, Menu& m, const Layout&, float left, float top) {
     MerchantState& g = g_merchant;
@@ -235,8 +262,11 @@ void merchantOnTake(State& s, Menu& m) {
         if (cost.empty()) return true;
         return !have.empty() && have.item == cost.item && have.count >= cost.count;
     };
-    for (const Offer& o : g_merchant.offers) {
-        if (o.result.item != m.slots[2].item) continue;
+    const int active = activeOffer(m);  // slots.getActiveOffer
+    if (active < 0) return;
+    {
+        const Offer& o = g_merchant.offers[size_t(active)];
+        g_merchant.xp += o.xp;  // merchant.overrideXp(getVillagerXp() + offer.getXp())
         for (int swap = 0; swap < 2; ++swap) {
             ItemStack& a = m.slots[size_t(swap)];
             ItemStack& b = m.slots[size_t(1 - swap)];
@@ -541,7 +571,7 @@ bool crafterInput(State& s, const InputEvent& e, Menu& m, const Layout& l, float
     if (anyPress(e) && !s.window->keyDown(VK_SHIFT)) {
         if (crafterDisabled(m, slot)) crafterSetSlot(s, m, slot, true);
         else if (s.carried.empty()) crafterSetSlot(s, m, slot, false);
-    } else if (e.type == InputEvent::Key && e.down && s.carried.empty() && crafterDisabled(m, slot)) {
+    } else if (e.type == InputEvent::Key && e.down && crafterDisabled(m, slot)) {  // SWAP: no cursor check
         // SWAP: the hotbar keys (Inventory slots 0-8) and the offhand key (40) with an item there
         int from = -1;
         for (int i = 0; i < 9 && from < 0; ++i)
@@ -570,19 +600,22 @@ struct MountState {
     int columns = 0, entity = -1;
     std::string type = "horse";  // entity type without namespace
     bool baby = false;
+    bool tamed = false;  // AbstractHorse.isTamed (DATA_ID_FLAGS & 2) / TamableAnimal.isTame (DATA_FLAGS_ID & 4)
 } g_mount;
 
 bool mountNautilus() { return g_mount.type == "nautilus" || g_mount.type == "zombie_nautilus"; }
 bool mountLlama() { return g_mount.type == "llama" || g_mount.type == "trader_llama"; }
+// canUseSlot: Horse, Llama, SkeletonHorse and ZombieHorse every slot; other AbstractHorses the saddle when adult and
+// tamed; AbstractNautilus the saddle and the body when adult and tame.
 bool mountSaddle() {  // canUseSlot(SADDLE) && #can_equip_saddle
-    static const char* kSaddle[] = {"horse", "skeleton_horse", "zombie_horse", "donkey", "mule", "camel", "camel_husk", "nautilus",
-                                    "zombie_nautilus"};
-    for (const char* t : kSaddle)
-        if (g_mount.type == t) return !g_mount.baby;
+    const std::string& t = g_mount.type;
+    if (t == "horse" || t == "skeleton_horse" || t == "zombie_horse") return true;
+    if (t == "donkey" || t == "mule" || t == "camel" || t == "camel_husk" || mountNautilus()) return !g_mount.baby && g_mount.tamed;
     return false;
 }
 bool mountArmor() {  // canUseSlot(BODY) && (#can_wear_horse_armor || llama); nautili: canUseSlot(BODY)
-    return !g_mount.baby && (g_mount.type == "horse" || g_mount.type == "zombie_horse" || mountLlama() || mountNautilus());
+    if (mountNautilus()) return !g_mount.baby && g_mount.tamed;
+    return g_mount.type == "horse" || g_mount.type == "zombie_horse" || mountLlama();
 }
 void mountLayout(const Menu&, Layout& l) {
     l.background = mountNautilus() ? "gui/container/nautilus" : "gui/container/horse";
@@ -730,6 +763,8 @@ void registerHandlers(State& st, net::Client& client) {
                 if (auto it = all.find(entity); it != all.end() && it->second.info) {
                     g_mount.type = shortName(it->second.info->name);
                     g_mount.baby = it->second.baby;
+                    g_mount.tamed = mountNautilus() ? (ent::dataInt(it->second, "DATA_FLAGS_ID") & 4) != 0
+                                                    : (ent::dataInt(it->second, "DATA_ID_FLAGS") & 2) != 0;
                     title = it->second.name.empty() ? Text(s->res.translate("entity.minecraft." + g_mount.type)) : Text(it->second.name);
                 }
             }

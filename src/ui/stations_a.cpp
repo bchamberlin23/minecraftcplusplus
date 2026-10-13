@@ -269,7 +269,6 @@ void smithingDrawBg(UiState& s, Canvas& c, Menu& m, const Layout& l, float left,
 }
 
 void smithingDrawTop(UiState& s, Canvas& c, Menu& m, const Layout&, float left, float top) {  // onboarding tooltips
-    if (!s.carried.empty()) return;
     std::string key;
     if (m.data[0] != 0 && inRect(s.mouseX, s.mouseY, left + 65, top + 46, 28, 21)) key = "container.upgrade.error_tooltip";
     const int hs = s.hoveredSlot;
@@ -342,7 +341,9 @@ struct EnchantState {
     // Book (EnchantmentScreen.tickBook).
     JavaRandom random;
     float flip = 0, oFlip = 0, flipT = 0, flipA = 0, open = 0, oOpen = 0;
-    int lastItem = -2, lastCount = 0, lastTick = 0;
+    int lastTick = 0;
+    ItemStack last;  // the stack the book last saw (ItemStack.matches: item, count and components)
+    bool seen = false;
     // Enchantment registry (network ids: the registry sorted by name).
     bool registryLoaded = false;
     struct Ench {
@@ -400,7 +401,7 @@ void enchantOpened(UiState& s, Menu& m) {
     const bool regLoaded = ench.registryLoaded;
     auto reg = std::move(ench.registry);
     ench.flip = ench.oFlip = ench.flipT = ench.flipA = ench.open = ench.oOpen = 0;
-    ench.lastItem = -2, ench.lastCount = 0, ench.lastTick = s.guiTicks;
+    ench.seen = false, ench.last = ItemStack{}, ench.lastTick = s.guiTicks;
     ench.random.setSeed(i64(std::llround(s.clock * 1000.0)) ^ 0x1234567);
     ench.registryLoaded = regLoaded, ench.registry = std::move(reg);
     for (int i = 4; i < 10; ++i) m.data[size_t(i)] = -1;  // enchantClue / levelClue default -1 until the server sends them
@@ -408,11 +409,13 @@ void enchantOpened(UiState& s, Menu& m) {
 
 void tickBook(Menu& m) {
     const ItemStack& cur = m.slots[0];
-    const int item = cur.empty() ? -1 : cur.item, count = cur.empty() ? 0 : cur.count;
-    if (item != ench.lastItem || count != ench.lastCount) {
-        ench.lastItem = item, ench.lastCount = count;
-        do {
-            ench.flipT += float(ench.random.nextInt(4) - ench.random.nextInt(4));
+    const bool same = ench.seen && (cur.empty() ? ench.last.empty()
+                                                : !ench.last.empty() && cur.count == ench.last.count && cur.sameItemSameComponents(ench.last));
+    if (!same) {
+        ench.last = cur, ench.seen = true;
+        do {  // nextInt(4) - nextInt(4), left to right
+            const int first = ench.random.nextInt(4);
+            ench.flipT += float(first - ench.random.nextInt(4));
         } while (ench.flip <= ench.flipT + 1.0f && ench.flip >= ench.flipT - 1.0f);
     }
     ench.oFlip = ench.flip, ench.oOpen = ench.open;
@@ -594,7 +597,6 @@ void enchantDrawBg(UiState& s, Canvas& c, Menu& m, const Layout&, float left, fl
 }
 
 void enchantDrawTop(UiState& s, Canvas& c, Menu& m, const Layout&, float left, float top) {  // the clue tooltip
-    if (!s.carried.empty()) return;
     const int gold = lapisCount(m);
     for (int i = 0; i < 3; ++i) {
         const int minLevel = m.data[size_t(i)], enchId = m.data[size_t(4 + i)], level = m.data[size_t(7 + i)];
