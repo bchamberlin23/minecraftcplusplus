@@ -1712,7 +1712,8 @@ void Visuals::Impl::tickLocal() {
     tickPoseAnimation(e, move, p.pose == Player::Pose::FallFlying, p.pose == Player::Pose::Crouching);
     // LocalPlayer: the cloak from the position before the move, the bob, the walked distance (LocalPlayer.move).
     const float horizontal = float(std::sqrt(move[0] * move[0] + move[2] * move[2]));
-    tickCloak(e, p.prev, p.onGround && !p.swimming ? std::min(0.1f, horizontal) : 0.0f);
+    // AbstractClientPlayer: no bob while dead or dying
+    tickCloak(e, p.prev, p.onGround && !p.swimming && !(game && game->dead) ? std::min(0.1f, horizontal) : 0.0f);
     e.walkDist += horizontal * 0.6f;
 }
 
