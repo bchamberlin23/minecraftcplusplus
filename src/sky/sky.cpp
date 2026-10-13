@@ -1002,7 +1002,7 @@ void Sky::setOptions(const Options& o) {
 void Sky::buildClouds(const CameraState& cam, const Value* a) {
     Frame& f = *frame_;
     const Value& color = a[int(Attr::CloudColor)];
-    f.clouds = options_.clouds != 0 && color[3] > 0.0f && dimension_->skybox == Skybox::Overworld && cloudW_ > 0;
+    f.clouds = options_.clouds != 0 && color[3] > 0.0f && cloudW_ > 0;  // LevelRenderer: any dimension whose cloud colour shows
     if (!f.clouds) return;
     const float bottom = a[int(Attr::CloudHeight)][0];
     const float relBottom = float(bottom - cam.y), relTop = relBottom + 4.0f;
