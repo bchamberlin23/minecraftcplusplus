@@ -27,7 +27,9 @@ listening socket).
 
 ## Protocol / networking
 
-- **NET-16**: debug subscriptions.
+- **NET-16**: debug subscriptions. A release client only ever requests `dedicated_server_tick_time` (the F3 + 2
+  chart's TPS from a dedicated server, operators only); every world debug renderer needs MC_DEBUG_* flags. So:
+  that request with the chart (DEBUG-01).
 
 ## Items / UI
 
@@ -39,6 +41,13 @@ listening socket).
 
 ## Screens
 
+
+## Debug
+
+- **DEBUG-01** (not in the audit): the 26.3 F3 debug screen: DebugScreenOverlay with its configurable entries
+  (Debug Options screen, F3 + F6, profiles), the F3 + key combinations (chunk borders, hitboxes, reload chunks, help,
+  charts...), the visualizers (chunk borders, hitboxes, collision boxes, heightmap, water, light levels, solid
+  faces, supporting blocks...) and the FPS / TPS, profiler and network charts. Ours is an engine statistics overlay.
 
 ## Gameplay / world
 
