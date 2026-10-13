@@ -25,7 +25,11 @@ only profiles through Mojang's profile service and the skin patch's cape / elytr
 Debug Options, key combinations, renderers, charts with the TPS debug subscription: DEBUG-01, NET-16), server post
 effects (/posteffect), saved creative hotbars, the smooth camera and spyglass sensitivity, glowing outlines of dropped
 items / frames / paintings, minecart contents and the TNT fuse flash, the sleep fade, the friends key, the test instance
-beam, files dropped on the window (packs into the mods folder), F3 + C (debug crash) and F3 + S (texture dump). ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
+beam and error markers, files dropped on the window (packs into the mods folder), F3 + C (debug crash) and F3 + S
+(texture dump), the multiplayer safety warning, the experimental features confirmation, cobwebs with Weaving, every
+block's animateTick with its sounds (ClientLevel.animateTick, biome ambient particles, the creative markers), rain
+sounds, the menu and dragon music, the client-played sounds (pickups, totem, lightning, dragon, portal trigger, air
+bubbles, arrow hits, pufferfish, elder guardian curse with its appearance, armor stand hits). ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
 switch (automated runs never change the display mode) and the LAN publish from World Options (it would open a
 listening socket).
 
