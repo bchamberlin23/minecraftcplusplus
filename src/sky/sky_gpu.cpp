@@ -165,6 +165,7 @@ bool SkyGpu::init(Renderer& renderer, SkyImages images, std::vector<Sky::Frame::
             "root signature"))
         return false;
 
+    float depthBias = 0;  // DepthStencilState's bias (scale factor and constant alike)
     auto pso = [&](const void* vs, size_t vsSize, const void* ps, size_t psSize, Blend blend, bool depthTest,
                    bool depthWrite, bool cull, ComPtr<ID3D12PipelineState>& out) {
         D3D12_GRAPHICS_PIPELINE_STATE_DESC d{};
@@ -185,6 +186,8 @@ bool SkyGpu::init(Renderer& renderer, SkyImages images, std::vector<Sky::Frame::
         d.RasterizerState.CullMode = cull ? D3D12_CULL_MODE_BACK : D3D12_CULL_MODE_NONE;
         d.RasterizerState.FrontCounterClockwise = TRUE;  // the game's quads are counter-clockwise from the front here
         d.RasterizerState.DepthClipEnable = TRUE;
+        d.RasterizerState.DepthBias = INT(depthBias);
+        d.RasterizerState.SlopeScaledDepthBias = depthBias;
         d.DepthStencilState.DepthEnable = depthTest;
         d.DepthStencilState.DepthWriteMask = depthWrite ? D3D12_DEPTH_WRITE_MASK_ALL : D3D12_DEPTH_WRITE_MASK_ZERO;
         d.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_GREATER_EQUAL;  // reversed Z
@@ -201,9 +204,10 @@ bool SkyGpu::init(Renderer& renderer, SkyImages images, std::vector<Sky::Frame::
         !pso(SHADER(SkyGeoVS), SHADER(SkyGeoPS), Blend::Alpha, false, false, false, psoBlend_) ||
         !pso(SHADER(SkyGeoVS), SHADER(SkyGeoPS), Blend::Add, false, false, false, psoAdd_) ||
         !pso(SHADER(SkyCloudVS), SHADER(SkyCloudPS), Blend::Alpha, true, true, true, psoClouds_) ||
-        !pso(SHADER(SkyGeoVS), SHADER(SkyWeatherPS), Blend::Alpha, true, false, false, psoWeather_) ||
-        !pso(SHADER(SkyGeoVS), SHADER(SkyBorderPS), Blend::Add, true, false, false, psoBorder_))
+        !pso(SHADER(SkyGeoVS), SHADER(SkyWeatherPS), Blend::Alpha, true, false, false, psoWeather_))
         return false;
+    depthBias = 3.0f;  // RenderPipelines.WORLD_BORDER: DepthStencilState(GREATER_THAN_OR_EQUAL, write, 3, 3)
+    if (!pso(SHADER(SkyGeoVS), SHADER(SkyBorderPS), Blend::Add, true, true, false, psoBorder_)) return false;
 #undef SHADER
 
     starVertices_ = u32(stars.size());
