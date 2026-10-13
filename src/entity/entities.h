@@ -302,6 +302,9 @@ public:
     bool use(int id, const double hit[3], bool sneaking);
     // MultiPlayerGameMode.spectate / spectatorNoAction: ServerboundSpectatorActionPacket with the entity under the
     // crosshair (closer than blockDistance, < 0: no block), or none.
+    // Minecraft.pickBlockOrEntity on an entity: ServerboundPickItemFromEntityPacket (Ctrl: include its data). False
+    // when no entity is under the crosshair in front of the targeted block.
+    bool pickItem(const double eye[3], const double dir[3], double blockDistance, double reach, bool includeData);
     bool spectate(const double eye[3], const double dir[3], double blockDistance, double reach);
 
     const std::unordered_map<int, Entity>& entities() const { return entities_; }

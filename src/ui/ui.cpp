@@ -522,7 +522,7 @@ bool Ui::init(const Init& in) {
         if (st.online()) {
             net::Writer w;
             w.blockPos(x, y, z);
-            w.boolean(false);  // include data
+            w.boolean(st.window && st.window->keyDown(VK_CONTROL));  // include data: Ctrl (Minecraft.hasControlDown)
             st.client->sendPlay("pick_item_from_block", w);
             return;
         }

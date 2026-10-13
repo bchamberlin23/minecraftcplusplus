@@ -1898,6 +1898,17 @@ bool EntityWorld::click(const double eye[3], const double dir[3], bool attack, b
     return true;
 }
 
+bool EntityWorld::pickItem(const double eye[3], const double dir[3], double blockDistance, double reach, bool includeData) {
+    if (!client_ || !client_->alive()) return false;
+    const PickResult p = pick(eye, dir, blockDistance >= 0 ? std::min(blockDistance, reach) : reach);
+    if (p.id < 0) return false;
+    net::Writer w;
+    w.varInt(p.id);
+    w.boolean(includeData);
+    client_->sendPlay("pick_item_from_entity", w);
+    return true;
+}
+
 bool EntityWorld::spectate(const double eye[3], const double dir[3], double blockDistance, double reach) {
     if (!client_ || !client_->alive()) return false;
     const PickResult p = pick(eye, dir, blockDistance >= 0 ? std::min(blockDistance, reach) : reach);

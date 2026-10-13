@@ -314,7 +314,9 @@ void Game::handleClicks(Window& w, double dt, int rightPresses, int middlePresse
     const bool doPlace = (ev.right > 0 || (rightHeld && repeatTimer_ <= 0 && !use.active)) && !dig_.active && !handsBusy;
     if (doPlace) repeatTimer_ = ev.right > 0 ? 0.3 : 0.2;
     if (ev.middle && spectatorInput && spectatorInput(2, 0)) ev.middle = 0;
-    if (ev.middle && target_.hit) {
+    if (ev.middle && onPickEntity && onPickEntity(target_.hit ? blockDistance_ : -1.0)) {
+        // Minecraft.pickBlockOrEntity: the entity under the crosshair
+    } else if (ev.middle && target_.hit) {
         if (onPickBlock) onPickBlock(target_.x, target_.y, target_.z);
         else hotbar_[selected_] = world_.block(target_.x, target_.y, target_.z);
     }

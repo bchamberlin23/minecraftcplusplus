@@ -960,6 +960,13 @@ int wmain(int argc, wchar_t** argv) {
         }
         return entities.click(eye, dir, attack, use, blockDistance, game.entityReach, game.player().sneaking);
     };
+    game.onPickEntity = [&](double blockDistance) {
+        if (!session || !haveEntities) return false;
+        const CameraState c = game.camera();
+        const double eye[3] = {c.x, c.y, c.z}, cp = std::cos(c.pitch);
+        const double dir[3] = {-std::sin(c.yaw) * cp, -std::sin(c.pitch), std::cos(c.yaw) * cp};
+        return entities.pickItem(eye, dir, blockDistance, game.entityReach, window.keyDown(VK_CONTROL));
+    };
     // Minecraft.shouldEntityAppearGlowing (the glowing flag, or players while a spectator holds Spectator Outlines) and
     // Entity.getTeamColor (the team's colour, white without one).
     entityRenderer.outlineColor = [&](const ent::Entity& e) {
