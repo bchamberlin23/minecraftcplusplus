@@ -541,8 +541,13 @@ bool crafterInput(State& s, const InputEvent& e, Menu& m, const Layout& l, float
     if (anyPress(e) && !s.window->keyDown(VK_SHIFT)) {
         if (crafterDisabled(m, slot)) crafterSetSlot(s, m, slot, true);
         else if (s.carried.empty()) crafterSetSlot(s, m, slot, false);
-    } else if (e.type == InputEvent::Key && e.down && e.code >= '1' && e.code <= '9' && s.carried.empty()) {
-        if (crafterDisabled(m, slot) && !s.inventory.slots[size_t(36 + e.code - '1')].empty()) crafterSetSlot(s, m, slot, true);
+    } else if (e.type == InputEvent::Key && e.down && s.carried.empty() && crafterDisabled(m, slot)) {
+        // SWAP: the hotbar keys (Inventory slots 0-8) and the offhand key (40) with an item there
+        int from = -1;
+        for (int i = 0; i < 9 && from < 0; ++i)
+            if (s.isKey(Key(int(Key::Hotbar1) + i), e)) from = 36 + i;
+        if (from < 0 && s.isKey(Key::SwapOffhand, e)) from = 45;
+        if (from >= 0 && !s.inventory.slots[size_t(from)].empty()) crafterSetSlot(s, m, slot, true);
     }
     return false;  // the click goes on (AbstractContainerScreen.slotClicked)
 }

@@ -58,7 +58,7 @@ Layout layoutFor(const Menu& m) {
         for (int i = 0; i < rows * 9; ++i) l.slots.push_back({8 + (i % 9) * 18, 18 + (i / 9) * 18});
         const int yo = (rows - 4) * 18;
         playerSlots(l, rows * 9, 103 + yo, 161 + yo);
-        if (t == "shulker_box") l.height = 166, l.slots.resize(27), playerSlots(l, 27, 84, 142);
+        if (t == "shulker_box") l.height = 167, l.slots.resize(27), playerSlots(l, 27, 84, 142);  // ShulkerBoxScreen: 176 x 167
         l.invLabelY = l.height - 94;
     } else if (t == "crafting") {
         l.background = "gui/container/crafting_table";
