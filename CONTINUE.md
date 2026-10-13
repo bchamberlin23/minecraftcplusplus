@@ -21,15 +21,13 @@ menu / HUD / spectate click (PLAY-08), glowing entity outlines and capes (VIS-06
 skins for players / mannequins / the player list (VIS-07, NET-17), the Social Interactions screen, trail / sulfur / geyser
 particles and the potent sulfur client effects (FX-05), command suggestions and colours in the command block
 editors, the spectated entities' post effects (FX-07), experimental minecart movement (NET-15), name / id
-only profiles through Mojang's profile service and the skin patch's cape / elytra. ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
+only profiles through Mojang's profile service and the skin patch's cape / elytra, the 26.3 F3 debug screen (entries,
+Debug Options, key combinations, renderers, charts with the TPS debug subscription: DEBUG-01, NET-16). ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
 switch (automated runs never change the display mode) and the LAN publish from World Options (it would open a
 listening socket).
 
 ## Protocol / networking
 
-- **NET-16**: debug subscriptions. A release client only ever requests `dedicated_server_tick_time` (the F3 + 2
-  chart's TPS from a dedicated server, operators only); every world debug renderer needs MC_DEBUG_* flags. So:
-  that request with the chart (DEBUG-01).
 
 ## Items / UI
 
@@ -44,10 +42,9 @@ listening socket).
 
 ## Debug
 
-- **DEBUG-01** (not in the audit): the 26.3 F3 debug screen: DebugScreenOverlay with its configurable entries
-  (Debug Options screen, F3 + F6, profiles), the F3 + key combinations (chunk borders, hitboxes, reload chunks, help,
-  charts...), the visualizers (chunk borders, hitboxes, collision boxes, heightmap, water, light levels, solid
-  faces, supporting blocks...) and the FPS / TPS, profiler and network charts. Ours is an engine statistics overlay.
+- **DEBUG-01 residual**: the profiler pie (F3 + 1: no profiler of the game's kind; F3 + L likewise), F3 + S (dump
+  dynamic textures), F3 + C held for the debug crash, the sky light sections renderer, the chunk culling / octree
+  renderers (the game's section graph), labels of the projected renderers not scaled with distance.
 
 ## Gameplay / world
 
