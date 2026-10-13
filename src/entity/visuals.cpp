@@ -3424,7 +3424,12 @@ void Visuals::Impl::buildCracks(const PassContext& ctx) {
         const ItemModels::Rect& r = models.rect(rect);
         const u16 block = world.world().block(d->x, d->y, d->z);
         const BlockInfo& b = reg.infos()[block];
-        if (b.kind == KindAir || (b.fluid && !b.waterlogged)) continue;
+        // Block entity models (ModelFeatureRenderer's crumbling pass over the renderer's parts): chests and the like
+        // have no block model of their own.
+        static std::vector<be::BeQuad> beQuads;
+        beQuads.clear();
+        if (const be::BlockEntityRenderer* ber = be::BlockEntityRenderer::instance()) ber->crackQuads(d->x, d->y, d->z, beQuads);
+        if ((b.kind == KindAir && beQuads.empty()) || (b.fluid && !b.waterlogged)) continue;
         const u32 first = u32(dyn.size());
         auto quad = [&](const float (&p)[4][3]) {  // corners in order around the quad
             if (dyn.size() >= kMaxDynamic) return;
@@ -3438,10 +3443,13 @@ void Visuals::Impl::buildCracks(const PassContext& ctx) {
                              : std::abs(n[2]) >= std::abs(n[0])                                   ? 2
                                                                                                   : 0;
             MeshQuad q{};
+            // SheetedDecalTextureGenerator repeats the texture per block: each quad in the cell of its centre.
+            float cell[3];
+            for (int a = 0; a < 3; ++a) cell[a] = std::floor((p[0][a] + p[1][a] + p[2][a] + p[3][a]) * 0.25f);
             for (int k = 0; k < 4; ++k) {
                 for (int a = 0; a < 3; ++a) q.pos[k][a] = p[k][a] + n[a] * 0.002f;  // polygon offset
-                const float x = std::clamp(p[k][0], 0.0f, 1.0f), y = std::clamp(p[k][1], 0.0f, 1.0f),
-                            z = std::clamp(p[k][2], 0.0f, 1.0f);
+                const float x = std::clamp(p[k][0] - cell[0], 0.0f, 1.0f), y = std::clamp(p[k][1] - cell[1], 0.0f, 1.0f),
+                            z = std::clamp(p[k][2] - cell[2], 0.0f, 1.0f);
                 const float u = axis == 1 ? x : axis == 2 ? x : z, v = axis == 1 ? z : 1.0f - y;
                 q.uv[k][0] = r.u0 + u * r.du, q.uv[k][1] = r.v0 + v * r.dv;
             }
@@ -3462,6 +3470,11 @@ void Visuals::Impl::buildCracks(const PassContext& ctx) {
                                        {mq.pos[3][0], mq.pos[3][1], mq.pos[3][2]}, {mq.pos[2][0], mq.pos[2][1], mq.pos[2][2]}};
                 quad(p);  // "Z" order (0 1 2 / 2 1 3) -> around (0 1 3 2)
             }
+        }
+        for (const be::BeQuad& bq : beQuads) {
+            const float p[4][3] = {{bq.pos[0][0], bq.pos[0][1], bq.pos[0][2]}, {bq.pos[1][0], bq.pos[1][1], bq.pos[1][2]},
+                                   {bq.pos[2][0], bq.pos[2][1], bq.pos[2][2]}, {bq.pos[3][0], bq.pos[3][1], bq.pos[3][2]}};
+            quad(p);
         }
         const Xf m = xfTranslate(float(d->x - ctx.camX), float(d->y - ctx.camY), float(d->z - ctx.camZ));
         cracks.add(m, first, u32(dyn.size()) - first, 256 | 512, 0xFFFFFFFF, 1);

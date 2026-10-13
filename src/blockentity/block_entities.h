@@ -132,6 +132,9 @@ public:
     // nullptr when none is known).
     static const BlockEntityRenderer* instance();
     const Data* dataAt(int x, int y, int z) const;
+    // The model quads of the block entity at (x, y, z) relative to its block origin (crumbling overlays while it is
+    // being broken; no text, beams or portal effects). Empty when none is tracked there.
+    void crackQuads(int x, int y, int z, std::vector<BeQuad>& out) const;
 
     // Items the block entities show (campfire / shelf items, the vault's display item, a brushed item) and player
     // heads with a profile: with an item drawer set they are left to it (the entity visuals draw them with the full

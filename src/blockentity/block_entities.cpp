@@ -197,6 +197,22 @@ const BlockEntityRenderer::Data* BlockEntityRenderer::dataAt(int x, int y, int z
     return nullptr;
 }
 
+void BlockEntityRenderer::crackQuads(int x, int y, int z, std::vector<BeQuad>& out) const {
+    out.clear();
+    auto it = sections_.find(sectionKey(x >> 4, y >> 4, z >> 4));
+    if (it == sections_.end()) return;
+    for (const Instance& in : it->second.list) {
+        if (in.x != x || in.y != y || in.z != z) continue;
+        std::vector<BeQuad> text, translucent;
+        Emit e{{&out, &text, &translucent}, {double(x), double(y), double(z)}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+        const Data* data = in.data >= 0 && size_t(in.data) < it->second.data.size() ? &it->second.data[size_t(in.data)] : nullptr;
+        emitInstance(e, in, data, partial_);
+        out.insert(out.end(), translucent.begin(), translucent.end());
+        std::erase_if(out, [](const BeQuad& q) { return q.tex == kTexAtlasRepeat || q.tex == kTexEndPortal || q.tex == kTexEndGateway; });
+        return;
+    }
+}
+
 void BlockEntityRenderer::shownItems(std::vector<ShownItem>& out) const {
     if (!itemDrawer_) return;
     // The same poses the geometry would use: emitInstance with emitItem / the player heads recording instead.
