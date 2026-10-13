@@ -311,7 +311,7 @@ private:
     float progressAt(int x, int y, int z, u16 state) const;
     void edit(int x, int y, int z, u16 id);
     place::Context placeContext();  // game/placement.h: the placement prediction's view of this game
-    void updateNeighbourShapes(int x, int y, int z);
+    void updateNeighbourShapes(int x, int y, int z, u16 old);
 
     World& world_;
     BlockRegistry& registry_;

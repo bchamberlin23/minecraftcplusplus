@@ -384,7 +384,7 @@ bool Game::useTarget(bool place) {
         if (onEdit) onEdit(action);
         const u16 old = world_.block(target_.x, target_.y, target_.z);
         edit(target_.x, target_.y, target_.z, 0);
-        updateNeighbourShapes(target_.x, target_.y, target_.z);
+        updateNeighbourShapes(target_.x, target_.y, target_.z, old);
         if (onBlockChanged && old) onBlockChanged(false, target_.x, target_.y, target_.z, old);
         if (onSwing) onSwing(0, swingType);
         return true;
@@ -442,8 +442,8 @@ int Game::useItemOn(int hand) {
     send(kUseConsume);
     edit(t[0], t[1], t[2], id);
     for (const auto& [x, y, z, s] : placed.extra) edit(x, y, z, u16(s));  // setPlacedBy: door / plant tops, bed heads
-    updateNeighbourShapes(t[0], t[1], t[2]);
-    for (const auto& [x, y, z, s] : placed.extra) updateNeighbourShapes(x, y, z);
+    updateNeighbourShapes(t[0], t[1], t[2], existing);
+    for (const auto& [x, y, z, s] : placed.extra) updateNeighbourShapes(x, y, z, 0);
     placedLast_ = true;
     if (onBlockChanged) onBlockChanged(true, t[0], t[1], t[2], id);
     if (onSwing) {  // a use swing: the used hand's interact_animation
@@ -522,7 +522,7 @@ bool Game::destroyBlock(int x, int y, int z) {
     if (instabuild && canDestroyInCreative && !canDestroyInCreative()) return false;
     const BlockInfo& b = registry_.infos()[old];
     edit(x, y, z, b.waterlogged ? registry_.waterId() : 0);  // FluidState.createLegacyBlock
-    updateNeighbourShapes(x, y, z);  // Level.setBlock (UPDATE_ALL): the neighbours' updateShape
+    updateNeighbourShapes(x, y, z, old);  // Level.setBlock (UPDATE_ALL): the neighbours' updateShape
     if (onBlockChanged) onBlockChanged(false, x, y, z, old);
     return true;
 }
@@ -686,14 +686,15 @@ place::Context Game::placeContext() {
 
 // Level.setBlock's neighbour shape updates for a changed cell (connections, stair shapes, double chests, the other
 // halves of doors, tall plants and beds), as the client's prediction does them.
-void Game::updateNeighbourShapes(int x, int y, int z) {
+void Game::updateNeighbourShapes(int x, int y, int z, u16 old) {
     std::vector<std::array<int, 4>> changes;
-    place::neighbourShapes(placeContext(), x, y, z, changes);
-    for (const auto& [cx, cy, cz, s] : changes) edit(cx, cy, cz, u16(s));
-    for (const auto& [cx, cy, cz, s] : changes)  // a removed half's own neighbours (its pair's other cells)
-        if (s == 0) {
+    place::neighbourShapes(placeContext(), x, y, z, old, changes);
+    std::vector<u16> before;
+    for (const auto& [cx, cy, cz, s] : changes) before.push_back(world_.block(cx, cy, cz)), edit(cx, cy, cz, u16(s));
+    for (size_t i = 0; i < changes.size(); ++i)  // a removed half's own neighbours (its pair's other cells)
+        if (changes[i][3] == 0) {
             std::vector<std::array<int, 4>> more;
-            place::neighbourShapes(placeContext(), cx, cy, cz, more);
+            place::neighbourShapes(placeContext(), changes[i][0], changes[i][1], changes[i][2], before[i], more);
             for (const auto& [mx, my, mz, ms] : more) edit(mx, my, mz, u16(ms));
         }
 }

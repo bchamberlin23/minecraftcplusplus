@@ -37,7 +37,8 @@ struct Result {
 // The state the held block takes at `pos` (replaceClicked: placing into the clicked cell).
 Result placementState(const Context& c, u16 held, const int pos[3], bool replaceClicked);
 
-// Block.updateShape of the six neighbours of a changed cell: the cells whose state changes (x, y, z, state).
-void neighbourShapes(const Context& c, int x, int y, int z, std::vector<std::array<int, 4>>& out);
+// Block.updateShape of the six neighbours of a changed cell (old: its previous state) and the redstone wires' indirect
+// updates: the cells whose state changes (x, y, z, state).
+void neighbourShapes(const Context& c, int x, int y, int z, u16 old, std::vector<std::array<int, 4>>& out);
 
 }  // namespace place

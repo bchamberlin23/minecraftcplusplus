@@ -200,6 +200,92 @@ u16 wallShape(const Context& c, u16 state, const int p[3], const bool connected[
     return with(c, state, "up", post ? "true" : "false");
 }
 
+// RedStoneWireBlock
+bool isWire(const std::string& n) { return n == "minecraft:redstone_wire"; }
+// BlockBehaviour.isRedstoneConductor: a full collision cube, but the blocks Blocks.java says never (or always)
+bool conductor(const Context& c, u16 id) {
+    const std::string n = nameOf(c, id);
+    if (n == "minecraft:soul_sand" || n == "minecraft:mud") return true;
+    if (c.reg.infos()[id].leaves || n.ends_with("glass") || n.find("copper_grate") != std::string::npos ||
+        n.find("copper_bulb") != std::string::npos || n.ends_with("piston"))
+        return false;
+    for (std::string_view never : {"tnt", "ice", "frosted_ice", "glowstone", "beacon", "redstone_block", "sea_lantern", "chorus_flower",
+                                   "observer", "bamboo", "scaffolding", "powder_snow", "pointed_dripstone", "sulfur_spike"})
+        if (n.size() == never.size() + 10 && std::string_view(n).substr(10) == never) return false;
+    return fullCollision(c.reg, id);
+}
+// BlockBehaviour.isSignalSource of the blocks that override it
+bool signalSource(const std::string& n) {
+    if (n.ends_with("_pressure_plate") || n.ends_with("_button") || n.ends_with("lightning_rod")) return true;
+    for (std::string_view s : {"daylight_detector", "detector_rail", "comparator", "jukebox", "lectern", "lever", "redstone_block",
+                               "redstone_torch", "redstone_wall_torch", "sculk_sensor", "calibrated_sculk_sensor", "target",
+                               "trapped_chest", "tripwire_hook"})
+        if (n.size() == s.size() + 10 && std::string_view(n).substr(10) == s) return true;
+    return false;
+}
+// shouldRedstoneWireConnectTo (dir: from the wire to the block, -1 for none)
+bool wireConnectsTo(const Context& c, u16 id, int dir) {
+    const std::string n = nameOf(c, id);
+    if (isWire(n)) return true;
+    if (n == "minecraft:repeater") {
+        const int f = faceByName(c.reg.property(id, "facing"));
+        return dir >= 0 && (f == dir || f == opposite(dir));
+    }
+    if (n == "minecraft:observer") return dir >= 0 && faceByName(c.reg.property(id, "facing")) == dir;
+    return signalSource(n) && dir >= 0;
+}
+bool wireSurvivesOn(const Context& c, u16 below) { return sturdy(c.reg, below, kUp) || nameOf(c, below) == "minecraft:hopper"; }
+bool wireConnected(const Context& c, u16 s, int d) { return c.reg.property(s, kName[d]) != "none"; }
+bool wireDot(const Context& c, u16 s) {
+    for (int d = 2; d < 6; ++d)
+        if (wireConnected(c, s, d)) return false;
+    return true;
+}
+bool wireCross(const Context& c, u16 s) {
+    for (int d = 2; d < 6; ++d)
+        if (!wireConnected(c, s, d)) return false;
+    return true;
+}
+// getConnectingSide
+std::string_view wireSide(const Context& c, const int p[3], int dir) {
+    const bool canConnectUp = !conductor(c, at(c, p, kUp));
+    const int q[3] = {p[0] + kStep[dir][0], p[1], p[2] + kStep[dir][2]};
+    const u16 rs = c.block(q[0], q[1], q[2]);
+    if (canConnectUp) {
+        const bool placeableAbove = nameOf(c, rs).ends_with("trapdoor") || wireSurvivesOn(c, rs);
+        if (placeableAbove && isWire(nameOf(c, at(c, q, kUp)))) return sturdy(c.reg, rs, opposite(dir)) ? "up" : "side";
+    }
+    return !wireConnectsTo(c, rs, dir) && (conductor(c, rs) || !isWire(nameOf(c, at(c, q, kDown)))) ? "none" : "side";
+}
+// getConnectionState: the missing connections, a lone line extended to both sides
+u16 wireConnectionState(const Context& c, u16 state, const int p[3]) {
+    const bool wasDot = wireDot(c, state);
+    u16 s = state;
+    for (int d = 2; d < 6; ++d) s = with(c, s, kName[d], "none");  // defaultBlockState with the power
+    for (int d = 2; d < 6; ++d) s = with(c, s, kName[d], wireSide(c, p, d));
+    if (wasDot && wireDot(c, s)) return s;
+    const bool north = wireConnected(c, s, kNorth), south = wireConnected(c, s, kSouth), east = wireConnected(c, s, kEast),
+               west = wireConnected(c, s, kWest);
+    const bool nsEmpty = !north && !south, ewEmpty = !east && !west;
+    if (!west && nsEmpty) s = with(c, s, "west", "side");
+    if (!east && nsEmpty) s = with(c, s, "east", "side");
+    if (!north && ewEmpty) s = with(c, s, "north", "side");
+    if (!south && ewEmpty) s = with(c, s, "south", "side");
+    return s;
+}
+u16 wireCrossState(const Context& c, u16 state) {
+    for (int d = 2; d < 6; ++d) state = with(c, state, kName[d], "side");
+    return state;
+}
+// RedStoneWireBlock.updateShape of the wire `s` at q towards dirToNeighbour (the changed cell)
+u16 wireUpdate(const Context& c, u16 s, const int q[3], int dirToNeighbour) {
+    if (dirToNeighbour == kDown) return wireSurvivesOn(c, at(c, q, kDown)) ? s : 0;
+    if (dirToNeighbour == kUp) return wireConnectionState(c, s, q);
+    const std::string_view side = wireSide(c, q, dirToNeighbour);
+    if ((side != "none") == wireConnected(c, s, dirToNeighbour) && !wireCross(c, s)) return with(c, s, kName[dirToNeighbour], side);
+    return wireConnectionState(c, with(c, wireCrossState(c, s), kName[dirToNeighbour], side), q);
+}
+
 // StairBlock.getStairsShape of a stair state at p
 std::string_view stairsShape(const Context& c, u16 state, const int p[3]) {
     const int facing = faceByName(c.reg.property(state, "facing"));
@@ -519,6 +605,10 @@ Result placementState(const Context& c, u16 held, const int pos[3], bool replace
     }
     // Connections and shapes that getStateForPlacement computes from the neighbours.
     if (isStairs(n)) s = with(c, s, "shape", stairsShape(c, s, pos));
+    if (isWire(n)) {  // RedStoneWireBlock.getStateForPlacement (canSurvive: on a sturdy top or a hopper)
+        if (!wireSurvivesOn(c, at(c, pos, kDown))) return r;
+        s = wireConnectionState(c, wireCrossState(c, s), pos);
+    }
     if (isWall(n) && !reg.property(s, "up").empty()) {
         bool connected[6] = {};
         for (int d = 2; d < 6; ++d) connected[d] = wallConnects(c, at(c, pos, d), opposite(d));
@@ -536,7 +626,7 @@ Result placementState(const Context& c, u16 held, const int pos[3], bool replace
     return r;
 }
 
-void neighbourShapes(const Context& c, int x, int y, int z, std::vector<std::array<int, 4>>& out) {
+void neighbourShapes(const Context& c, int x, int y, int z, u16 old, std::vector<std::array<int, 4>>& out) {
     BlockRegistry& reg = c.reg;
     const int p[3] = {x, y, z};
     const u16 self = c.block(x, y, z);
@@ -549,6 +639,8 @@ void neighbourShapes(const Context& c, int x, int y, int z, std::vector<std::arr
         if (horizontal(d) && (isFence(nn) || isBars(nn))) {  // FenceBlock / IronBarsBlock.updateShape: the side facing us
             const bool connect = isFence(nn) ? fenceConnects(c, nn, self, d) : barsAttach(c, self, d);
             updated = with(c, nb, kName[opposite(d)], connect ? "true" : "false");
+        } else if (isWire(nn)) {
+            updated = wireUpdate(c, nb, q, opposite(d));
         } else if (isWall(nn) && d != kUp && !reg.property(nb, "up").empty()) {
             // WallBlock.updateShape: sideUpdate (the side facing us) or topUpdate (we are above it)
             bool connected[6] = {};
@@ -580,7 +672,21 @@ void neighbourShapes(const Context& c, int x, int y, int z, std::vector<std::arr
         }
         if (updated != nb) out.push_back({q[0], q[1], q[2], int(updated)});
     }
-    (void)p;
+    // RedStoneWireBlock.updateIndirectNeighbourShapes of the old and the new state: the wires one step down or up
+    // beyond each connected side
+    for (const u16 wire : {old, self}) {
+        if (!isWire(nameOf(c, wire))) continue;
+        for (int d = 2; d < 6; ++d) {
+            if (!wireConnected(c, wire, d) || isWire(nameOf(c, at(c, p, d)))) continue;
+            for (const int dy : {-1, 1}) {
+                const int q[3] = {x + kStep[d][0], y + dy, z + kStep[d][2]};
+                const u16 nb = c.block(q[0], q[1], q[2]);
+                if (!isWire(nameOf(c, nb))) continue;
+                const u16 updated = wireUpdate(c, nb, q, opposite(d));
+                if (updated != nb) out.push_back({q[0], q[1], q[2], int(updated)});
+            }
+        }
+    }
 }
 
 }  // namespace place
