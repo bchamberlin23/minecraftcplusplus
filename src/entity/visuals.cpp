@@ -2453,15 +2453,8 @@ void Visuals::Impl::buildTags(const PassContext& ctx) {
         float* out = r == 0 ? right : r == 1 ? up : fwd;
         for (int c = 0; c < 3; ++c) out[c] = vp(row, c) / l;
     }
-    // Crosshair entity (named mobs show their name when looked at).
-    int targeted = -1;
-    if (game) {
-        const CameraState c = game->camera();
-        const double eye[3] = {c.x, c.y, c.z}, cp = std::cos(c.pitch);
-        const double dir[3] = {-std::sin(c.yaw) * cp, -std::sin(c.pitch), std::cos(c.yaw) * cp};
-        const double limit = game->target().hit ? std::min(game->target().distance, 5.0) : 5.0;
-        targeted = world.pick(eye, dir, limit).id;
-    }
+    // Crosshair entity (named mobs show their name when looked at): Minecraft.crosshairPickEntity (the entity reach).
+    const int targeted = game ? game->crosshairEntity : -1;
     std::shared_lock lock(world.world().mutex());
     // Text displays (DisplayRenderer.TextDisplayRenderer): the display's pose, then rotate(Y, pi) and scale(-0.025);
     // one-sided (the text pipelines cull back faces), see-through ones without the depth test.
@@ -2503,7 +2496,7 @@ void Visuals::Impl::buildTags(const PassContext& ctx) {
             it = world.entities().count(it->first) ? std::next(it) : textBlocks.erase(it);
     static const int frameTypes[2] = {assets.typeId("minecraft:item_frame"), assets.typeId("minecraft:glow_item_frame")};
     for (const auto& [id, e] : world.entities()) {
-        if (!e.info || e.deathTime > 0) continue;
+        if (!e.info) continue;  // (dying entities keep their tags until removed)
         // ItemFrameRenderer.shouldShowName / getNameTag: only the targeted frame's item, when it has a custom name
         const bool frame = e.type >= 0 && (e.type == frameTypes[0] || e.type == frameTypes[1]);
         if (frame && !(id == targeted && e.itemStack && e.itemStack->hasCustomName && !(ui && ui->hudHidden()))) continue;
@@ -2538,12 +2531,16 @@ void Visuals::Impl::buildTags(const PassContext& ctx) {
         const bool discrete = e.pose == 5;  // crouching
         double bw, bh;  // the current dimensions (poses, sleeping, age and scale): the name tag attachment's height
         entitySize(e, bw, bh);
-        const float h = float(bh);
+        // the NAME_TAG attachment: the entity's height (AT_HEIGHT), the sniffer's nameTagOffset(2.05) scaled with it
+        const float h = float(e.info->name == "minecraft:sniffer" ? bh * 2.05 / 1.75 : bh);
         const float x = float(p[0] - cam[0]), y = float(p[1] - cam[1]) + h + 0.5f, z = float(p[2] - cam[2]);
         // EntityRenderDispatcher.distanceToSqr: from the entity's position (not the tag's)
         const float ox = float(p[0] - cam[0]), oy = float(p[1] - cam[1]), oz = float(p[2] - cam[2]);
         const float d2 = ox * ox + oy * oy + oz * oz;
-        if (d2 > 64.0f * 64.0f || (discrete && d2 >= 1024.0f)) continue;
+        // EntityRenderer: < 64 blocks; LivingEntityRenderer.shouldShowName: a sneaking one only within 32
+        const bool living = (e.category == Category::Living || e.category == Category::Player) &&
+                            e.info->name != "minecraft:armor_stand";  // ArmorStandRenderer: its own rule
+        if (!(d2 < 64.0f * 64.0f) || (living && discrete && d2 >= 1024.0f)) continue;
         if (fwd[0] * x + fwd[1] * y + fwd[2] * z < -1.0f) continue;  // behind the camera
         // Entity.getDisplayName: the team's prefix, colour and suffix (members: a player's name, else the UUID).
         const u32 light = lightAt(p[0], p[1] + e.info->eye, p[2]) | 512u;
