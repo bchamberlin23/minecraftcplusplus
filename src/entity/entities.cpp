@@ -203,6 +203,8 @@ EntityWorld::EntityWorld(EntityAssets& assets, World& world, BlockRegistry& regi
         d.cloudRadius = id({"DATA_RADIUS"});
         d.cloudWaiting = id({"DATA_WAITING"});
         d.cloudParticle = id({"DATA_PARTICLE"});
+        d.commandName = id({"DATA_ID_COMMAND_NAME"});
+        d.lastOutput = id({"DATA_ID_LAST_OUTPUT"});
         d.damage = id({"DATA_ID_DAMAGE"});
         d.mainGene = id({"MAIN_GENE_ID", "DATA_MAIN_GENE_ID"});
         d.mobFlags = id({"DATA_MOB_FLAGS_ID"});
@@ -1015,6 +1017,8 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
         else if (idx == d.noGravity) e.noGravity = v.i != 0;
         else if (idx == d.dangerous) e.dangerous = v.i != 0;
         else if (idx == d.cloudRadius) e.cloudRadius = v.f[0];
+        else if (idx == d.commandName && v.str >= 0 && size_t(v.str) < q.strings.size()) e.minecartCommand = q.strings[size_t(v.str)];
+        else if (idx == d.lastOutput && v.str >= 0 && size_t(v.str) < q.strings.size()) e.minecartLastOutput = q.strings[size_t(v.str)];
         else if (idx == d.cloudWaiting) e.cloudWaiting = v.i != 0;
         else if (idx == d.cloudParticle && v.str >= 0 && size_t(v.str) < q.strings.size()) e.cloudParticle = q.strings[size_t(v.str)];
         else if (idx == d.inGround) e.inGround = v.i != 0;
@@ -1666,6 +1670,7 @@ bool EntityWorld::attack(int id) {
 
 bool EntityWorld::use(int id, const double hit[3], bool sneaking) {
     if (!client_ || !client_->alive()) return false;
+    if (auto it = entities_.find(id); it != entities_.end() && onUse) onUse(it->second);
     net::Writer w;
     w.varInt(id);
     w.varInt(0);  // main hand

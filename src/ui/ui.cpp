@@ -9,6 +9,8 @@
 #include "ui/frontend.h"
 #include "ui/item_ui.h"
 #include "ui/signs_books.h"
+#include "entity/entities.h"
+#include "ui/block_editors.h"
 #include "ui/dialogs.h"
 #include "ui/gameplay_hud.h"
 #include "ui/narrator.h"
@@ -532,9 +534,13 @@ bool Ui::init(const Init& in) {
             }
         st.inventory.slots[size_t(36 + st.game->selectedSlot())] = ItemStack{id, 1};
     };
+    in.game->extraLines = [this](std::vector<LineVertex>& lines, const CameraState& cam, float w, float h) {
+        operatorBoxes(*s_, lines, cam, w, h);  // block_editors.cpp
+    };
     in.game->onInteract = [this](int x, int y, int z) {
         State& st = *s_;
         if (!st.online()) return false;
+        if (openBlockEditor(st, x, y, z)) return true;  // block_editors.cpp: command, structure, jigsaw, test blocks
         std::string n = st.registry->name(st.world->block(x, y, z));
         n = n.substr(n.find(':') + 1, n.find('[') == std::string::npos ? std::string::npos : n.find('[') - n.find(':') - 1);
         static const char* exact[] = {"barrel", "crafting_table", "crafter",
@@ -937,7 +943,15 @@ void Ui::attachSession(net::Client* client, net::Session* session) {
     };
 }
 
-void Ui::setEntities(ent::EntityWorld* entities) { s_->entities = entities; }
+void Ui::setEntities(ent::EntityWorld* entities) {
+    s_->entities = entities;
+    if (!entities) return;
+    State* s = s_.get();
+    entities->onUse = [s](const ent::Entity& e) {  // MinecartCommandBlock.interact: the editor on the client
+        if (!e.info || e.info->name != "minecraft:command_block_minecart") return;
+        openMinecartCommandEditor(*s, e.id, e.minecartCommand, parseComponent(e.minecartLastOutput, s->lang()));
+    };
+}
 void Ui::setItemModels(ent::ItemModels* models) {
     s_->itemModels = models;
     s_->icons.setItemModels(models);

@@ -575,12 +575,14 @@ void World::replaceChunk(int cx, int cz, int firstSy, const std::vector<PackedSe
 }
 
 void World::setChunkBlockEntities(int cx, int cz, std::vector<BlockEntityNbt> list) {
+    for (BlockEntityNbt& be : list) be.serial = ++blockEntitySerial_;
     if (list.empty()) blockEntities_.erase(chunkKey(cx, cz));
     else blockEntities_[chunkKey(cx, cz)] = std::move(list);
     noteBlockChange(cx, cz);
 }
 
 void World::setBlockEntity(BlockEntityNbt be) {
+    be.serial = ++blockEntitySerial_;
     const int cx = be.x >> 4, cz = be.z >> 4;
     auto& list = blockEntities_[chunkKey(cx, cz)];
     auto it = std::find_if(list.begin(), list.end(), [&](const BlockEntityNbt& e) { return e.x == be.x && e.y == be.y && e.z == be.z; });

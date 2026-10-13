@@ -777,6 +777,7 @@ void Game::buildOverlay() {
         if (highContrastOutline) pass(0xFF000000, 7.0f);
         pass(highContrastOutline ? 0xFFE1FF57 : 0x66000000, std::max(2.5f, W / 1920.0f * 2.5f));
     }
+    if (extraLines) extraLines(world, cam, float(std::max(1u, renderer_.width())), float(std::max(1u, renderer_.height())));
 
     if (!drawHud) {  // the UI draws the crosshair and hotbar
         renderer_.setOverlay(std::move(world), {}, {});

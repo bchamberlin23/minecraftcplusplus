@@ -164,6 +164,7 @@ public:
     struct BlockEntityNbt {
         i32 x = 0, y = 0, z = 0;
         std::string nbt;
+        u64 serial = 0;  // when it was last set (a world-wide counter): editors wait for the server's newer data
     };
     const std::vector<BlockEntityNbt>* blockEntities(int cx, int cz) const {
         auto it = blockEntities_.find(chunkKey(cx, cz));
@@ -203,6 +204,7 @@ private:
     std::unordered_map<u64, NbtValue> genExtras_;
     bool trackChanges_ = true;
     std::unordered_map<u64, std::vector<BlockEntityNbt>> blockEntities_;
+    u64 blockEntitySerial_ = 0;
     std::vector<u64> blockChanges_;
     bool trackBlockChanges_ = false;
     void noteBlockChange(int cx, int cz) {

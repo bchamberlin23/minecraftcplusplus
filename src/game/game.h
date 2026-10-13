@@ -207,6 +207,9 @@ public:
     // and death roll (bobHurt), and the attack strength (Player.attackStrengthTicker) for the attack indicator. ---
     bool bobView = true;  // the "View Bobbing" option (default on)
     bool highContrastOutline = false;  // the "High Contrast Block Outline" option
+    // More world lines for this frame (camera-relative; the screen's pixel size for line widths): structure and test
+    // block boxes (block_editors.cpp).
+    std::function<void(std::vector<LineVertex>& lines, const CameraState& cam, float screenW, float screenH)> extraLines;
     float damageTilt = 1.0f;  // the "Damage Tilt" option (damageTiltStrength) scales the bobHurt roll
     float walkDist = 0, walkDistO = 0, bob = 0, bobO = 0;
     int hurtTime = 0, hurtDuration = 10, deathTime = 0;
