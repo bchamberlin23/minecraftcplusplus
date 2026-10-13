@@ -257,6 +257,7 @@ struct Visuals::Impl {
     int crackRects[2][10] = {{-2, -2, -2, -2, -2, -2, -2, -2, -2, -2}, {-2, -2, -2, -2, -2, -2, -2, -2, -2, -2}};
     void buildCracks(const PassContext& ctx);
     void buildFlames(const double cam[3], float pt);
+    void buildBeams(const double cam[3], float pt);
     double lastTime = 0;
     float partial = 0;
     int glintRect = -1;
@@ -1855,6 +1856,85 @@ void Visuals::Impl::buildFlames(const double cam[3], float pt) {
     if (avatarReady && game->cameraMode != 0 && (avatar.sharedFlags & 0x01)) flame(avatar);
 }
 
+// GuardianRenderer.renderBeam: from the eyes to the target's middle, two crossed strips turning with the attack time
+// and an end cap, coloured from purple to yellow by the attack scale, full bright (entityCutout, guardian_beam: the
+// texture repeats 2.5 times per block, so each strip is cut where it wraps).
+void Visuals::Impl::buildBeams(const double cam[3], float pt) {
+    static int beamTex = -2;
+    if (beamTex == -2) beamTex = models.texture("entity/guardian/guardian_beam");
+    if (beamTex < 0 || !game) return;
+    const ItemModels::Rect& tr = models.rect(beamTex);
+    for (const auto& [id, e] : world.entities()) {
+        if (!e.info || e.attackTarget == 0 || (e.info->name != "minecraft:guardian" && e.info->name != "minecraft:elder_guardian")) continue;
+        double target[3];
+        if (auto t = world.entities().find(e.attackTarget); t != world.entities().end() && t->second.info) {
+            for (int a = 0; a < 3; ++a) target[a] = t->second.prevPos[a] + (t->second.pos[a] - t->second.prevPos[a]) * pt;
+            target[1] += t->second.info->height * 0.5;
+        } else if (e.attackTarget == world.selfId) {  // ourselves
+            const Player& p = game->player();
+            for (int a = 0; a < 3; ++a) target[a] = p.prev[a] + (p.pos[a] - p.prev[a]) * pt;
+            target[1] += Player::height(p.pose) * 0.5;
+        } else {
+            continue;
+        }
+        double eye[3];
+        for (int a = 0; a < 3; ++a) eye[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt;
+        eye[1] += e.info->eye;
+        double d[3] = {target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]};
+        const double len0 = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+        if (len0 < 1e-6) continue;
+        for (double& c : d) c /= len0;
+        const float length = float(len0 + 1.0);
+        const float duration = e.info->name == "minecraft:elder_guardian" ? 60.0f : 80.0f;
+        const float time = float(e.attackTime) + pt, scale = time / duration, texVOff = std::fmod(time * 0.5f, 1.0f);
+        // poseStack.rotate Y by pi/2 - atan2(z, x), then X by acos(y): local +Y along the beam
+        const float xRot = std::acos(float(std::clamp(d[1], -1.0, 1.0))), yRot = kPi / 2 - std::atan2(float(d[2]), float(d[0]));
+        auto rotate = [&](float x, float y, float z, float out[3]) {
+            const float y1 = y * std::cos(xRot) - z * std::sin(xRot), z1 = y * std::sin(xRot) + z * std::cos(xRot);  // Axis.XP
+            out[0] = x * std::cos(yRot) + z1 * std::sin(yRot), out[1] = y1, out[2] = -x * std::sin(yRot) + z1 * std::cos(yRot);  // Axis.YP
+        };
+        const float rot = time * 0.05f * -1.5f, cs = scale * scale;
+        const u32 r = u32(64 + int(cs * 191.0f)), g = u32(32 + int(cs * 191.0f)), b = u32(128 - int(cs * 64.0f));
+        const u32 color = 0xFF000000u | (b << 16) | (g << 8) | r;  // ABGR
+        auto at = [&](float ang, float rad, float out[2]) { out[0] = std::cos(rot + ang) * rad, out[1] = std::sin(rot + ang) * rad; };
+        const u32 first = u32(dyn.size());
+        auto quad = [&](const float p[4][3], const float uv[4][2]) {
+            if (dyn.size() >= kMaxDynamic) return;
+            MeshQuad q{};
+            for (int k = 0; k < 4; ++k) {
+                rotate(p[k][0], p[k][1], p[k][2], q.pos[k]);
+                q.uv[k][0] = tr.u0 + uv[k][0] * tr.du, q.uv[k][1] = tr.v0 + uv[k][1] * tr.dv;
+            }
+            q.normal = packNormal(0, 1, 0), q.color = color, q.tex = kTexItems, q.flags = kQuadNoShade;
+            dyn.push_back(q);
+        };
+        // The two strips: u 0.4999 .. 0 across, v from minV at the eyes to maxV at the far end, cut at whole v.
+        const float minV = -1.0f + texVOff, maxV = minV + length * 2.5f;
+        auto strip = [&](const float a[2], const float c[2]) {
+            for (float v = minV; v < maxV;) {
+                const float cell = std::floor(v), next = std::min(cell + 1.0f, maxV);
+                const float y0 = (v - minV) / (maxV - minV) * length, y1 = (next - minV) / (maxV - minV) * length;
+                const float p[4][3] = {{a[0], y1, a[1]}, {a[0], y0, a[1]}, {c[0], y0, c[1]}, {c[0], y1, c[1]}};
+                const float lo = v - cell, hi = next - cell;
+                const float uv[4][2] = {{0.4999f, hi}, {0.4999f, lo}, {0.0f, lo}, {0.0f, hi}};
+                quad(p, uv);
+                v = next;
+            }
+        };
+        float w[2], ea[2], n[2], s[2];
+        at(kPi, 0.2f, w), at(0.0f, 0.2f, ea), at(kPi / 2, 0.2f, n), at(kPi * 3 / 2, 0.2f, s);
+        strip(w, ea), strip(n, s);
+        float wn[2], en[2], es[2], ws[2];  // the end cap
+        at(kPi * 3 / 4, 0.282f, wn), at(kPi / 4, 0.282f, en), at(kPi * 7 / 4, 0.282f, es), at(kPi * 5 / 4, 0.282f, ws);
+        const float vBase = int(std::floor(time)) % 2 == 0 ? 0.5f : 0.0f;
+        const float cap[4][3] = {{wn[0], length, wn[1]}, {en[0], length, en[1]}, {es[0], length, es[1]}, {ws[0], length, ws[1]}};
+        const float capUv[4][2] = {{0.5f, vBase + 0.5f}, {1.0f, vBase + 0.5f}, {1.0f, vBase}, {0.5f, vBase}};
+        quad(cap, capUv);
+        worldLists.cut.add(xfTranslate(float(eye[0] - cam[0]), float(eye[1] - cam[1]), float(eye[2] - cam[2])), first, u32(dyn.size()) - first,
+                           0xFFu | 512u, 0xFFFFFFFF, 1);  // full bright
+    }
+}
+
 void Visuals::Impl::buildWorld(const PassContext& ctx) {
     const double cam[3] = {ctx.camX, ctx.camY, ctx.camZ};
     const float pt = std::clamp(world.partialTick(), 0.0f, 1.0f);
@@ -2184,6 +2264,7 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
         }
     }
     buildFlames(cam, pt);  // world lock held (lightAt)
+    buildBeams(cam, pt);
 }
 
 // ---------------------------------------------------------------------------------------------------------
