@@ -39,7 +39,11 @@ What remains:
 - **Feature positions**: a set of features land elsewhere than the server's in a fraction of chunks (coal ore, deep
   dark sculk patches, lush caves moss / clay pools, dark oak trees); the differences are symmetric (the same
   features, shifted), spread over chunk interiors, while other ores, blobs and most vegetation match. The feature
-  order (FeatureSorter) and the per-chunk biome set follow the game's code; the cause is open.
+  order (FeatureSorter) and the per-chunk biome set follow the game's code; the cause is open. A likely one: all of
+  these consume their random stream depending on the blocks around them (OreFeature's discard chance on air
+  exposure for the lower coal ores, sculk spreading, vegetation patches testing their ground, trees testing their
+  space), so a neighbour decorated in another order changes how much of the stream they use and shifts the
+  placements after it; features whose random use does not depend on their surroundings match.
 
 Far terrain uses this generator only beyond the server's view distance, and the viewer for chunks the save does
 not have; biomes, terrain shape and structures, what shows at a distance, match.
