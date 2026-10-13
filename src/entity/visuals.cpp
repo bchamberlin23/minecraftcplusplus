@@ -1644,6 +1644,7 @@ void Visuals::Impl::update() {
         const bool spectator = gameMode && gameMode() == 3;
         er.setLocalPlayer(avatarReady && game->cameraMode != 0 && !spectator ? &avatar : nullptr);
         er.setLocalPlayerShadow(avatarReady && game->cameraMode == 0 && !spectator ? &avatar : nullptr);  // first person
+        er.setLocalHolder(ui::itemWorld().localId, avatarReady ? &avatar : nullptr, game->cameraMode == 0, ui ? ui->settings().fov : 70.0f);
     }
     updateItemOwner(partial);
     animClock += dt;

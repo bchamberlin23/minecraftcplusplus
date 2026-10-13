@@ -39,7 +39,7 @@ struct MetaValue {
 
 enum class EventType : u8 {
     Add, Remove, Move, PositionSync, Teleport, Motion, HeadRot, Data, Equipment, PlayerInfo, PlayerRemove, Swing,
-    Hurt, Damage, EntityEvent, TakeItem, Passengers, Animate, Jukebox
+    Hurt, Damage, EntityEvent, TakeItem, Passengers, Animate, Jukebox, ProjectilePower, EntityLink
 };
 
 struct Step {
@@ -140,6 +140,9 @@ struct Entity {
     u8 sharedFlags = 0;  // 0x02 crouching, 0x20 invisible, ...
     u8 mobFlags = 0;     // Mob: 1 no AI, 2 left handed, 4 aggressive
     bool noGravity = false, inGround = false;
+    double accelerationPower = 0.1;  // AbstractHurtingProjectile (projectile_power); wind charges 0
+    bool dangerous = false;          // WitherSkull DATA_DANGEROUS (the blue skull)
+    int leashHolder = 0;             // Leashable: the holder's entity id (set_entity_link), 0 none
     int pose = 0;
     bool baby = false;
     float health = 1;
@@ -319,7 +322,7 @@ public:
            damage = -1, mainGene = -1, hiddenGene = -1, mobFlags = -1, noGravity = 5, inGround = -1, rotation = -1,
            painting = -1, nameVisible = 3, livingFlags = -1, attachedTo = -1, sleepPos = -1, ticksFrozen = -1,
            paddleLeft = -1, paddleRight = -1, chest = -1, color = -1, attachFace = -1, peek = -1, fireworksItem = -1,
-           silent = 4, staysStill = -1;
+           silent = 4, staysStill = -1, dangerous = -1;
         // Display entities.
         i8 dStart = -1, dDuration = -1, dPosRot = -1, dTranslation = -1, dScale = -1, dLeft = -1, dRight = -1,
            dBillboard = -1, dBrightness = -1, dViewRange = -1, dWidth = -1, dHeight = -1, dBlock = -1, dItem = -1,

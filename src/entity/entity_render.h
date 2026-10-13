@@ -49,6 +49,11 @@ public:
     // First-person camera: the local player is not drawn but still casts its shadow (shader pipeline).
     void setLocalPlayerShadow(const Entity* e) { localShadow_ = e; }
     static constexpr i32 kLocalPlayerId = INT32_MIN;
+    // The local player for ropes and the fishing line (holder / angler): its network id, the avatar (posed like the
+    // other players) and whether the camera is first person; fov: the FOV option (degrees).
+    void setLocalHolder(int networkId, const Entity* avatar, bool firstPerson, float fov) {
+        localNetId_ = networkId, localAvatar_ = avatar, localFirstPerson_ = firstPerson, fovOption_ = fov;
+    }
     // Model attachment points of the entities drawn in the last frame (camera-relative part matrices, blocks):
     // ItemInHandLayer / CustomHeadLayer of the visuals pass.
     struct Attachment {
@@ -153,6 +158,11 @@ private:
     ItemRules* rules_ = nullptr;
     bool externalItems_ = false;
     const Entity* localPlayer_ = nullptr;
+    int localNetId_ = -1;
+    const Entity* localAvatar_ = nullptr;
+    bool localFirstPerson_ = true;
+    float fovOption_ = 70.0f;
+    void emitRopes(const double cam[3], float pt, float projY);  // leashes (LeashFeatureRenderer), fishing lines
     const Entity* localShadow_ = nullptr;
 
     // Last build: reference ranges. Refs: [cutout: camera | shadow only][translucent: camera | shadow only][glint].

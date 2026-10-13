@@ -199,6 +199,7 @@ EntityWorld::EntityWorld(EntityAssets& assets, World& world, BlockRegistry& regi
         d.standPose = id({"DATA_HEAD_POSE"});
         d.hurt = id({"DATA_ID_HURT"});
         d.hurtDir = id({"DATA_ID_HURTDIR"});
+        d.dangerous = id({"DATA_DANGEROUS"});
         d.damage = id({"DATA_ID_DAMAGE"});
         d.mainGene = id({"MAIN_GENE_ID", "DATA_MAIN_GENE_ID"});
         d.mobFlags = id({"DATA_MOB_FLAGS_ID"});
@@ -600,6 +601,20 @@ void EntityWorld::attach(net::Client& client) {
         e.f[0] = r.f32();
         if (r.ok) q.events.push_back(e);
     });
+    on("projectile_power", [](net::Reader& r, EventQueue& q) {  // ClientboundProjectilePowerPacket
+        Event e;
+        e.type = EventType::ProjectilePower;
+        e.id = r.varInt();
+        e.d[0] = r.f64();
+        if (r.ok) q.events.push_back(e);
+    });
+    on("set_entity_link", [](net::Reader& r, EventQueue& q) {  // ClientboundSetEntityLinkPacket: source, holder (ints)
+        Event e;
+        e.type = EventType::EntityLink;
+        e.id = r.i32v();
+        e.a = r.i32v();
+        if (r.ok) q.events.push_back(e);
+    });
     on("damage_event", [](net::Reader& r, EventQueue& q) {
         Event e;
         e.type = EventType::Damage;
@@ -928,6 +943,8 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
             e.hurtTime = 10;
             if (verbose_) LOG("entities: %d hurt animation", e.id);
             break;
+        case EventType::ProjectilePower: e.accelerationPower = ev.d[0]; break;  // handleProjectilePowerPacket
+        case EventType::EntityLink: e.leashHolder = ev.a; break;               // Leashable.setDelayedLeashHolderId
         case EventType::Damage:  // ClientPacketListener.handleDamageEvent -> animateHurt
             e.hurtTime = 10;
             if (verbose_) LOG("entities: %d damaged", e.id);
@@ -967,6 +984,7 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
         else if (idx == d.fireworksItem && v.serializer == 7) e.fireworks = v.str >= 0 ? q.strings[size_t(v.str)] : std::string();
         else if (idx == d.mobFlags) e.mobFlags = u8(v.i);
         else if (idx == d.noGravity) e.noGravity = v.i != 0;
+        else if (idx == d.dangerous) e.dangerous = v.i != 0;
         else if (idx == d.inGround) e.inGround = v.i != 0;
         else if (idx == d.pose) e.pose = int(v.i);
         else if (idx == d.customName && v.str >= 0 && e.category != Category::Player) e.name = q.strings[size_t(v.str)];
@@ -1254,6 +1272,31 @@ void EntityWorld::tickEntity(Entity& e) {
                !e.inGround) {
         // Client-side motion between server updates (items, falling blocks and projectiles simulate locally).
         const bool arrowLike = e.info && (e.info->name.ends_with("arrow") || e.info->name == "minecraft:trident");
+        const std::string_view name = e.info ? std::string_view(e.info->name) : std::string_view();
+        const bool windCharge = name == "minecraft:wind_charge" || name == "minecraft:breeze_wind_charge";
+        if (windCharge || name == "minecraft:fireball" || name == "minecraft:small_fireball" || name == "minecraft:dragon_fireball" ||
+            name == "minecraft:wither_skull") {
+            // AbstractHurtingProjectile.tick: applyInertia (the velocity grows by accelerationPower along itself, then
+            // the inertia: 0.95, 0.8 in water, a dangerous wither skull 0.73, wind charges 1), then the move.
+            bool water = false;
+            {
+                std::shared_lock lock(world_.mutex());
+                const u16 at = world_.block(int(std::floor(e.pos[0])), int(std::floor(e.pos[1])), int(std::floor(e.pos[2])));
+                const BlockInfo& b = registry_.infos()[at];
+                water = b.waterlogged || (b.fluid && registry_.name(at).find("water") != std::string::npos);
+            }
+            const double inertia = windCharge ? 1.0 : water ? 0.8 : name == "minecraft:wither_skull" && e.dangerous ? 0.73 : 0.95;
+            const double len = std::sqrt(e.vel[0] * e.vel[0] + e.vel[1] * e.vel[1] + e.vel[2] * e.vel[2]);
+            const double power = windCharge ? 0.0 : e.accelerationPower;
+            for (double& v : e.vel) v = (v + (len < 1e-4 ? 0.0 : v / len * power)) * inertia;
+            for (int a = 0; a < 3; ++a) e.pos[a] += e.vel[a];
+            const double h = std::sqrt(e.vel[0] * e.vel[0] + e.vel[2] * e.vel[2]);
+            if (h > 1e-4 || std::abs(e.vel[1]) > 1e-4) {  // ProjectileUtil.rotateTowardsMovement(0.2)
+                e.yaw = rotLerp(0.2f, e.yaw, float(std::atan2(e.vel[0], e.vel[2]) * 180.0 / kPi));
+                e.pitch = lerpf(0.2f, e.pitch, float(std::atan2(e.vel[1], h) * 180.0 / kPi));
+            }
+            return tickSpecies(e, gameTime_, entities_);
+        }
         const double gravity = e.category == Category::Projectile ? (arrowLike ? 0.05 : 0.03) : 0.04;
         const double drag = e.category == Category::Projectile ? 0.99 : 0.98;
         if (!e.onGround || e.vel[1] > 0) {

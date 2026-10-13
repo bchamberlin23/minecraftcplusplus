@@ -1889,6 +1889,239 @@ void EntityRenderer::emitFree(const float pos[4][3], const float uv[4][2], const
     std::memcpy(frameBase_ + kFreeOffset + u64(freeCount_++) * sizeof(FreeQuad), &q, sizeof(FreeQuad));
 }
 
+namespace {
+struct V3 {
+    double x = 0, y = 0, z = 0;
+    V3 operator+(const V3& o) const { return {x + o.x, y + o.y, z + o.z}; }
+    V3 operator-(const V3& o) const { return {x - o.x, y - o.y, z - o.z}; }
+    V3 operator*(double s) const { return {x * s, y * s, z * s}; }
+};
+V3 yRot(V3 v, double a) {  // Vec3.yRot
+    const double c = std::cos(a), s = std::sin(a);
+    return {v.x * c + v.z * s, v.y, v.z * c - v.x * s};
+}
+V3 xRot(V3 v, double a) {  // Vec3.xRot
+    const double c = std::cos(a), s = std::sin(a);
+    return {v.x, v.y * c + v.z * s, v.z * c - v.y * s};
+}
+// The eye height by pose (players crouch to 1.27, swim / glide at 0.4), scaled like the box (babies).
+double eyeHeight(const Entity& e) {
+    if (!e.info) return 1.62;
+    if (e.category == Category::Player) {
+        if (e.pose == 5) return 1.27;
+        if (e.pose == 1 || e.pose == 3 || e.pose == 4) return 0.4;
+        if (e.pose == 2) return 0.2;
+    }
+    double w, h;
+    entitySize(e, w, h);
+    return e.info->height > 0 ? e.info->eye * h / e.info->height : e.info->eye;
+}
+float wrapDeg(float d) { return d - 360.0f * std::floor((d + 180.0f) / 360.0f); }  // Mth.wrapDegrees
+bool isBoat(const std::string& n) { return n.ends_with("_boat") || n.ends_with("_raft"); }
+// Leashable.createQuadLeashOffsets
+void quadOffsets(double w, double h, double front, double frontBack, double leftRight, double height, V3 out[4]) {
+    const double f = front * w, fb = frontBack * w, lr = leftRight * w, hh = height * h;
+    out[0] = {-lr, hh, fb + f}, out[1] = {-lr, hh, -fb + f}, out[2] = {lr, hh, -fb + f}, out[3] = {lr, hh, fb + f};
+}
+}  // namespace
+
+// Leash ropes (EntityRenderer.extractRenderState leash states, LeashFeatureRenderer): 24 steps from the leashed
+// entity's attach point to its holder's rope hold position, sagging, alternately shaded, as two crossed 0.05 ribbons;
+// quad ropes (four, taut) between a horse / camel / sniffer / boat and a (happy) ghast. Fishing lines
+// (FishingHookRenderer): 16 black segments from the hook to the angler's hand, one window line width wide.
+void EntityRenderer::emitRopes(const double cam[3], float pt, float projY) {
+    const auto& entities = world_.entities();
+    World& world = world_.world();
+    auto find = [&](int id) -> const Entity* {
+        if (id == localNetId_ && localAvatar_) return localAvatar_;
+        auto it = entities.find(id);
+        return it == entities.end() ? nullptr : &it->second;
+    };
+    auto lerpPos = [&](const Entity& e) {
+        return V3{e.prevPos[0] + (e.pos[0] - e.prevPos[0]) * pt, e.prevPos[1] + (e.pos[1] - e.prevPos[1]) * pt,
+                  e.prevPos[2] + (e.pos[2] - e.prevPos[2]) * pt};
+    };
+    auto living = [](const Entity& e) { return e.category == Category::Living || e.category == Category::Player; };
+    auto bodyRot = [&](const Entity& e) {  // getPreciseBodyRotation (radians)
+        const float a = living(e) ? e.prevBodyYaw + wrapDeg(e.bodyYaw - e.prevBodyYaw) * pt : e.prevYaw + wrapDeg(e.yaw - e.prevYaw) * pt;
+        return double(a) * kDeg;
+    };
+    auto lightAt = [&](const V3& p) -> u32 {
+        const int x = int(std::floor(p.x)), y = int(std::floor(p.y)), z = int(std::floor(p.z));
+        if (y < world.minSectionY() * 16 || y >= (world.maxSectionY() + 1) * 16) return 0xF0;
+        return world.light(x >> 4, y >> 4, z >> 4).at(x & 15, y & 15, z & 15);
+    };
+    const TexRect& white = assets_.rect(0);
+    const float uv[4][2] = {{white.u0, white.v0}, {white.u0, white.v0}, {white.u0, white.v0}, {white.u0, white.v0}};
+    const float up[3] = {0, 1, 0};
+    auto rope = [&](V3 start, V3 end, bool slack, u32 l0, u32 l1) {  // LeashFeatureRenderer.prepare
+        const double dx = end.x - start.x, dy = end.y - start.y, dz = end.z - start.z;
+        const double hl = std::sqrt(dx * dx + dz * dz);
+        const double factor = hl > 1e-6 ? 0.05 / 2.0 / hl : 0.0;
+        const double dxOff = dz * factor, dzOff = dx * factor;
+        auto point = [&](int k, double fudge, bool second, float out[3]) {
+            const double p = k / 24.0;
+            double y = slack ? (dy > 0 ? dy * p * p : dy - dy * (1 - p) * (1 - p)) : dy * p;
+            const double sx = second ? dxOff : -dxOff, sz = second ? -dzOff : dzOff;
+            const double yy = second ? y + 0.05 - fudge : y + fudge;
+            out[0] = float(start.x + dx * p + sx - cam[0]), out[1] = float(start.y + yy - cam[1]), out[2] = float(start.z + dz * p + sz - cam[2]);
+        };
+        for (int pass = 0; pass < 2; ++pass) {  // fudge 0.05 forwards, then 0 backwards: the two diagonals
+            const double fudge = pass == 0 ? 0.05 : 0.0;
+            for (int k = 0; k < 24; ++k) {
+                // The leash pipeline's flat colour: the far pair of each step (k + 1 forwards, k backwards).
+                const int kc = pass == 0 ? k + 1 : k;
+                const float shade = kc % 2 == (pass == 1 ? 1 : 0) ? 0.7f : 1.0f;
+                const u32 color = 0xFF000000u | u32(0.3f * shade * 255.0f) << 16 | u32(0.4f * shade * 255.0f) << 8 | u32(0.5f * shade * 255.0f);
+                const double p = kc / 24.0;
+                const u32 hi = u32(double((l0 >> 4) & 15) + (double((l1 >> 4) & 15) - double((l0 >> 4) & 15)) * p);
+                const u32 lo = u32(double(l0 & 15) + (double(l1 & 15) - double(l0 & 15)) * p);
+                float pos[4][3];
+                point(k, fudge, false, pos[0]);
+                point(k, fudge, true, pos[1]);
+                point(k + 1, fudge, true, pos[2]);
+                point(k + 1, fudge, false, pos[3]);
+                emitFree(pos, uv, up, 0xFFFFFFFF, color, (hi << 4 | lo) | 512, 0);
+            }
+        }
+    };
+    for (const auto& [id, e] : entities) {
+        if (!e.info) continue;
+        if (e.leashHolder != 0) {
+            const Entity* holder = find(e.leashHolder);
+            if (!holder || !holder->info) continue;
+            const std::string& n = e.info->name;
+            const std::string& hn = holder->info->name;
+            double w, hgt;
+            entitySize(e, w, hgt);
+            const double eye = eyeHeight(e);
+            const V3 pos = lerpPos(e), hpos = lerpPos(*holder);
+            const u32 l0 = lightAt(pos + V3{0, eye, 0}), l1 = lightAt(hpos + V3{0, eyeHeight(*holder), 0});
+            const double rot = bodyRot(e);
+            const bool holderQuad = hn == "minecraft:happy_ghast" || hn == "minecraft:ghast";
+            const bool horse = n == "minecraft:horse" || n == "minecraft:donkey" || n == "minecraft:mule" || n == "minecraft:skeleton_horse" ||
+                               n == "minecraft:zombie_horse" || n == "minecraft:camel" || n == "minecraft:camel_husk";
+            const bool quad = holderQuad && (horse || n == "minecraft:sniffer" || isBoat(n));
+            if (quad) {
+                V3 a[4], b[4];
+                if (n == "minecraft:camel" || n == "minecraft:camel_husk") quadOffsets(w, hgt, 0.02, 0.48, 0.25, 0.82, a);
+                else if (n == "minecraft:sniffer") quadOffsets(w, hgt, -0.01, 0.63, 0.38, 1.15, a);
+                else if (isBoat(n)) quadOffsets(w, hgt, 0.0, 0.64, 0.382, 0.88, a);
+                else if (n == "minecraft:donkey" || n == "minecraft:mule" || n == "minecraft:zombie_horse") quadOffsets(w, hgt, 0.04, 0.41, 0.18, 0.73, a);
+                else quadOffsets(w, hgt, 0.04, 0.52, 0.23, 0.87, a);
+                double hw, hh;
+                entitySize(*holder, hw, hh);
+                if (hn == "minecraft:happy_ghast") quadOffsets(hw, hh, -0.03125, 0.4375, 0.46875, 0.03125, b);
+                else quadOffsets(hw, hh, 0.0, 0.5, 0.5, 0.0, b);
+                const double hrot = bodyRot(*holder);
+                for (int i = 0; i < 4; ++i) rope(pos + yRot(a[i], -rot), hpos + yRot(b[i], -hrot), false, l0, l1);
+                continue;
+            }
+            // Leashable.getLeashOffset (by type)
+            V3 off{0, eye, w * 0.4};
+            if (n == "minecraft:allay") off = {0, eye * 0.6, w * 0.1};
+            else if (n == "minecraft:bee") off = {0, 0.5 * eye, w * 0.2};
+            else if (n == "minecraft:wolf" || n == "minecraft:pig" || n == "minecraft:rabbit" || n == "minecraft:strider") off = {0, 0.6 * eye, w * 0.4};
+            else if (n == "minecraft:fox") off = {0, 0.55 * eye, w * 0.4};
+            else if (n == "minecraft:ocelot" || n == "minecraft:parrot") off = {0, 0.5 * eye, w * 0.4};
+            else if (n == "minecraft:snow_golem") off = {0, 0.75 * eye, w * 0.4};
+            else if (n == "minecraft:iron_golem") off = {0, 0.875 * eye, w * 0.4};
+            else if (n == "minecraft:copper_golem") off = {0, 0.75 * eye, 0};
+            else if (n == "minecraft:llama" || n == "minecraft:trader_llama") off = {0, 0.75 * eye, w * 0.5};
+            else if (n == "minecraft:happy_ghast") off = {0, 0, 0};
+            else if (n == "minecraft:sulfur_cube") off = {0, hgt / 2.0, 0};
+            else if (isBoat(n)) off = {0, 0.88 * hgt, 0.64 * w};
+            else if (n == "minecraft:camel" || n == "minecraft:camel_husk") {  // getBodyAnchorAnimationYOffset (settled poses)
+                const double scale = e.baby ? 0.6 : 1.0;
+                const bool sitting = e.pose == 10;  // Pose.SITTING
+                const double dimsH = e.info->height * scale - (sitting ? 1.43 * scale : 0.0);
+                off = {0, dimsH - (e.baby ? 0.09375 : 0.375) + (sitting ? 0.2 * scale : 0.0) - 0.2 * scale, e.info->width * scale * 0.56};
+            }
+            const V3 rotated = yRot(off, -rot);
+            // getRopeHoldPosition (by holder)
+            V3 end = hpos + V3{0, eyeHeight(*holder) * 0.7, 0};
+            if (hn == "minecraft:leash_knot") {
+                end = hpos + V3{0, 0.2, 0};
+            } else if (hn == "minecraft:villager" || hn == "minecraft:wandering_trader") {
+                double hw, hh;
+                entitySize(*holder, hw, hh);
+                end = hpos + yRot(V3{0, hh - 1.0, 0.2}, -bodyRot(*holder));
+            } else if (holder->category == Category::Player) {
+                const double side = holder->mainArm != 0 ? -1.0 : 1.0;  // right handed: -1
+                const double xr = double(holder->pitch + (holder->prevPitch - holder->pitch) * pt * 0.5f) * kDeg;
+                if (holder == localAvatar_ && localFirstPerson_) {  // LocalPlayer: from the eyes, the hand's offset
+                    const double yr = double(holder->yaw + (holder->prevYaw - holder->yaw) * pt * 0.5f) * kDeg;
+                    end = xRot(V3{0.39 * side, -0.6, 0.3}, -xr);
+                    end = yRot(end, -yr) + hpos + V3{0, eyeHeight(*holder), 0};
+                } else if (holder->pose == 3) {  // isVisuallySwimming
+                    end = hpos + yRot(xRot(V3{0.22 * side, 0.2, -0.15}, -xr), -bodyRot(*holder));
+                } else {
+                    double hw, hh;
+                    entitySize(*holder, hw, hh);
+                    end = hpos + yRot(V3{0.22 * side, hh - 1.0, holder->pose == 5 ? -0.2 : 0.07}, -bodyRot(*holder));
+                }
+            }
+            rope(pos + rotated, end, true, l0, l1);
+        }
+    }
+    // Fishing lines: the hook's owner (its data) and the hand holding the rod.
+    static const int bobber = assets_.typeId("minecraft:fishing_bobber");
+    const float lineWidth = std::max(2.5f, float(renderer_ ? renderer_->width() : 1920) / 1920.0f * 2.5f);
+    const float screenH = float(renderer_ ? std::max(1u, renderer_->height()) : 1080u);
+    for (const auto& [id, e] : entities) {
+        if (e.type != bobber) continue;
+        const Entity* owner = find(e.direction);
+        if (!owner || owner->category != Category::Player) continue;
+        const bool rodInMain = items_ && items_->itemName(owner->equipment[0]) == "fishing_rod";
+        const bool rightArm = rodInMain ? owner->mainArm != 0 : owner->mainArm == 0;  // getHoldingArm
+        const double invert = rightArm ? 1.0 : -1.0;
+        const float swingT = owner->swingTime >= 0 ? std::clamp((float(owner->swingTime) + pt) / float(owner->swingDuration), 0.0f, 1.0f) : 0.0f;
+        const double swing = std::sin(std::sqrt(swingT) * kPi);
+        const V3 opos = lerpPos(*owner), eyePos = opos + V3{0, eyeHeight(*owner), 0};
+        V3 hand;
+        if (owner == localAvatar_ && localFirstPerson_) {
+            // camera.getNearPlane(fov).getPointOnPlane(invert * 0.525, -0.1) * 960 / fov, swung
+            const double fovR = double(fovOption_) * kDeg;
+            const double aspect = renderer_ ? double(renderer_->width()) / double(std::max(1u, renderer_->height())) : 16.0 / 9.0;
+            const double planeH = std::tan(fovR / 2.0) * 0.05, planeW = planeH * aspect;
+            const double yaw = double(owner->prevYaw + (owner->yaw - owner->prevYaw) * pt) * kDeg;
+            const double pitch = double(owner->prevPitch + (owner->pitch - owner->prevPitch) * pt) * kDeg;
+            const V3 fwd{-std::sin(yaw) * std::cos(pitch), -std::sin(pitch), std::cos(yaw) * std::cos(pitch)};
+            const V3 upv{-std::sin(yaw) * std::sin(pitch), std::cos(pitch), std::cos(yaw) * std::sin(pitch)};
+            const V3 left{std::cos(yaw), 0, std::sin(yaw)};
+            V3 p = fwd * 0.05 + upv * (planeH * -0.1) - left * (planeW * invert * 0.525);
+            p = p * (960.0 / double(fovOption_));
+            p = xRot(yRot(p, swing * 0.5), -swing * 0.7);
+            hand = eyePos + p;
+        } else {
+            const double r = bodyRot(*owner), s = std::sin(r), c = std::cos(r);
+            const double right = invert * 0.35, forward = 0.8;
+            hand = eyePos + V3{-c * right - s * forward, (owner->pose == 5 ? -0.1875 : 0.0) - 0.45, -s * right + c * forward};
+        }
+        const V3 hook = lerpPos(e) + V3{0, 0.25, 0};
+        const V3 d = hand - hook;
+        auto at = [&](double t) { return hook + V3{d.x * t, d.y * (t * t + t) * 0.5, d.z * t}; };  // stringVertex
+        for (int i = 0; i < 16; ++i) {
+            const V3 a = at(i / 16.0), b = at((i + 1) / 16.0);
+            // A camera-facing strip one line width wide (the lines pipeline), black and unlit.
+            auto rel = [&](const V3& v) { return V3{v.x - cam[0], v.y - cam[1], v.z - cam[2]}; };
+            const V3 ra = rel(a), rb = rel(b), seg = rb - ra;
+            const V3 mid = (ra + rb) * 0.5;
+            V3 side{seg.y * mid.z - seg.z * mid.y, seg.z * mid.x - seg.x * mid.z, seg.x * mid.y - seg.y * mid.x};
+            const double sl = std::sqrt(side.x * side.x + side.y * side.y + side.z * side.z);
+            if (sl < 1e-9) continue;
+            auto half = [&](const V3& v) {  // half the line width in world units at that distance
+                return double(lineWidth) * 0.5 * std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z) * 2.0 / (double(screenH) * double(projY));
+            };
+            const V3 sa = side * (half(ra) / sl), sb = side * (half(rb) / sl);
+            const V3 q[4] = {ra - sa, ra + sa, rb + sb, rb - sb};
+            float pos[4][3];
+            for (int k = 0; k < 4; ++k) pos[k][0] = float(q[k].x), pos[k][1] = float(q[k].y), pos[k][2] = float(q[k].z);
+            emitFree(pos, uv, up, 0xFFFFFFFF, 0xFF000000, 256, 0);
+        }
+    }
+}
+
 // EntityRenderer.extractShadow / ShadowFeatureRenderer: misc/shadow on the tops of the full blocks under each drawn
 // entity, fading with the distance to the camera (16 blocks), the depth below the entity and the light there.
 void EntityRenderer::emitBlobShadows(const double cam[3]) {
@@ -2339,6 +2572,11 @@ void EntityRenderer::build(const PassContext& ctx) {
     for (const auto& [id, e] : entities) visit(e);
     if (localPlayer_) visit(*localPlayer_);
     if (localShadow_ && !pack_) visit(*localShadow_);
+    if (!shadowOnly_) {  // the projection's y scale (1 / tan(fov / 2)): the fishing line's pixel width
+        float l = 0;
+        for (int c = 0; c < 3; ++c) l += vp(1, c) * vp(1, c);
+        emitRopes(cam, pt, std::sqrt(l));
+    }
     camCutout_ = refCount_, camFree_ = freeCount_, camTranslucent_ = u32(translucent_.size() / 2);
     blobFirst_ = freeCount_;
     if (!pack_) emitBlobShadows(cam);
