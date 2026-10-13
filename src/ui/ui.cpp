@@ -3,6 +3,7 @@
 #include "ui/item_props.h"
 
 #include "assets/assets.h"
+#include "audio/audio.h"
 #include "assets/game_reports.h"
 #include "ui/frontend.h"
 #include "ui/item_ui.h"
@@ -241,6 +242,7 @@ void Ui::State::openScreen(Screen s) {
     if (screen != s)
         if (const ScreenDef* d = screenDef(screen); d && d->closed) d->closed(*this);
     screen = s;
+    if (s == Screen::Options || s == Screen::Title || s == Screen::None) optionsParent = Screen::Options;
     buttons.clear();
     draggingSlider = -1;
     isQuickCrafting = false;
@@ -1097,6 +1099,7 @@ void Ui::beginFrame(double dt) {
     if (s.game) s.game->bobView = s.settings.bobView;  // the View Bobbing option
     if (s.game) s.game->damageTilt = float(s.settings.damageTiltStrength), s.game->highContrastOutline = s.settings.highContrastBlockOutline;
     if (s.window) s.window->setQuitShortcuts(s.settings.quitShortcuts);
+    if (audio::AudioSystem* a = audio::instance()) a->setMusicFrequency(s.settings.musicFrequency);
     // The server's data-driven registries (enchantment / painting / instrument names, creative contents).
     if (s.client && s.client->inPlay() && !s.items.registriesSet()) s.items.setRegistries(*s.client);
     if (s.session && !s.session->connected() && !s.quit) {

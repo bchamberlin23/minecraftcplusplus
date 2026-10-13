@@ -107,8 +107,87 @@ void drawTutorial(UiState& s, Canvas& c, Toast& t, float x, float y) {
     }
 }
 
+// --- NowPlayingToast: its own ToastInstance at the top left (MusicManager's song, the Music Toast option) ---------
+struct NowPlaying {
+    double animationStart = -1, fullyVisibleAt = -1;  // ToastInstance (seconds of the UI clock)
+    bool visible = false, wanted = false, updating = false, finished = true;
+    float portion = 0;
+    int shows = 0, hides = 0, mode = -1;  // the audio system's counters / the option, as last seen
+};
+NowPlaying g_np;
+int g_noteTick = 0;
+double g_noteChange = 0;
+u32 g_noteColor = 0xFFFFFFFF;
+
+// ColorLerper.getLerpedColor(MUSIC_NOTE): 30 steps a colour through MUSIC_NOTE_COLORS (texture colours x 1.25).
+u32 musicNoteColor(int tick) {
+    static const u32 kColors[12] = {0xF9FFFE, 0x9D9D97, 0x3AB3DA, 0x3C44AA, 0x169C9C, 0x5E7C16,
+                                    0x80C71F, 0xFED83D, 0xF9801D, 0xF38BAA, 0xB02E26, 0xC74EBD};
+    auto modified = [](int i) -> u32 {
+        if (i == 0) return 0xFFE6E6E6;  // white: -1644826
+        u32 c = 0xFF000000;
+        for (int k = 0; k < 24; k += 8) c |= u32(std::clamp(int(std::floor(float((kColors[i] >> k) & 255) * 1.25f)), 0, 255)) << k;
+        return c;
+    };
+    const int value = tick / 30, c1 = value % 12, c2 = (value + 1) % 12;
+    const float sub = float(tick % 30) / 30.0f;
+    const u32 a = modified(c1), b = modified(c2);
+    u32 out = 0;
+    for (int k = 0; k < 32; k += 8) {  // ARGB.srgbLerp: Mth.lerpInt per channel
+        const int from = int((a >> k) & 255), to = int((b >> k) & 255);
+        out |= u32((from + int(std::floor(sub * float(to - from)))) & 255) << k;
+    }
+    return out;
+}
+
+Text nowPlayingText(UiState& s, const std::string& key) { return Text(s.res.translate(key)); }
+
 void drawToasts(UiState& s, Canvas& c) {
     const double now = s.clock;
+    if (audio::AudioSystem* a = audio::instance()) {  // ToastManager: showNowPlayingToast / hideNowPlayingToast
+        const int mode = s.settings.musicToast;
+        if (mode != g_np.mode) {  // setMusicToastDisplayState: a new instance, shown at once with music audible
+            const bool wasNone = g_np.mode < 0;
+            g_np = NowPlaying{};
+            g_np.mode = mode, g_np.shows = a->nowPlayingShows(), g_np.hides = a->nowPlayingHides();
+            if (!wasNone && mode == 2 && a->volume(audio::Category::Music) * a->volume(audio::Category::Master) > 0.0f)
+                g_np.updating = g_np.wanted = true;
+        }
+        if (a->nowPlayingShows() != g_np.shows) {
+            g_np.shows = a->nowPlayingShows();
+            if (mode != 0) {
+                g_np = NowPlaying{-1, -1, false, true, true, true, 0, g_np.shows, g_np.hides, mode};  // resetToast + showToast
+            }
+        }
+        if (a->nowPlayingHides() != g_np.hides) g_np.hides = a->nowPlayingHides(), g_np.wanted = false;
+        if (mode != 0) {  // ToastInstance.update
+            NowPlaying& n = g_np;
+            if (n.animationStart < 0) n.animationStart = now, n.visible = true;
+            if (n.visible && now - n.animationStart <= kSlide) n.fullyVisibleAt = now;
+            const double fullyVisibleFor = now - n.fullyVisibleAt;
+            float p = float(std::clamp((now - n.animationStart) / kSlide, 0.0, 1.0));
+            p *= p;
+            n.portion = n.visible ? p : 1.0f - p;
+            if (n.updating) {  // NowPlayingToast.update
+                n.wanted = fullyVisibleFor < kDisplay * s.settings.notificationDisplayTime;
+                tickNowPlayingNotes(s);
+            }
+            if (n.wanted != n.visible) {
+                n.animationStart = now - (1.0f - n.portion) * kSlide;
+                n.visible = n.wanted;
+            }
+            const bool wasFinished = n.finished;
+            n.finished = !n.visible && now - n.animationStart > kSlide;
+            if (n.finished && !wasFinished) n.updating = false;  // onFinishedRendering
+            if (mode == 2 && !n.finished && s.screen != Screen::Pause && !s.hudHidden) {
+                const std::string& key = a->currentSongKey();
+                if (!key.empty()) {
+                    const float w = float(30 + s.font.width(nowPlayingText(s, key)) + 7);
+                    drawNowPlaying(s, c, w * n.portion - w, 0);
+                }
+            }
+        }
+    }
     g_now = now, g_displayScale = s.settings.notificationDisplayTime;
     // Free slots fill from the queue (ToastManager.update).
     while (!g_queue.empty()) {
@@ -216,6 +295,26 @@ void showCustomToast(const char* kind, int width, std::function<void(Canvas& c, 
     Toast t;
     t.kind = Kind::Custom, t.custom = kind, t.width = width, t.draw = std::move(draw);
     g_queue.push_back(std::move(t));
+}
+
+void tickNowPlayingNotes(UiState&) {  // NowPlayingToast.tickMusicNotes: the notes change colour every 25 ms
+    audio::AudioSystem* a = audio::instance();
+    if (!a || a->currentSongKey().empty()) return;
+    const double now = nowSeconds();
+    if (now > g_noteChange + 0.025) {
+        ++g_noteTick;
+        g_noteChange = now;
+        g_noteColor = musicNoteColor(g_noteTick);
+    }
+}
+
+void drawNowPlaying(UiState& s, Canvas& c, float x, float y) {  // NowPlayingToast.extractToast
+    audio::AudioSystem* a = audio::instance();
+    if (!a || a->currentSongKey().empty()) return;
+    const Text text = nowPlayingText(s, a->currentSongKey());
+    blitSprite(c, s.sprites.sprite("toast/now_playing"), x, y, float(30 + s.font.width(text) + 7), 30);
+    blitSprite(c, s.sprites.sprite("icon/music_notes"), x + 7, y + 7, 16, 16, g_noteColor);
+    s.drawText(c, text, x + 30, y + 15 - 9 / 2, 0xFFD3D3D3, true);
 }
 
 void setTutorialToastProgress(int handle, float progress) {

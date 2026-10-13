@@ -85,6 +85,8 @@ public:
     void popScissor();
     void setInvert(bool on) { setBlend(on ? 1 : 0); }
     void setBlend(u8 mode);
+    // Multiplies the alpha of everything drawn from now on (AbstractWidget.alpha: widgets fading in or out).
+    void setAlpha(float a) { alpha_ = std::clamp(a, 0.0f, 1.0f); }
 
     const std::vector<UiVertex>& vertices() const { return verts_; }
     const std::vector<Batch>& batches() const { return batches_; }
@@ -108,6 +110,7 @@ private:
     std::vector<UiVertex> verts_;
     std::vector<Batch> batches_;
     u8 blend_ = 0;
+    float alpha_ = 1.0f;
 };
 
 inline u32 argbToAbgr(u32 c) { return (c & 0xFF00FF00) | ((c & 0xFF) << 16) | ((c >> 16) & 0xFF); }

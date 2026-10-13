@@ -41,6 +41,7 @@ Button onOffButton(UiState& s, const char* captionKey, bool* value, std::functio
                    const char* tooltipKey = nullptr);
 Button sliderButton(float value, std::function<Text()> label, std::function<void(float)> slide);
 Button screenButton(UiState& s, const char* labelKey, Screen target, bool active = true);
+Button narratorButton(UiState& s);  // Options.narrator (Not Available without a voice)
 std::vector<Text> tooltipLines(UiState& s, const Text& text);  // split at new lines and 170 pixels
 // OptionInstance widgets on a Settings field (each change saves options.txt, then runs `changed`):
 std::function<Text()> tooltipKey(UiState& s, const char* key);  // a constant translated tooltip

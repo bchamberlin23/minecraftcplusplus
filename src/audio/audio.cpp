@@ -180,6 +180,10 @@ void AudioSystem::setVolume(Category c, float v) {
     volumes_[int(c)] = std::clamp(v, 0.0f, 1.0f);
     engine_.setCategoryGain(c, config_.muted && c == Category::Master ? 0.0f : volumes_[int(c)]);
     saveSettings();
+    if ((c == Category::Music || c == Category::Master) && v > 0.0f && !toastShown_) {  // showNowPlayingToastIfNeeded
+        ++nowPlayingShows_;
+        toastShown_ = true;
+    }
 }
 
 void AudioSystem::saveSettings() const {
@@ -205,6 +209,7 @@ u32 AudioSystem::play(int event, Category category, const double pos[3], float v
     JavaRandom random(seed);  // SimpleSoundInstance(..., RandomSource.create(seed), ...)
     ResolvedSound s;
     if (!bank_.resolve(event, random, s)) return 0;
+    lastFile_ = s.file;
     const float instVolume = volume * s.volume;
     if (soundVolume) *soundVolume = s.volume;
     if (onSound) {  // SoundEngine.notifyListeners: before the silent check
@@ -564,7 +569,7 @@ void AudioSystem::update(double dt, const CameraState& cam, const WorldInfo& inf
     finished_.clear();
     engine_.takeFinished(finished_);
     for (u32 h : finished_) {
-        if (h == music_) music_ = 0;
+        if (h == music_) music_ = 0, musicSong_.clear();
         for (Loop& l : loops_)
             if (l.handle == h) l.handle = 0;
         std::erase_if(entitySounds_, [h](const EntityBound& e) { return e.handle == h; });
@@ -632,17 +637,20 @@ void AudioSystem::setScreenMusic(std::string_view event) {
     if (id < 0 && screenMusic_.event >= 0 && music_ && musicEvent_ == screenMusic_.event) {  // MusicManager.stopPlaying
         engine_.stopHandle(music_);
         music_ = 0, musicEvent_ = -1;
+        musicSong_.clear();
+        ++nowPlayingHides_;
         nextSongDelay_ = 100;
     }
     screenMusic_ = MusicDef{id, 0, 0, true};  // Musics.CREDITS: no delay, replaces what plays
 }
 
-// MusicManager.tick with the default music frequency.
+// MusicManager.tick; MusicFrequency.getNextSongDelay (at most 20, 10 or 0 minutes; constant: 5 seconds).
 void AudioSystem::tickMusic(const AudioEnvironment* env, bool creative, bool underwater, float volume) {
-    constexpr int kMaxFrequency = 20 * 1200;
+    const int maxFrequency = (musicFrequency_ == 0 ? 20 : musicFrequency_ == 1 ? 10 : 0) * 1200;
     auto nextDelay = [&](const MusicDef* m) {
-        if (!m) return kMaxFrequency;
-        return rng_.nextInt(std::min(m->minDelay, kMaxFrequency), std::min(m->maxDelay, kMaxFrequency));
+        if (!m) return maxFrequency;
+        if (musicFrequency_ == 2) return 100;
+        return rng_.nextInt(std::min(m->minDelay, maxFrequency), std::min(m->maxDelay, maxFrequency));
     };
     if (music_ && musicGain_ != volume) {  // fadePlaying
         if (musicGain_ < volume) {
@@ -656,6 +664,8 @@ void AudioSystem::tickMusic(const AudioEnvironment* env, bool creative, bool und
         if (musicGain_ <= 1.0E-4f) {
             engine_.stopHandle(music_);
             music_ = 0;
+            musicSong_.clear();
+            ++nowPlayingHides_;
             nextSongDelay_ = nextDelay(screenMusic_.event >= 0 ? &screenMusic_ : env ? env->music.select(creative, underwater) : nullptr) + 100;
             return;
         }
@@ -669,6 +679,7 @@ void AudioSystem::tickMusic(const AudioEnvironment* env, bool creative, bool und
     if (music_ && music->replace && music->event != musicEvent_) {
         engine_.stopHandle(music_);
         music_ = 0;
+        musicSong_.clear();
         nextSongDelay_ = rng_.nextInt(0, music->minDelay / 2);
     }
     if (!music_ && musicEvent_ >= 0) {  // the song ended
@@ -682,6 +693,14 @@ void AudioSystem::tickMusic(const AudioEnvironment* env, bool creative, bool und
         engine_.setMusicFade(musicGain_);
         music_ = play(music->event, Category::Music, zero, 1.0f, 1.0f, rng_.nextLong(), false, true);
         musicEvent_ = music_ ? music->event : -1;
+        if (music_ && lastFile_ >= 0) {  // Identifier.toShortLanguageKey with '/' as '.'
+            musicSong_ = bank_.fileName(lastFile_);
+            for (char& ch : musicSong_)
+                if (ch == '/' || ch == ':') ch = '.';
+            // SoundManager.play: STARTED shows the toast, STARTED_SILENTLY (no music volume) waits for the volume
+            toastShown_ = volumes_[int(Category::Music)] * volumes_[0] > 0.0f;
+            if (toastShown_) ++nowPlayingShows_;
+        }
         nextSongDelay_ = INT_MAX;
         if (music_) LOG("audio: music %s", bank_.eventName(music->event).c_str());
     }

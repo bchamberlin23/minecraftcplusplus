@@ -111,6 +111,8 @@ struct Button {
     std::function<void(float)> onSlide;
     std::function<Text()> labelFn;
     std::function<Text()> tooltip;  // shown while hovered (Tooltip, split at 170 pixels); empty text: none
+    std::string icon;  // SpriteIconButton.TextAndIcon: this sprite at the right, the label centred beside it
+    float iconW = 0, iconH = 0;
 };
 
 enum class Screen {
@@ -211,6 +213,9 @@ struct Ui::State {
     // HUD
     bool hudHidden = false, debug = false;
     int guiTicks = 0;
+    // Where the Options sub-screens (Sounds, Accessibility, Language) go back to: the Options screen, or the
+    // accessibility onboarding screen that opened them.
+    Screen optionsParent = Screen::Options;
     // Hud.tickAutosaveIndicator: the local server saving (MinecraftServer.isCurrentlySaving), eased in and out.
     bool serverSaving = false;
     float autosaveIndicator = 0, lastAutosaveIndicator = 0;
@@ -342,6 +347,7 @@ struct Ui::State {
     void tickHud();
     void drawHud(Canvas& c);
     void drawSavingIndicator(Canvas& c);  // Hud.extractSavingIndicator
+    bool rendersNowPlayingToast() const;
     void drawChat(Canvas& c, bool focused);
     void drawDebug(Canvas& c);
     // playerSlot: the player inventory menu slot the stack is (item model properties compare stack identity: the

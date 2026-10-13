@@ -1206,6 +1206,7 @@ int wmain(int argc, wchar_t** argv) {
         {  // Video Settings the meshes depend on (Smooth Lighting, See-Through Leaves, Biome Blend): re-mesh on change
             const ui::Settings& vs = ui.settings();
             const MeshOptions mo{vs.ao, vs.cutoutLeaves};
+            terrain.setChunkUpdates(vs.prioritizeChunkUpdates);  // Chunk Builder (PrioritizeChunkUpdates)
             static int blendRadius = -1;
             if (!(mo == meshOptions()) || vs.biomeBlendRadius != blendRadius) {
                 const bool first = blendRadius < 0;

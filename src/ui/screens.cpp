@@ -7,6 +7,7 @@
 #include "ui/dialogs.h"
 #include "ui/item_ui.h"
 #include "ui/mp_hud.h"
+#include "ui/toasts.h"
 #include "ui/ui_state.h"
 #include "world/terrain.h"
 
@@ -613,6 +614,12 @@ void Ui::State::drawButton(Canvas& c, size_t i, bool hoverable) {
     }
     const Text label = b.labelFn ? b.labelFn() : b.label;
     const u32 color = b.active ? 0xFFFFFFFF : 0xFFA0A0A0;
+    if (!b.icon.empty()) {  // SpriteIconButton.TextAndIcon
+        const float left = b.x + 2, right = b.x + b.w - b.iconW - 4, w = float(font.width(label));
+        drawText(c, label, std::clamp(float(int(b.x + b.w / 2 - w / 2)), left, std::max(left, right - w)), b.y + (b.h - 8) / 2, color, true);
+        blitSprite(c, sprites.sprite(b.icon), b.x + b.w - b.iconW - 2, b.y + float(int(b.h / 2 - b.iconH / 2)), b.iconW, b.iconH);
+        return;
+    }
     drawCentered(c, label, b.x + b.w / 2, b.y + (b.h - 8) / 2, color);
 }
 
@@ -682,6 +689,7 @@ void Ui::State::drawScreen(Canvas& c) {
             c.gradient(0, 0, float(W), float(H), 0xC0101010, 0xD0101010);
             drawCentered(c, Text(res.translate("menu.game")), float(W / 2), 40.f, 0xFFFFFFFF);
             drawButtons(c);
+            if (rendersNowPlayingToast()) drawNowPlaying(*this, c, 0, 0);  // PauseScreen: the song playing, top left
             for (const Button& b : buttons)  // the custom options button's tooltip
                 if (b.tooltip && mouseX >= b.x && mouseY >= b.y && mouseX < b.x + b.w && mouseY < b.y + b.h)
                     drawTooltip(c, font.split(b.tooltip(), 170), mouseX, mouseY);

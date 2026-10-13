@@ -459,6 +459,8 @@ void frontEndInit(State& s) {
     else if (f.cfg.openScreen == "friends") openFriendsScreen(s);
     else if (f.cfg.openScreen == "create") openWorlds(s), openCreateWorld(s);  // world_create.cpp (tests)
     else friendsMenuCommand(s, f.cfg.openScreen);  // friend-join:<code> (friends_screen.cpp)
+    // Gui.addInitialScreens: the accessibility onboarding first, until it is finished once.
+    if (f.cfg.openScreen.empty() && s.settings.onboardAccessibility) s.openScreen(Screen::AccessibilityOnboarding);
 }
 
 // --- title screen (TitleScreen) -----------------------------------------------------------------------------------

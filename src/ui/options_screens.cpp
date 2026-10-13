@@ -64,6 +64,7 @@ Text boldUnderlined(Text t) {
 // --- OptionsList -----------------------------------------------------------------------------------------------
 
 OptionsList::OptionsList(UiState& s, Text title, Screen back) : s_(s) {
+    if (back == Screen::Options) back = s.optionsParent;
     if (g.screen != s.screen) g.scroll = 0;  // a new screen starts at the top; a rebuild (resize, change) keeps it
     const float scroll = g.scroll;
     g = ListState{};
@@ -762,6 +763,8 @@ void keyBindsClosed(UiState& s) {
 
 // --- Accessibility Settings ----------------------------------------------------------------------------------------
 
+}  // namespace
+
 // Options.narrator: the system speech engine's status; "Not Available" without one.
 Button narratorButton(UiState& s) {
     UiState* p = &s;
@@ -780,6 +783,8 @@ Button narratorButton(UiState& s) {
     b.active = narrator::available();
     return b;
 }
+
+namespace {
 
 // The options shared by Accessibility and Chat Settings (same OptionInstance in the game).
 Button textBackgroundOpacitySlider(UiState& s) {

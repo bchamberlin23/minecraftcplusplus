@@ -58,7 +58,7 @@ void filter(UiState& s) {  // LanguageSelectionList.filterEntries
 
 void onDone(UiState& s) {
     if (!g.selected.empty() && g.selected != s.res.languageCode()) setLanguage(s, g.selected);
-    s.openScreen(Screen::Options);
+    s.openScreen(s.optionsParent);
 }
 
 void build(UiState& s) {
@@ -132,7 +132,7 @@ void draw(UiState& s, Canvas& c) {
 
 void input(UiState& s, const Window::InputEvent& e) {
     using E = Window::InputEvent;
-    if (e.type == E::Key && e.down && e.code == VK_ESCAPE) return s.openScreen(Screen::Options);
+    if (e.type == E::Key && e.down && e.code == VK_ESCAPE) return s.openScreen(s.optionsParent);
     if (e.type == E::Key && e.down && e.code == VK_RETURN) return onDone(s);
     if (e.type == E::Wheel && s.mouseY >= listTop() && s.mouseY < listBottom(s)) {
         g.scroll = std::clamp(g.scroll - float(e.code) * float(kRowH / 2), 0.0f, maxScroll(s));

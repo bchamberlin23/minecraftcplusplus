@@ -90,6 +90,7 @@ void Canvas::rotate(float radians) {
 void Canvas::vertex(float x, float y, float u, float v, u32 abgr, u32 mode) {
     UiVertex vt;
     point(x, y, vt.x, vt.y);
+    if (alpha_ < 1.0f) abgr = (abgr & 0xFFFFFF) | u32(float(abgr >> 24) * alpha_ + 0.5f) << 24;
     vt.u = u, vt.v = v, vt.color = abgr, vt.mode = mode;
     verts_.push_back(vt);
 }

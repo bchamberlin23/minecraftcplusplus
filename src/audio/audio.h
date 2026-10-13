@@ -69,6 +69,13 @@ public:
     // Screen.getBackgroundMusic: a screen's own music (WinScreen: music.credits) over the situational one; "" ends
     // it (stopping it if it plays).
     void setScreenMusic(std::string_view event);
+    // MusicManager: the Music Frequency option (0 default, 1 frequent, 2 constant); the song playing as a translation
+    // key (getCurrentMusicTranslationKey: "music.game.sweden", "" none); counters of the now playing toast's show
+    // requests (a song started audibly, or the music turned up while one plays silently) and hide requests.
+    void setMusicFrequency(int frequency) { musicFrequency_ = frequency; }
+    const std::string& currentSongKey() const { return musicSong_; }
+    int nowPlayingShows() const { return nowPlayingShows_; }
+    int nowPlayingHides() const { return nowPlayingHides_; }
     // A sound the server named by Holder<SoundEvent>: registry id (>= 0), else the inline name.
     u32 playNetwork(int registryId, std::string_view name, Category category, const double pos[3], float volume, float pitch);
     void stop(u32 handle);
@@ -172,6 +179,11 @@ private:
     MusicDef screenMusic_;  // setScreenMusic (event < 0: none)
     int nextSongDelay_ = 100;
     float musicGain_ = 1.0f;
+    int musicFrequency_ = 0;
+    std::string musicSong_;
+    int nowPlayingShows_ = 0, nowPlayingHides_ = 0;
+    bool toastShown_ = false;
+    int lastFile_ = -1;  // the file the last play() picked
     // BiomeAmbientSoundsHandler
     std::vector<Loop> loops_;
     int loopEvent_ = -1;

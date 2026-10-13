@@ -1,11 +1,13 @@
 // HUD (Hud.java), chat (ChatComponent / ChatScreen input), F3 debug overlay, item slots and tooltips.
 #include "assets/assets.h"
+#include "audio/audio.h"
 #include "ui/gameplay_hud.h"
 #include "render/renderer.h"
 #include "ui/narrator.h"
 #include "ui/options_list.h"
 #include "ui/item_props.h"
 #include "ui/item_ui.h"
+#include "ui/toasts.h"
 #include "ui/ui_state.h"
 #include "world/terrain.h"
 #include "world/world.h"
@@ -65,6 +67,7 @@ void Ui::State::tickHud() {
     ++guiTicks;
     lastAutosaveIndicator = autosaveIndicator;
     autosaveIndicator += 0.2f * ((serverSaving ? 1.0f : 0.0f) - autosaveIndicator);
+    if (screen == Screen::Pause && rendersNowPlayingToast()) tickNowPlayingNotes(*this);  // PauseScreen.tick
     tickChat();
     for (auto& [id, e] : effects)
         if (e.duration > 0) --e.duration;
@@ -202,6 +205,12 @@ void Ui::State::drawTooltip(Canvas& c, const std::vector<Text>& lines, float mx,
 }
 
 // --- HUD ----------------------------------------------------------------------------------------------------
+
+// PauseScreen.rendersNowPlayingToast: the Music Toast option shows it in the pause menu, with music audible.
+bool Ui::State::rendersNowPlayingToast() const {
+    const audio::AudioSystem* a = audio::instance();
+    return settings.musicToast != 0 && a && a->volume(audio::Category::Music) * a->volume(audio::Category::Master) > 0.0f;
+}
 
 // Hud.extractSavingIndicator: "Saving world" bottom right while the local server saves (Autosave Indicator option).
 void Ui::State::drawSavingIndicator(Canvas& c) {
