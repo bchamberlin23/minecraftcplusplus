@@ -1016,18 +1016,27 @@ int Gameplay::predictBucket(int hand, const std::string& name) {
     const Physics& physics = game_->physics();
     const RayHit block = physics.raycast(eye, dir, reach);
     const double blockT = block.hit ? block.distance : reach;
+    // The user's bucket sounds (the server plays them with the player as the exception).
+    auto sound = [&](const char* id, audio::Category cat, double x, double y, double z) {
+        if (audio::AudioSystem* a = audio::instance()) a->play(id, cat, x, y, z, 1.0f, 1.0f);
+    };
     if (name == "bucket") {  // ClipContext.Fluid.SOURCE_ONLY: the first source (or block) along the ray
         for (double t = 0; t < blockT; t += 0.01) {
             const int x = int(std::floor(eye[0] + dir[0] * t)), y = int(std::floor(eye[1] + dir[1] * t)), z = int(std::floor(eye[2] + dir[2] * t));
             const Physics::Fluid f = physics.fluid(x, y, z);
             if (!f.type || !f.source || eye[1] + dir[1] * t > y + physics.fluidHeight(x, y, z, f)) continue;
             const u16 state = world_.block(x, y, z);
+            // BucketItem.use: player.playSound(the pickup's getPickupSound) at the player
+            const bool lava = registry_.name(state).starts_with("minecraft:lava");
             if (!registry_.property(state, "waterlogged").empty()) {  // SimpleWaterloggedBlock.pickupBlock
                 game_->predictBlock(x, y, z, registry_.withProperty(state, "waterlogged", "false"));
+                sound("minecraft:item.bucket.fill", audio::Category::Player, p.pos[0], p.pos[1], p.pos[2]);
                 return Game::kUseConsume;
             }
             if (!registry_.infos()[state].fluid) return Game::kUseFail;  // kelp, seagrass: not a BucketPickup
             game_->predictBlock(x, y, z, 0);  // LiquidBlock.pickupBlock
+            sound(lava ? "minecraft:item.bucket.fill_lava" : "minecraft:item.bucket.fill", audio::Category::Player, p.pos[0], p.pos[1],
+                  p.pos[2]);
             return Game::kUseConsume;
         }
         return block.hit ? Game::kUseFail : Game::kUsePass;
@@ -1035,6 +1044,15 @@ int Gameplay::predictBucket(int hand, const std::string& name) {
     if (!block.hit) return Game::kUsePass;
     const bool water = name != "lava_bucket";
     const u16 fluidState = registry_.idFor(water ? "minecraft:water[level=0]" : "minecraft:lava[level=0]");
+    auto emptySound = [&](int x, int y, int z) {  // BucketItem / MobBucketItem.playEmptySound at the placed block
+        const char* id = !water ? "minecraft:item.bucket.empty_lava" : "minecraft:item.bucket.empty";
+        audio::Category cat = audio::Category::Block;
+        if (name == "cod_bucket" || name == "salmon_bucket" || name == "pufferfish_bucket" || name == "tropical_fish_bucket")
+            id = "minecraft:item.bucket.empty_fish", cat = audio::Category::Neutral;
+        else if (name == "axolotl_bucket") id = "minecraft:item.bucket.empty_axolotl", cat = audio::Category::Neutral;
+        else if (name == "tadpole_bucket") id = "minecraft:item.bucket.empty_tadpole", cat = audio::Category::Neutral;
+        sound(id, cat, x + 0.5, y + 0.5, z + 0.5);
+    };
     auto tryPlace = [&](int x, int y, int z) {  // BucketItem.emptyContents
         const u16 state = world_.block(x, y, z);
         const BlockInfo& target = registry_.infos()[state];
@@ -1054,11 +1072,13 @@ int Gameplay::predictBucket(int hand, const std::string& name) {
         const std::string_view logged = registry_.property(state, "waterlogged");
         if (water && logged == "false") {  // LiquidBlockContainer.placeLiquid
             game_->predictBlock(x, y, z, registry_.withProperty(state, "waterlogged", "true"));
+            emptySound(x, y, z);
             return true;
         }
         const BlockInfo& b = registry_.infos()[state];
         if (!b.replaceable && state != 0) return false;
         game_->predictBlock(x, y, z, fluidState);
+        emptySound(x, y, z);
         return true;
     };
     const int fx = block.x + (block.face == 4 ? -1 : block.face == 5 ? 1 : 0), fy = block.y + (block.face == 0 ? -1 : block.face == 1 ? 1 : 0),
