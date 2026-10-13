@@ -555,8 +555,8 @@ void Riding::boatTick(ent::Entity& e) {
     }
     // move (no step: boats cannot climb)
     double d[3] = {e.vel[0], e.vel[1], e.vel[2]};
+    lastYd_ = e.vel[1];  // checkFallDamage: the velocity before the move's collisions
     collideMove(e, width, height, 0.0, d, vehicleOnGround_, vehicleHCollision_, gravity, false);
-    lastYd_ = e.vel[1];
     e.bodyYaw = e.headYaw = e.yaw;
     // positionRider: the rider turns with the boat, its look kept within 105 degrees of the boat's heading.
     Player& p = game_.player();

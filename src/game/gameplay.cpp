@@ -608,6 +608,7 @@ void Gameplay::setPlayer(Game& game, ui::Ui& ui) {
             AABB b{{e.pos[0] - w / 2, e.pos[1], e.pos[2] - w / 2}, {e.pos[0] + w / 2, e.pos[1] + h, e.pos[2] + w / 2}};
             if (boat) b.min[0] -= 0.2, b.max[0] += 0.2, b.min[1] += 0.01, b.max[1] -= 0.01, b.min[2] -= 0.2, b.max[2] += 0.2;
             if (!b.intersects(body)) continue;
+            if (boat && !(body.min[1] <= e.pos[1])) continue;  // AbstractBoat.push: not one standing higher than the boat
             double xa = p.pos[0] - e.pos[0], za = p.pos[2] - e.pos[2];
             double dd = std::max(std::abs(xa), std::abs(za));  // Mth.absMax
             if (dd < double(0.01f)) continue;
