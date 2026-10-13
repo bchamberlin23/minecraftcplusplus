@@ -20,7 +20,8 @@ void showToast(const Text& title, const Text& message = Text(), const std::strin
 // type: AdvancementType (0 task, 1 challenge, 2 goal).
 void showAdvancementToast(const Text& title, int type, const ItemStack& icon);
 // icon: a "toast/<icon>" sprite ("movement_keys", "mouse", "tree", "recipe_book", "wooden_planks"). Returns a handle.
-int showTutorialToast(const std::string& icon, const Text& title, const Text& message, bool progressable);
+// seconds > 0: it hides itself after that long, the bar filling with the time (TutorialToast.timeToDisplayMs).
+int showTutorialToast(const std::string& icon, const Text& title, const Text& message, bool progressable, double seconds = 0);
 void setTutorialToastProgress(int handle, float progress);
 void hideTutorialToast(int handle);
 // A toast drawing itself (RecipeToast): one per kind; showing it again while it is up updates it and restarts its

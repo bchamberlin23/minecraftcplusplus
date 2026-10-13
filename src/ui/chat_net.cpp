@@ -317,7 +317,21 @@ void registerHandlers(UiState& s, net::Client& client) {
             return;
         }
         LOG("[chat] %s", t.plain().c_str());
-        sp->post([sp, t] { sp->addChat(t, 1); });  // addServerSystemMessage
+        sp->post([sp, t] {
+            // ChatListener.handleSystemMessage: with Hide Matched Names, a "<name>" of a hidden player drops it
+            // (guessChatUUID: the first <...> in the plain text, a player seen this session).
+            if (sp->settings.hideMatchedNames) {
+                const std::string plain = t.plain();
+                const size_t a = plain.find('<'), b = a == std::string::npos ? a : plain.find('>', a + 1);
+                if (b != std::string::npos) {
+                    const std::string name = plain.substr(a + 1, b - a - 1);
+                    for (const std::vector<PlayerInfoView>& list : {playerInfos(), seenPlayers()})
+                        for (const PlayerInfoView& p : list)
+                            if (p.name == name && socialHidden(p.uuid)) return;
+                }
+            }
+            sp->addChat(t, 1);  // addServerSystemMessage
+        });
     });
     client.onPlay("player_chat", [sp, lang, cl](net::Reader& r) {
         auto m = std::make_shared<PlayerChat>();

@@ -412,7 +412,7 @@ void drawTitle(State& s, Canvas& c) {
     // LogoRenderer: 256x44 of the 256x64 logo, the edition 7 pixels into it.
     blitTexture(c, s.sprites.texture("gui/title/minecraft"), float(W / 2 - 128), 30, 0, 0, 256, 44, 256, 64);
     blitTexture(c, s.sprites.texture("gui/title/edition"), float(W / 2 - 64), 30 + 44 - 7, 0, 0, 128, 14, 128, 16);
-    if (!f.splash.empty()) {  // SplashRenderer
+    if (!f.splash.empty() && !s.settings.hideSplashTexts) {  // SplashRenderer (TitleScreen: unless Hide Splash Texts)
         const Text splash(f.splash);
         const int textW = s.font.width(splash);
         const double ms = std::fmod(s.clock * 1000.0, 1000.0);

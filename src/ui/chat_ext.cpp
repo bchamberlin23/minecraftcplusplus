@@ -346,7 +346,7 @@ void registerHandlers(UiState& s, net::Client& client) {
             if (id != cx.pendingId || sp->screen != tg.screen) return;
             cx.haveResult = true, cx.start = start, cx.length = length, cx.result = list;
             updateUsage(*sp);
-            showSuggestions(*sp);  // autoSuggestions (default on)
+            if (sp->settings.autoSuggestions) showSuggestions(*sp);  // CommandSuggestions.updateCommandInfo
         });
     });
 }

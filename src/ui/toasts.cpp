@@ -27,6 +27,7 @@ struct Toast {
     std::string sprite;     // tutorial icon sprite
     bool progressable = false;
     float progress = 0, smoothed = 0;
+    double timeToDisplay = 0;  // tutorial: seconds until it hides itself (0: until the tutorial hides it)
     int handle = 0;
     bool hideRequested = false;
     std::string custom;  // Custom: its kind, width and drawing; restartAt: updated while up (its time runs from there)
@@ -207,7 +208,9 @@ void drawToasts(UiState& s, Canvas& c) {
     }
     const int W = c.guiWidth();
     for (Toast& t : g_visible) {
-        const bool done = t.kind == Kind::Tutorial ? t.hideRequested
+        if (t.kind == Kind::Tutorial && t.timeToDisplay > 0)
+            t.progress = t.smoothed = float(std::min(visibleFor(t, now) / t.timeToDisplay, 1.0));
+        const bool done = t.kind == Kind::Tutorial ? t.hideRequested || (t.timeToDisplay > 0 && visibleFor(t, now) > t.timeToDisplay)
                           : t.restartAt >= 0     ? now - t.restartAt >= kDisplay * g_displayScale
                                                  : visibleFor(t, now) >= kDisplay * g_displayScale;
         if (!t.hiding && done) {
@@ -272,9 +275,10 @@ void showAdvancementToast(const Text& title, int type, const ItemStack& icon) {
     g_queue.push_back(std::move(t));
 }
 
-int showTutorialToast(const std::string& icon, const Text& title, const Text& message, bool progressable) {
+int showTutorialToast(const std::string& icon, const Text& title, const Text& message, bool progressable, double seconds) {
     Toast t;
     t.kind = Kind::Tutorial, t.sprite = icon, t.title = title, t.message = message, t.progressable = progressable;
+    t.timeToDisplay = seconds;
     t.handle = g_nextHandle++;
     g_queue.push_back(t);
     return t.handle;

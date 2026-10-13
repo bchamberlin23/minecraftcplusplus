@@ -3,6 +3,7 @@
 // inventory and craft planks.
 #include "assets/assets.h"
 #include "game/game.h"
+#include "ui/frontend.h"
 #include "ui/items.h"
 #include "ui/modules.h"
 #include "ui/toasts.h"
@@ -84,6 +85,13 @@ void tick(UiState& s) {
         g.started = true;
         g.step = Step(std::clamp(s.settings.tutorialStep, 0, 5));
         g.timeWaiting = 0, g.moved = g.looked = 0, g.moveCompleted = g.lookCompleted = -1, g.haveLook = false;
+    }
+    // Minecraft.tick: the first time on a server (not the integrated one), Gui.addSocialInteractionsToast for 8 s.
+    if (!s.settings.joinedFirstServer && !s.fe->cfg.singleplayer) {
+        showTutorialToast("social_interactions", Text(s.res.translate("tutorial.socialInteractions.title")),
+                          translatable("tutorial.socialInteractions.description", {key(s, Key::SocialInteractions)}, s.lang()), true, 8.0);
+        s.settings.joinedFirstServer = true;
+        s.settings.save();
     }
     const bool survival = s.game->gameMode == 0;  // Tutorial.isSurvival
     ++g.timeWaiting;

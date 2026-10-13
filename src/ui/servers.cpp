@@ -264,7 +264,8 @@ void buildServers(State& s) {
     addButton(s, x0 + 104, y0, 100, tr(s, "selectServer.direct"), [p] {
         FrontEndState& fe = *p->fe;
         fe.directIp.text = TextField{};
-        fe.directIp.text.value = lastDirect(fe.cfg.serversFile);
+        // DirectJoinServerScreen: options.lastMpIp (the last direct address), else this port's own record of it
+        fe.directIp.text.value = !p->settings.lastServer.empty() ? p->settings.lastServer : lastDirect(fe.cfg.serversFile);
         fe.directIp.text.cursor = fe.directIp.text.selection = int(fe.directIp.text.value.size());
         p->openScreen(Screen::DirectConnect);
     });
@@ -314,7 +315,9 @@ void drawServers(State& s, Canvas& c) {
             blitTexture(c, s.sprites.texture("misc/unknown_server"), rowLeft, y, 0, 0, 32, 32, 32, 32);
             s.drawText(c, tr(s, "lanServer.title"), rowLeft + 35, y + 1, 0xFFFFFFFF, true);
             s.drawText(c, Text(fitText(s.font, lan.motd, kRowW - 40)), rowLeft + 35, y + 12, 0xFF808080, true);
-            s.drawText(c, Text(lan.address), rowLeft + 35, y + 23, 0xFF808080, true);
+            // NetworkServerEntry: "Address Hidden" with Hide Server Address on
+            s.drawText(c, s.settings.hideServerAddress ? tr(s, "selectServer.hiddenAddress") : Text(lan.address), rowLeft + 35, y + 23, 0xFF808080,
+                       true);
             if (hovered) {
                 c.fill(rowLeft, y, rowLeft + 32, y + 32, 0xA0909090);
                 blitSprite(c, s.sprites.sprite(s.mouseX < rowLeft + 32 ? "server_list/join_highlighted" : "server_list/join"), rowLeft, y, 32, 32);
@@ -525,6 +528,7 @@ void buildDirectConnect(State& s) {
         while (!ip.empty() && ip.back() == ' ') ip.pop_back();
         if (ip.empty()) return;
         saveAll(*p, &ip);
+        p->settings.lastServer = ip, p->settings.save();
         connect(*p, ip);
     };
     addButton(s, x, float(H / 4 + 96 + 12), 200, tr(s, "selectServer.select"), join);
