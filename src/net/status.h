@@ -91,5 +91,6 @@ private:
 
 // The port Open to LAN offers: a free one from the game's range (HttpUtil.getAvailablePort tries 25564 first).
 u16 suggestLanPort();
+bool lanPortAvailable(u16 port);
 
 }  // namespace net

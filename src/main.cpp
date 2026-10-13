@@ -841,6 +841,28 @@ int wmain(int argc, wchar_t** argv) {
             LOG("lan: open to LAN on port %u as \"%s\"", port, motd.c_str());
             return true;
         };
+        fe.serverCommand = [&](const std::string& line) {
+            if (localServer) localServer->command(line);
+        };
+        fe.publishLan = [&](const std::string& motd, u16 port, std::string& error) {
+            if (!localServer) return false;
+            if (!lanHost.start(motd, port, localServer->port(), !opt.lan, error)) return false;
+            LOG("lan: open to LAN on port %u as \"%s\"", port, motd.c_str());
+            return true;
+        };
+        fe.unpublishLan = [&] { lanHost.stop(); };
+        fe.setGuestCommands = [&](bool on) {
+            if (localServer) localServer->setOpJoiners(on);
+        };
+        fe.setForceGameMode = [&](bool on, const std::string& mode) {
+            if (localServer) localServer->setForceGameMode(on, mode);
+        };
+        fe.setAllowCommands = [&](bool on) {
+            if (localServer) localServer->setAllowCommands(on);
+        };
+        fe.lockDifficulty = [&] {
+            if (localServer) localServer->setDifficultyLocked();
+        };
         fe.serverAddress = serverEntry;
         fe.reloadResources = [&] {  // server resource packs: the block textures (uploaded before the next frame)
             texturesReloaded = registry.reloadTextures();

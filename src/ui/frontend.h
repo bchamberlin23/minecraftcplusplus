@@ -6,6 +6,7 @@
 #include "ui/ui_state.h"
 #include "world/nbt_dom.h"
 
+#include <climits>
 #include <memory>
 #include <unordered_map>
 
@@ -129,10 +130,6 @@ struct FrontEndState {
     std::function<void()> messageAction;
 
     // Open to LAN
-    int lanMode = 0;  // survival, creative, adventure, spectator
-    bool lanCheats = false;
-    Field lanPort;
-    std::string lanError;
     u16 lanOpenPort = 0;  // published on this port
 };
 
@@ -183,10 +180,21 @@ void buildDirectConnect(State& s);
 void drawDirectConnect(State& s, Canvas& c);
 void serversFrame(State& s);  // ping results, LAN worlds
 void frontEndInit(State& s);
-void openToLanScreen(State& s);  // pause menu: Open to LAN  // Ui::init: the title screen (menu mode) or the in-world parts
+// world_create.cpp: the game's game rules (read once with the game's code, cached), their names and categories.
+struct GameRuleInfo {
+    std::string id, category, def;
+    bool boolean = true;
+    i64 min = INT_MIN, max = INT_MAX;
+};
+const std::vector<GameRuleInfo>* gameRuleInfos(State& s);  // null while loading (started on the first call) / failed
+bool gameRulesFailed();
+std::string gameRuleName(State& s, const std::string& id);
+std::string gameRuleDescription(State& s, const std::string& id);
+std::string gameRuleCategoryName(State& s, const std::string& category);
 // friends_screen.cpp: the Friends screen, its button label ("Friends (2)" with requests), --menu friend-join:<code>.
 void openFriendsScreen(State& s);
 Text friendsButtonLabel();
+int friendsPendingRequests();  // incoming friend requests (the pause menu's Friends badge)
 bool friendsMenuCommand(State& s, const std::string& command);
 
 }  // namespace ui

@@ -169,102 +169,6 @@ void drawConfirm(State& s, Canvas& c) {
     s.drawButtons(c);
 }
 
-// --- Open to LAN (ShareToLanScreen) -------------------------------------------------------------------------------
-
-const char* kLanModes[] = {"survival", "creative", "adventure", "spectator"};
-
-void startLan(State& s) {
-    FrontEndState& f = *s.fe;
-    std::string portText = f.lanPort.text.value;
-    u16 port = 0;
-    if (portText.empty()) {
-        port = net::suggestLanPort();
-    } else {
-        const int v = std::atoi(portText.c_str());
-        bool digits = !portText.empty();
-        for (char ch : portText) digits = digits && ch >= '0' && ch <= '9';
-        if (!digits || v < 1024 || v > 65535) {
-            f.lanError = s.res.translate("lanServer.port.invalid");
-            return;
-        }
-        port = u16(v);
-    }
-    WorldEntry w;
-    const std::string level = !f.cfg.worldName.empty()           ? f.cfg.worldName
-                              : readWorld(f.cfg.worldDir, w) ? w.name
-                                                             : utf8(f.cfg.worldDir.filename());
-    const std::string motd = f.cfg.playerName + " - " + level;  // like the game's LAN announcement
-    std::string error;
-    if (!f.cfg.openToLan || !f.cfg.openToLan(motd, kLanModes[f.lanMode], f.lanCheats, port, error)) {
-        LOG("lan: could not open to LAN: %s", error.c_str());
-        f.lanError = error.empty() ? s.res.translate("commands.publish.failed") : s.res.translate("lanServer.port.unavailable");
-        return;
-    }
-    f.lanOpenPort = port;
-    f.lanError.clear();
-    s.closeScreen();
-    s.addChat(translatable("commands.publish.started", {Text(std::to_string(port))}, s.lang()));
-}
-
-}  // namespace
-
-void openToLanScreen(State& s) {
-    FrontEndState& f = *s.fe;
-    // Like ShareToLanScreen: the host's game mode and commands, a free port.
-    f.lanMode = std::clamp(s.gameMode(), 0, 3);
-    WorldEntry w;
-    f.lanCheats = readWorld(f.cfg.worldDir, w) && w.cheats;
-    f.lanPort.text = TextField{};
-    f.lanPort.text.value = std::to_string(net::suggestLanPort());
-    f.lanPort.text.maxLength = 5;
-    f.lanPort.text.cursor = f.lanPort.text.selection = int(f.lanPort.text.value.size());
-    f.lanError.clear();
-    s.openScreen(Screen::OpenToLan);
-}
-
-namespace {
-
-void buildOpenToLan(State& s) {
-    FrontEndState& f = *s.fe;
-    const int W = s.guiW(), H = s.guiH();
-    State* p = &s;
-    Button& mode = addButton(s, float(W / 2 - 155), 100, 150, Text(), [p] {
-        p->fe->lanMode = (p->fe->lanMode + 1) % 4;
-    });
-    mode.labelFn = [p] {
-        const std::string key = std::string("selectWorld.gameMode.") + kLanModes[p->fe->lanMode];
-        return trf(*p, "options.generic_value", {tr(*p, "selectWorld.gameMode"), Text(p->res.translate(key))});
-    };
-    Button& cheats = addButton(s, float(W / 2 + 5), 100, 150, Text(), [p] { p->fe->lanCheats = !p->fe->lanCheats; });
-    cheats.labelFn = [p] {
-        return trf(*p, "options.generic_value",
-                   {tr(*p, "selectWorld.allowCommands.new"), tr(*p, p->fe->lanCheats ? "options.on" : "options.off")});
-    };
-    f.lanPort.x = float(W / 2 - 75), f.lanPort.y = 160, f.lanPort.w = 150;
-    setFields(s, {&f.lanPort}, 0);
-    addButton(s, float(W / 2 - 155), float(H - 28), 150, tr(s, "lanServer.start"), [p] { startLan(*p); });
-    auto back = [p] { p->openScreen(Screen::Pause); };
-    addButton(s, float(W / 2 + 5), float(H - 28), 150, tr(s, "gui.cancel"), back);
-    f.onBack = back;
-    f.onEnter = [p] { startLan(*p); };
-}
-
-void drawOpenToLan(State& s, Canvas& c) {
-    FrontEndState& f = *s.fe;
-    const int W = c.guiWidth();
-    c.gradient(0, 0, float(W), float(c.guiHeight()), 0xC0101010, 0xD0101010);
-    s.drawCentered(c, tr(s, "lanServer.title"), float(W / 2), 50, 0xFFFFFFFF);
-    s.drawCentered(c, tr(s, "lanServer.otherPlayers"), float(W / 2), 82, 0xFFFFFFFF);
-    s.drawCentered(c, tr(s, "lanServer.port"), float(W / 2), 146, 0xFFA0A0A0);
-    drawFields(s, c);
-    int y = 186;
-    for (const Text& l : s.font.split(Text(f.lanError), W - 40)) {
-        s.drawCentered(c, l, float(W / 2), float(y), 0xFFFF5555);
-        y += 9;
-    }
-    s.drawButtons(c);
-}
-
 }  // namespace
 
 // --- helpers ------------------------------------------------------------------------------------------------------
@@ -521,7 +425,6 @@ void Ui::State::buildFrontEndButtons() {
         case Screen::DirectConnect: buildDirectConnect(*this); break;
         case Screen::Loading: buildLoading(*this); break;
         case Screen::Message: buildMessage(*this); break;
-        case Screen::OpenToLan: buildOpenToLan(*this); break;
         default: break;
     }
     if (f.fields == prevFields) f.focus = prevFocus;  // a re-layout (window resized) keeps the focus
@@ -539,7 +442,6 @@ void Ui::State::drawFrontEnd(Canvas& c) {
         case Screen::DirectConnect: drawDirectConnect(*this, c); break;
         case Screen::Loading: drawLoading(*this, c); break;
         case Screen::Message: drawMessage(*this, c); break;
-        case Screen::OpenToLan: drawOpenToLan(*this, c); break;
         default: break;
     }
 }

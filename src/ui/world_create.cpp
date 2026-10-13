@@ -1313,4 +1313,25 @@ bool recreateWorld(State& s, const fs::path& dir) {
     return true;
 }
 
+const std::vector<GameRuleInfo>* gameRuleInfos(State& s) {
+    ensureRules(s);
+    if (g.rulesTask.valid() && g.rulesTask.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        const bool ok = g.rulesTask.get();
+        g.rulesLoaded = ok, g.rulesFailed = !ok;
+    }
+    if (!g.rulesLoaded) return nullptr;
+    static std::vector<GameRuleInfo> infos;
+    if (infos.size() != g.ruleDefs.size()) {
+        infos.clear();
+        for (const RuleDef& d : g.ruleDefs) infos.push_back({d.id, d.category, d.def, d.boolean, d.min, d.max});
+    }
+    return &infos;
+}
+bool gameRulesFailed() { return g.rulesFailed; }
+std::string gameRuleName(State& s, const std::string& id) { return ruleName(s, id); }
+std::string gameRuleDescription(State& s, const std::string& id) { return ruleDescription(s, id); }
+std::string gameRuleCategoryName(State& s, const std::string& category) {
+    return lang(s, "gamerule.category." + pathOf(category), pathOf(category));
+}
+
 }  // namespace ui

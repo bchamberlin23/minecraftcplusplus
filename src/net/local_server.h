@@ -69,6 +69,12 @@ public:
     // Open to LAN with cheats: every player who joins from now on is made an operator (vanilla's LAN worlds allow
     // commands for later joiners too; "op @a" only reached those online at the time).
     void setOpJoiners(bool on) { opJoiners_ = on; }
+    // World Options (IntegratedServer.setWorldAllowCommands / setForceGameMode / setDifficultyLocked) on the dedicated
+    // server: the host made an operator or not (allowCommands in level.dat when it stops), other players put in the
+    // default game mode as they join, the difficulty lock written to level.dat when it stops.
+    void setAllowCommands(bool on);
+    void setForceGameMode(bool on, const std::string& mode);
+    void setDifficultyLocked() { lockDifficulty_ = true; }
     void stop(double timeoutSeconds = 60.0);   // saves, exits and syncs the player data back
 
 private:
@@ -91,4 +97,10 @@ private:
     std::mutex stdinMutex_;
     u16 port_ = 0;
     bool stopped_ = false, upgrading_ = false, creating_ = false;
+    int allowCommands_ = -1;  // -1: unchanged
+    bool lockDifficulty_ = false;
+    std::atomic<bool> forceGameMode_{false};
+    std::string forcedMode_;
+    std::mutex forceMutex_;
+    void writeWorldOptions();
 };

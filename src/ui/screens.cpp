@@ -7,6 +7,7 @@
 #include "ui/dialogs.h"
 #include "ui/item_ui.h"
 #include "ui/mp_hud.h"
+#include "ui/options_list.h"
 #include "ui/subtitles.h"
 #include "ui/toasts.h"
 #include "ui/ui_state.h"
@@ -528,6 +529,9 @@ void Ui::State::buildButtons() {
         Text dialogLabel;  // dialogs.h: custom options / server links
         std::function<void()> openDialog;
         const bool dialogButton = pauseMenuDialogButton(*this, dialogLabel, openDialog);
+        // PauseScreen.createPauseMenu: a 2-column grid (cells padded 4, 4, 4, 0), Back to Game 50 lower, the icon row
+        // (Report Bugs, Give Feedback, Friends, Player Reporting), the server's custom options, Options | World Options,
+        // Disconnect; placed at a quarter of the free height.
         const int gridW = 212, gridH = 50 + 20 + (dialogButton ? 5 : 4) * 24;
         const int left = (W - gridW) / 2, top = int(float(H - gridH) * 0.25f);
         auto full = [&](int y, Text label, std::function<void()> fn, bool active = true) {
@@ -547,9 +551,26 @@ void Ui::State::buildButtons() {
         half(0, y, tr("gui.advancements"), [this] { openAdvancementsFromPause(*this); });  // advancements.cpp
         half(1, y, tr("gui.stats"), [this] { openStatsFromPause(*this); });  // stats.cpp
         y += 24;
-        half(0, y, Text("Mods & Packs"), [this] { openScreen(Screen::Mods); });  // mods_screen.cpp
-        half(1, y, Text(), [this] { openFriendsScreen(*this); });  // friends_screen.cpp
-        buttons.back().labelFn = friendsButtonLabel;
+        {
+            auto icon = [&](float x, const char* sprite, const char* key, std::function<void()> fn) -> Button& {
+                Button b;
+                b.x = x, b.y = float(y), b.w = 20, b.label = tr(key), b.onPress = std::move(fn);
+                b.icon = sprite, b.iconW = b.iconH = 15, b.iconOnly = true;
+                b.tooltip = [this, key] { return Text(res.translate(key)); };  // withTootip: the message
+                buttons.push_back(std::move(b));
+                return buttons.back();
+            };
+            const float x0 = float(left + (gridW - (4 * 20 + 3 * 4)) / 2);
+            icon(x0, "pause_menu/bug", "menu.reportBugs", [this] { openConfirmLink(*this, "https://aka.ms/snapshotbugs?ref=game", Screen::Pause); });
+            icon(x0 + 24, "pause_menu/social_interactions", "menu.sendFeedback",
+                 [this] { openConfirmLink(*this, "https://aka.ms/javafeedback?ref=game", Screen::Pause); });  // a release: RELEASE_FEEDBACK
+            Button& friends = icon(x0 + 48, "friends/friends", "gui.friends.open", [this] { openFriendsScreen(*this); });  // friends_screen.cpp
+            friends.tooltip = [this] { return Text(res.translate("gui.friends.open.tooltip")); };
+            friends.badge = [] { return friendsPendingRequests(); };
+            Button& report = icon(x0 + 72, "pause_menu/player_reporting", "menu.playerReporting", nullptr);
+            report.active = false;  // player reporting needs a Microsoft account; no players to report offline
+            if (fe->cfg.singleplayer) report.tooltip = [this] { return Text(res.translate("menu.playerReporting.no_players")); };
+        }
         y += 24;
         if (dialogButton) {
             full(y, dialogLabel, openDialog);
@@ -557,10 +578,7 @@ void Ui::State::buildButtons() {
             y += 24;
         }
         half(0, y, tr("menu.options"), [this] { openScreen(Screen::Options); });
-        if (fe->cfg.singleplayer)  // title.cpp
-            half(1, y, tr("menu.shareToLan"), [this] { openToLanScreen(*this); }, fe->lanOpenPort == 0);
-        else
-            half(1, y, tr("options.worldOptions.button"), nullptr, false);
+        half(1, y, tr("options.worldOptions.button"), [this] { openScreen(Screen::WorldOptions); });  // world_options.cpp
         y += 24;
         full(y, tr(online() && !fe->cfg.singleplayer ? "menu.disconnect" : "menu.returnToMenu"), [this] {
             fe->titleMenu = online() && !fe->cfg.singleplayer ? "servers" : "";
@@ -615,6 +633,14 @@ void Ui::State::drawButton(Canvas& c, size_t i, bool hoverable) {
     }
     const Text label = b.labelFn ? b.labelFn() : b.label;
     const u32 color = b.active ? 0xFFFFFFFF : 0xFFA0A0A0;
+    if (!b.icon.empty() && b.iconOnly) {  // SpriteIconButton.CenteredIcon
+        blitSprite(c, sprites.sprite(b.icon), b.x + float(int((b.w - b.iconW) / 2)), b.y + float(int((b.h - b.iconH) / 2)), b.iconW, b.iconH);
+        if (const int n = b.badge && b.active ? b.badge() : 0; n > 0) {
+            static const char* const kBadges[6] = {"notification/1", "notification/2", "notification/3", "notification/4", "notification/5", "notification/more"};
+            blitSprite(c, sprites.sprite(kBadges[std::min(n, 6) - 1]), b.x + b.w - 5, b.y - 3, 8, 8);
+        }
+        return;
+    }
     if (!b.icon.empty()) {  // SpriteIconButton.TextAndIcon
         const float left = b.x + 2, right = b.x + b.w - b.iconW - 4, w = float(font.width(label));
         drawText(c, label, std::clamp(float(int(b.x + b.w / 2 - w / 2)), left, std::max(left, right - w)), b.y + (b.h - 8) / 2, color, true);

@@ -389,6 +389,18 @@ u16 suggestLanPort() {
     return port;
 }
 
+bool lanPortAvailable(u16 port) {  // HttpUtil.isPortAvailable: a server socket can open on it
+    winsock();
+    SOCKET s = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (s == INVALID_SOCKET) return false;
+    sockaddr_in a{};
+    a.sin_family = AF_INET;
+    a.sin_port = htons(port);
+    const bool ok = bind(s, reinterpret_cast<sockaddr*>(&a), sizeof(a)) == 0;
+    closesocket(s);
+    return ok;
+}
+
 LanHost::~LanHost() { stop(); }
 
 bool LanHost::start(const std::string& motd, u16 publicPort, u16 serverPort, bool forward, std::string& error) {

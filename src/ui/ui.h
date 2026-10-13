@@ -171,6 +171,15 @@ struct FrontEnd {
     // Open to LAN: publishes the local server (game mode for others, the host's cheats, port); error on failure.
     std::function<bool(const std::string& motd, const std::string& gameMode, bool cheats, u16 port, std::string& error)>
         openToLan;
+    // World Options on the local server: its console, publishing to LAN (motd, port) / stopping, LAN guests made
+    // operators as they join, guests put in a game mode as they join, the host's commands, the difficulty lock.
+    std::function<void(const std::string& line)> serverCommand;
+    std::function<bool(const std::string& motd, u16 port, std::string& error)> publishLan;
+    std::function<void()> unpublishLan;
+    std::function<void(bool on)> setGuestCommands;
+    std::function<void(bool on, const std::string& mode)> setForceGameMode;
+    std::function<void(bool on)> setAllowCommands;
+    std::function<void()> lockDifficulty;
     // Multiplayer: the server list entry this connection belongs to (its address; --connect, or the first server of a
     // transfer), for its "Server Resource Packs" setting and accepted Code of Conduct.
     std::string serverAddress;

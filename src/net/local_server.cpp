@@ -639,6 +639,10 @@ void LocalServer::readOutput() {
                 const size_t s = line.rfind("]: ", j);
                 const std::string name = s == std::string::npos ? std::string() : line.substr(s + 3, j - s - 3);
                 if (opJoiners_ && !name.empty() && name.find(' ') == std::string::npos) command("op " + name);
+                if (forceGameMode_ && !name.empty() && name.find(' ') == std::string::npos && name != config_.player) {
+                    std::lock_guard lock(forceMutex_);
+                    command("gamemode " + forcedMode_ + " " + name);  // force-gamemode for the joining guest
+                }
                 LOG("server: %s", line.c_str());
             } else if (line.find("The game is frozen") != std::string::npos ||
                        line.find("The game is running normally") != std::string::npos) {
@@ -659,6 +663,38 @@ void LocalServer::readOutput() {
             }
         }
     }
+}
+
+void LocalServer::setAllowCommands(bool on) {
+    allowCommands_ = on ? 1 : 0;
+    command((on ? "op " : "deop ") + config_.player);
+}
+
+void LocalServer::setForceGameMode(bool on, const std::string& mode) {
+    std::lock_guard lock(forceMutex_);
+    forceGameMode_ = on, forcedMode_ = mode;
+}
+
+void LocalServer::writeWorldOptions() {  // level.dat: allowCommands / DifficultyLocked changed in World Options
+    if (allowCommands_ < 0 && !lockDifficulty_) return;
+    NbtValue root;
+    std::string rootName;
+    if (!readNbtGz(config_.world / "level.dat", root, &rootName)) return;
+    NbtValue* data = root.find("Data");
+    if (!data) return;
+    if (allowCommands_ >= 0) {
+        NbtValue cheats = NbtValue::make(TagByte);
+        cheats.i = allowCommands_;
+        data->set("allowCommands", std::move(cheats));
+    }
+    if (lockDifficulty_) {
+        NbtValue* ds = data->find("difficulty_settings");
+        NbtValue locked = NbtValue::make(TagByte);
+        locked.i = 1;
+        if (ds) ds->set("locked", std::move(locked));
+        else data->set("DifficultyLocked", std::move(locked));
+    }
+    writeNbtGz(config_.world / "level.dat", root, rootName);
 }
 
 void LocalServer::command(const std::string& line) {
@@ -693,5 +729,6 @@ void LocalServer::stop(double timeoutSeconds) {
     process_ = job_ = stdoutRead_ = nullptr;
     importHostPlayer();
     if (creating_) finishNewWorld();
+    writeWorldOptions();
     LOG("server  %8.1f ms  local server saved and stopped", t.ms());
 }

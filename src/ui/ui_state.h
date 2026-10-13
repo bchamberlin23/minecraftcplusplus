@@ -113,6 +113,8 @@ struct Button {
     std::function<Text()> tooltip;  // shown while hovered (Tooltip, split at 170 pixels); empty text: none
     std::string icon;  // SpriteIconButton.TextAndIcon: this sprite at the right, the label centred beside it
     float iconW = 0, iconH = 0;
+    bool iconOnly = false;       // SpriteIconButton.CenteredIcon: only the sprite (the label is for narration / tooltip)
+    std::function<int()> badge;  // FriendsButton: a notification count drawn at the top right (notification/1..5, more)
 };
 
 enum class Screen {
@@ -126,8 +128,9 @@ enum class Screen {
     Dialog,              // dialogs.cpp: server dialogs and their confirmation / waiting screens
     ServerPackPrompt, CodeOfConduct, Reconfiguring,  // server_config.cpp
     Win, CreditsAttribution,  // credits.cpp
+    WorldOptions, InWorldGameRules, Restrictions,  // world_options.cpp
     // Front end (frontend.h)
-    Title, Worlds, CreateWorld, EditWorld, Confirm, Servers, EditServer, DirectConnect, Loading, Message, OpenToLan
+    Title, Worlds, CreateWorld, EditWorld, Confirm, Servers, EditServer, DirectConnect, Loading, Message
 };
 
 struct Ui::State {

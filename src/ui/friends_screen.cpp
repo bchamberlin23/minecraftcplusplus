@@ -591,6 +591,8 @@ void openFriendsScreen(UiState& s) {
     s.openScreen(Screen::Friends);
 }
 
+int friendsPendingRequests() { return Friends::get().started() ? Friends::get().pendingRequests() : 0; }
+
 Text friendsButtonLabel() {
     const int requests = Friends::get().started() ? Friends::get().pendingRequests() : 0;
     return Text(requests ? "Friends (" + std::to_string(requests) + ")" : "Friends");
