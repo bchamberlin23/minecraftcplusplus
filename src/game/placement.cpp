@@ -527,6 +527,9 @@ bool canSurviveHere(const Context& c, u16 state, const int p[3]) {
     if (n == "nether_sprouts" || n == "crimson_roots" || n == "warped_roots") return vegetationGround() || nylium || b == "soul_soil";
     if (n == "crimson_fungus" || n == "warped_fungus") return vegetationGround() || nylium || b == "mycelium" || b == "soul_soil";
     if (n == "nether_wart") return b == "soul_sand";
+    if (n == "brown_mushroom" || n == "red_mushroom")  // MushroomBlock: #overrides_mushroom_light_requirement, else dim on solid
+        return in({"mycelium", "podzol", "crimson_nylium", "warped_nylium"}) ||
+               ((!c.brightness || c.brightness(p[0], p[1], p[2]) < 13) && c.reg.infos()[below].occludes);
     if (n == "bamboo" || n == "bamboo_sapling")  // #supports_bamboo
         return sand || in({"bamboo", "bamboo_sapling", "gravel", "suspicious_gravel"}) || (vegetationGround() && b != "farmland");
     auto water = [&](const int q[3]) {  // FluidState is #water (sources, flows, waterlogged blocks)

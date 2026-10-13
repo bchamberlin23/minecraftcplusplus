@@ -681,6 +681,11 @@ void Game::tickAttack(bool down) {
 place::Context Game::placeContext() {
     place::Context c{registry_};
     c.block = [this](int x, int y, int z) { return world_.block(x, y, z); };
+    c.brightness = [this](int x, int y, int z) {
+        if (y < world_.minSectionY() * 16 || y >= (world_.maxSectionY() + 1) * 16) return 15;
+        const u8 l = world_.light(x >> 4, y >> 4, z >> 4).at(x & 15, y & 15, z & 15);
+        return std::max(l >> 4, l & 15);
+    };
     c.waterSource = [this](int x, int y, int z) {
         const Physics::Fluid f = physics_.fluid(x, y, z);
         return f.type == 1 && f.source;

@@ -18,6 +18,7 @@ struct Context {
     BlockRegistry& reg;
     std::function<u16(int x, int y, int z)> block;
     std::function<bool(int x, int y, int z)> waterSource;  // a water source there (waterlogging)
+    std::function<int(int x, int y, int z)> brightness;    // getRawBrightness(pos, 0): max(sky, block light)
     int clicked[3] = {};   // the block the ray hit
     int face = 1;          // the hit face
     double hit[3] = {};    // the hit point
