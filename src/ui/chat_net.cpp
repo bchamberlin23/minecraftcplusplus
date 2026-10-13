@@ -310,7 +310,7 @@ void registerHandlers(UiState& s, net::Client& client) {
     client.onPlay("system_chat", [sp, lang](net::Reader& r) {
         Text t = parseComponent(r.nbt(), lang);
         if (r.boolean()) {  // ChatListener.handleOverlay
-            sp->post([sp, t] { sp->actionbar = t, sp->actionbarTime = 60; });
+            sp->post([sp, t] { sp->actionbar = t, sp->actionbarTime = 60, sp->actionbarAnimated = false; });
             return;
         }
         LOG("[chat] %s", t.plain().c_str());

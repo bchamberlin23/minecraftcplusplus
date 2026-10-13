@@ -175,6 +175,17 @@ private:
     std::mutex netMutex_;
     std::vector<NetSpawn> netSpawns_, spawnsLocal_;  // network thread / main thread (swapped, capacity kept)
     std::vector<NetBreak> netBreaks_, breaksLocal_;
+    struct NetLevelEvent {
+        int type, x, y, z, data;
+    };
+    std::vector<NetLevelEvent> netLevelEvents_;
+    // LevelEventHandler.levelEvent / globalLevelEvent (main thread, world lock held): the sounds and particles of the
+    // game's level events (the block break sound and jukebox songs are the audio system's).
+    void levelEvent(int type, int x, int y, int z, int data);
+    void globalLevelEvent(int type, int x, int y, int z);
+    Particle* addNamed(std::string_view type, double x, double y, double z, double xa, double ya, double za, const Options* opt = nullptr);
+    int itemIdOf(std::string_view name);  // network item id by name (cached)
+    std::unordered_map<std::string, int> itemIds_;
     std::vector<std::pair<int, float>> netWeather_;
     struct BlockParticleInfo {  // ExplosionParticleInfo with its WeightedList weight
         int type;

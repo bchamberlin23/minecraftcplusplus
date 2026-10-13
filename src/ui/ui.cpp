@@ -892,7 +892,19 @@ void Ui::registerHandlers(net::Client& client) {
     });
     client.onPlay("set_action_bar_text", [s, lang](net::Reader& r) {
         Text t = parseComponent(r.nbt(), lang);
-        s->post([s, t] { s->actionbar = t, s->actionbarTime = 60; });
+        s->post([s, t] { s->actionbar = t, s->actionbarTime = 60, s->actionbarAnimated = false; });
+    });
+    client.onPlayPeek("level_event", [s](net::Reader& r) {  // 1010: Hud.setNowPlaying(the song's description)
+        const int type = r.i32v();
+        r.u64v();
+        const int data = r.i32v();
+        if (!r.ok || type != 1010) return;
+        s->post([s, data] {
+            const auto& songs = s->items.registry("minecraft:jukebox_song");
+            if (data < 0 || size_t(data) >= songs.size()) return;
+            s->actionbar = translatable("record.nowPlaying", {songs[size_t(data)].description}, s->lang());
+            s->actionbarTime = 60, s->actionbarAnimated = true;
+        });
     });
     client.onPlay("set_titles_animation", [s](net::Reader& r) {
         const int in = r.i32v(), stay = r.i32v(), out = r.i32v();

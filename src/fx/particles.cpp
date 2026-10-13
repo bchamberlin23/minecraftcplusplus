@@ -228,11 +228,13 @@ void Particles::attach(net::Client& client) {
         int x, y, z;
         r.blockPos(x, y, z);
         const int data = r.i32v();
-        r.boolean();  // global event
-        if (!r.ok || (type != 2001 && type != 2019 && type != 2020)) return;
+        const bool global = r.boolean();
+        if (!r.ok) return;
         std::lock_guard lock(netMutex_);
-        if (type == 2001) netBreaks_.push_back({x, y, z, data});
-        else netBreaks_.push_back({x, y, z, 0, std::clamp(data, 0, 5)});  // LevelEventHandler: Direction by ordinal
+        if (global) netLevelEvents_.push_back({-type, x, y, z, data});  // globalLevelEvent
+        else if (type == 2001) netBreaks_.push_back({x, y, z, data});
+        else if (type == 2019 || type == 2020) netBreaks_.push_back({x, y, z, 0, std::clamp(data, 0, 5)});  // Direction by ordinal
+        else netLevelEvents_.push_back({type, x, y, z, data});
     });
     // ClientboundExplodePacket: the explosion particle and sound (ClientPacketListener.handleExplosion).
     client.onPlay("explode", [this](net::Reader& r) {
@@ -933,6 +935,427 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
     spawnQueue_.push_back(p);
     ++stats_.spawned;
     return &spawnQueue_.back();
+}
+
+Particles::Particle* Particles::addNamed(std::string_view type, double x, double y, double z, double xa, double ya, double za,
+                                         const Options* opt) {
+    return add(typeId(type), x, y, z, xa, ya, za, opt);
+}
+
+int Particles::itemIdOf(std::string_view name) {
+    auto it = itemIds_.find(std::string(name));
+    if (it != itemIds_.end()) return it->second;
+    int found = -1;
+    for (int id = 0; id < 4096 && found < 0; ++id)
+        if (items_.itemName(id) == name) found = id;
+    return itemIds_[std::string(name)] = found;
+}
+
+void Particles::globalLevelEvent(int type, int x, int y, int z) {
+    // 1023 wither spawned, 1028 dragon died, 1038 end portal opened: heard from two blocks towards it from the camera
+    if (type != 1023 && type != 1028 && type != 1038) return;
+    audio::AudioSystem* a = audio::instance();
+    if (!a) return;
+    double d[3] = {x + 0.5 - cam_[0], y + 0.5 - cam_[1], z + 0.5 - cam_[2]};
+    const double len = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+    for (double& v : d) v = len > 1e-4 ? v / len : 0.0;
+    const double pos[3] = {cam_[0] + d[0] * 2.0, cam_[1] + d[1] * 2.0, cam_[2] + d[2] * 2.0};
+    const char* sound = type == 1023 ? "minecraft:entity.wither.spawn" : type == 1038 ? "minecraft:block.end_portal.spawn" : "minecraft:entity.ender_dragon.death";
+    a->playNetwork(-1, sound, audio::Category::Hostile, pos, type == 1028 ? 5.0f : 1.0f, 1.0f);
+}
+
+void Particles::levelEvent(int type, int bx, int by, int bz, int data) {
+    using audio::Category;
+    const double center[3] = {bx + 0.5, by + 0.5, bz + 0.5};
+    auto sound = [&](const char* name, Category cat, float volume, float pitch) {  // level.playLocalSound(pos, ...)
+        if (audio::AudioSystem* a = audio::instance()) a->playNetwork(-1, name, cat, center, volume, pitch);
+    };
+    auto rnd = [&] { return double(randf()); };
+    auto variedPitch = [&] { return (randf() - randf()) * 0.2f + 1.0f; };
+    auto smallPitch = [&] { return randf() * 0.1f + 0.9f; };
+    auto blockName = [&](int x, int y, int z) { return registry_.name(blockAt(x, y, z)); };
+    // ParticleUtils.spawnParticleOnFace / spawnParticlesOnBlockFaces
+    static const int kDirs[6][3] = {{0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}};
+    auto onFace = [&](int face, std::string_view particle, const double speed[3], double step, const Options* opt = nullptr) {
+        const int* s = kDirs[face];
+        const double x = center[0] + (s[0] == 0 ? rnd() - 0.5 : s[0] * step);
+        const double y = center[1] + (s[1] == 0 ? rnd() - 0.5 : s[1] * step);
+        const double z = center[2] + (s[2] == 0 ? rnd() - 0.5 : s[2] * step);
+        addNamed(particle, x, y, z, s[0] == 0 ? speed[0] : 0.0, s[1] == 0 ? speed[1] : 0.0, s[2] == 0 ? speed[2] : 0.0, opt);
+    };
+    auto onFaces = [&](std::string_view particle, int lo, int hi) {
+        for (int face = 0; face < 6; ++face)
+            for (int i = 0, n = lo + int(randf() * float(hi - lo + 1)); i < n; ++i) {
+                const double speed[3] = {rnd() - 0.5, rnd() - 0.5, rnd() - 0.5};
+                onFace(face, particle, speed, 0.55);
+            }
+    };
+    // ParticleUtils.spawnParticles (spread around the block, optionally only above ground)
+    auto spread = [&](int x, int y, int z, int count, double width, double height, bool floating, std::string_view particle) {
+        for (int i = 0; i < count; ++i) {
+            const double vx = gauss() * 0.02, vy = gauss() * 0.02, vz = gauss() * 0.02;
+            const double px = x + 0.5 - width + rnd() * width * 2.0, py = y + rnd() * height, pz = z + 0.5 - width + rnd() * width * 2.0;
+            const u16 below = blockAt(int(std::floor(px)), int(std::floor(py)) - 1, int(std::floor(pz)));
+            if (floating || below != 0) addNamed(particle, px, py, pz, vx, vy, vz);
+        }
+    };
+    auto shapeTop = [&](int x, int y, int z) {  // the block's shape height (air: a whole block)
+        const u16 id = blockAt(x, y, z);
+        if (id == 0) return 1.0;
+        const BlockInfo& b = registry_.infos()[id];
+        float top = 0;
+        for (u32 i = 0; i < b.selectionCount; ++i) top = std::max(top, registry_.box(b.selectionFirst + i).max[1]);
+        return b.selectionCount ? double(top) : 1.0;
+    };
+    auto inBlock = [&](int x, int y, int z, int count, std::string_view particle) {  // ParticleUtils.spawnParticleInBlock
+        spread(x, y, z, count, 0.5, shapeTop(x, y, z), true, particle);
+    };
+    auto shoot = [&](std::string_view particle) {  // shootParticles: out of the facing side (Direction 3D data)
+        const int* n = kDirs[std::clamp(data, 0, 5)];
+        for (int i = 0; i < 10; ++i) {
+            const double pow = rnd() * 0.2 + 0.01;
+            const double x = bx + n[0] * 0.6 + 0.5 + n[0] * 0.01 + (rnd() - 0.5) * n[2] * 0.5;
+            const double y = by + n[1] * 0.6 + 0.5 + n[1] * 0.01 + (rnd() - 0.5) * n[1] * 0.5;
+            const double z = bz + n[2] * 0.6 + 0.5 + n[2] * 0.01 + (rnd() - 0.5) * n[0] * 0.5;
+            addNamed(particle, x, y, z, n[0] * pow + gauss() * 0.01, n[1] * pow + gauss() * 0.01, n[2] * pow + gauss() * 0.01);
+        }
+    };
+    auto potionSplash = [&](std::string_view particle) {  // potionSplashParticles
+        const int bottle = itemIdOf("splash_potion");
+        for (int i = 0; i < 8; ++i)
+            if (bottle >= 0) itemShard(bottle, bx + 0.5, by, bz + 0.5, gauss() * 0.15, rnd() * 0.2, gauss() * 0.15);
+        const float red = float((data >> 16) & 255) / 255.0f, green = float((data >> 8) & 255) / 255.0f, blue = float(data & 255) / 255.0f;
+        for (int i = 0; i < 100; ++i) {
+            const double dist = rnd() * 4.0, angle = rnd() * 3.14159265358979 * 2.0;
+            const double vx = std::cos(angle) * dist, vy = 0.01 + rnd() * 0.5, vz = std::sin(angle) * dist;
+            const float bright = 0.75f + randf() * 0.25f;
+            Options o;
+            o.color = 0xFF000000u | u32(red * bright * 255.0f) << 16 | u32(green * bright * 255.0f) << 8 | u32(blue * bright * 255.0f);
+            o.hasColor = true, o.power = float(dist);
+            addNamed(particle, bx + 0.5 + vx * 0.1, by + 0.3, bz + 0.5 + vz * 0.1, vx, vy, vz, &o);
+        }
+    };
+    auto teleport = [&](int tx, int ty, int tz) {  // singleBlockTeleportationParticles
+        for (int i = 0; i < 128; ++i) {
+            const double t = rnd();
+            const float vx = (randf() - 0.5f) * 0.2f, vy = (randf() - 0.5f) * 0.2f, vz = (randf() - 0.5f) * 0.2f;
+            addNamed("portal", tx + (bx - tx) * t + (rnd() - 0.5) + 0.5, ty + (by - ty) * t + rnd() - 0.5, tz + (bz - tz) * t + (rnd() - 0.5) + 0.5, vx, vy, vz);
+        }
+    };
+    auto unpackDiff = [&](int xs, int ys, int zs, int& tx, int& ty, int& tz) {  // BlockUtil.unpackDifferenceInPosition
+        const int bitsX = int(std::ceil(std::log2(double(xs * 2 + 1)))), bitsY = int(std::ceil(std::log2(double(ys * 2 + 1))));
+        const int bitsZ = int(std::ceil(std::log2(double(zs * 2 + 1))));
+        (void)bitsZ;
+        const int dx = (data & ((1 << bitsX) - 1)) - xs;
+        const int dy = ((data >> bitsX) & ((1 << bitsY) - 1)) - ys;
+        const int dz = (data >> (bitsX + bitsY)) - zs;
+        tx = bx + dx, ty = by + dy, tz = bz + dz;
+    };
+    auto trialSpawn = [&](const char* flame) {  // TrialSpawner.addSpawnParticles
+        for (int i = 0; i < 20; ++i) {
+            const double x = bx + 0.5 + (rnd() - 0.5) * 2.0, y = by + 0.5 + (rnd() - 0.5) * 2.0, z = bz + 0.5 + (rnd() - 0.5) * 2.0;
+            addNamed("smoke", x, y, z, 0, 0, 0);
+            addNamed(flame, x, y, z, 0, 0, 0);
+        }
+    };
+    auto detectPlayer = [&](int n, const char* particle) {  // TrialSpawner.addDetectPlayerParticles
+        for (int i = 0; i < 30 + std::min(n, 10) * 5; ++i)
+            addNamed(particle, bx + 0.5 + (2.0 * rnd() - 1.0) * 0.65, by + 0.1 + rnd() * 0.8, bz + 0.5 + (2.0 * rnd() - 1.0) * 0.65, 0, 0, 0);
+    };
+    auto ejectItem = [&] {  // TrialSpawner.addEjectItemParticles
+        for (int i = 0; i < 20; ++i) {
+            const double x = bx + 0.4 + rnd() * 0.2, y = by + 0.4 + rnd() * 0.2, z = bz + 0.4 + rnd() * 0.2;
+            const double xa = gauss() * 0.02, ya = gauss() * 0.02, za = gauss() * 0.02;
+            addNamed("small_flame", x, y, z, xa, ya, za * 0.25);
+            addNamed("smoke", x, y, z, xa, ya, za);
+        }
+    };
+    auto flameOf = [&](int d) { return d == 1 ? "soul_fire_flame" : "flame"; };  // TrialSpawner.FlameParticle.decode
+    switch (type) {
+        case 1000: sound("minecraft:block.dispenser.dispense", Category::Block, 1.0f, 1.0f); break;
+        case 1001: sound("minecraft:block.dispenser.fail", Category::Block, 1.0f, 1.2f); break;
+        case 1002: sound("minecraft:block.dispenser.launch", Category::Block, 1.0f, 1.2f); break;
+        case 1004: sound("minecraft:entity.firework_rocket.shoot", Category::Neutral, 1.0f, 1.2f); break;
+        case 1009:
+            if (data == 0) sound("minecraft:block.fire.extinguish", Category::Block, 0.5f, 2.6f + (randf() - randf()) * 0.8f);
+            else if (data == 1) sound("minecraft:block.generic.extinguish_fire", Category::Block, 0.7f, 1.6f + (randf() - randf()) * 0.4f);
+            break;
+        case 1015: sound("minecraft:entity.ghast.warn", Category::Hostile, 10.0f, variedPitch()); break;
+        case 1016: sound("minecraft:entity.ghast.shoot", Category::Hostile, 10.0f, variedPitch()); break;
+        case 1017: sound("minecraft:entity.ender_dragon.shoot", Category::Hostile, 10.0f, variedPitch()); break;
+        case 1018: sound("minecraft:entity.blaze.shoot", Category::Hostile, 2.0f, variedPitch()); break;
+        case 1019: sound("minecraft:entity.zombie.attack_wooden_door", Category::Hostile, 2.0f, variedPitch()); break;
+        case 1020: sound("minecraft:entity.zombie.attack_iron_door", Category::Hostile, 2.0f, variedPitch()); break;
+        case 1021: sound("minecraft:entity.zombie.break_wooden_door", Category::Hostile, 2.0f, variedPitch()); break;
+        case 1022: sound("minecraft:entity.wither.break_block", Category::Hostile, 2.0f, variedPitch()); break;
+        case 1024: sound("minecraft:entity.wither.shoot", Category::Hostile, 2.0f, variedPitch()); break;
+        case 1025: sound("minecraft:entity.bat.takeoff", Category::Neutral, 0.05f, variedPitch()); break;
+        case 1026: sound("minecraft:entity.zombie.infect", Category::Hostile, 2.0f, variedPitch()); break;
+        case 1027: sound("minecraft:entity.zombie_villager.converted", Category::Hostile, 2.0f, variedPitch()); break;
+        case 1029: sound("minecraft:block.anvil.destroy", Category::Block, 1.0f, smallPitch()); break;
+        case 1030: sound("minecraft:block.anvil.use", Category::Block, 1.0f, smallPitch()); break;
+        case 1031: sound("minecraft:block.anvil.land", Category::Block, 0.3f, smallPitch()); break;
+        case 1032:  // SimpleSoundInstance.forLocalAmbience: at the listener
+            if (audio::AudioSystem* a = audio::instance()) a->playUi("minecraft:block.portal.travel", randf() * 0.4f + 0.8f, 0.25f);
+            break;
+        case 1033: sound("minecraft:block.chorus_flower.grow", Category::Block, 1.0f, 1.0f); break;
+        case 1034: sound("minecraft:block.chorus_flower.death", Category::Block, 1.0f, 1.0f); break;
+        case 1035: sound("minecraft:block.brewing_stand.brew", Category::Block, 1.0f, 1.0f); break;
+        case 1039: sound("minecraft:entity.phantom.bite", Category::Hostile, 0.3f, smallPitch()); break;
+        case 1040: sound("minecraft:entity.zombie.converted_to_drowned", Category::Hostile, 2.0f, variedPitch()); break;
+        case 1041: sound("minecraft:entity.husk.converted_to_zombie", Category::Hostile, 2.0f, variedPitch()); break;
+        case 1042: sound("minecraft:block.grindstone.use", Category::Block, 1.0f, smallPitch()); break;
+        case 1043: sound("minecraft:item.book.page_turn", Category::Block, 1.0f, smallPitch()); break;
+        case 1044: sound("minecraft:block.smithing_table.use", Category::Block, 1.0f, smallPitch()); break;
+        case 1045: sound("minecraft:block.pointed_dripstone.land", Category::Block, 2.0f, smallPitch()); break;
+        case 1046: sound("minecraft:block.pointed_dripstone.drip_lava_into_cauldron", Category::Block, 2.0f, smallPitch()); break;
+        case 1047: sound("minecraft:block.pointed_dripstone.drip_water_into_cauldron", Category::Block, 2.0f, smallPitch()); break;
+        case 1048: sound("minecraft:entity.skeleton.converted_to_stray", Category::Hostile, 2.0f, variedPitch()); break;
+        case 1049: sound("minecraft:block.crafter.craft", Category::Block, 1.0f, 1.0f); break;
+        case 1050: sound("minecraft:block.crafter.fail", Category::Block, 1.0f, 1.0f); break;
+        case 1051: sound("minecraft:entity.wind_charge.throw", Category::Block, 0.5f, 0.4f / (randf() * 0.4f + 0.8f)); break;
+        case 1052: sound("minecraft:block.sulfur_spike.land", Category::Block, 2.0f, smallPitch()); break;
+        case 1053:
+        case 1054: sound("minecraft:entity.splash_potion.break", Category::Neutral, 1.0f, smallPitch()); break;
+        case 1500: {  // ComposterBlock.handleFill
+            sound(data > 0 ? "minecraft:block.composter.fill_success" : "minecraft:block.composter.fill", Category::Block, 1.0f, 1.0f);
+            const double h = shapeTop(bx, by, bz) + 0.03125;  // the shape's height at the middle
+            for (int i = 0; i < 10; ++i)
+                addNamed("composter", bx + 0.1875 + 0.625 * randf(), by + h + randf() * (1.0 - h), bz + 0.1875 + 0.625 * randf(), gauss() * 0.02,
+                         gauss() * 0.02, gauss() * 0.02);
+            break;
+        }
+        case 1501:
+            sound("minecraft:block.lava.extinguish", Category::Block, 0.5f, 2.6f + (randf() - randf()) * 0.8f);
+            for (int i = 0; i < 8; ++i) addNamed("large_smoke", bx + rnd(), by + 1.2, bz + rnd(), 0, 0, 0);
+            break;
+        case 1502:
+            sound("minecraft:block.redstone_torch.burnout", Category::Block, 0.5f, 2.6f + (randf() - randf()) * 0.8f);
+            for (int i = 0; i < 5; ++i) addNamed("smoke", bx + rnd() * 0.6 + 0.2, by + rnd() * 0.6 + 0.2, bz + rnd() * 0.6 + 0.2, 0, 0, 0);
+            break;
+        case 1503:
+            sound("minecraft:block.end_portal_frame.fill", Category::Block, 1.0f, 1.0f);
+            for (int i = 0; i < 16; ++i) addNamed("smoke", bx + (5.0 + rnd() * 6.0) / 16.0, by + 0.8125, bz + (5.0 + rnd() * 6.0) / 16.0, 0, 0, 0);
+            break;
+        case 1504: {  // PointedDripstoneBlock.spawnDripParticle: the fluid above the stalactite's root
+            int y = by;
+            while (y < by + 12 && blockName(bx, y + 1, bz).starts_with("minecraft:pointed_dripstone")) ++y;
+            const std::string root = blockName(bx, y, bz), above = blockName(bx, y + 1, bz);
+            const bool lava = above.starts_with("minecraft:lava");
+            const bool water = above.starts_with("minecraft:water") || root.find("waterlogged=true") != std::string::npos;
+            if (lava || water) addNamed(lava ? "dripping_dripstone_lava" : "dripping_dripstone_water", bx + 0.5, by + 0.625, bz + 0.5, 0, 0, 0);
+            break;
+        }
+        case 1505: {  // BoneMealItem.addGrowthParticles
+            const std::string n = blockName(bx, by, bz);
+            const bool spreader = n == "minecraft:grass_block" || n == "minecraft:netherrack" || n.ends_with("_nylium") || n == "minecraft:moss_block" ||
+                                  n == "minecraft:pale_moss_block";
+            if (spreader) spread(bx, by + 1, bz, data * 3, 3.0, 1.0, false, "happy_villager");
+            else if (n.starts_with("minecraft:water")) spread(bx, by, bz, data * 3, 3.0, 1.0, false, "happy_villager");
+            else if (n != "minecraft:air") inBlock(bx, n == "minecraft:rooted_dirt" ? by - 1 : by, bz, data, "happy_villager");
+            sound("minecraft:item.bone_meal.use", Category::Block, 1.0f, 1.0f);
+            break;
+        }
+        case 2000: shoot("smoke"); break;
+        case 2002: potionSplash("effect"); break;
+        case 2003: {  // an eye of ender shatters
+            const int eye = itemIdOf("ender_eye");
+            for (int i = 0; i < 8; ++i)
+                if (eye >= 0) itemShard(eye, bx + 0.5, by, bz + 0.5, gauss() * 0.15, rnd() * 0.2, gauss() * 0.15);
+            for (double a = 0.0; a < 3.14159265358979 * 2; a += 3.14159265358979 / 20) {
+                addNamed("portal", bx + 0.5 + std::cos(a) * 5.0, by - 0.4, bz + 0.5 + std::sin(a) * 5.0, std::cos(a) * -5.0, 0, std::sin(a) * -5.0);
+                addNamed("portal", bx + 0.5 + std::cos(a) * 5.0, by - 0.4, bz + 0.5 + std::sin(a) * 5.0, std::cos(a) * -7.0, 0, std::sin(a) * -7.0);
+            }
+            break;
+        }
+        case 2004:
+            for (int i = 0; i < 20; ++i) {
+                const double x = bx + 0.5 + (rnd() - 0.5) * 2.0, y = by + 0.5 + (rnd() - 0.5) * 2.0, z = bz + 0.5 + (rnd() - 0.5) * 2.0;
+                addNamed("smoke", x, y, z, 0, 0, 0);
+                addNamed("flame", x, y, z, 0, 0, 0);
+            }
+            break;
+        case 2006:
+            for (int i = 0; i < 200; ++i) {
+                const float dist = randf() * 4.0f, angle = randf() * 3.14159265f * 2.0f;
+                const double vx = std::cos(angle) * dist, vy = 0.01 + rnd() * 0.5, vz = std::sin(angle) * dist;
+                Options o;
+                o.power = dist;  // PowerParticleOption
+                addNamed("dragon_breath", bx + vx * 0.1, by + 0.3, bz + vz * 0.1, vx, vy, vz, &o);
+            }
+            if (data == 1) sound("minecraft:entity.dragon_fireball.explode", Category::Hostile, 1.0f, smallPitch());
+            break;
+        case 2007: potionSplash("instant_effect"); break;
+        case 2008: addNamed("explosion", bx + 0.5, by + 0.5, bz + 0.5, 0, 0, 0); break;
+        case 2009:
+            for (int i = 0; i < 8; ++i) addNamed("cloud", bx + rnd(), by + 1.2, bz + rnd(), 0, 0, 0);
+            break;
+        case 2010: shoot("white_smoke"); break;
+        case 2011:
+        case 2012: inBlock(bx, by, bz, data, "happy_villager"); break;
+        case 2013: {  // ParticleUtils.spawnSmashAttackParticles: dust pillars of the block hit
+            Options o;
+            o.block = 0;
+            const u16 hit = blockAt(bx, by, bz);
+            for (size_t i = 0; i < blockStates_.size(); ++i)
+                if (localBlock(int(i)) == hit) {
+                    o.block = int(i);
+                    break;
+                }
+            const double cx = bx + 0.5, cy = by + 1.0, cz = bz + 0.5;
+            for (int i = 0; i < float(data) / 3.0f; ++i)
+                addNamed("dust_pillar", cx + gauss() / 2.0, cy, cz + gauss() / 2.0, gauss() * 0.2, gauss() * 0.2, gauss() * 0.2, &o);
+            for (int i = 0; i < float(data) / 1.5f; ++i)
+                addNamed("dust_pillar", cx + 3.5 * std::cos(i) + gauss() / 2.0, cy, cz + 3.5 * std::sin(i) + gauss() / 2.0, gauss() * 0.05, gauss() * 0.05,
+                         gauss() * 0.05, &o);
+            break;
+        }
+        case 2014: blockDestroyed(bx, by, bz, localBlock(data)); break;
+        case 2015:
+        case 2016:
+        case 2017: {
+            int tx, ty, tz;
+            if (type == 2015) unpackDiff(16, 8, 16, tx, ty, tz);
+            else if (type == 2016) unpackDiff(8, 8, 8, tx, ty, tz);
+            else unpackDiff(127, 127, 127, tx, ty, tz);
+            teleport(tx, ty, tz);
+            break;
+        }
+        case 2018: {  // an enderman's teleport trail
+            int tx, ty, tz;
+            unpackDiff(127, 127, 127, tx, ty, tz);
+            for (int i = 0; i < 128; ++i) {
+                const double t = rnd();
+                const float vx = (randf() - 0.5f) * 0.2f, vy = (randf() - 0.5f) * 0.2f, vz = (randf() - 0.5f) * 0.2f;
+                addNamed("portal", tx + (bx - tx) * t + (rnd() - 0.5) * 0.6 * 2.0, ty + (by - ty) * t + rnd() * 2.9, tz + (bz - tz) * t + (rnd() - 0.5) * 0.6 * 2.0,
+                         vx, vy, vz);
+            }
+            break;
+        }
+        case 3000:
+            addNamed("explosion_emitter", bx + 0.5, by + 0.5, bz + 0.5, 0, 0, 0);
+            sound("minecraft:block.end_gateway.spawn", Category::Block, 10.0f, (1.0f + (randf() - randf()) * 0.2f) * 0.7f);
+            break;
+        case 3001: sound("minecraft:entity.ender_dragon.growl", Category::Hostile, 64.0f, 0.8f + randf() * 0.3f); break;
+        case 3002:
+            if (data >= 0 && data < 3) {  // spawnParticlesAlongAxis(axis, 0.125, electric_spark, 10..19)
+                for (int i = 0, n = 10 + int(randf() * 10.0f); i < n; ++i) {
+                    const double x = center[0] + (rnd() * 2.0 - 1.0) * (data == 0 ? 0.5 : 0.125);
+                    const double y = center[1] + (rnd() * 2.0 - 1.0) * (data == 1 ? 0.5 : 0.125);
+                    const double z = center[2] + (rnd() * 2.0 - 1.0) * (data == 2 ? 0.5 : 0.125);
+                    addNamed("electric_spark", x, y, z, data == 0 ? rnd() * 2.0 - 1.0 : 0.0, data == 1 ? rnd() * 2.0 - 1.0 : 0.0,
+                             data == 2 ? rnd() * 2.0 - 1.0 : 0.0);
+                }
+            } else {
+                onFaces("electric_spark", 3, 5);
+            }
+            break;
+        case 3003: onFaces("wax_on", 3, 5); break;
+        case 3004: onFaces("wax_off", 3, 5); break;
+        case 3005: onFaces("scrape", 3, 5); break;
+        case 3006: {  // sculk charge
+            const int count = data >> 6;
+            if (count > 0) {
+                if (randf() < 0.3f + float(count) * 0.1f)
+                    sound("minecraft:block.sculk.charge", Category::Block, 0.15f + 0.02f * float(count * count) * randf(), 0.4f + 0.3f * float(count) * randf());
+                const int faces = data & 63;
+                for (int face = 0; face < 6; ++face) {
+                    if (faces != 0 && !((faces >> face) & 1)) continue;  // MultifaceBlock.unpack
+                    Options o;
+                    o.scale = faces == 0 ? (face == 0 ? 3.14159265f : 0.0f) : (face == 1 ? 3.14159265f : 0.0f);  // the roll
+                    const double step = faces == 0 ? (face < 2 ? 0.65 : 0.57) : 0.35;
+                    for (int i = 0, n = int(randf() * float(count + 1)); i < n; ++i) {
+                        const double speed[3] = {(rnd() * 2.0 - 1.0) * 0.005, (rnd() * 2.0 - 1.0) * 0.005, (rnd() * 2.0 - 1.0) * 0.005};
+                        onFace(face, "sculk_charge", speed, step, &o);
+                    }
+                }
+            } else {
+                sound("minecraft:block.sculk.charge", Category::Block, 1.0f, 1.0f);
+                const BlockInfo& b = registry_.infos()[blockAt(bx, by, bz)];
+                const bool solid = b.kind == KindCube && b.collisionCount;
+                const int n = solid ? 40 : 20;
+                const float spreadR = solid ? 0.45f : 0.25f;
+                for (int i = 0; i < n; ++i) {
+                    const float vx = 2.0f * randf() - 1.0f, vy = 2.0f * randf() - 1.0f, vz = 2.0f * randf() - 1.0f;
+                    addNamed("sculk_charge_pop", center[0] + vx * spreadR, center[1] + vy * spreadR, center[2] + vz * spreadR, vx * 0.07f, vy * 0.07f, vz * 0.07f);
+                }
+            }
+            break;
+        }
+        case 3007: {  // a sculk shrieker shrieks
+            for (int i = 0; i < 10; ++i) {
+                Options o;
+                o.delay = i * 5;
+                addNamed("shriek", bx + 0.5, by + 0.5, bz + 0.5, 0, 0, 0, &o);
+            }
+            if (blockName(bx, by, bz).find("waterlogged=true") == std::string::npos)
+                if (audio::AudioSystem* a = audio::instance()) {
+                    const double pos[3] = {bx + 0.5, by + 0.5, bz + 0.5};
+                    a->playNetwork(-1, "minecraft:block.sculk_shrieker.shriek", Category::Block, pos, 2.0f, 0.6f + randf() * 0.4f);
+                }
+            break;
+        }
+        case 3008: {  // brushing finished
+            const u16 state = localBlock(data);
+            const std::string n = registry_.name(state);
+            if (n.starts_with("minecraft:suspicious_sand")) sound("minecraft:item.brush.brushing.sand.complete", Category::Player, 1.0f, 1.0f);
+            else if (n.starts_with("minecraft:suspicious_gravel")) sound("minecraft:item.brush.brushing.gravel.complete", Category::Player, 1.0f, 1.0f);
+            blockDestroyed(bx, by, bz, state);
+            break;
+        }
+        case 3009: onFaces("egg_crack", 3, 6); break;
+        case 3011: trialSpawn(flameOf(data)); break;
+        case 3012:
+            sound("minecraft:block.trial_spawner.spawn_mob", Category::Block, 1.0f, variedPitch());
+            trialSpawn(flameOf(data));
+            break;
+        case 3013:
+            sound("minecraft:block.trial_spawner.detect_player", Category::Block, 1.0f, variedPitch());
+            detectPlayer(data, "trial_spawner_detection");
+            break;
+        case 3014:
+            sound("minecraft:block.trial_spawner.eject_item", Category::Block, 1.0f, variedPitch());
+            ejectItem();
+            break;
+        case 3015:  // VaultBlockEntity.Client.emitActivationParticles
+            for (int i = 0; i < 20; ++i) {
+                const double x = bx + 0.1 + rnd() * 0.8, y = by + 0.25 + rnd() * 0.5, z = bz + 0.1 + rnd() * 0.8;
+                addNamed("smoke", x, y, z, 0, 0, 0);
+                addNamed(data == 0 ? "small_flame" : "soul_fire_flame", x, y, z, 0, 0, 0);
+            }
+            sound("minecraft:block.vault.activate", Category::Block, 1.0f, variedPitch());
+            break;
+        case 3016:  // emitDeactivationParticles
+            for (int i = 0; i < 20; ++i)
+                addNamed(data == 0 ? "small_flame" : "soul_fire_flame", bx + 0.4 + rnd() * 0.2, by + 0.4 + rnd() * 0.2, bz + 0.4 + rnd() * 0.2, gauss() * 0.02,
+                         gauss() * 0.02, gauss() * 0.02);
+            sound("minecraft:block.vault.deactivate", Category::Block, 1.0f, variedPitch());
+            break;
+        case 3017: ejectItem(); break;
+        case 3018:
+            for (int i = 0; i < 10; ++i) addNamed("poof", bx + rnd(), by + rnd(), bz + rnd(), gauss() * 0.02, gauss() * 0.02, gauss() * 0.02);
+            sound("minecraft:block.cobweb.place", Category::Block, 1.0f, variedPitch());
+            break;
+        case 3019:
+            sound("minecraft:block.trial_spawner.detect_player", Category::Block, 1.0f, variedPitch());
+            detectPlayer(data, "trial_spawner_detection_ominous");
+            break;
+        case 3020:
+            sound("minecraft:block.trial_spawner.ominous_activate", Category::Block, data == 0 ? 0.3f : 1.0f, variedPitch());
+            detectPlayer(0, "trial_spawner_detection_ominous");
+            for (int i = 0; i < 20; ++i) {  // addBecomeOminousParticles
+                const double x = bx + 0.5 + (rnd() - 0.5) * 2.0, y = by + 0.5 + (rnd() - 0.5) * 2.0, z = bz + 0.5 + (rnd() - 0.5) * 2.0;
+                const double xa = gauss() * 0.02, ya = gauss() * 0.02, za = gauss() * 0.02;
+                addNamed("trial_omen", x, y, z, xa, ya, za);
+                addNamed("soul_fire_flame", x, y, z, xa, ya, za);
+            }
+            break;
+        case 3021:
+            sound("minecraft:block.trial_spawner.spawn_item", Category::Block, 1.0f, variedPitch());
+            trialSpawn(flameOf(data));
+            break;
+        default: break;
+    }
 }
 
 void Particles::spawn(std::string_view type, double x, double y, double z, double vx, double vy, double vz) {
@@ -1813,10 +2236,12 @@ void Particles::frame(double dt, const double cam[3]) {
     std::vector<NetBreak>& breaks = breaksLocal_;
     spawns.clear(), breaks.clear();
     std::vector<NetExplosion> explosions;
+    std::vector<NetLevelEvent> levelEvents;
     {
         std::lock_guard lock(netMutex_);
         spawns.swap(netSpawns_);
         breaks.swap(netBreaks_);
+        levelEvents.swap(netLevelEvents_);
         weatherQueue_.insert(weatherQueue_.end(), netWeather_.begin(), netWeather_.end());
         netWeather_.clear();
         explosions.swap(netExplosions_);
@@ -1838,6 +2263,10 @@ void Particles::frame(double dt, const double cam[3]) {
     for (const NetBreak& b : breaks) {
         if (b.face >= 0) blockCrack(b.x, b.y, b.z, b.face);
         else blockDestroyed(b.x, b.y, b.z, localBlock(b.state));
+    }
+    for (const NetLevelEvent& e : levelEvents) {
+        if (e.type < 0) globalLevelEvent(-e.type, e.x, e.y, e.z);
+        else levelEvent(e.type, e.x, e.y, e.z, e.data);
     }
     for (const NetSpawn& s : spawns) {
         const double dx = s.x - cam[0], dy = s.y - cam[1], dz = s.z - cam[2];

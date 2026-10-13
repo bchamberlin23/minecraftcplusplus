@@ -1,4 +1,5 @@
 #include "audio/audio.h"
+#include "world/nbt_dom.h"
 
 #include "assets/assets.h"
 #include "assets/game_reports.h"
@@ -441,6 +442,7 @@ bool AudioSystem::eyeInWater() {
 // ---- network ----------------------------------------------------------------------------------
 
 void AudioSystem::attachNet(net::Client& client) {
+    client_ = &client;
     // Holder<SoundEvent>: VarInt 0 = inline (identifier + optional fixed range), else registry id + 1.
     auto readEvent = [this](net::Reader& r) {
         const int holder = r.varInt();
@@ -494,6 +496,14 @@ void AudioSystem::attachNet(net::Client& client) {
             netQueue_.push_back(s);
             return;
         }
+        if (r.ok && (type == 1010 || type == 1011)) {  // a jukebox starts (the jukebox_song id) / stops its song
+            s.type = type == 1010 ? NetSound::JukeboxPlay : NetSound::JukeboxStop;
+            s.pos[0] = x, s.pos[1] = y, s.pos[2] = z;
+            s.event = data;
+            std::lock_guard lock(netMutex_);
+            netQueue_.push_back(s);
+            return;
+        }
         if (!r.ok || type != 2001 || data < 0 || data >= int(stateSoundTypes_.size()) || stateSoundTypes_[data] < 0) return;
         s.event = stateSoundTypes_[data];
         s.pos[0] = x + 0.5, s.pos[1] = y + 0.5, s.pos[2] = z + 0.5;
@@ -535,6 +545,30 @@ void AudioSystem::handleNet(const NetSound& s) {
     case NetSound::BlockHit:
         blockHit(int(s.pos[0]), int(s.pos[1]), int(s.pos[2]));
         break;
+    case NetSound::JukeboxPlay:
+    case NetSound::JukeboxStop: {
+        const u64 key = (u64(u32(int(s.pos[0]))) << 32) ^ (u64(u32(int(s.pos[1]))) << 48) ^ u64(u32(int(s.pos[2])));
+        if (auto it = jukeboxes_.find(key); it != jukeboxes_.end()) {  // stopJukeboxSong
+            engine_.stopHandle(it->second);
+            jukeboxes_.erase(it);
+        }
+        if (s.type == NetSound::JukeboxStop || !client_) break;
+        // The jukebox_song entry's sound_event: an id, or an inline event ({sound_id: ...}).
+        const std::vector<net::Client::RegistryEntry> songs = client_->registryEntries("minecraft:jukebox_song");
+        if (s.event < 0 || size_t(s.event) >= songs.size()) break;
+        NbtValue nbt;
+        const std::string& raw = songs[size_t(s.event)].nbt;
+        if (!nbtReadNetwork(reinterpret_cast<const u8*>(raw.data()), raw.size(), nbt)) break;
+        const NbtValue* ev = nbt.find("sound_event");
+        std::string name = ev && ev->type == TagString ? ev->s : std::string();
+        if (ev && ev->type == TagCompound)
+            if (const NbtValue* id = const_cast<NbtValue*>(ev)->find("sound_id"); id && id->type == TagString) name = id->s;
+        const int event = name.empty() ? -1 : bank_.eventId(name);
+        // SimpleSoundInstance.forJukeboxSong: records, volume 4, linear, at the block's centre
+        const double pos[3] = {s.pos[0] + 0.5, s.pos[1] + 0.5, s.pos[2] + 0.5};
+        if (const u32 h = event >= 0 ? play(event, Category::Record, pos, 4.0f, 1.0f, rng_.nextLong()) : 0) jukeboxes_[key] = h;
+        break;
+    }
     case NetSound::Stop:  // SoundManager.stop(name, source)
         if (!s.anyEvent && s.event < 0) break;  // a sound this client does not know is not playing
         if (engine_.capturing()) engine_.mark("stop_sound");

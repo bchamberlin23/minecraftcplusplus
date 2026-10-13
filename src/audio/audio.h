@@ -104,7 +104,7 @@ private:
         bool air = false, water = false;
     };
     struct NetSound {
-        enum Type : u8 { Sound, EntitySound, Stop, BlockBreak, BlockHit } type;
+        enum Type : u8 { Sound, EntitySound, Stop, BlockBreak, BlockHit, JukeboxPlay, JukeboxStop } type;
         int event = -1, category = -1, entity = 0;  // BlockBreak: event = sound type
         double pos[3] = {};
         float volume = 1, pitch = 1;
@@ -173,6 +173,9 @@ private:
     int playerTicks_ = 0, lastCrystalTick_ = -1000;
     float crystalIntensity_ = 0;
 
+    // LevelEventHandler.playJukeboxSong / stopJukeboxSong: the song playing at each jukebox (block position key)
+    std::unordered_map<u64, u32> jukeboxes_;
+    net::Client* client_ = nullptr;
     // MusicManager
     u32 music_ = 0;
     int musicEvent_ = -1;
