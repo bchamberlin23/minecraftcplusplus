@@ -969,8 +969,7 @@ void recalcAttached(const EntityWorld& w, Entity& e, int kind) {
 double pickRadius(const Entity& e) {
     if (!e.info) return 0;
     const std::string& n = e.info->name;
-    return n == "minecraft:fireball" || n == "minecraft:small_fireball" || n == "minecraft:shulker_bullet" || n == "minecraft:wind_charge" ||
-                   n == "minecraft:breeze_wind_charge"
+    return n == "minecraft:fireball" || n == "minecraft:shulker_bullet" || n == "minecraft:wind_charge" || n == "minecraft:breeze_wind_charge"
                ? 1.0
                : 0.0;
 }
@@ -1835,26 +1834,66 @@ void entitySize(const Entity& e, double& w, double& h) {
     }
 }
 
+// Entity.isPickable: living entities and players (not spectators), vehicles, falling blocks / primed TNT, the block
+// attached decorations, crystals, interactions, shulker bullets and the redirectable projectiles; not marker armour
+// stands nor the ender dragon itself (its parts are).
+bool EntityWorld::pickableEntity(const Entity& e) const {
+    if (!e.info) return false;
+    const std::string& n = e.info->name;
+    if (n == "minecraft:ender_dragon" || (n == "minecraft:armor_stand" && (e.standFlags & 16))) return false;
+    if (e.category == Category::Player && isSpectator && isSpectator(e)) return false;
+    if (e.category == Category::Living || e.category == Category::Player || e.category == Category::Vehicle || e.category == Category::Block)
+        return true;
+    return n == "minecraft:item_frame" || n == "minecraft:glow_item_frame" || n == "minecraft:painting" || n == "minecraft:cushion" ||
+           n == "minecraft:leash_knot" || n == "minecraft:end_crystal" || n == "minecraft:interaction" ||
+           n == "minecraft:shulker_bullet" || n == "minecraft:fireball" || n == "minecraft:wind_charge" ||
+           n == "minecraft:breeze_wind_charge";
+}
+
+namespace {
+bool rayBox(const double o[3], const double dir[3], const double lo[3], const double hi[3], double maxT, double& t) {
+    double t0 = 0, t1 = maxT;
+    for (int a = 0; a < 3; ++a) {
+        if (std::abs(dir[a]) < 1e-12) {
+            if (o[a] < lo[a] || o[a] > hi[a]) return false;
+            continue;
+        }
+        double ta = (lo[a] - o[a]) / dir[a], tb = (hi[a] - o[a]) / dir[a];
+        if (ta > tb) std::swap(ta, tb);
+        t0 = std::max(t0, ta), t1 = std::min(t1, tb);
+        if (t0 > t1) return false;
+    }
+    t = t0;
+    return true;
+}
+}  // namespace
+
 PickResult EntityWorld::pick(const double o[3], const double dir[3], double maxDistance) const {
     PickResult best;
     best.distance = maxDistance;
     const float pt = partialTick();
     for (const auto& [id, e] : entities_) {
         if (!e.info) continue;
-        bool pickable = e.category == Category::Living || e.category == Category::Player ||
-                        e.category == Category::Vehicle || e.category == Category::Block;
-        const std::string& n = e.info->name;
-        if (n == "minecraft:item_frame" || n == "minecraft:glow_item_frame" || n == "minecraft:painting" || n == "minecraft:cushion" ||
-            n == "minecraft:leash_knot" || n == "minecraft:end_crystal" || n == "minecraft:interaction" ||
-            n == "minecraft:shulker_bullet" || n == "minecraft:fireball" || n == "minecraft:small_fireball" ||
-            n == "minecraft:wind_charge" || n == "minecraft:breeze_wind_charge")
-            pickable = true;
-        if (n == "minecraft:ender_dragon" || (n == "minecraft:armor_stand" && (e.standFlags & 16))) pickable = false;
-        if (!pickable || e.deathTime > 0) continue;
-        double w, h;
-        entitySize(e, w, h);
+        if (e.deathTime > 0) continue;
         double c[3];
         for (int a = 0; a < 3; ++a) c[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt;
+        if (e.info->name == "minecraft:ender_dragon" && e.health > 0) {  // EnderDragonPart (ids: the dragon's + 1 .. 8)
+            double parts[8][6];
+            dragonPartBoxes(e, parts);
+            for (int k = 0; k < 8; ++k) {
+                double t;
+                const double lo[3] = {c[0] + parts[k][0], c[1] + parts[k][1], c[2] + parts[k][2]};
+                const double hi[3] = {c[0] + parts[k][3], c[1] + parts[k][4], c[2] + parts[k][5]};
+                if (rayBox(o, dir, lo, hi, best.distance, t) && t < best.distance) {
+                    best.id = id + 1 + k, best.distance = t;
+                    for (int a = 0; a < 3; ++a) best.hit[a] = o[a] + dir[a] * t - c[a];
+                }
+            }
+            continue;
+        }
+        if (!pickableEntity(e)) continue;
+        double w, h;
+        entitySize(e, w, h);
         double lo[3] = {c[0] - w / 2, c[1], c[2] - w / 2}, hi[3] = {c[0] + w / 2, c[1] + h, c[2] + w / 2};
         if (double blo[3], bhi[3]; attachedBox(*this, e, blo, bhi))
             for (int a = 0; a < 3; ++a) lo[a] = c[a] + blo[a], hi[a] = c[a] + bhi[a];
@@ -1926,13 +1965,7 @@ PickResult EntityWorld::pickAttackRange(const double eye[3], const double dir[3]
         if (!e.info || e.deathTime > 0) continue;
         const std::string& n = e.info->name;
         // EntitySelector.CAN_BE_PICKED: the entities the crosshair can target (EntityWorld::pick).
-        bool pickable = e.category == Category::Living || e.category == Category::Player || e.category == Category::Vehicle ||
-                        e.category == Category::Block || n == "minecraft:item_frame" || n == "minecraft:glow_item_frame" ||
-                        n == "minecraft:painting" || n == "minecraft:end_crystal" || n == "minecraft:interaction" ||
-                        n == "minecraft:shulker_bullet" || n == "minecraft:fireball" || n == "minecraft:small_fireball" ||
-                        n == "minecraft:wind_charge" || n == "minecraft:breeze_wind_charge";
-        if (n == "minecraft:ender_dragon" || (n == "minecraft:armor_stand" && (e.standFlags & 16))) pickable = false;
-        if (!pickable) continue;
+        if (!pickableEntity(e)) continue;
         double w, h, c[3];
         entitySize(e, w, h);
         for (int a = 0; a < 3; ++a) c[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt;
@@ -2014,6 +2047,10 @@ bool EntityWorld::spectate(const double eye[3], const double dir[3], double bloc
 bool EntityWorld::attack(int id) {
     if (!client_ || !client_->alive()) return false;
     auto it = entities_.find(id);
+    if (it == entities_.end())  // an ender dragon's part (ids after the dragon's): the server resolves it
+        for (int k = 1; k <= 8 && it == entities_.end(); ++k)
+            if (auto d = entities_.find(id - k); d != entities_.end() && d->second.info && d->second.info->name == "minecraft:ender_dragon")
+                it = d;
     // The server disconnects clients that attack items, experience orbs or arrows (fireballs, shulker bullets and
     // wind charges can be hit: deflected / destroyed).
     if (it == entities_.end() || it->second.category == Category::Item) return false;

@@ -300,6 +300,7 @@ public:
     }
 
     // Ray pick against entity bounding boxes (inflated by the target's pick radius); origin/dir in world space.
+    bool pickableEntity(const Entity& e) const;  // Entity.isPickable
     PickResult pick(const double origin[3], const double dir[3], double maxDistance) const;
     // Sends attack (attack + punch) or use (interact) for an entity; false if not connected.
     bool attack(int id);
@@ -431,6 +432,8 @@ public:
     // The local player uses an entity (before the interact packet; main thread): true opens something client side
     // (the command block minecart's editor) and the packet is still sent.
     std::function<void(const Entity& e)> onUse;
+    // A player in spectator mode (the player list): not pickable.
+    std::function<bool(const Entity& e)> isSpectator;
     // The local player attacked an entity (after the packets): Player.attack's client-side part.
     std::function<void(const Entity& e)> onLocalAttack;
     std::function<void(const std::string& raw, double x, double y, double z, double vx, double vy, double vz)> spawnParticle;
