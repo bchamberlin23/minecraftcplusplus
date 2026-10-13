@@ -1113,7 +1113,7 @@ void Ui::State::runScript(double) {
                 {"keybinds", Screen::KeyBinds},   {"accessibility", Screen::Accessibility}, {"none", Screen::None},
                 {"chatoptions", Screen::ChatOptions}, {"language", Screen::Language}, {"font", Screen::FontOptions},
                 {"onboarding", Screen::AccessibilityOnboarding}, {"chat", Screen::Chat}, {"credits", Screen::CreditsAttribution},
-                {"worldoptions", Screen::WorldOptions}, {"gamerules", Screen::InWorldGameRules}, {"restrictions", Screen::Restrictions}, {"mods", Screen::Mods}};
+                {"worldoptions", Screen::WorldOptions}, {"gamerules", Screen::InWorldGameRules}, {"restrictions", Screen::Restrictions}, {"mods", Screen::Mods}, {"mpwarning", Screen::MultiplayerWarning}};
             for (auto [n, sc] : kScreens)
                 if (arg(0) == n) sc == Screen::None ? closeScreen() : openScreen(sc);
         } else if (st.verb == "option") {  // option <options.txt key> <value>: sets it as the options screens would

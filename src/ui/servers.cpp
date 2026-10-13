@@ -575,6 +575,89 @@ void registerServerData(UiState& s, net::Client& client) {
 
 const UiModuleRegistrar kServerData({.name = "server_data", .registerHandlers = registerServerData});
 
+// SafetyScreen (WarningScreen): the bold title, the message in a text area (width - 100, at most height - 100 high,
+// padded 12), the "do not show again" box and Proceed / Back; spaced 8 and centred.
+struct Safety {
+    bool stopShowing = false;
+    float scroll = 0;
+} safety;
+
+struct SafetyLayout {
+    int top, boxX, boxY, boxW, boxH, checkY, buttonsY, checkW;
+    std::vector<Text> lines;
+};
+SafetyLayout safetyLayout(State& s) {
+    SafetyLayout l;
+    const int W = s.guiW(), H = s.guiH();
+    l.boxW = W - 100;
+    l.lines = s.font.split(tr(s, "multiplayerWarning.message"), l.boxW - 8);
+    l.boxH = std::min(int(l.lines.size()) * 9 + 8, H - 100);
+    l.checkW = 17 + 4 + s.font.width(tr(s, "multiplayerWarning.check"));
+    const int total = 9 + 8 + 24 + l.boxH + 8 + 17 + 8 + 20;
+    l.top = (H - total) / 2;
+    l.boxX = 50, l.boxY = l.top + 9 + 8 + 12;
+    l.checkY = l.boxY + l.boxH + 12 + 8;
+    l.buttonsY = l.checkY + 17 + 8;
+    return l;
+}
+
+void safetyBuild(State& s) {
+    const SafetyLayout l = safetyLayout(s);
+    State* p = &s;
+    addButton(s, float(s.guiW() / 2 - 154), float(l.buttonsY), 150, tr(s, "gui.proceed"), [p] {
+        if (safety.stopShowing) {
+            p->settings.skipMultiplayerWarning = true;
+            p->settings.save();
+        }
+        openServers(*p);
+    });
+    addButton(s, float(s.guiW() / 2 + 4), float(l.buttonsY), 150, tr(s, "gui.back"), [p] { p->openScreen(Screen::Title); });
+    s.fe->onBack = [p] { p->openScreen(Screen::Title); };
+}
+
+void safetyDraw(State& s, Canvas& c) {
+    menuBackground(s, c);
+    const SafetyLayout l = safetyLayout(s);
+    const float cx = float(c.guiWidth() / 2);
+    Style bold;
+    bold.bold = 1;
+    s.drawCentered(c, Text(s.res.translate("multiplayerWarning.header"), bold), cx, float(l.top), 0xFFFFFFFF);
+    blitSprite(c, s.sprites.sprite("widget/text_field"), float(l.boxX), float(l.boxY), float(l.boxW), float(l.boxH));
+    const float maxScroll = std::max(0.0f, float(l.lines.size()) * 9 + 8 - float(l.boxH));
+    safety.scroll = std::clamp(safety.scroll, 0.0f, maxScroll);
+    c.pushScissor(float(l.boxX + 1), float(l.boxY + 1), float(l.boxX + l.boxW - 1), float(l.boxY + l.boxH - 1));
+    for (size_t i = 0; i < l.lines.size(); ++i) {
+        const float y = float(l.boxY + 4 + int(i) * 9) - safety.scroll;
+        if (y + 9 < float(l.boxY) || y > float(l.boxY + l.boxH)) continue;
+        s.drawText(c, l.lines[i], float(l.boxX + 4), y, 0xFFFFFFFF, true);
+    }
+    c.popScissor();
+    const float x = cx - float(l.checkW / 2);
+    blitSprite(c, s.sprites.sprite(safety.stopShowing ? "widget/checkbox_selected" : "widget/checkbox"), x, float(l.checkY), 17, 17);
+    s.drawText(c, tr(s, "multiplayerWarning.check"), x + 21, float(l.checkY + 4), 0xFFE0E0E0, true);
+    s.drawButtons(c);
+}
+
+void safetyInput(State& s, const InputEvent& e) {
+    if (e.type == InputEvent::Wheel) {
+        safety.scroll -= float(e.code) * 9 * 2;
+        return;
+    }
+    if (e.type == InputEvent::Button && e.down && e.code == 0) {
+        const SafetyLayout l = safetyLayout(s);
+        const float x = float(s.guiW() / 2 - l.checkW / 2);
+        if (s.mouseX >= x && s.mouseX < x + float(l.checkW) && s.mouseY >= float(l.checkY) && s.mouseY < float(l.checkY + 17)) {
+            safety.stopShowing = !safety.stopShowing;
+            return;
+        }
+    }
+    s.buttonsInput(e);
+}
+
+void safetyClosed(State&) { safety = Safety{}; }
+
+const ScreenRegistrar kSafetyScreen({Screen::MultiplayerWarning, safetyBuild, safetyDraw, safetyInput, safetyClosed});
+
 }  // namespace
 
 }  // namespace ui

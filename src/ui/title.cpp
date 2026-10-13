@@ -377,7 +377,10 @@ void buildTitle(State& s) {
     const float x = float(W / 2 - 100);
     const int y = H / 4 + 48;
     addButton(s, x, float(y), 200, tr(s, "menu.singleplayer"), [p] { openWorlds(*p); });
-    addButton(s, x, float(y + 24), 200, tr(s, "menu.multiplayer"), [p] { openServers(*p); });
+    addButton(s, x, float(y + 24), 200, tr(s, "menu.multiplayer"), [p] {  // SafetyScreen first unless skipped
+        if (p->settings.skipMultiplayerWarning) openServers(*p);
+        else p->openScreen(Screen::MultiplayerWarning);
+    });
     // Realms (menu.online) needs a Microsoft account: its place opens the mods and packs instead.
     addButton(s, x, float(y + 48), 200, Text("Mods & Packs"), [p] { p->openScreen(Screen::Mods); });
     // CommonButtons.friends / language / accessibility: three icon buttons centred under them.
