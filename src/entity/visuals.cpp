@@ -239,6 +239,7 @@ struct Visuals::Impl {
     void waterAndSprint(const double pos[3], const double vel[3], float width, bool inWater, bool& wasIn, bool sprinting);
     std::unordered_map<int, int> stunnedTicks;  // Ravager.stunnedTick (event 39)
     std::unordered_map<int, std::pair<int, u64>> stateStart;  // pose / sniffer state and the age it began (animation times)
+    std::unordered_map<int, std::pair<int, int>> breezeState;  // Breeze.jumpTrailStartedTick, soundTick
     // LivingEntity.breakItem: the item's break sound and five shards from the eyes (item: network id).
     void breakItem(int item, const double pos[3], double eyeHeight, float yaw, float pitch, bool silent, audio::Category category);
     bool emit(Emitter& em);  // TrackingEmitter.tick; false when the emitter is done
@@ -2693,6 +2694,24 @@ void Visuals::Impl::mobTick(const Entity& e) {
                     particles->spawnBlock("block", key, e.pos[0] + (R() * 1.4 - 0.7), e.pos[1], e.pos[2] + (R() * 1.4 - 0.7), 0, 0, 0);
             }
         }
+    } else if (n == "minecraft:breeze") {  // Breeze.tick: ground particles, the jump trail, the whirl sound
+        auto& [trail, soundTick] = breezeState[e.id];
+        const int bx = int(std::floor(e.pos[0])), bz = int(std::floor(e.pos[2]));
+        u16 ground = world.world().block(bx, int(std::floor(e.pos[1])), bz);
+        if (!ground) ground = world.world().block(bx, int(std::floor(e.pos[1] - 1e-5)), bz);
+        const std::string key = ground ? world.registry().name(ground) : std::string();
+        auto groundParticles = [&](int amount) {
+            if (e.vehicle >= 0 || key.empty()) return;
+            for (int i = 0; i < amount; ++i) particles->spawnBlock("block", key, e.pos[0], e.pos[1], e.pos[2], 0, 0, 0);
+        };
+        if (e.pose == 16 || e.pose == 17 || e.pose == 0) trail = 0, groundParticles(1);  // shooting, inhaling, standing
+        else if (e.pose == 15) groundParticles(20);                                     // sliding
+        else if (e.pose == 6 && ++trail <= 5 && !key.empty())                            // long jumping
+            for (int i = 0; i < 3; ++i)
+                particles->spawnBlock("block", key, e.pos[0] + e.vel[0], e.pos[1] + e.vel[1] + 0.1, e.pos[2] + e.vel[2], 0, 0, 0);
+        soundTick = soundTick == 0 ? 1 + int(fxRandom() % 80) : soundTick - 1;
+        if (soundTick == 0)
+            sound("minecraft:entity.breeze.whirl", audio::Category::Hostile, e.pos[0], e.pos[1], e.pos[2], float(0.8 + 0.2 * R()), float(0.7 + 0.4 * R()));
     } else if (n == "minecraft:sniffer") {  // Sniffer.tick: digging particles, the searching sound
         auto& st = stateStart[e.id];
         if (st.first != e.snifferState) st = {e.snifferState, e.age};
