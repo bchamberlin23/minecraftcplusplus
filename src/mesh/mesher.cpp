@@ -382,6 +382,30 @@ static void fluidFaces(const u16* ids, const u8* light, const BlockRegistry& reg
     auto type = [&](int p) { return code(p) & 3; };
     auto amount = [&](int p) { return float((code(p) >> 2) & 15) / 9.0f; };  // getOwnHeight
     auto solid = [&](int p) { return infos[ids[p]].collisionCount > 0 && !infos[ids[p]].fluid; };  // BlockState.isSolid
+    // BlockState.getFaceOcclusionShape(face) covering 0..1 x 0..h of that face (h: the height up the side faces; the
+    // whole face for up / down), from the collision boxes of blocks that can occlude (opaque, not leaves)
+    auto covers = [&](int q, int face, float h) {
+        const BlockInfo& b = infos[ids[q]];
+        if (b.occludes) return true;
+        if (b.fluid || b.leaves || b.layer != LayerOpaque || !b.collisionCount) return false;
+        const int axis = face < 2 ? 1 : face < 4 ? 2 : 0;
+        const bool positive = face & 1;
+        const int ua = axis == 1 ? 0 : axis == 2 ? 0 : 2, va = axis == 1 ? 2 : 1;  // the face's in-plane axes
+        const float vMax = axis == 1 ? 1.0f : h;
+        constexpr int kSamples = 8;
+        for (int i = 0; i < kSamples; ++i)
+            for (int j = 0; j < kSamples; ++j) {
+                const float u = (float(i) + 0.5f) / kSamples, v = (float(j) + 0.5f) / kSamples * vMax;
+                bool in = false;
+                for (u32 k = 0; k < b.collisionCount && !in; ++k) {
+                    const Box& c = registry.box(b.collisionFirst + k);
+                    const bool onFace = positive ? c.max[axis] >= 1.0f - 1e-4f : c.min[axis] <= 1e-4f;
+                    in = onFace && u >= c.min[ua] && u <= c.max[ua] && v >= c.min[va] && v <= c.max[va];
+                }
+                if (!in) return false;
+            }
+        return true;
+    };
     for (int y = 0; y < 16; ++y)
         for (int z = 0; z < 16; ++z)
             for (int x = 0; x < 16; ++x) {
@@ -395,8 +419,11 @@ static void fluidFaces(const u16* ids, const u8* light, const BlockRegistry& reg
                 };
                 const int up = p + kStrideY, down = p - kStrideY, north = p - kStrideZ, south = p + kStrideZ, west = p - kStrideX,
                           east = p + kStrideX;
-                const bool renderUp = !same(up), renderDown = !same(down) && !infos[ids[down]].occludes;
-                const bool renderSide[4] = {!same(north), !same(south), !same(west), !same(east)};
+                // FluidRenderer.shouldRenderFace: not the same fluid there, not hidden by the block's own face
+                // (isFaceOccludedBySelf: a waterlogged stair's back, a slab's bottom); down also not over a covered top
+                const bool renderUp = !same(up), renderDown = !same(down) && !covers(p, 0, 1.0f) && !covers(down, 1, 1.0f);
+                const bool renderSide[4] = {!same(north) && !covers(p, 2, 1.0f), !same(south) && !covers(p, 3, 1.0f),
+                                            !same(west) && !covers(p, 4, 1.0f), !same(east) && !covers(p, 5, 1.0f)};
                 if (!renderUp && !renderDown && !renderSide[0] && !renderSide[1] && !renderSide[2] && !renderSide[3]) continue;
                 const float self = height(p);
                 float hNE = 1, hNW = 1, hSE = 1, hSW = 1;
@@ -436,7 +463,7 @@ static void fluidFaces(const u16* ids, const u8* light, const BlockRegistry& reg
                 };
                 const u32 still = t == 1 ? waterStill : lavaStill, flowTex = t == 1 ? waterFlow : lavaFlow;
                 const u32 lit = lightOf(p, up);
-                if (renderUp && !(infos[ids[up]].occludes && std::min(std::min(hNW, hSW), std::min(hSE, hNE)) >= 1.0f)) {
+                if (renderUp && !(std::min(std::min(hNW, hSW), std::min(hSE, hNE)) >= 1.0f && covers(up, 0, 1.0f))) {
                     // FlowingFluid.getFlow: the height differences to the neighbours (over a drop: to the fluid below it)
                     double fx = 0, fz = 0;
                     const float own = amount(p);
@@ -472,7 +499,8 @@ static void fluidFaces(const u16* ids, const u8* light, const BlockRegistry& reg
                 const float top[4][2] = {{hNW, hNE}, {hSW, hSE}, {hNW, hSW}, {hNE, hSE}};
                 for (int k = 0; k < 4; ++k) {
                     const int q = sideCell[k];
-                    if (!renderSide[k] || infos[ids[q]].occludes) continue;
+                    // isFaceOccludedByNeighbor: the neighbour's face covers the side up to the fluid's height
+                    if (!renderSide[k] || covers(q, sideFace[k] ^ 1, std::max(top[k][0], top[k][1]))) continue;
                     u32 tex = flowTex;
                     if (t == 1) {  // HalfTransparentBlock / LeavesBlock beside it: the overlay texture
                         const std::string& n = registry.name(ids[q]);
