@@ -1419,7 +1419,9 @@ void EntityRenderer::blockDecorations(const Entity& e, const TypeDef& d, const M
     };
     switch (d.anim) {
         case Anim::Quadruped:
-            if (d.special == SpMooshroom && !e.baby) {  // three mushrooms: two on the back, one on the head
+            // three mushrooms: two on the back, one on the head (not on an invisible one: Java then draws only a glowing
+            // one's outline)
+            if (d.special == SpMooshroom && !e.baby && !(e.sharedFlags & 0x20)) {
                 const u16 b = blockId(e.variant == 1 ? "minecraft:brown_mushroom" : "minecraft:red_mushroom");
                 auto finish = [&](M34 x) { return mul(mul(x, scale(-1, -1, 1)), translate(-0.5f, -0.5f, -0.5f)); };
                 emit(b, finish(mul(mul(root, translate(0.2f, -0.35f, 0.5f)), rotY(-48.0f * kDeg))), overlay);
@@ -1447,7 +1449,7 @@ void EntityRenderer::blockDecorations(const Entity& e, const TypeDef& d, const M
         }
         case Anim::SnowGolem: {  // SnowGolemHeadLayer (SnowGolem.hasPumpkin)
             M34 head;
-            if (!(dataInt(e, "DATA_PUMPKIN_ID", 16) & 16) || !part("head", head)) break;
+            if (!(dataInt(e, "DATA_PUMPKIN_ID", 16) & 16) || (e.sharedFlags & 0x20) || !part("head", head)) break;  // not invisible
             M34 x = mul(mul(mul(head, translate(0, -0.34375f, 0)), rotY(kPi)), scale(0.625f, -0.625f, -0.625f));
             emit(blockId("minecraft:carved_pumpkin"), mul(x, translate(-0.5f, -0.5f, -0.5f)), overlay);
             break;
