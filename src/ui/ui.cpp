@@ -71,6 +71,43 @@ int vkFromName(std::string n) {
 }
 }  // namespace
 
+// --- the user's own block interaction sounds ----------------------------------------------------------------------
+
+namespace {
+
+// useWithoutItem of doors, trapdoors, fence gates, buttons and comparators plays its sound with the player as the
+// exception (the server skips the user): the BlockSetType / WoodType sound of the new state. (Levers are pulled on
+// the server with no exception.)
+void interactSound(const std::string& n, const std::string& full, int x, int y, int z) {
+    audio::AudioSystem* a = audio::instance();
+    if (!a) return;
+    auto has = [&](const char* p) { return full.find(p) != std::string::npos; };
+    const bool opened = !has("open=true");  // the state after the click
+    static std::mt19937 rng(0xD00Fu);
+    const float varied = std::uniform_real_distribution<float>(0.9f, 1.0f)(rng);  // random.nextFloat() * 0.1 + 0.9
+    // BlockSetType / WoodType families: cherry, nether (crimson / warped), bamboo, copper, else wooden.
+    const char* family = n.starts_with("cherry_") ? "cherry_wood" : n.starts_with("crimson_") || n.starts_with("warped_") ? "nether_wood"
+                         : n.starts_with("bamboo_") ? "bamboo_wood" : n.find("copper") != std::string::npos ? "copper" : "wooden";
+    auto play = [&](const std::string& sound, float volume, float pitch) {
+        a->play("minecraft:" + sound, audio::Category::Block, x + 0.5, y + 0.5, z + 0.5, volume, pitch);
+    };
+    if (n.ends_with("_door") && !n.starts_with("iron_"))  // DoorBlock.playSound (canOpenByHand: not iron)
+        return play(std::string("block.") + family + "_door." + (opened ? "open" : "close"), 1.0f, varied);
+    if (n.ends_with("_trapdoor") && !n.starts_with("iron_"))  // TrapDoorBlock.playSound
+        return play(std::string("block.") + family + "_trapdoor." + (opened ? "open" : "close"), 1.0f, varied);
+    if (n.ends_with("_fence_gate")) {  // FenceGateBlock: WoodType.fenceGateOpen / Close (oak's: block.fence_gate)
+        const std::string base = std::string(family) == "wooden" ? "block.fence_gate" : std::string("block.") + family + "_fence_gate";
+        return play(base + (opened ? ".open" : ".close"), 1.0f, varied);
+    }
+    if (n.ends_with("_button") && !has("powered=true")) {  // ButtonBlock.press: getSound(true)
+        const bool stone = n == "stone_button" || n == "polished_blackstone_button" || n.find("copper") != std::string::npos;
+        return play(std::string("block.") + (stone ? "stone" : family) + "_button.click_on", 1.0f, 1.0f);
+    }
+    if (n == "comparator") return play("block.comparator.click", 0.3f, has("mode=compare") ? 0.55f : 0.5f);  // the new mode
+}
+
+}  // namespace
+
 // --- settings ----------------------------------------------------------------------------------------------
 
 const char* const kModelParts[7] = {"cape", "jacket", "left_sleeve", "right_sleeve", "left_pants_leg", "right_pants_leg", "hat"};
@@ -549,8 +586,10 @@ bool Ui::init(const Init& in) {
         State& st = *s_;
         if (!st.online()) return false;
         if (openBlockEditor(st, x, y, z)) return true;  // block_editors.cpp: command, structure, jigsaw, test blocks
-        std::string n = st.registry->name(st.world->block(x, y, z));
-        n = n.substr(n.find(':') + 1, n.find('[') == std::string::npos ? std::string::npos : n.find('[') - n.find(':') - 1);
+        const std::string full = st.registry->name(st.world->block(x, y, z));
+        std::string n = full.substr(full.find(':') + 1,
+                                    full.find('[') == std::string::npos ? std::string::npos : full.find('[') - full.find(':') - 1);
+        interactSound(n, full, x, y, z);
         static const char* exact[] = {"barrel", "crafting_table", "crafter",
                                       "furnace", "blast_furnace", "smoker", "dispenser", "dropper", "hopper",
                                       "enchanting_table", "brewing_stand", "loom", "stonecutter", "grindstone",
