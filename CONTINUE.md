@@ -56,7 +56,8 @@ behind an entity, the text background opacity on name tags, the dropped item cop
 bubble-column rocking, display entity shadows and hidden falling blocks inside their block, wolf armour cracks,
 piglin / hoglin conversion shaking, beacon beams to the render distance, particle fixes (clouds, snowflakes, end
 rods, white smoke, light levels), the effects list beside the inventories and Hud.java details (frozen hearts, air
-row, off hand side, Now Playing, the light-level vignette). ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
+row, off hand side, Now Playing, the light-level vignette), cursor shapes (requestCursor, Allow Cursor Changes), armour
+trims on worn armour (26.3 paletted trim textures) and the smithing table's armour stand preview. ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
 switch (automated runs never change the display mode) and the LAN publish from World Options (it would open a
 listening socket).
 
