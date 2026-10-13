@@ -92,6 +92,13 @@ void buildLoading(State& s) {
     FrontEndState& f = *s.fe;
     State* p = &s;
     f.onBack = nullptr;
+    if (f.optimizeScreen) {  // OptimizeWorldScreen: Cancel at H / 4 + 150, Esc ignored
+        if (f.loadingCancel)
+            addButton(s, float(s.guiW() / 2 - 100), float(s.guiH() / 4 + 150), 200, tr(s, "gui.cancel"), [p] {
+                if (auto fn = p->fe->loadingCancelFn) fn();
+            });
+        return;
+    }
     if (connectScreen(f)) {
         addButton(s, float(s.guiW() / 2 - 100), float(s.guiH() / 4 + 120 + 12), 200, tr(s, "gui.cancel"), [p] {
             FrontEndState& fe = *p->fe;
@@ -119,6 +126,26 @@ void drawLoading(State& s, Canvas& c) {
     FrontEndState& f = *s.fe;
     const int W = c.guiWidth(), H = c.guiHeight();
     menuBackground(s, c);
+    if (f.optimizeScreen) {  // OptimizeWorldScreen.extractRenderState
+        s.drawCentered(c, f.loadingTitle, float(W / 2), 20, 0xFFFFFFFF);
+        const int x0 = W / 2 - 150, x1 = W / 2 + 150, y0 = H / 4 + 100, y1 = y0 + 10;
+        s.drawCentered(c, Text(f.loadingStatus), float(W / 2), float(y0 - 9 - 2), 0xFFA0A0A0);
+        if (f.upgradeTotal > 0) {
+            // The server's log counts the chunks done (converted or skipped) over all dimensions: one bar, the total
+            // line and the counter (no per-dimension split or converted / skipped lines).
+            c.fill(float(x0 - 1), float(y0 - 1), float(x1 + 1), float(y1 + 1), 0xFF000000);
+            s.drawText(c, trf(s, "optimizeWorld.info.total", {Text(std::to_string(f.upgradeTotal))}), float(x0), 40 + (9 + 3) * 2,
+                       0xFFA0A0A0, true);
+            const float pct = std::clamp(float(f.upgradeDone) / float(f.upgradeTotal), 0.0f, 1.0f);
+            c.fill(float(x0), float(y0), float(x0 + int(std::floor(pct * float(x1 - x0)))), float(y1), 0xFF336622);
+            s.drawCentered(c, trf(s, "optimizeWorld.progress.counter", {Text(std::to_string(f.upgradeDone)), Text(std::to_string(f.upgradeTotal))}),
+                           float(W / 2), float(y0 + 2 * 9 + 2), 0xFFA0A0A0);
+            s.drawCentered(c, trf(s, "optimizeWorld.progress.percentage", {Text(std::to_string(int(std::floor(pct * 100.0f))))}),
+                           float(W / 2), float(y0 + (y1 - y0) / 2 - 9 / 2), 0xFFA0A0A0);
+        }
+        s.drawButtons(c);
+        return;
+    }
     if (connectScreen(f)) {  // only the connection's own stages (not the instance's start-up)
         s.drawCentered(c, f.connectStatus.empty() ? f.loadingTitle : Text(f.connectStatus), float(W / 2), float(H / 2 - 50), 0xFFFFFFFF);
         s.drawButtons(c);

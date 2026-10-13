@@ -129,6 +129,8 @@ struct FrontEndState {
     float progress = 0;
     double loadingStart = 0;
     bool loadingCancel = false;
+    bool optimizeScreen = false;              // the loading screen is OptimizeWorldScreen
+    int upgradeDone = -1, upgradeTotal = -1;  // its chunk counts
     std::string connectStatus;  // ConnectScreen's status line (empty: the title, "Connecting to the server...")
     std::function<void()> loadingCancelFn;  // Cancel on the loading screen when it is not a starting instance
     Screen failBack = Screen::Title;

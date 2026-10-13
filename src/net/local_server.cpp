@@ -629,6 +629,8 @@ void LocalServer::readOutput() {
                 const std::string msg = s == std::string::npos ? line : line.substr(s + 3);
                 if (const size_t pc = msg.find("% completed ("); pc != std::string::npos) {
                     upgradePercent_ = std::atoi(msg.c_str());
+                    int done = 0, total = 0;  // "(<done> / <total> chunks)"
+                    if (std::sscanf(msg.c_str() + pc, "%% completed (%d / %d", &done, &total) == 2) upgradeDone_ = done, upgradeTotal_ = total;
                 } else if (msg.starts_with("Starting minecraft server") || msg.starts_with("Loading properties")) {
                     if (upgradePercent_ >= 0 || msg.starts_with("Starting")) upgradePercent_ = 100;
                 } else if (!msg.starts_with("Forcing")) {

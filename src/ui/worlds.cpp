@@ -569,6 +569,7 @@ void showWaiting(State& s, Text title, std::string status, float progress, std::
     f.loadingStart = s.clock;
     f.loadingCancel = bool(cancel);
     f.loadingCancelFn = std::move(cancel);
+    f.optimizeScreen = false;
     s.openScreen(Screen::Loading);
 }
 
@@ -599,10 +600,13 @@ void startOptimize(State& s) {
                            s.res.translate("gui.back"), [&s] { openWorlds(s); });
     }
     State* p = &s;
+    s.fe->upgradeDone = s.fe->upgradeTotal = -1;
     showWaiting(s, trf(s, "optimizeWorld.title", {Text(t.name)}), s.res.translate("optimizeWorld.stage.counting"), 0,
                 [p] {
                     if (task) task->cancelled = true;  // OptimizeWorldScreen's Cancel: stop where it is
                 });
+    s.fe->optimizeScreen = true;
+    s.buildButtons();
 }
 
 void restoreLevelData(State& s, const fs::path& dir) {  // LevelStorageAccess.restoreLevelDataFromOld
@@ -703,10 +707,9 @@ void worldsFrame(State& s) {
     }
     if (t.stopping.valid()) {
         if (t.stopping.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
-        const bool cancelled = t.cancelled;
         task.reset();
-        if (!cancelled) showToast(tr(s, "optimizeWorld.stage.finished"));
-        return openWorlds(s);
+        s.fe->optimizeScreen = false;
+        return openWorlds(s);  // callback.accept: back to the list, no toast
     }
     if (t.server) {
         FrontEndState& f = *s.fe;
@@ -714,6 +717,7 @@ void worldsFrame(State& s) {
             f.progress = float(pct) / 100.0f;
             f.loadingStatus = t.server->upgradeStatus();
         }
+        f.upgradeDone = t.server->upgradeDone(), f.upgradeTotal = t.server->upgradeTotal();
         // The upgrade is done once the server goes on to start (or it stopped): save and stop it off this thread.
         if (t.cancelled || t.server->ready() || !t.server->running()) {
             f.loadingStatus = s.res.translate(t.cancelled ? "optimizeWorld.stage.canceled" : "optimizeWorld.stage.finished");

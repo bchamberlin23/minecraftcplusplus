@@ -57,6 +57,8 @@ public:
     // --forceUpgrade: the upgrader's last status line and percentage (-1 until it reports one).
     std::string upgradeStatus() const;
     int upgradePercent() const { return upgradePercent_; }
+    int upgradeDone() const { return upgradeDone_; }    // chunks converted or skipped (-1: not counted yet)
+    int upgradeTotal() const { return upgradeTotal_; }
     bool running() const;
     bool saving() const { return saving_; }  // MinecraftServer.isCurrentlySaving (autosave / save-all)
     u16 port() const { return port_; }
@@ -93,6 +95,7 @@ private:
     std::thread reader_;
     std::atomic<bool> ready_{false}, failed_{false}, opJoiners_{false}, saving_{false};
     std::atomic<int> upgradePercent_{-1};
+    std::atomic<int> upgradeDone_{-1}, upgradeTotal_{-1};
     mutable std::mutex statusMutex_;
     std::string upgradeStatus_;
     std::mutex stdinMutex_;
