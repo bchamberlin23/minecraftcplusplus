@@ -19,7 +19,8 @@ jukebox songs (FX-06), the tickable sounds (FX-10: minecarts, riding, elytra, be
 bubble columns), terrain textures with shaders off (a min-LOD clamp bug), the 26.3 title screen layout, the spectator
 menu / HUD / spectate click (PLAY-08), glowing entity outlines and capes (VIS-06), profile
 skins for players / mannequins / the player list (VIS-07, NET-17), the Social Interactions screen, trail / sulfur / geyser
-particles and the potent sulfur client effects (FX-05). ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
+particles and the potent sulfur client effects (FX-05), command suggestions and colours in the command block
+editors. ITEM-08 was already complete; FX-02 is obsolete (26.3 removed `map_color`). Untested on real hardware: the exclusive fullscreen display-mode
 switch (automated runs never change the display mode) and the LAN publish from World Options (it would open a
 listening socket).
 
@@ -41,7 +42,6 @@ listening socket).
 
 ## Screens
 
-- The command block editor's field does not colour the command (CommandSuggestions.formatChat; the chat does).
 
 ## Gameplay / world
 
