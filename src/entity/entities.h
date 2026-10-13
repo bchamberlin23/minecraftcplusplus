@@ -212,6 +212,7 @@ struct Entity {
     int attackTime = 0;
     int snifferState = 0;    // Sniffer DATA_STATE (Sniffer.State id)
     int cape = -1;                // the profile's cape (atlas texture), -1 none
+    int elytraTexture = -1;       // the skin patch's elytra texture, -1 none
     // NewMinecartBehavior (experimental minecarts, ClientboundMoveMinecartPacket): the steps waiting, the ones being
     // lerped through over 3 ticks by weight, and where the lerp started.
     std::vector<MinecartStep> lerpSteps, currentLerpSteps;

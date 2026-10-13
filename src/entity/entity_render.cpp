@@ -1052,7 +1052,7 @@ int EntityRenderer::equipmentLayers(const Entity& e, const TypeDef& d, Layer* ou
     if (chest >= 0 && elytra >= 0 &&
         (d.anim == Anim::Humanoid || d.anim == Anim::Zombie || d.anim == Anim::Skeleton || d.anim == Anim::ArmorStand)) {
         // WingsLayer.getPlayerElytraTexture: a player's cape (when shown) instead of the elytra's own texture
-        const int capeTex = d.special == SpPlayer && e.cape >= 0 && (e.skinParts & 1) ? e.cape : -1;
+        const int capeTex = d.special != SpPlayer ? -1 : e.elytraTexture >= 0 ? e.elytraTexture : e.cape >= 0 && (e.skinParts & 1) ? e.cape : -1;
         for (const EquipmentLayer& l : items_->itemLayers(chest, 3))
             if (l.tex >= 0 && n < max) out[n++] = {elytra, capeTex >= 0 ? capeTex : l.tex, kWhite, u16(Elytra | ((e.equipFoil & 16) ? Glint : 0))};
     }

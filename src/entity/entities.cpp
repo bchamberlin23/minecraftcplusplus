@@ -429,14 +429,16 @@ void readEntityData(net::Reader& r, EventQueue& q, int entityEffect,
                     if (textures.empty() && hasName != hasId) resolve = hasName ? "N" + name : "U" + id;
                 }
                 // PlayerSkin.Patch: optional body / cape / elytra textures (identifiers), optional model (slim)
-                std::string body;
+                std::string body, cape, elytra;
                 if (r.boolean()) body = std::string(r.str());
-                if (r.boolean()) r.str();
-                if (r.boolean()) r.str();
+                if (r.boolean()) cape = std::string(r.str());
+                if (r.boolean()) elytra = std::string(r.str());
                 v.i = r.boolean() ? (r.boolean() ? 3 : 1) : 0;  // bit 0: a model given, bit 1: slim
                 q.strings.push_back(std::move(textures)), v.str = i32(q.strings.size() - 1);
                 q.strings.push_back(std::move(body)), v.f[0] = float(q.strings.size() - 1);
                 q.strings.push_back(std::move(resolve)), v.f[1] = float(q.strings.size() - 1);
+                q.strings.push_back(std::move(cape)), v.f[2] = float(q.strings.size() - 1);
+                q.strings.push_back(std::move(elytra)), v.f[3] = float(q.strings.size() - 1);
                 break;
             }
             default: stop = true, keep = false; break;  // anything newer
@@ -1129,6 +1131,11 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
                 if (t >= 0) e.skin = t;
             }
             if (v.i & 1) e.slim = (v.i & 2) != 0;
+            auto patchTexture = [&](const std::string& id) {  // ClientAsset.ResourceTexture: the id's texture
+                return id.empty() ? -1 : assets_.texture(id.starts_with("minecraft:") ? std::string_view(id).substr(10) : std::string_view(id));
+            };
+            if (const int t = patchTexture(q.strings[size_t(v.f[2])]); t >= 0) e.cape = t;
+            e.elytraTexture = patchTexture(q.strings[size_t(v.f[3])]);
             e.profileTextures = body.empty() ? q.strings[size_t(v.str)] : std::string();
             e.profileSkin = e.profileTextures.empty() ? 0 : 1;
             e.profileResolve = body.empty() ? q.strings[size_t(v.f[1])] : std::string();
