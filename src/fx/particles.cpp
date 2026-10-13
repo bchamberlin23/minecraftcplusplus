@@ -28,7 +28,7 @@ enum class Kind : u8 {
     Suspended, HappyVillager, Lava, Dust, DustTransition, Note, Cloud, Snowflake, Item, Vibration, Drip, Spark, Flash,
     Totem, EndRod, Gust, GustSeed, Rising, SculkCharge, SculkChargePop, Shriek, Firefly, Glow, Trail, SulfurBubble,
     NoxiousGas, GasCloud, GeyserEruption, GeyserBase, GeyserPlume, Ash, SuspendedAir, ReversePortal, CurrentDown, BubbleUp,
-    Marker
+    Marker, DragonBreath, Wake, Sweep, SquidInk, Vertical, DustPlume, TrialDetection, FlyStraight
 };
 enum class Opt : u8 { None, Block, Dust, DustTransition, Spell, Color, Float, VarInt, Int, IntFloat, Trail, Item, Vibration, Geyser, GeyserBase };
 enum SizeMode : u8 { SizeConst, SizeGrow, SizeFlame, SizePortal, SizeLava, SizeReverse };
@@ -64,7 +64,12 @@ const std::pair<const char*, Kind> kKinds[] = {
     {"geyser_plume", Kind::GeyserPlume}, {"sulfur_cube_goo", Kind::Item}, {"ash", Kind::Ash}, {"white_ash", Kind::Ash},
     {"underwater", Kind::SuspendedAir}, {"crimson_spore", Kind::SuspendedAir}, {"warped_spore", Kind::SuspendedAir},
     {"spore_blossom_air", Kind::SuspendedAir}, {"reverse_portal", Kind::ReversePortal}, {"current_down", Kind::CurrentDown},
-    {"bubble_column_up", Kind::BubbleUp}, {"block_marker", Kind::Marker}};
+    {"bubble_column_up", Kind::BubbleUp}, {"block_marker", Kind::Marker}, {"dragon_breath", Kind::DragonBreath},
+    {"fishing", Kind::Wake}, {"spit", Kind::Poof}, {"sweep_attack", Kind::Sweep}, {"squid_ink", Kind::SquidInk},
+    {"glow_squid_ink", Kind::SquidInk}, {"pause_mob_growth", Kind::Vertical}, {"reset_mob_growth", Kind::Vertical},
+    {"dust_plume", Kind::DustPlume}, {"trial_spawner_detection", Kind::TrialDetection},
+    {"trial_spawner_detection_ominous", Kind::TrialDetection}, {"vault_connection", Kind::Enchant},
+    {"ominous_spawning", Kind::FlyStraight}};
 
 // DripParticle and its providers: the hanging drop falls into the next type, which lands as another one.
 enum DripStage : u8 { DripHang, DripCoolingHang, DripFall, DripFallLand, DripDripstoneFallLand, DripHoneyFallLand, DripLand };
@@ -518,6 +523,7 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
             p.r = p.g = p.b = c;
             p.quadSize = 0.1f * (randf() * randf() * 6.0f + 1.0f);
             p.lifetime = int(16.0 / (randf() * 0.8 + 0.2)) + 2;
+            if (t.name == "spit") p.gravity = 0.5f;  // SpitParticle
             ageSprite();
             break;
         }
@@ -656,6 +662,102 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
             p.r = 0.9f * br, p.g = 0.9f * br, p.b = br;
             p.flags &= u8(~Physics);
             p.lifetime = int(randf() * 10.0f) + 30;
+            if (t.name == "vault_connection") {  // VaultConnectionProvider: glowing, fading in (LifetimeAlpha 0 -> 0.6)
+                p.emissive = 15, p.quadSize *= 1.5f, p.a = 0.0f, p.e0 = 1.0f;
+                p.flags |= Translucent;
+            }
+            randomSprite();
+            break;
+        }
+        case Kind::DragonBreath: {  // DragonBreathParticle (the power option scales the push)
+            base(x, y, z);
+            p.friction = 0.96f;
+            p.xd = xa, p.yd = ya, p.zd = za;
+            p.r = 0.7176471f + randf() * (0.8745098f - 0.7176471f), p.g = 0.0f, p.b = 0.8235294f + randf() * (0.9764706f - 0.8235294f);
+            p.quadSize *= 0.75f;
+            p.lifetime = int(20.0 / (randf() * 0.8 + 0.2));
+            p.flags &= u8(~Physics);
+            if (opt) {
+                const float power = opt->scale;
+                p.xd *= power, p.yd = (p.yd - 0.1f) * power + 0.1f, p.zd *= power;  // Particle.setPower
+            }
+            p.sizeMode = SizeGrow;
+            ageSprite();
+            break;
+        }
+        case Kind::Wake:  // WakeParticle (fishing): the given push, no gravity; the sprite cycles
+            baseVel(x, y, z, 0, 0, 0);
+            p.lifetime = int(8.0 / (randf() * 0.8 + 0.2));
+            p.gravity = 0;
+            p.xd = xa, p.yd = ya, p.zd = za;
+            p.sprite = t.sprites.front();
+            break;
+        case Kind::Sweep:  // AttackSweepParticle
+            baseVel(x, y, z, 0, 0, 0);
+            p.xd = p.yd = p.zd = 0;
+            p.lifetime = 4;
+            p.r = p.g = p.b = randf() * 0.6f + 0.4f;
+            p.quadSize = 1.0f - float(xa) * 0.5f;
+            p.emissive = 255;
+            p.flags &= u8(~Physics);
+            ageSprite();
+            break;
+        case Kind::SquidInk: {  // SquidInkParticle (SimpleAnimatedParticle): fades over its second half, sinks in air
+            base(x, y, z);
+            p.friction = 0.92f, p.quadSize = 0.5f, p.gravity = 0;
+            if (t.name == "glow_squid_ink") p.r = 0.2f, p.g = 0.8f, p.b = 0.6f;
+            else p.r = p.g = p.b = 0.0f;
+            p.lifetime = int(0.5f * 12.0f / (randf() * 0.8f + 0.2f));
+            p.flags &= u8(~Physics);
+            p.flags |= Translucent;
+            p.xd = xa, p.yd = ya, p.zd = za;
+            ageSprite();
+            break;
+        }
+        case Kind::Vertical:  // SimpleVerticalParticle (pause / reset mob growth): drifting down / up
+            baseVel(x, y, z, xa, ya, za);
+            p.xd = xa, p.zd = za, p.yd = ya + (t.name == "reset_mob_growth" ? 0.03 : -0.03);
+            p.gravity = 0;
+            p.quadSize *= randf() * 0.6f + 0.5f;
+            p.lifetime = 8;
+            randomSprite();
+            break;
+        case Kind::DustPlume: {  // DustPlumeParticle (BaseAshSmokeParticle 0.7 / 0.6 / 0.7, gravity and friction decaying)
+            baseVel(x, y, z, 0, 0, 0);
+            p.friction = 0.96f, p.gravity = 0.5f;
+            p.flags |= SpeedUp;
+            p.flags &= u8(~Physics);
+            p.xd = p.xd * 0.7f + xa, p.yd = p.yd * 0.6f + ya + 0.15f, p.zd = p.zd * 0.7f + za;
+            const float shift = randf() * 0.2f;
+            p.r = 0xBA / 255.0f - shift, p.g = 0xB1 / 255.0f - shift, p.b = 0xC2 / 255.0f - shift;
+            p.quadSize *= 0.75f;
+            p.lifetime = std::max(int(7.0 / (randf() * 0.8 + 0.2)), 1);
+            p.sizeMode = SizeGrow;
+            ageSprite();
+            break;
+        }
+        case Kind::TrialDetection: {  // TrialSpawnerDetectionParticle (scale 1.5, glowing)
+            baseVel(x, y, z, 0, 0, 0);
+            p.friction = 0.96f, p.gravity = -0.1f;
+            p.flags |= SpeedUp;
+            p.xd = p.xd * 0.0 + xa, p.yd = p.yd * 0.9 + ya, p.zd = p.zd * 0.0 + za;
+            p.quadSize *= 0.75f * 1.5f;
+            p.lifetime = std::max(int(8.0f / (0.5f + randf() * 0.5f) * 1.5f), 1);
+            p.emissive = 15;
+            p.sizeMode = SizeGrow;
+            ageSprite();
+            break;
+        }
+        case Kind::FlyStraight: {  // FlyStraightTowardsParticle (ominous spawning): straight in, blue fading to white
+            base(x, y, z);
+            p.xd = xa, p.yd = ya, p.zd = za;
+            p.sx = x, p.sy = y, p.sz = z;
+            p.x = p.xo = x + xa, p.y = p.yo = y + ya, p.z = p.zo = z + za;
+            p.quadSize = 0.1f * (randf() * 0.5f + 0.2f) * (3.0f + randf() * 2.0f);
+            p.lifetime = int(randf() * 5.0f) + 25;
+            p.flags &= u8(~Physics);
+            p.emissive = 15;
+            color(0x45B8FE);  // -12210434
             randomSprite();
             break;
         }
@@ -2104,6 +2206,10 @@ void Particles::tickOne(Particle& p) {
         }
         case Kind::Enchant: {
             if (p.age++ >= p.lifetime) return remove();
+            if (p.e0 > 0.5f) {  // vault_connection: LifetimeAlpha(0, 0.6, 0.25, 1)
+                const float a = std::clamp((float(p.age) / float(p.lifetime) - 0.25f) / 0.75f, 0.0f, 1.0f);
+                p.a = 0.6f * a;
+            }
             float pos = 1.0f - float(p.age) / float(p.lifetime);
             float pp = 1.0f - pos;
             pp *= pp, pp *= pp;
@@ -2126,6 +2232,60 @@ void Particles::tickOne(Particle& p) {
             defaultTick();
             ageSprite();
             break;
+        case Kind::DragonBreath:
+            if (p.age++ >= p.lifetime) return remove();
+            ageSprite();
+            if (p.flags & OnGround) p.yd = 0, p.e3 = 1;  // hasHitGround
+            if (p.e3 > 0.5f) p.yd += 0.002;
+            move(p, p.xd, p.yd, p.zd);
+            if (p.y == p.yo) p.xd *= 1.1, p.zd *= 1.1;
+            p.xd *= p.friction, p.zd *= p.friction;
+            if (p.e3 > 0.5f) p.yd *= p.friction;
+            break;
+        case Kind::Wake: {
+            const int life = 60 - p.lifetime;
+            if (p.lifetime-- <= 0) return remove();
+            move(p, p.xd, p.yd, p.zd);
+            p.xd *= 0.98f, p.yd *= 0.98f, p.zd *= 0.98f;
+            if (!t.sprites.empty()) p.sprite = t.sprites[size_t(life % 4) * (t.sprites.size() - 1) / 4];  // SpriteSet.get(i, 4)
+            break;
+        }
+        case Kind::Sweep:
+            if (p.age++ >= p.lifetime) return remove();
+            ageSprite();
+            break;
+        case Kind::SquidInk: {
+            defaultTick();
+            if (p.flags & Removed) break;
+            ageSprite();
+            if (p.age > p.lifetime / 2) p.a = 1.0f - (float(p.age) - float(p.lifetime / 2)) / float(p.lifetime);
+            if (blockAt(int(std::floor(p.x)), int(std::floor(p.y)), int(std::floor(p.z))) == 0) p.yd -= 0.0074f;
+            break;
+        }
+        case Kind::Vertical:
+            defaultTick();
+            break;
+        case Kind::DustPlume:
+            p.gravity *= 0.88f, p.friction *= 0.92f;
+            defaultTick();
+            ageSprite();
+            break;
+        case Kind::TrialDetection:
+            defaultTick();
+            ageSprite();
+            break;
+        case Kind::FlyStraight: {
+            if (p.age++ >= p.lifetime) return remove();
+            const float n = float(p.age) / float(p.lifetime), k = 1.0f - n;
+            p.x = p.sx + p.xd * k, p.y = p.sy + p.yd * k, p.z = p.sz + p.zd * k;
+            auto lin = [](float c) { return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f); };
+            auto srgb = [](float c) { return c <= 0.0031308f ? c * 12.92f : 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f; };
+            const float from[3] = {0x45 / 255.0f, 0xB8 / 255.0f, 0xFE / 255.0f};  // ARGB.srgbLerp to white
+            float out[3];
+            for (int i = 0; i < 3; ++i) out[i] = srgb(lin(from[i]) + (1.0f - lin(from[i])) * n);
+            p.r = out[0], p.g = out[1], p.b = out[2];
+            break;
+        }
         case Kind::SuspendedAir:
         case Kind::Marker:
             defaultTick();
