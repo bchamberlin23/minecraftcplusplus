@@ -22,6 +22,10 @@ struct WorldEntry {
     std::string folder, name, versionName;
     i64 lastPlayed = -1;  // ms since 1970
     int gameMode = 0, dataVersion = 0;
+    int storageVersion = 19133;  // the "version" tag (LevelVersion.levelDataVersion: 19133 Anvil, else conversion)
+    int versionId = 0;           // Version.Id (the data version that last saved it, for backups / downgrades)
+    std::string series = "main";  // Version.Series (DataVersion.isCompatible: the same series)
+    bool experimental = false;    // enabled_features beyond vanilla (FeatureFlags.isExperimental)
     bool hardcore = false, cheats = false, locked = false;
     bool broken = false;  // level.dat unreadable (LevelSummary.CorruptedLevelSummary): Play recovers it
     Image icon;  // icon.png (64x64), empty when the world has none
@@ -102,6 +106,8 @@ struct FrontEndState {
     std::string confirmYes;
     std::function<void()> confirmAction;
     Screen confirmBack = Screen::Worlds;
+    std::string confirmNo;                // the no button (empty: Cancel)
+    std::function<void()> confirmCancel;  // no / Esc (null: back to confirmBack)
 
     // Server list
     std::vector<ServerEntry> servers;
@@ -131,6 +137,7 @@ struct FrontEndState {
     Text messageTitle, messageText;
     std::string messageButton;
     std::function<void()> messageAction;
+    bool messageAlert = false;  // AlertScreen's layout (else DisconnectedScreen's)
 
     // Open to LAN
     u16 lanOpenPort = 0;  // published on this port
@@ -151,8 +158,9 @@ Text trf(State& s, const char* key, const std::vector<Text>& args);
 
 // Switching instances / messages (title.cpp).
 void startChild(State& s, std::vector<std::wstring> args, Text title, Screen back, bool cancellable);
-void showMessage(State& s, Text title, Text text, std::string button, std::function<void()> action);
-void showConfirm(State& s, Text title, Text text, std::string yes, std::function<void()> action, Screen back);
+void showMessage(State& s, Text title, Text text, std::string button, std::function<void()> action, bool alert = false);
+void showConfirm(State& s, Text title, Text text, std::string yes, std::function<void()> action, Screen back,
+                 std::string no = {}, std::function<void()> cancel = nullptr);
 // mods_screen.cpp: PackSelectionScreen.onFilesDrop into the mods folder (confirm, copy, rescan, then `after`).
 void dropIntoModsFolder(State& s, const std::vector<fs::path>& files, Screen back, std::function<void()> after);
 void requestTitle(State& s, const std::string& menu);  // leave this world ("" title, "servers", "worlds")
@@ -168,7 +176,7 @@ void worldsInput(State& s, const Window::InputEvent& e);
 void openWorlds(State& s);  // rescans the saves
 void buildCreateWorld(State& s);
 void drawCreateWorld(State& s, Canvas& c);
-void openCreateWorld(State& s);                         // world_create.cpp (tabs, Superflat, Single Biome, rules...)
+void openCreateWorld(State& s, bool fresh = false);  // fresh: openFresh (Cancel to the title)                         // world_create.cpp (tabs, Superflat, Single Biome, rules...)
 void createWorldInput(State& s, const Window::InputEvent& e);
 bool recreateWorld(State& s, const fs::path& dir);      // Re-Create: Create New World filled in from a world
 void buildEditWorld(State& s);

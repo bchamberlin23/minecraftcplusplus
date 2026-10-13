@@ -63,6 +63,7 @@ enum class Page { Tabs, Flat, FlatPresets, Buffet, Experiments, GameRules, DataP
 
 struct Create {
     Page page = Page::Tabs;
+    bool fresh = false;  // CreateWorldScreen.openFresh from an empty world list: Cancel goes to the title
     int tab = 0;
     // World tab
     std::vector<std::string> presets, altPresets;  // world_preset tags normal / extended (Shift)
@@ -543,8 +544,9 @@ void buildTabs(State& s) {
         });
     }
     addButton(s, float(W / 2 - 154), float(H - 27), 150, tr(s, "selectWorld.create"), [p] { createWorldNow(*p); });
-    addButton(s, float(W / 2 + 4), float(H - 27), 150, tr(s, "gui.cancel"), [p] { openWorlds(*p); });
-    f.onBack = [p] { openWorlds(*p); };
+    auto cancel = [p] { g.fresh ? p->openScreen(Screen::Title) : openWorlds(*p); };
+    addButton(s, float(W / 2 + 4), float(H - 27), 150, tr(s, "gui.cancel"), cancel);
+    f.onBack = cancel;
     f.onEnter = [p] { createWorldNow(*p); };
 }
 
@@ -1191,8 +1193,9 @@ void createWorldNow(State& s) {
 
 }  // namespace
 
-void openCreateWorld(State& s) {
+void openCreateWorld(State& s, bool fresh) {
     FrontEndState& f = *s.fe;
+    g.fresh = fresh;
     loadData(s);
     f.createName.text = TextField{};
     f.createName.text.value = s.res.translate("selectWorld.newWorld");

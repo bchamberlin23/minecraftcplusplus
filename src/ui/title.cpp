@@ -143,44 +143,57 @@ void drawLoading(State& s, Canvas& c) {
     s.drawButtons(c);
 }
 
+// DisconnectedScreen: a centred column (title and reason padded 10, the button 2); Esc does nothing. As AlertScreen
+// (messageAlert): the title at 70, the text from 90, a 150 wide button at clamp(90 + text + 12, H / 6 + 96, H - 24).
+int messageTop(State& s, int lines) { return (s.guiH() - (9 + 20 + lines * 9 + 20 + 24)) / 2; }
+
 void buildMessage(State& s) {
     FrontEndState& f = *s.fe;
     const int W = s.guiW(), H = s.guiH();
     const int lines = int(s.font.split(f.messageText, W - 50).size());
-    const int top = H / 2 - (lines * 9 + 20 + 32) / 2;
     State* p = &s;
     auto act = [p] {
         auto fn = p->fe->messageAction;
         if (fn) fn();
     };
-    addButton(s, float(W / 2 - 100), float(top + 20 + lines * 9 + 12), 200, Text(f.messageButton), act);
-    f.onBack = act;
-    f.onEnter = act;
+    if (f.messageAlert) {
+        addButton(s, float((W - 150) / 2), float(std::clamp(90 + lines * 9 + 12, H / 6 + 96, H - 24)), 150, Text(f.messageButton), act);
+        f.onBack = act;  // AlertScreen.shouldCloseOnEsc
+        return;
+    }
+    addButton(s, float(W / 2 - 100), float(messageTop(s, lines) + 29 + lines * 9 + 20 + 2), 200, Text(f.messageButton), act);
 }
 
 void drawMessage(State& s, Canvas& c) {
     FrontEndState& f = *s.fe;
-    const int W = c.guiWidth(), H = c.guiHeight();
+    const int W = c.guiWidth();
     menuBackground(s, c);
     const std::vector<Text> lines = s.font.split(f.messageText, W - 50);
-    const int top = H / 2 - (int(lines.size()) * 9 + 20 + 32) / 2;
-    s.drawCentered(c, f.messageTitle, float(W / 2), float(top), 0xFFAAAAAA);
-    for (size_t i = 0; i < lines.size(); ++i) s.drawCentered(c, lines[i], float(W / 2), float(top + 20 + int(i) * 9), 0xFFFFFFFF);
+    const int top = f.messageAlert ? 70 : messageTop(s, int(lines.size())) + 10, text = f.messageAlert ? 90 : top + 29;
+    s.drawCentered(c, f.messageTitle, float(W / 2), float(top), 0xFFFFFFFF);
+    for (size_t i = 0; i < lines.size(); ++i) s.drawCentered(c, lines[i], float(W / 2), float(text + int(i) * 9), 0xFFFFFFFF);
     s.drawButtons(c);
 }
 
+// ConfirmScreen: a column spaced 8 (title, the message of at most 15 lines, two 150 wide buttons 4 apart below 16 more)
+// centred on the screen; Esc answers no.
+int confirmLines(State& s) { return std::min(15, int(s.font.split(s.fe->confirmText, s.guiW() - 50).size())); }
+int confirmTop(State& s) { return (s.guiH() - (9 + 8 + confirmLines(s) * 9 + 8 + 16 + 20)) / 2; }
+
 void buildConfirm(State& s) {
     FrontEndState& f = *s.fe;
-    const int W = s.guiW(), H = s.guiH();
+    const int W = s.guiW();
     State* p = &s;
-    const int lines = int(s.font.split(f.confirmText, W - 50).size());
-    const float y = float(std::max(H / 6 + 96, 90 + lines * 9 + 12));
-    addButton(s, float(W / 2 - 155), y, 150, Text(f.confirmYes), [p] {
+    const float y = float(confirmTop(s) + 9 + 8 + confirmLines(s) * 9 + 8 + 16), x = float((W - 304) / 2);
+    addButton(s, x, y, 150, Text(f.confirmYes), [p] {
         auto fn = p->fe->confirmAction;
         if (fn) fn();
     });
-    auto back = [p] { p->openScreen(p->fe->confirmBack); };
-    addButton(s, float(W / 2 + 5), y, 150, tr(s, "gui.cancel"), back);
+    auto back = [p] {
+        if (auto fn = p->fe->confirmCancel) fn();
+        else p->openScreen(p->fe->confirmBack);
+    };
+    addButton(s, x + 154, y, 150, f.confirmNo.empty() ? tr(s, "gui.cancel") : Text(f.confirmNo), back);
     f.onBack = back;
 }
 
@@ -188,9 +201,10 @@ void drawConfirm(State& s, Canvas& c) {
     FrontEndState& f = *s.fe;
     const int W = c.guiWidth();
     menuBackground(s, c);
-    s.drawCentered(c, f.confirmTitle, float(W / 2), 70, 0xFFFFFFFF);
+    const int top = confirmTop(s);
+    s.drawCentered(c, f.confirmTitle, float(W / 2), float(top), 0xFFFFFFFF);
     const std::vector<Text> lines = s.font.split(f.confirmText, W - 50);
-    for (size_t i = 0; i < lines.size(); ++i) s.drawCentered(c, lines[i], float(W / 2), float(90 + int(i) * 9), 0xFFFFFFFF);
+    for (int i = 0; i < confirmLines(s); ++i) s.drawCentered(c, lines[size_t(i)], float(W / 2), float(top + 17 + i * 9), 0xFFFFFFFF);
     s.drawButtons(c);
 }
 
@@ -350,17 +364,18 @@ void startChild(State& s, std::vector<std::wstring> args, Text title, Screen bac
     }
 }
 
-void showMessage(State& s, Text title, Text text, std::string button, std::function<void()> action) {
+void showMessage(State& s, Text title, Text text, std::string button, std::function<void()> action, bool alert) {
     FrontEndState& f = *s.fe;
     f.messageTitle = std::move(title), f.messageText = std::move(text), f.messageButton = std::move(button);
-    f.messageAction = std::move(action);
+    f.messageAction = std::move(action), f.messageAlert = alert;
     s.openScreen(Screen::Message);
 }
 
-void showConfirm(State& s, Text title, Text text, std::string yes, std::function<void()> action, Screen back) {
+void showConfirm(State& s, Text title, Text text, std::string yes, std::function<void()> action, Screen back, std::string no,
+                 std::function<void()> cancel) {
     FrontEndState& f = *s.fe;
     f.confirmTitle = std::move(title), f.confirmText = std::move(text), f.confirmYes = std::move(yes);
-    f.confirmAction = std::move(action), f.confirmBack = back;
+    f.confirmAction = std::move(action), f.confirmBack = back, f.confirmNo = std::move(no), f.confirmCancel = std::move(cancel);
     s.openScreen(Screen::Confirm);
 }
 

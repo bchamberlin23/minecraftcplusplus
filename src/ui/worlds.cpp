@@ -2,6 +2,7 @@
 // world (to the Recycle Bin). Worlds are played through the local official server (--play), created by it, or opened
 // in the fast local viewer (--world, read only).
 #include "ui/frontend.h"
+#include "assets/assets.h"
 #include "net/local_server.h"
 #include "ui/toasts.h"
 #include "world/nbt_dom.h"
@@ -88,7 +89,7 @@ WorldEntry* selected(State& s) {
 
 void filterWorlds(State& s) {
     FrontEndState& f = *s.fe;
-    const std::string q = lower(trim(f.worldSearch.text.value));
+    const std::string q = lower(f.worldSearch.text.value);  // toLowerCase(Locale.ROOT), untrimmed
     f.worldView.clear();
     for (size_t i = 0; i < f.worlds.size(); ++i)
         if (q.empty() || lower(f.worlds[i].name).find(q) != std::string::npos ||
@@ -112,19 +113,57 @@ std::vector<std::wstring> worldArgs(const WorldEntry& w, bool play) {
 
 void openRecover(State& s);
 
-void playWorld(State& s, bool play) {
-    WorldEntry* w = selected(s);
-    if (!w || w->locked) return;
-    if (w->broken) return openRecover(s);  // CorruptedLevelSummary: the primary action recovers
-    s.fe->failTitle = Text("Could not open the world");
-    startChild(s, worldArgs(*w, play), Text((play ? "Loading \"" : "Viewing \"") + w->name + "\""), Screen::Worlds, false);
+// LevelSummary for this game (26.3, a stable release of the "main" series).
+int currentDataVersion(State& s) {
+    static int v = gameDataVersion(s.fe->cfg.jar);
+    return v;
+}
+bool compatible(const WorldEntry& w) { return w.series == "main"; }
+bool manualConversion(const WorldEntry& w) { return !w.broken && w.storageVersion != 19133; }
+bool fileFixing(const WorldEntry& w) {  // FileFixerUpper.requiresFileFixing: below the last file fix (4899)
+    return !w.broken && (w.dataVersion < 4772 ? 0 : w.dataVersion) < 4899;
+}
+enum class Backup { None, Downgrade, FileFixing };  // BackupStatus (no UPGRADE_TO_SNAPSHOT in a release)
+Backup backupStatus(State& s, const WorldEntry& w) {
+    if (w.broken) return Backup::None;
+    if (fileFixing(w)) return Backup::FileFixing;
+    const int current = currentDataVersion(s);
+    return current && w.versionId > current ? Backup::Downgrade : Backup::None;
+}
+bool disabled(const WorldEntry& w) { return !w.broken && (w.locked || manualConversion(w) || !compatible(w)); }
+bool canEdit(const WorldEntry& w) { return !w.broken && !disabled(w) && !fileFixing(w); }
+Text versionName(State& s, const WorldEntry& w) {
+    return w.versionName.empty() ? tr(s, "selectWorld.versionUnknown") : Text(w.versionName);
 }
 
-// The pages of the Edit World screen: Edit World itself, Optimize World's backup question, and Recover World
-// (RecoverWorldDataScreen, for a world whose level.dat cannot be read).
-enum class EditPage { Edit, Optimize, Recover };
+// WorldOpenFlows.openWorld: incompatible -> AlertScreen; a backup question for file fixing / downgrades and for
+// experimental worlds (BackupConfirmScreen); low disk space -> ConfirmScreen; then the world.
+void continuePlay(State& s, int step);
+
+void playWorld(State& s, bool play) {
+    WorldEntry* w = selected(s);
+    if (!w) return;
+    if (w->broken) return openRecover(s);  // CorruptedLevelSummary: the primary action recovers
+    if (disabled(*w)) return;
+    if (!play) {  // this port's read-only viewer (Shift)
+        s.fe->failTitle = Text("Could not open the world");
+        return startChild(s, worldArgs(*w, false), Text("Viewing \"" + w->name + "\""), Screen::Worlds, false);
+    }
+    continuePlay(s, 0);
+}
+
+// The pages of the Edit World screen: Edit World itself, a BackupConfirmScreen (Optimize World's, or opening a world
+// that wants a backup), and Recover World (RecoverWorldDataScreen, for a world whose level.dat cannot be read).
+enum class EditPage { Edit, Backup, Recover };
 EditPage editPage = EditPage::Edit;
 bool eraseCache = false;  // BackupConfirmScreen's "Erase cached data"
+struct BackupPrompt {
+    Text title, description, confirm;
+    bool eraseCachePrompt = false;
+    std::function<void(bool backup)> proceed;
+    std::function<void()> cancel;
+};
+BackupPrompt prompt;
 
 void openEditWorld(State& s) {
     WorldEntry* w = selected(s);
@@ -136,11 +175,11 @@ void openEditWorld(State& s) {
     s.openScreen(Screen::EditWorld);
 }
 
-void saveEditWorld(State& s) {
+void saveEditWorld(State& s, bool blankToo = false) {
     WorldEntry* w = selected(s);
     if (!w) return openWorlds(s);
-    const std::string name = trim(s.fe->editName.text.value);
-    if (!name.empty() && name != w->name && !worldLocked(w->dir)) {
+    const std::string name = trim(s.fe->editName.text.value);  // LevelStorageAccess.renameLevel: trimmed
+    if ((!name.empty() || blankToo) && name != w->name && !worldLocked(w->dir)) {
         NbtValue root;
         std::string rootName;
         if (readNbtGz(w->dir / "level.dat", root, &rootName))
@@ -166,11 +205,11 @@ bool recycle(const fs::path& dir) {
 
 void deleteWorld(State& s) {
     WorldEntry* w = selected(s);
-    if (!w || w->locked) return;
+    if (!w) return;
     const fs::path dir = w->dir;
     const std::string name = w->name;
     State* p = &s;
-    showConfirm(s, tr(s, "selectWorld.deleteQuestion"),
+    showConfirm(s, tr(s, "selectWorld.deleteQuestion"),  // canDelete: always (a locked world's delete fails)
                 Text(formatJava(s.res.translate("selectWorld.deleteWarning"), {name}) + "\n(It goes to the Recycle Bin.)"),
                 s.res.translate("selectWorld.deleteButton"),
                 [p, dir] {
@@ -224,8 +263,16 @@ bool readWorld(const fs::path& dir, WorldEntry& out) {
         if (NbtValue* h = ds->find("hardcore")) out.hardcore = h->i != 0;
     out.cheats = num("allowCommands", 0) != 0;
     out.dataVersion = int(num("DataVersion", 0));
-    if (NbtValue* v = data->find("Version"))
+    out.storageVersion = int(num("version", 0));
+    if (NbtValue* v = data->find("Version")) {  // LevelVersion.parse (missing: the current version's)
         if (NbtValue* n = v->find("Name")) out.versionName = n->s;
+        if (NbtValue* n = v->find("Id")) out.versionId = int(n->i);
+        if (NbtValue* n = v->find("Series")) out.series = n->s;
+    } else {
+        out.series = "main";
+    }
+    if (NbtValue* features = data->find("enabled_features"))
+        for (const NbtValue& e : features->items) out.experimental |= e.s != "minecraft:vanilla";
     out.locked = worldLocked(dir);
     std::vector<u8> png;
     if (readFile(dir / "icon.png", png)) decodeImage(png, out.icon);
@@ -253,7 +300,7 @@ std::vector<WorldEntry> scanWorlds(const fs::path& saves) {
     }
     std::stable_sort(out.begin(), out.end(), [](const WorldEntry& a, const WorldEntry& b) {
         if (a.lastPlayed != b.lastPlayed) return a.lastPlayed > b.lastPlayed;
-        return a.name < b.name;
+        return a.folder < b.folder;  // LevelSummary.compareTo: then the level id
     });
     return out;
 }
@@ -289,6 +336,8 @@ void openWorlds(State& s) {
     filterWorlds(s);
     f.worldScroll = std::clamp(f.worldScroll, 0.0f, maxScroll(s, f.worldView.size()));
     LOG("ui: %zu worlds in %s", f.worlds.size(), utf8(f.cfg.savesDir).c_str());
+    // WorldSelectionList.handleNewLevels: no worlds at all -> CreateWorldScreen.openFresh (closing to the title)
+    if (f.worlds.empty()) return openCreateWorld(s, true);
     s.openScreen(Screen::Worlds);
 }
 
@@ -297,25 +346,36 @@ void buildWorlds(State& s) {
     const int W = s.guiW(), H = s.guiH();
     State* p = &s;
     f.worldSearch.x = float(W / 2 - 100), f.worldSearch.y = 22, f.worldSearch.w = 200;
-    setFields(s, {&f.worldSearch}, -1);
+    setFields(s, {&f.worldSearch}, 0);  // setInitialFocus(searchBox) (a rebuild keeps the focus)
     const WorldEntry* w = selected(s);
-    const bool can = w && !w->locked;
+    const bool active = w && (w->broken || !disabled(*w));  // primaryActionActive
     const float x0 = float(W / 2 - 154), y0 = float(H - 52), y1 = float(H - 28);
-    // Shift: the world in the fast local viewer instead (read only, no server), like the game's Shift alternatives.
-    const bool view = s.window->keyDown(VK_SHIFT) && can && !w->broken;
-    addButton(s, x0, y0, 150, w && w->broken ? tr(s, "recover_world.button") : view ? Text("View Only") : tr(s, "selectWorld.select"),
-              [p, view] { playWorld(*p, !view); }, can);
+    // Shift: the world in the fast local viewer instead (read only, no server): this port's own.
+    const bool view = s.window->keyDown(VK_SHIFT) && active && !w->broken;
+    Text play = w && w->broken ? tr(s, "recover_world.button") : view ? Text("View Only")
+              : w && fileFixing(*w) ? tr(s, "selectWorld.upgrade_and_play") : tr(s, "selectWorld.select");
+    Button& playButton = addButton(s, x0, y0, 150, play, [p, view] { playWorld(*p, !view); }, active);
     addButton(s, x0 + 158, y0, 150, tr(s, "selectWorld.create"), [p] { openCreateWorld(*p); });
-    addButton(s, x0, y1, 71, tr(s, "selectWorld.edit"), [p] { openEditWorld(*p); }, w != nullptr && !w->broken);
-    addButton(s, x0 + 79, y1, 71, tr(s, "selectWorld.delete"), [p] { deleteWorld(*p); }, can);
-    addButton(s, x0 + 158, y1, 71, tr(s, "selectWorld.recreate"), [p] {
+    Button& edit = addButton(s, x0, y1, 71, tr(s, "selectWorld.edit"), [p] { openEditWorld(*p); }, w && canEdit(*w));
+    addButton(s, x0 + 79, y1, 71, tr(s, "selectWorld.delete"), [p] { deleteWorld(*p); }, w != nullptr);
+    Button& recreate = addButton(s, x0 + 158, y1, 71, tr(s, "selectWorld.recreate"), [p] {
         if (const WorldEntry* we = selected(*p); we && !recreateWorld(*p, we->dir))
             showMessage(*p, tr(*p, "selectWorld.recreate.error.title"), tr(*p, "selectWorld.recreate.error.text"),
-                        p->res.translate("gui.back"), [p] { openWorlds(*p); });
-    }, can && !w->broken);
+                        p->res.translate("gui.back"), [p] { openWorlds(*p); }, true);
+    }, w && canEdit(*w));
+    if (w && fileFixing(*w)) {  // SelectWorldScreen.updateButtonStatus: why they are off
+        playButton.tooltip = [p] { return tr(*p, "selectWorld.requiresFileFixingTooltip.play"); };
+        edit.tooltip = [p] { return tr(*p, "selectWorld.requiresFileFixingTooltip.edit"); };
+        recreate.tooltip = [p] { return tr(*p, "selectWorld.requiresFileFixingTooltip.recreate"); };
+    }
     addButton(s, x0 + 237, y1, 71, tr(s, "gui.back"), [p] { p->openScreen(Screen::Title); });
     f.onBack = [p] { p->openScreen(Screen::Title); };
-    f.onEnter = [p] { playWorld(*p, true); };
+    f.onEnter = [p] {  // WorldListEntry.keyPressed: the list entry has the focus (not the search box)
+        if (p->fe->focus < 0) {
+            const WorldEntry* we = selected(*p);
+            if (we && (we->broken || !disabled(*we))) playWorld(*p, true);
+        }
+    };
 }
 
 void drawWorlds(State& s, Canvas& c) {
@@ -343,40 +403,78 @@ void drawWorlds(State& s, Canvas& c) {
         const Sprite* icon = w.icon.w ? iconSprite(s, "world:" + utf8(w.dir), w.icon, std::to_string(w.lastPlayed)) : nullptr;
         if (icon) blitSprite(c, icon, rowLeft, y, 32, 32);
         else blitTexture(c, s.sprites.texture("misc/unknown_server"), rowLeft, y, 0, 0, 32, 32, 32, 32);
-        const int textW = kRowW - 35 - 6;
-        s.drawText(c, Text(fitText(s.font, w.name, textW)), rowLeft + 35, y + 1, 0xFFFFFFFF, true);
+        // StringWidgets of at most 270 - 37 - 2 wide (clipped with "..."), the full text as their tooltip
+        const int textW = kRowW - 37 - 2;
+        auto line = [&](const Text& t, float ty, u32 color) {
+            const bool clipped = s.font.width(t) > textW;
+            s.drawText(c, clipped ? Text(fitText(s.font, t.plain(), textW), t.spans.empty() ? Style{} : t.spans[0].style) : t,
+                       rowLeft + 35, ty, color, true);
+            if (clipped && s.mouseX >= rowLeft + 35 && s.mouseX < rowLeft + 35 + float(textW) && s.mouseY >= ty && s.mouseY < ty + 9)
+                tooltip = s.font.split(t, 170);
+        };
+        line(Text(w.name), y + 1, 0xFFFFFFFF);
         std::string line2 = w.folder;
-        if (w.lastPlayed > 0) line2 += " (" + formatDate(w.lastPlayed) + ")";
-        s.drawText(c, Text(fitText(s.font, line2, textW)), rowLeft + 35, y + 12, 0xFF808080, true);
-        // LevelSummary.getInfo: game mode, commands, version.
+        if (w.lastPlayed != -1) line2 += " (" + formatDate(w.lastPlayed) + ")";
+        line(Text(line2), y + 12, 0xFF808080);
+        // LevelSummary.getInfo (merged over gray)
+        const Backup backup = backupStatus(s, w);
         Text info;
         if (w.broken) {
-            info = Text(fitText(s.font, s.res.translate("recover_world.warning"), textW), colorStyle(0xFF0000));
+            info = Text(s.res.translate("recover_world.warning"), colorStyle(0xFF0000));
         } else if (w.locked) {
-            info = Text(fitText(s.font, s.res.translate("selectWorld.locked"), textW), colorStyle(0xFF5555));
+            info = Text(s.res.translate("selectWorld.locked"), colorStyle(0xFF5555));
+        } else if (manualConversion(w)) {
+            info = Text(s.res.translate("selectWorld.conversion"), colorStyle(0xFF5555));
+        } else if (!compatible(w)) {
+            info = trf(s, "selectWorld.incompatible.info", {versionName(s, w)});
+            for (Span& sp : info.spans) sp.style = sp.style.over(colorStyle(0xFF5555));
         } else {
             if (w.hardcore) info.append(s.res.translate("gameMode.hardcore"), colorStyle(0xFF0000));
             else info.append(s.res.translate(w.gameMode == 1 ? "gameMode.creative" : w.gameMode == 2 ? "gameMode.adventure"
                                              : w.gameMode == 3 ? "gameMode.spectator" : "gameMode.survival"));
             if (w.cheats) info.append(", " + s.res.translate("selectWorld.commands"));
-            info.append(", " + s.res.translate("selectWorld.version") + " " +
-                        (w.versionName.empty() ? s.res.translate("selectWorld.versionUnknown") : w.versionName));
+            if (w.experimental) info.append(", "), info.append(s.res.translate("selectWorld.experimental"), colorStyle(0xFFFF55));
+            info.append(", " + s.res.translate("selectWorld.version") + " ");
+            Text version = versionName(s, w);
+            if (backup != Backup::None) {  // shouldBackup: italic, a downgrade red
+                Style st;
+                if (backup == Backup::Downgrade) st = colorStyle(0xFF5555);
+                else st.italic = 1;
+                for (Span& sp : version.spans) sp.style = sp.style.over(st);
+            }
+            info.append(version);
         }
-        s.drawText(c, info, rowLeft + 35, y + 21, 0xFF808080, true);
+        line(info, y + 21, 0xFF808080);
         if (hovered) {
             c.fill(rowLeft, y, rowLeft + 32, y + 32, 0xA0909090);
-            const bool overIcon = s.mouseX < rowLeft + 32;
-            if (w.locked) {
-                blitSprite(c, s.sprites.sprite(overIcon ? "world_list/error_highlighted" : "world_list/error"), rowLeft, y, 32, 32);
-                if (overIcon) tooltip = s.font.split(Text(s.res.translate("selectWorld.locked"), colorStyle(0xFF5555)), 175);
+            const bool overIcon = s.mouseX >= rowLeft && s.mouseX < rowLeft + 32 && s.mouseY >= y && s.mouseY < y + 32;
+            auto sprite = [&](const char* name) {
+                blitSprite(c, s.sprites.sprite(std::string("world_list/") + name + (overIcon ? "_highlighted" : "")), rowLeft, y, 32, 32);
+            };
+            auto tip = [&](const char* key) {
+                if (overIcon) tooltip = s.font.split(Text(s.res.translate(key), colorStyle(0xFF5555)), 175);
+            };
+            if (w.broken) {
+                sprite("error"), sprite("marked_join");
+            } else if (w.locked) {
+                sprite("error"), tip("selectWorld.locked");
+            } else if (manualConversion(w)) {
+                sprite("error"), tip("selectWorld.conversion.tooltip");
+            } else if (!compatible(w)) {
+                sprite("error"), tip("selectWorld.incompatible.tooltip");
+            } else if (backup != Backup::None) {
+                sprite("marked_join");
+                if (backup == Backup::Downgrade) {
+                    sprite("error");
+                    if (overIcon)
+                        tooltip = {Text(s.res.translate("selectWorld.tooltip.fromNewerVersion1"), colorStyle(0xFF5555)),
+                                   Text(s.res.translate("selectWorld.tooltip.fromNewerVersion2"), colorStyle(0xFF5555))};
+                }
             } else {
-                blitSprite(c, s.sprites.sprite(overIcon ? "world_list/join_highlighted" : "world_list/join"), rowLeft, y, 32, 32);
+                sprite("join");
             }
         }
     }
-    if (f.worldView.empty())
-        s.drawCentered(c, Text(f.worlds.empty() ? "No worlds yet: Create New World makes one" : "No worlds match the search"),
-                       float(W / 2), top + 16, 0xFFA0A0A0);
     c.popScissor();
     if (const float ms = maxScroll(s, f.worldView.size()); ms > 0) {  // scroll bar right of the rows
         const float x = rowLeft + kRowW + 4, h = bottom - top;
@@ -387,6 +485,9 @@ void drawWorlds(State& s, Canvas& c) {
     }
     s.drawButtons(c);
     if (!tooltip.empty()) s.drawTooltip(c, tooltip, s.mouseX, s.mouseY);
+    for (const Button& b : s.buttons)  // the file fixing tooltips (MenuTooltipPositioner)
+        if (b.tooltip && s.mouseX >= b.x && s.mouseY >= b.y && s.mouseX < b.x + b.w && s.mouseY < b.y + b.h)
+            s.drawTooltip(c, s.font.split(b.tooltip(), 170), s.mouseX, s.mouseY, nullptr, false, {}, std::array<float, 4>{b.x, b.y, b.w, b.h}.data());
 }
 
 void worldsInput(State& s, const Window::InputEvent& e) {
@@ -402,7 +503,8 @@ void worldsInput(State& s, const Window::InputEvent& e) {
     if (e.type == E::Key && e.down && (e.code == VK_UP || e.code == VK_DOWN) && !f.worldView.empty()) {
         auto it = std::find(f.worldView.begin(), f.worldView.end(), f.worldSel);
         int i = it == f.worldView.end() ? -1 : int(it - f.worldView.begin());
-        i = std::clamp(i + (e.code == VK_DOWN ? 1 : -1), 0, int(f.worldView.size()) - 1);
+        if (i < 0) i = e.code == VK_DOWN ? 0 : int(f.worldView.size()) - 1;  // nothing selected: the first / last
+        else i = std::clamp(i + (e.code == VK_DOWN ? 1 : -1), 0, int(f.worldView.size()) - 1);
         f.worldSel = f.worldView[size_t(i)];
         const float y = 4 + float(i) * kRowH;  // keep it in view
         f.worldScroll = std::clamp(f.worldScroll, y + kRowH - (bottom - top), y);
@@ -418,7 +520,8 @@ void worldsInput(State& s, const Window::InputEvent& e) {
             s.buildButtons();
             const float y = top + 4 + float(i) * kRowH - f.worldScroll;
             const bool overIcon = s.mouseX < rowLeft + 32 && s.mouseY >= y && s.mouseY < y + 32;
-            if (doubleClicked(s, i) || overIcon) playWorld(s, true);
+            const WorldEntry& we = f.worlds[size_t(f.worldSel)];
+            if ((doubleClicked(s, i) || overIcon) && (we.broken || !disabled(we))) playWorld(s, true);  // canInteract
         }
         return;
     }
@@ -440,7 +543,8 @@ namespace {
 
 // A backup / optimization running in the background (main thread state).
 struct WorldTask {
-    enum class After { List, Optimize, Restore } after = After::List;
+    enum class After { List, Optimize, Restore, Play } after = After::List;
+    int nextStep = 0;  // After::Play: where continuePlay goes on
     fs::path dir;
     std::string folder, name;
     bool eraseCache = false;
@@ -510,8 +614,67 @@ void restoreLevelData(State& s, const fs::path& dir) {  // LevelStorageAccess.re
     WorldEntry check;
     const bool ok = !ec && readWorld(dir, check);
     LOG("ui: restoring %s from level.dat_old %s", utf8(dir).c_str(), ok ? "worked" : "failed");
-    showMessage(s, tr(s, "recover_world.done.title"), tr(s, ok ? "recover_world.done.success" : "recover_world.done.failed"),
-                s.res.translate("gui.back"), [&s] { openWorlds(s); });
+    // RecoverWorldDataScreen: success -> ConfirmScreen (Continue opens the world, Back), failure -> AlertScreen
+    if (ok)
+        showConfirm(s, tr(s, "recover_world.done.title"), tr(s, "recover_world.done.success"), s.res.translate("gui.continue"),
+                    [&s] {
+                        openWorlds(s);
+                        playWorld(s, true);
+                    },
+                    Screen::Worlds, s.res.translate("gui.back"), [&s] { openWorlds(s); });
+    else
+        showMessage(s, tr(s, "recover_world.done.title"), tr(s, "recover_world.done.failed"), s.res.translate("gui.back"),
+                    [&s] { openWorlds(s); }, true);
+}
+
+void continuePlay(State& s, int step) {
+    WorldEntry* w = selected(s);
+    if (!w) return openWorlds(s);
+    State* p = &s;
+    auto ask = [&](Text question, Text warning, int next) {
+        prompt = {std::move(question), std::move(warning), tr(s, "selectWorld.backupJoinConfirmButton"), false,
+                  [p, next](bool backup) {
+                      editPage = EditPage::Edit;
+                      const WorldEntry* we = selected(*p);
+                      if (!we) return openWorlds(*p);
+                      if (!backup) return continuePlay(*p, next);
+                      startTask(*p, *we, WorldTask::After::Play, true);  // EditWorldScreen.makeBackupAndShowToast
+                      task->nextStep = next;
+                  },
+                  [p] {
+                      editPage = EditPage::Edit;
+                      openWorlds(*p);
+                  }};
+        editPage = EditPage::Backup;
+        s.openScreen(Screen::EditWorld);
+    };
+    if (step <= 0) {
+        if (!compatible(*w)) {
+            return showMessage(s, Text(s.res.translate("selectWorld.incompatible.title"), colorStyle(0xFF0000)),
+                               trf(s, "selectWorld.incompatible.description", {versionName(s, *w)}), s.res.translate("gui.back"),
+                               [p] { openWorlds(*p); }, true);
+        }
+        if (const Backup b = backupStatus(s, *w); b != Backup::None) {
+            const std::string key = b == Backup::Downgrade ? "downgrade" : "file_fixing_required";
+            Text question = tr(s, ("selectWorld.backupQuestion." + key).c_str());
+            if (b == Backup::Downgrade)  // severe
+                for (Span& sp : question.spans) sp.style = sp.style.over(colorStyle(0xDF5050));
+            return ask(std::move(question),
+                       trf(s, ("selectWorld.backupWarning." + key).c_str(), {versionName(s, *w), Text(s.fe->cfg.version)}), 1);
+        }
+    }
+    if (step <= 1 && w->experimental)  // openWorldCheckWorldStemCompatibility: an unstable (experimental) world
+        return ask(tr(s, "selectWorld.backupQuestion.experimental"), tr(s, "selectWorld.backupWarning.experimental"), 2);
+    if (step <= 2) {  // openWorldCheckDiskSpace: under 64 MiB free
+        ULARGE_INTEGER free{};
+        if (GetDiskFreeSpaceExW(w->dir.c_str(), &free, nullptr, nullptr) && free.QuadPart < 67108864ull) {
+            return showConfirm(s, Text(s.res.translate("selectWorld.warning.lowDiskSpace.title"), colorStyle(0xFF5555)),
+                               tr(s, "selectWorld.warning.lowDiskSpace.description"), s.res.translate("gui.continue"),
+                               [p] { continuePlay(*p, 3); }, Screen::Worlds, s.res.translate("gui.back"), [p] { openWorlds(*p); });
+        }
+    }
+    s.fe->failTitle = Text("Could not open the world");
+    startChild(s, worldArgs(*w, true), Text("Loading \"" + w->name + "\""), Screen::Worlds, false);
 }
 
 }  // namespace
@@ -532,8 +695,10 @@ void worldsFrame(State& s) {
         if (t.after == WorldTask::After::Optimize) return startOptimize(s);
         const fs::path dir = t.dir;
         const WorldTask::After after = t.after;
+        const int next = t.nextStep;
         task.reset();
         if (after == WorldTask::After::Restore) return restoreLevelData(s, dir);
+        if (after == WorldTask::After::Play) return continuePlay(s, next);
         return openWorlds(s);
     }
     if (t.stopping.valid()) {
@@ -569,26 +734,13 @@ void buildEditWorld(State& s) {
         editPage = EditPage::Edit;
         openWorlds(*p);
     };
-    if (editPage == EditPage::Optimize) {  // BackupConfirmScreen(optimizeWorld.confirm.*, erase cache prompt)
-        const int lines = int(s.font.split(tr(s, "optimizeWorld.confirm.description"), W - 50).size());
+    if (editPage == EditPage::Backup) {  // BackupConfirmScreen
+        const int lines = int(s.font.split(prompt.description, W - 50).size());
         const float textSize = float((lines + 1) * 9);
-        auto proceed = [p](bool backup) {
-            const WorldEntry* we = selected(*p);
-            editPage = EditPage::Edit;
-            if (!we) return openWorlds(*p);
-            startTask(*p, *we, WorldTask::After::Optimize, backup);
-            if (!backup) startOptimize(*p);
-        };
-        addButton(s, float(W / 2 - 155), 100 + textSize, 150, tr(s, "optimizeWorld.confirm.proceed"), [proceed] { proceed(true); });
-        addButton(s, float(W / 2 + 5), 100 + textSize, 150, tr(s, "selectWorld.backupJoinSkipButton"), [proceed] { proceed(false); });
-        addButton(s, float(W / 2 - 75), 124 + textSize, 150, tr(s, "gui.cancel"), [p] {
-            editPage = EditPage::Edit;
-            p->buildButtons();
-        });
-        f.onBack = [p] {
-            editPage = EditPage::Edit;
-            p->buildButtons();
-        };
+        addButton(s, float(W / 2 - 155), 100 + textSize, 150, prompt.confirm, [] { prompt.proceed(true); });
+        addButton(s, float(W / 2 + 5), 100 + textSize, 150, tr(s, "selectWorld.backupJoinSkipButton"), [] { prompt.proceed(false); });
+        addButton(s, float(W / 2 - 75), 124 + textSize, 150, tr(s, "gui.cancel"), [] { prompt.cancel(); });
+        f.onBack = nullptr;  // shouldCloseOnEsc: false
         return;
     }
     if (editPage == EditPage::Recover) {  // RecoverWorldDataScreen
@@ -622,7 +774,7 @@ void buildEditWorld(State& s) {
             we->icon = Image{};
             p->buildButtons();
         }
-    }, hasIcon && can);
+    }, hasIcon);
     addButton(s, x, top + 89, 200, tr(s, "selectWorld.edit.openFolder"), [p] {
         if (const WorldEntry* we = selected(*p)) openFolder(we->dir);
     });
@@ -635,22 +787,41 @@ void buildEditWorld(State& s) {
         openFolder(backupsDir(*p));
     });
     addButton(s, x, top + 164, 200, tr(s, "selectWorld.edit.optimize"), [p] {
-        editPage = EditPage::Optimize, eraseCache = false;
+        prompt = {tr(*p, "optimizeWorld.confirm.title"), tr(*p, "optimizeWorld.confirm.description"),
+                  tr(*p, "optimizeWorld.confirm.proceed"), true,
+                  [p](bool backup) {
+                      const WorldEntry* we = selected(*p);
+                      editPage = EditPage::Edit;
+                      if (!we) return openWorlds(*p);
+                      startTask(*p, *we, WorldTask::After::Optimize, backup);
+                      if (!backup) startOptimize(*p);
+                  },
+                  [p] {
+                      editPage = EditPage::Edit;
+                      p->buildButtons();
+                  }};
+        editPage = EditPage::Backup, eraseCache = false;
         p->buildButtons();
-    }, can);
+    });
     addButton(s, x, top + 214, 98, tr(s, "selectWorld.edit.save"), [p] { saveEditWorld(*p); },
-              can && !trim(f.editName.text.value).empty());
+              !trim(f.editName.text.value).empty());
     addButton(s, x + 102, top + 214, 98, tr(s, "gui.cancel"), [p] { openWorlds(*p); });
-    f.onEnter = [p] { saveEditWorld(*p); };
+    f.onEnter = [p] {  // keyPressed: Enter in the name field renames (even blank) and closes
+        if (p->fe->focus == 0) saveEditWorld(*p, true);
+    };
 }
 
 void drawEditWorld(State& s, Canvas& c) {
     const int W = c.guiWidth(), H = c.guiHeight();
     menuBackground(s, c);
-    if (editPage == EditPage::Optimize) {
-        s.drawCentered(c, tr(s, "optimizeWorld.confirm.title"), float(W / 2), 50, 0xFFFFFFFF);
-        const std::vector<Text> lines = s.font.split(tr(s, "optimizeWorld.confirm.description"), W - 50);
+    if (editPage == EditPage::Backup) {
+        s.drawCentered(c, prompt.title, float(W / 2), 50, 0xFFFFFFFF);
+        const std::vector<Text> lines = s.font.split(prompt.description, W - 50);
         for (size_t i = 0; i < lines.size(); ++i) s.drawCentered(c, lines[i], float(W / 2), 70 + float(i) * 9, 0xFFFFFFFF);
+        if (!prompt.eraseCachePrompt) {
+            s.drawButtons(c);
+            return;
+        }
         // Checkbox "Erase cached data" (17 x 17 box, label 4 to the right, the label colour -2039584).
         const float bx = float(W / 2 - 155 + 80), by = 76 + float((lines.size() + 1) * 9);
         const bool over = s.mouseX >= bx && s.mouseX < bx + 17 + 4 + s.font.width(tr(s, "selectWorld.backupEraseCache")) &&
@@ -697,8 +868,8 @@ void drawEditWorld(State& s, Canvas& c) {
 
 void editWorldInput(State& s, const Window::InputEvent& e) {
     using E = Window::InputEvent;
-    if (editPage == EditPage::Optimize && e.type == E::Button && e.down && e.code == 0) {
-        const int lines = int(s.font.split(tr(s, "optimizeWorld.confirm.description"), s.guiW() - 50).size());
+    if (editPage == EditPage::Backup && prompt.eraseCachePrompt && e.type == E::Button && e.down && e.code == 0) {
+        const int lines = int(s.font.split(prompt.description, s.guiW() - 50).size());
         const float bx = float(s.guiW() / 2 - 155 + 80), by = 76 + float((lines + 1) * 9);
         if (s.mouseX >= bx && s.mouseX < bx + 21 + s.font.width(tr(s, "selectWorld.backupEraseCache")) && s.mouseY >= by &&
             s.mouseY < by + 17) {

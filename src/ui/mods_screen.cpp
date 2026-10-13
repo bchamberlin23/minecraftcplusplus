@@ -128,7 +128,7 @@ void dropIntoModsFolder(UiState& s, const std::vector<fs::path>& files, Screen b
         }
         if (!rejected.empty()) {
             showMessage(st, tr(st, "pack.dropRejected.title"), trf(st, "pack.dropRejected.message", {Text(rejected)}),
-                        st.res.translate("gui.back"), [p, back] { p->openScreen(back); });
+                        st.res.translate("gui.back"), [p, back] { p->openScreen(back); }, true);  // AlertScreen
             return;
         }
         st.openScreen(back);
