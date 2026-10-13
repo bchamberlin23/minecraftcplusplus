@@ -1308,6 +1308,7 @@ int wmain(int argc, wchar_t** argv) {
         {  // Video / Accessibility Settings the sky reads (Clouds, Cloud Distance, Weather Radius, Brightness, Hide Lightning Flashes)
             const ui::Settings& vs = ui.settings();
             sky.setOptions({vs.cloudStatus, vs.cloudRange, vs.weatherRadius, float(vs.gamma), vs.hideLightningFlash});
+            visuals.setVideo(vs.particles, vs.weatherRadius);
         }
         if (haveEntities)
             entityRenderer.setShadows(ui.settings().entityShadows, sky.skyDarken(), session ? session->dimension().ambientLight : 0.0f);

@@ -142,6 +142,7 @@ struct Particles::Type {
     std::vector<int> sprites;  // item atlas rects
     int drip = -1;             // kDrips index
     int next = -2;             // drips: the particle type they turn into (-2 unresolved)
+    bool overrideLimiter = false;  // ParticleType.getOverrideLimiter
 };
 
 struct Particles::Particle {
@@ -187,6 +188,12 @@ bool Particles::init(const ui::Resources& res) {
             if (t.name == n) t.opt = o;
         for (size_t d = 0; d < std::size(kDrips); ++d)
             if (t.name == kDrips[d].name) t.kind = Kind::Drip, t.drip = int(d);
+        static constexpr std::string_view kOverride[] = {  // ParticleTypes registered with overrideLimiter = true
+            "geyser", "damage_indicator", "elder_guardian", "explosion_emitter", "explosion", "gust", "gust_emitter_large",
+            "gust_emitter_small", "sonic_boom", "sculk_charge_pop", "poof", "spit", "squid_ink", "sweep_attack",
+            "campfire_cosy_smoke", "campfire_signal_smoke", "glow_squid_ink", "glow", "wax_on", "wax_off", "electric_spark",
+            "scrape", "trial_spawner_detection", "trial_spawner_detection_ominous", "vault_connection", "ominous_spawning"};
+        for (std::string_view n : kOverride) t.overrideLimiter |= t.name == n;
     }
     for (const auto& [key, id] : reports_.stateIds()) {
         if (id < 0) continue;
@@ -228,7 +235,7 @@ void Particles::attach(net::Client& client) {
         if (!r.ok || s.type < 0 || size_t(s.type) >= types_.size()) return;
         const Type& t = types_[size_t(s.type)];
         if (!readOptions(&r, s.type, s.opt)) return;  // options that cannot be decoded: the rest is unreadable
-        r.boolean();  // override limiter
+        s.overrideLimiter = r.boolean();
         s.alwaysShow = r.boolean();
         s.x = r.f64(), s.y = r.f64(), s.z = r.f64();
         s.dx = r.f32(), s.dy = r.f32(), s.dz = r.f32();
@@ -1234,7 +1241,17 @@ Particles::Particle* Particles::add(int typeIndex, double x, double y, double z,
 
 Particles::Particle* Particles::addNamed(std::string_view type, double x, double y, double z, double xa, double ya, double za,
                                          const Options* opt) {
-    return add(typeId(type), x, y, z, xa, ya, za, opt);
+    const int id = typeId(type);
+    return levelAllows(id, false, false, x, y, z) ? add(id, x, y, z, xa, ya, za, opt) : nullptr;
+}
+
+bool Particles::levelAllows(int typeIndex, bool overrideLimiter, bool alwaysShow, double x, double y, double z) {
+    int level = status_;  // calculateParticleLevel
+    if (alwaysShow && level == 2 && randf() < 0.1f) level = 1;
+    if (level == 1 && int(randf() * 3.0f) == 0) level = 2;
+    if (overrideLimiter || (typeIndex >= 0 && size_t(typeIndex) < types_.size() && types_[size_t(typeIndex)].overrideLimiter)) return true;
+    const double dx = x - cam_[0], dy = y - cam_[1], dz = z - cam_[2];
+    return dx * dx + dy * dy + dz * dz <= 1024.0 && level != 2;
 }
 
 int Particles::itemIdOf(std::string_view name) {
@@ -1654,13 +1671,13 @@ void Particles::levelEvent(int type, int bx, int by, int bz, int data) {
 }
 
 void Particles::spawn(std::string_view type, double x, double y, double z, double vx, double vy, double vz) {
-    add(typeId(type), x, y, z, vx, vy, vz);
+    addNamed(type, x, y, z, vx, vy, vz);
 }
 
 void Particles::spawnBlock(std::string_view type, std::string_view stateKey, double x, double y, double z, double vx, double vy, double vz) {
     Options o;
     o.block = reports_.stateId(reports_.complete(stateKey));
-    if (o.block > 0) add(typeId(type), x, y, z, vx, vy, vz, &o);
+    if (o.block > 0) addNamed(type, x, y, z, vx, vy, vz, &o);
 }
 
 void Particles::sprintDust(double x, double y, double z, double width, const double vel[3]) {
@@ -1682,13 +1699,13 @@ void Particles::sprintDust(double x, double y, double z, double width, const dou
 void Particles::spawnPower(std::string_view type, double x, double y, double z, double vx, double vy, double vz, float power) {
     Options o;
     o.scale = power;
-    add(typeId(type), x, y, z, vx, vy, vz, &o);
+    addNamed(type, x, y, z, vx, vy, vz, &o);
 }
 
 void Particles::spawnColored(std::string_view type, double x, double y, double z, double vx, double vy, double vz, u32 argb) {
     Options o;
     o.hasColor = true, o.color = argb;
-    add(typeId(type), x, y, z, vx, vy, vz, &o);
+    addNamed(type, x, y, z, vx, vy, vz, &o);
 }
 
 bool Particles::readEncoded(net::Reader& r, std::string& raw) const {
@@ -3382,8 +3399,8 @@ void Particles::weather(const double cam[3]) {
     static int rainType = -2, smokeType = -2;
     if (rainType == -2) rainType = typeId("rain"), smokeType = typeId("smoke");
     const int cx = int(std::floor(cam[0])), cy = int(std::floor(cam[1])), cz = int(std::floor(cam[2]));
-    const int radius = 10, diameter = 2 * radius + 1;
-    const int count = int(0.225f * float(diameter * diameter) * rain * rain);
+    const int radius = weatherRadius_, diameter = 2 * radius + 1;
+    const int count = int(0.225f * float(diameter * diameter) * rain * rain) / (status_ == 1 ? 2 : 1);
     int soundAt[3] = {};
     bool haveSound = false;
     for (int i = 0; i < count; ++i) {
@@ -3408,11 +3425,13 @@ void Particles::weather(const double cam[3]) {
                 const Box& s = registry_.box(b.collisionFirst + k);
                 if (bx >= s.min[0] && bx <= s.max[0] && bz >= s.min[2] && bz <= s.max[2]) top = std::max(top, double(s.max[1]));
             }
+            soundAt[0] = x, soundAt[1] = y, soundAt[2] = z, haveSound = true;
+            if (status_ == 2) break;  // MINIMAL: only the sound position
             const std::string& n = registry_.name(id);
             const bool hot = n.starts_with("minecraft:lava") || n == "minecraft:magma_block" ||
                              (n.find("campfire") != std::string::npos && n.find("lit=true") != std::string::npos);
-            add(hot ? smokeType : rainType, x + bx, y + top, z + bz, 0, 0, 0);
-            soundAt[0] = x, soundAt[1] = y, soundAt[2] = z, haveSound = true;
+            const int type = hot ? smokeType : rainType;
+            if (levelAllows(type, false, false, x + bx, y + top, z + bz)) add(type, x + bx, y + top, z + bz, 0, 0, 0);
             break;
         }
     }
@@ -3432,6 +3451,7 @@ void Particles::weather(const double cam[3]) {
 // block count), each at a random point of the blast sphere that is air, flying outwards (ExplosionParticleInfo).
 void Particles::tickExplosions() {
     if (trackedExplosions_.empty()) return;
+    if (status_ != 0) return trackedExplosions_.clear();  // ClientExplosionTracker: debris only at ALL
     long long total = 0;
     for (const NetExplosion& e : trackedExplosions_) total += std::max(e.blockCount, 0);
     const int count = int(std::min<long long>(total, 512));
@@ -3543,7 +3563,7 @@ void Particles::frame(double dt, const double cam[3]) {
             if (audio::AudioSystem* a = audio::instance())
                 a->playNetwork(e.soundId, e.soundName, audio::Category::Block, e.pos, 4.0f, (1.0f + (randf() - randf()) * 0.2f) * 0.7f);
         NetSpawn s{};
-        s.type = e.particle, s.alwaysShow = true;
+        s.type = e.particle, s.alwaysShow = true, s.overrideLimiter = true;  // handleExplosion: addParticle(.., true, true, ..)
         s.x = e.pos[0], s.y = e.pos[1], s.z = e.pos[2];
         s.dx = 1, s.sx = 1, s.count = 0;
         spawns.push_back(s);
@@ -3560,8 +3580,10 @@ void Particles::frame(double dt, const double cam[3]) {
         else levelEvent(e.type, e.x, e.y, e.z, e.data);
     }
     for (const NetSpawn& s : spawns) {
-        const double dx = s.x - cam[0], dy = s.y - cam[1], dz = s.z - cam[2];
-        if (!s.alwaysShow && dx * dx + dy * dy + dz * dz > 1024.0) continue;
+        // ClientPacketListener.tryAddParticle -> ClientLevel.addParticle(particle, overrideLimiter, alwaysShow, ...)
+        auto add = [&](int type, double x, double y, double z, double xa, double ya, double za, const Options* o) {
+            if (levelAllows(type, s.overrideLimiter, s.alwaysShow, x, y, z)) this->add(type, x, y, z, xa, ya, za, o);
+        };
         if (s.count == 0) {
             add(s.type, s.x, s.y, s.z, double(s.sx) * s.dx, double(s.sy) * s.dy, double(s.sz) * s.dz, &s.opt);
         } else {

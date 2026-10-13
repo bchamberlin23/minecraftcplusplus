@@ -2566,6 +2566,10 @@ void Visuals::predictUse(const Entity& e) {
                        e.pos[2] + (2 * u(m.fxRandom) - 1) * w, 0, 0, 0);
 }
 
+void Visuals::setVideo(int particleStatus, int weatherRadius) {
+    if (impl_->particles) impl_->particles->setVideo(particleStatus, weatherRadius);
+}
+
 void Visuals::localEntityEvent(int event) {  // our own entity's events (LocalPlayer.handleEntityEvent)
     Impl& m = *impl_;
     if (!m.game || !m.particles) return;

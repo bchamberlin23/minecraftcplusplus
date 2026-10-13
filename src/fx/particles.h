@@ -102,6 +102,8 @@ public:
     // ClientLevel.animateTick's environment, each tick: the overworld day timeline's night stretch (creaking_active /
     // firefly_bush_sounds), the Nether (water evaporates, lava drips from dripstone), the sky darkening, the block a
     // creative player's held barrier / light marks ("" none).
+    // Video Settings: Particles (ParticleStatus 0 all, 1 decreased, 2 minimal) and Weather Radius.
+    void setVideo(int particleStatus, int weatherRadius) { status_ = particleStatus, weatherRadius_ = weatherRadius; }
     void setAmbientEnv(bool night, bool nether, int skyDarken, std::string markerBlock) {
         ambientNight_ = night, ambientNether_ = nether, skyDarken_ = skyDarken, markerBlock_ = std::move(markerBlock);
     }
@@ -200,6 +202,10 @@ private:
     std::vector<Particle> spawnQueue_;         // spawned while ticking
     std::mt19937 rng_{0x51A7E5u};
     double tickClock_ = 0, cam_[3] = {};
+    int status_ = 0, weatherRadius_ = 10;
+    // ClientLevel.doAddParticle: a type or packet that overrides the limiter always shows; others only within 32
+    // blocks of the camera and not at the (randomly lowered) MINIMAL level (calculateParticleLevel).
+    bool levelAllows(int typeIndex, bool overrideLimiter, bool alwaysShow, double x, double y, double z);
     u64 ticks_ = 0;
     float rain_ = 0, rainTarget_ = 0, rainOverride_ = -1, thunder_ = 0;
     int rainSoundTime_ = 0;
@@ -218,7 +224,7 @@ private:
     struct NetSpawn {
         int type;
         Options opt;
-        bool alwaysShow;
+        bool alwaysShow, overrideLimiter = false;
         double x, y, z;
         float dx, dy, dz, sx, sy, sz;
         int count, mode;
