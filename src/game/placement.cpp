@@ -870,6 +870,18 @@ Result placementStateImpl(const Context& c, u16 held, const int pos[3], bool rep
         s = with(c, held, "facing", kName[f]);
         if (isStairs(n)) s = with(c, s, "half", upperClick ? "top" : "bottom");
     }
+    // RepeaterBlock.getStateForPlacement: locked by a powered diode beside it pointing in (getControlInputSignal with
+    // diodes only; on the client a comparator's output, kept by its block entity, reads 0)
+    if (n == "minecraft:repeater") {
+        const int f = faceByName(reg.property(s, "facing"));
+        bool locked = false;
+        for (int side : {clockWise(f), counterClockWise(f)}) {
+            const u16 d = at(c, pos, side);
+            locked |= nameOf(c, d) == "minecraft:repeater" && reg.property(d, "powered") == "true" &&
+                      faceByName(reg.property(d, "facing")) == side;
+        }
+        s = with(c, s, "locked", locked ? "true" : "false");
+    }
     // Slabs: top or bottom by the click height.
     const std::string_view type = reg.property(s, "type");
     if (n.ends_with("_slab") && (type == "top" || type == "bottom")) s = with(c, s, "type", upperClick ? "top" : "bottom");
