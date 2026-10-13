@@ -439,6 +439,17 @@ void Visuals::setItemRules(ItemRules* rules) {
 void Visuals::setPlayer(Game& game, ui::Ui& ui, const std::string& name, std::function<int()> gameMode) {
     Impl& m = *impl_;
     m.game = &game;
+    // PotentSulfurBlockEntity.LAUNCH_ENTITY_TICKER for the local player (its movement is ours): a push up while in an
+    // erupting geyser's column, until it rises fast enough.
+    game.blockEntityTick = [&m](Player& p) {
+        if (!m.particles || p.noClip || p.flying || m.game->vehicleId >= 0 || m.game->dead) return;
+        const AABB body = p.box();
+        for (const fx::Particles::GeyserColumn& c : m.particles->geyserColumns()) {
+            const AABB col{{double(c.x), double(c.y0), double(c.z)}, {double(c.x + 1), double(c.y0 + c.height), double(c.z + 1)}};
+            if (!body.intersects(col)) continue;
+            if (p.vel[1] < 0.3 + c.waterBlocks * 0.1) p.vel[1] += 0.2;
+        }
+    };
     m.ui = &ui;
     ui.setItemModels(&m.models);
     m.playerName = name;

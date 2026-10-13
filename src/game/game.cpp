@@ -228,6 +228,7 @@ void Game::frame(Window& w, double dt) {
             player_.tickPistons(physics_);  // the moving blocks' ticks (ClientLevel block entities)
             player_.tick(physics_, input);
             if (entityPush) entityPush(player_);  // other entities' pushEntities / boats push the player
+            if (blockEntityTick) blockEntityTick(player_);
         }
         if (traceTicks)
             LOG("tick %llu: pos %.4f %.4f %.4f vel %.4f %.4f %.4f ground %d hcol %d water %.3f lava %.3f eye %d swim %d sprint %d "

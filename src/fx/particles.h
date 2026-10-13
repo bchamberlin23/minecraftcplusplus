@@ -65,6 +65,12 @@ public:
     void frame(double dt, const double cam[3]);
     // Local actions.
     void blockDestroyed(int x, int y, int z, u16 block);
+    // The erupting geysers' launch columns (PotentSulfurBlockEntity.LAUNCH_ENTITY_TICKER): blocks x, z, from y0 for
+    // height blocks, with their water depth. Refreshed every tick.
+    struct GeyserColumn {
+        int x, y0, z, height, waterBlocks;
+    };
+    const std::vector<GeyserColumn>& geyserColumns() const { return geyserColumns_; }
     // ClientLevel.addBreakingParticles: one shard on the hit face of the block being broken (world lock held).
     void blockCrack(int x, int y, int z, int face);
     // BreakingItemParticle (ParticleTypes.ITEM): a shard of an item's texture (eating, items breaking).
@@ -124,7 +130,8 @@ private:
     bool noxiousGasReaches(int sx, int sy, int sz, const double pos[3]);
     bool gasSource(int x, int y, int z, int& sourceY);
     void tickPotentSulfur();
-    std::unordered_map<u64, std::pair<u64, u16>> eruptions_;  // potent sulfur position -> (eruption start tick, state)
+    std::unordered_map<u64, std::pair<u64, u16>> eruptions_;
+    std::vector<GeyserColumn> geyserColumns_;  // potent sulfur position -> (eruption start tick, state)
     void move(Particle& p, double xa, double ya, double za);
     u16 blockAt(int x, int y, int z);  // through a small per-frame cache (collisions repeat lookups)
     u8 lightAt(double x, double y, double z) const;

@@ -1829,6 +1829,7 @@ void Particles::tickPotentSulfur() {
     if (cloud == -2) cloud = typeId("noxious_gas_cloud"), geyser = typeId("geyser");
     const int ccx = int(std::floor(cam_[0])) >> 4, ccz = int(std::floor(cam_[2])) >> 4;
     std::unordered_map<u64, u64> seen;
+    geyserColumns_.clear();
     for (int cz = ccz - 3; cz <= ccz + 3; ++cz)
         for (int cx = ccx - 3; cx <= ccx + 3; ++cx) {
             const auto* list = world_.blockEntities(cx, cz);
@@ -1848,6 +1849,12 @@ void Particles::tickPotentSulfur() {
                     seen[key] = 1;
                     int sy;
                     if (!gasSource(be.x, be.y, be.z, sy)) continue;
+                    {  // getUnobstructedBlockCount: up to 6 blocks per block of water, to the first obstruction
+                        const int water = sy - be.y - 1;
+                        int height = 0;
+                        while (height < 6 * water && geyserPassable(be.x, be.y + 1 + height, be.z)) ++height;
+                        if (height > 0) geyserColumns_.push_back({be.x, be.y + 1, be.z, height, water});
+                    }
                     const u64 t = ticks_ - it->second.first;
                     if (t % 20 == 0) {
                         Options o;
