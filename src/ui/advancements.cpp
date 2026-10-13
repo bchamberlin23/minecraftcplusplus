@@ -313,7 +313,11 @@ void handlers(UiState& s, net::Client& client) {
             return;
         }
         sp->post([u] {
-            if (u->reset) g.advs.clear(), g.order.clear(), g.progress.clear();
+            if (u->reset) {  // onAdvancementsCleared: the tabs go (their scroll) and the selection with them
+                g.advs.clear(), g.order.clear(), g.progress.clear();
+                g.tabs.clear();
+                g.selected.clear();
+            }
             for (const std::string& id : u->removed) {
                 g.advs.erase(id);
                 g.order.erase(std::remove(g.order.begin(), g.order.end(), id), g.order.end());
@@ -617,15 +621,14 @@ void input(UiState& s, const InputEvent& e) {
     g.dragging = true;
     g.lastMouse[0] = s.mouseX, g.lastMouse[1] = s.mouseY;
     const int left = (s.guiW() - 252) / 2, top = (s.guiH() - 140) / 2;
-    if (g.tabs.size() > 1)
-        for (const Tab& tb : g.tabs) {
-            int x, y, w, h;
-            tabRect(tb.index, x, y, w, h);
-            if (s.mouseX > float(left + x) && s.mouseX < float(left + x + w) && s.mouseY > float(top + y) && s.mouseY < float(top + y + h)) {
-                selectTab(s, tb.root, true);
-                return;
-            }
+    for (const Tab& tb : g.tabs) {
+        int x, y, w, h;
+        tabRect(tb.index, x, y, w, h);
+        if (s.mouseX > float(left + x) && s.mouseX < float(left + x + w) && s.mouseY > float(top + y) && s.mouseY < float(top + y + h)) {
+            selectTab(s, tb.root, true);
+            return;
         }
+    }
 }
 
 const ScreenRegistrar kScreen({Screen::Advancements, build, draw, input, closed});
