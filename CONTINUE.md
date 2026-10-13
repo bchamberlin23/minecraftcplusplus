@@ -96,7 +96,7 @@ docs/audit-26.3 was re-checked: most of it is done, its remaining items are fold
 ## Visuals / effects
 
 - **Improved Transparency** (video option) is stored but not read; this engine's translucency path (OIT under the
-  shader pipeline) is its own. The nausea overlay and vignette draw after the UI layer (they also tint the HUD).
+  shader pipeline) is its own.
 
 - **Block rendering, approximations**: face occlusion shapes come from collision boxes (fluid faces against partial
   blocks; model faces against partial neighbours still cull only on full cubes, not Block.shouldRenderFace's shapes).

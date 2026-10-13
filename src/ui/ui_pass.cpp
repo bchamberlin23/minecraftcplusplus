@@ -182,10 +182,10 @@ void UiPass::upload(const PassContext& ctx, Atlas& atlas, ID3D12Resource* tex, u
 }
 
 void UiPass::draw(const PassContext& ctx) {
-    // With a separate UI layer the inverting batches (crosshair) wait for the final image (AfterUi); otherwise
-    // everything draws in the Hud stage.
-    const bool afterUi = ctx.stage == PassStage::AfterUi;
-    if (afterUi && !ctx.uiLayer) return;
+    // With a separate UI layer the batches that read the scene (inverting crosshair, vignette, additive overlays)
+    // draw onto the final image before the layer goes over it (BeforeUi); otherwise everything draws in the Hud stage.
+    const bool afterUi = ctx.stage == PassStage::BeforeUi;
+    if (ctx.stage == PassStage::AfterUi || (afterUi && !ctx.uiLayer)) return;
     u64 used = 0;
     if (!afterUi) {
         upload(ctx, gui_, guiTex_.Get(), used);

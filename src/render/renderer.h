@@ -127,8 +127,11 @@ enum class PassStage {
     World,  // after opaque, cutout and model terrain, before translucent terrain (depth test + write)
     Hud,    // after the built-in overlays (crosshair, hotbar)
     AfterTranslucent,  // after translucent terrain, before the overlays (clouds, weather; depth test)
-    AfterUi,           // onto the final back buffer after the UI layer is composited (blends that read the scene,
-                       // like the inverting crosshair); with the vanilla path it follows Hud directly
+    AfterUi,           // onto the final back buffer after the UI layer is composited; with the vanilla path it follows
+                       // Hud directly
+    BeforeUi,          // onto the final back buffer just before a separate UI layer is composited over it: the Hud's
+                       // blends that read the scene (vignette, the inverting crosshair, additive overlays), drawn
+                       // under the rest of the Hud as Java draws them first
 };
 
 // Built-in shader pipeline ("shaders"): HDR + AgX tonemap, cascaded sun / moon shadows, lit water with
@@ -444,7 +447,7 @@ private:
     double sortedCam_[3] = {};
     u32 segBase_[4] = {}, segCap_[4] = {};
 
-    std::vector<RenderPass*> passes_[5];
+    std::vector<RenderPass*> passes_[6];
     float fogColor_[4] = {0.62f, 0.76f, 1.0f, 1.0f};
     float daylight_ = 1.0f;
     Lightmap lightmap_;

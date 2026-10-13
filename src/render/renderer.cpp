@@ -1244,6 +1244,17 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     pc.sceneColor = bb;
     runPasses(PassStage::Hud, pc);
     if (!shaded && !packUi) runPasses(PassStage::AfterUi, pc);
+    if (pc.uiLayer || ((shaded || packUi) && upscalers_->uiComposedBySwapChain())) {
+        // BeforeUi: the scene-reading Hud batches onto the final image, under the UI layer
+        const D3D12_VIEWPORT v{0, 0, float(bb->GetDesc().Width), float(bb->GetDesc().Height), 0, 1};
+        const D3D12_RECT sr{0, 0, LONG(bb->GetDesc().Width), LONG(bb->GetDesc().Height)};
+        list_->RSSetViewports(1, &v);
+        list_->RSSetScissorRects(1, &sr);
+        list_->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+        PassContext before = pc;
+        before.uiLayer = true;
+        runPasses(PassStage::BeforeUi, before);
+    }
     if (shaded || packUi) {
         upscalers_->beforeUiComposite(list_.Get(), bb);  // frame generation: keep the hudless image
         if (upscalers_->uiComposedBySwapChain()) {       // FSR FG blends the UI layer itself (real + generated frames)
@@ -1408,7 +1419,7 @@ void Renderer::preparePasses(const PassContext& ctx) {
     RenderPass* done[32];
     u32 n = 0;
     for (int stage : {int(PassStage::Sky), int(PassStage::World), int(PassStage::AfterTranslucent), int(PassStage::Hud),
-                      int(PassStage::AfterUi)}) {
+                      int(PassStage::AfterUi), int(PassStage::BeforeUi)}) {
         c.stage = PassStage(stage);
         for (RenderPass* p : passes_[stage]) {
             if (std::find(done, done + n, p) != done + n) continue;

@@ -597,7 +597,7 @@ bool Ui::init(const Init& in) {
     s.registry = in.registry, s.terrain = in.terrain;
     s.pass = std::make_unique<UiPass>(s.guiAtlas, s.iconAtlas);
     if (!in.renderer->addPass(s.pass.get(), PassStage::Hud)) return false;
-    in.renderer->addPass(s.pass.get(), PassStage::AfterUi);  // the inverting crosshair, against the final image
+    in.renderer->addPass(s.pass.get(), PassStage::BeforeUi);  // the inverting crosshair and vignette, against the final image
 
     s.inventory.slots.assign(46, ItemStack{});
     s.inventory.title = Text(s.res.translate("container.crafting"));
