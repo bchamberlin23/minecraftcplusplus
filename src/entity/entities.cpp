@@ -1717,6 +1717,11 @@ void EntityWorld::tickEntity(Entity& e) {
     }
     // AbstractBoat.tick: the paddles turn pi/8 per tick while rowing (getRowingTime lerps from the previous step).
     for (int i = 0; i < 2; ++i) e.paddlePos[i] = e.paddle[i] ? e.paddlePos[i] + kPi / 8 : 0.0f;
+    if (dataSeen(e, "DATA_ID_BUBBLE_TIME")) {  // AbstractBoat.tickBubbleColumn: the rocking over a bubble column
+        e.bubbleMultiplier = std::clamp(e.bubbleMultiplier + (dataInt(e, "DATA_ID_BUBBLE_TIME") > 0 ? 0.05f : -0.1f), 0.0f, 1.0f);
+        e.bubbleAngleO = e.bubbleAngle;
+        e.bubbleAngle = 10.0f * float(std::sin(0.5 * e.age)) * e.bubbleMultiplier;
+    }
     if (e.category != Category::Living && e.category != Category::Player) return tickSpecies(e, gameTime_, entities_);
     {  // pose animation state (swimming / gliding / elytra wings), the bed of a sleeping entity
         const double move[3] = {e.pos[0] - e.prevPos[0], e.pos[1] - e.prevPos[1], e.pos[2] - e.prevPos[2]};

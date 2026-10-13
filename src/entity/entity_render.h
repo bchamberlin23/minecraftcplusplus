@@ -115,6 +115,7 @@ public:
     // A mob type drawn without an entity (spawner display entities): its layers with the default variants, its
     // animation and the renderer's scale. Returns the layer count (0: not drawn as a model).
     int displayLayers(int type, Layer* out, int max, Anim& anim, float& scale) const;
+    bool boatUnderWater(const Entity& e) const;
 
 private:
     struct OutlinePass : RenderPass {

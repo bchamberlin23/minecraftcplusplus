@@ -1511,20 +1511,23 @@ void EntityRenderer::mobPoses(const Entity& e, const TypeDef& d, const double ca
     }
 }
 
+// AbstractBoat.isUnderWater (its eyes in water).
+bool EntityRenderer::boatUnderWater(const Entity& e) const {
+    const World& world = world_.world();
+    const int x = int(std::floor(e.pos[0])), y = int(std::floor(e.pos[1] + e.info->eye)), z = int(std::floor(e.pos[2]));
+    const u16 at = y >= world.minSectionY() * 16 && y < (world.maxSectionY() + 1) * 16 ? world.block(x, y, z) : 0;
+    const BlockInfo& b = world_.registry().infos()[at];
+    return b.waterlogged || (b.fluid && world_.registry().name(at).find("water") != std::string::npos);
+}
+
 bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, const double cam[3], u32 light) {
     Layer layers[16];
     int layerCount = 0;
     if (d.kind == Kind::Mob) layerCount = resolve(e, d, layers);
     if (!layerCount) return false;
     layerCount = speciesLayers(e, d, pt, layers, layerCount, 16);
-    if (d.waterPatch && waterPatchModel_ >= 0 && layerCount < 16 && !pack_ && !shadowOnly_) {  // unless isUnderWater
-        const World& world = world_.world();
-        const int x = int(std::floor(e.pos[0])), y = int(std::floor(e.pos[1] + e.info->eye)), z = int(std::floor(e.pos[2]));
-        const u16 at = y >= world.minSectionY() * 16 && y < (world.maxSectionY() + 1) * 16 ? world.block(x, y, z) : 0;
-        const BlockInfo& b = world_.registry().infos()[at];
-        if (!(b.waterlogged || (b.fluid && world_.registry().name(at).find("water") != std::string::npos)))
-            layers[layerCount++] = {waterPatchModel_, layers[0].tex, kWhite, u16(NoOverlay)};
-    }
+    if (d.waterPatch && waterPatchModel_ >= 0 && layerCount < 16 && !pack_ && !shadowOnly_ && !boatUnderWater(e))
+        layers[layerCount++] = {waterPatchModel_, layers[0].tex, kWhite, u16(NoOverlay)};
     if (e.category == Category::Living || e.category == Category::Player)
         layerCount += equipmentLayers(e, d, layers + layerCount, 16 - layerCount);
     // CapeLayer: the profile's cape unless invisible, hidden in the skin options or under an elytra (WINGS layer).
@@ -1579,6 +1582,14 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         root = mul(root, rotY((180.0f - yaw) * kDeg));
         const float hurt = float(e.vehicleHurt) - pt;
         if (hurt > 0) root = mul(root, rotX(std::sin(hurt) * hurt * std::max(e.vehicleDamage - pt, 0.0f) / 10.0f * float(e.vehicleHurtDir) * kDeg));
+        const float bubble = e.bubbleAngleO + (e.bubbleAngle - e.bubbleAngleO) * pt;  // getBubbleAngle
+        if (bubble != 0.0f && !boatUnderWater(e)) {
+            // Quaternionf.setAngleAxis(angle, 1, 0, 1): the axis is not normalised, so neither is the quaternion
+            // (Matrix4f.rotate takes it as it is).
+            const float hs = std::sin(bubble * kDeg * 0.5f), x = hs, z = hs, w = std::cos(bubble * kDeg * 0.5f);
+            const float w2 = w * w, x2 = x * x, z2 = z * z, dzw = 2 * z * w, dxz = 2 * x * z, dxw = 2 * x * w;
+            root = mul(root, M34{{w2 + x2 - z2, -dzw, dxz, 0, dzw, -z2 + w2 - x2, -dxw, 0, dxz, dxw, z2 - x2 + w2, 0}});
+        }
         root = mul(root, scale(-1, -1, 1));
         root = mul(root, rotY(90.0f * kDeg));
     } else if (d.special == SpMinecart) {

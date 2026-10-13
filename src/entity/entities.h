@@ -256,6 +256,7 @@ struct Entity {
     bool furnaceFuel = false;
     int fuse = -1;  // primed TNT (DATA_FUSE_ID) and TNT minecarts (entity event 70: 80 ticks), counted down each tick
     float paddlePos[2] = {};  // AbstractBoat.paddlePositions (radians)
+    float bubbleMultiplier = 0, bubbleAngle = 0, bubbleAngleO = 0;  // AbstractBoat.tickBubbleColumn (client side)
     // Player skin (default skins chosen from the UUID like the game).
     bool slim = false;
     int skin = -1;
