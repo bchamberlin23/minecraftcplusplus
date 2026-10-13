@@ -7,7 +7,15 @@
 
 enum RenderLayer : u8 { LayerOpaque = 0, LayerCutout = 1, LayerTranslucent = 2, LayerCount = 3 };
 enum BlockKind : u8 { KindAir = 0, KindCube = 1, KindModel = 2 };
-enum Tint : u8 { TintNone = 0, TintGrass, TintFoliage, TintBirch, TintSpruce, TintWater, TintLilyPad, TintRedstone };
+// Block tints (BlockColors): fixed entries of the colour table (mesher.h ColorTable). Grass, foliage, water and dry
+// foliage take the biome's colour in the world; redstone wire by its power, stems by their age.
+enum Tint : u8 {
+    TintNone = 0, TintGrass, TintFoliage, TintBirch, TintSpruce, TintWater, TintLilyPad, TintDryFoliage, TintAttachedStem,
+    TintRedstone,                // + power 0..15
+    TintStem = TintRedstone + 16,  // + age 0..7
+    TintCount = TintStem + 8
+};
+u32 fixedTintRgb(u8 tint);  // 0xRRGGBB (biome tints: their defaults)
 
 // Face order everywhere: 0 down(-Y) 1 up(+Y) 2 north(-Z) 3 south(+Z) 4 west(-X) 5 east(+X).
 struct CubeFace {

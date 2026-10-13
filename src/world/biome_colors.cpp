@@ -1,6 +1,7 @@
 #include "world/biome_colors.h"
 
 #include "assets/asset_source.h"
+#include "assets/assets.h"
 #include "mesh/mesher.h"
 #include "world/world.h"
 
@@ -12,7 +13,7 @@
 
 struct BiomeColors::Def {
     float temperature = 0.8f, downfall = 0.4f;
-    i64 grass = -1, foliage = -1, water = 0x3F76E4;  // -1: from the colormap
+    i64 grass = -1, foliage = -1, dryFoliage = -1, water = 0x3F76E4;  // -1: from the colormap
     std::string grassModifier;
 };
 
@@ -54,6 +55,7 @@ bool BiomeColors::init(const fs::path& jar) {
         for (std::string& f : data.list("data/" + ns + "/worldgen/biome/", ".json")) files.push_back(std::move(f));
     files.push_back("assets/minecraft/textures/colormap/grass.png");
     files.push_back("assets/minecraft/textures/colormap/foliage.png");
+    files.push_back("assets/minecraft/textures/colormap/dry_foliage.png");
     for (const std::string& file : files) {
         std::string_view n = file;
         const size_t nsEnd = n.find('/', 5);
@@ -70,6 +72,7 @@ bool BiomeColors::init(const fs::path& jar) {
                 const auto& fx = j["effects"];
                 if (fx.contains("grass_color")) d.grass = parseColor(fx["grass_color"]);
                 if (fx.contains("foliage_color")) d.foliage = parseColor(fx["foliage_color"]);
+                if (fx.contains("dry_foliage_color")) d.dryFoliage = parseColor(fx["dry_foliage_color"]);
                 if (fx.contains("water_color")) d.water = parseColor(fx["water_color"]);
                 d.grassModifier = fx.value("grass_color_modifier", "");
             }
@@ -78,12 +81,13 @@ bool BiomeColors::init(const fs::path& jar) {
             World::biomeId(id);  // known biomes get ids up front
             (*defs_)[id] = d;
         } else if (n == "assets/minecraft/textures/colormap/grass.png" ||
-                   n == "assets/minecraft/textures/colormap/foliage.png") {
+                   n == "assets/minecraft/textures/colormap/foliage.png" ||
+                   n == "assets/minecraft/textures/colormap/dry_foliage.png") {
             if (!assets.read(file, bytes)) continue;
             int w = 0, h = 0, c = 0;
             u8* img = stbi_load_from_memory(bytes.data(), int(bytes.size()), &w, &h, &c, 4);
             if (!img) continue;
-            std::vector<u32>& map = n.ends_with("grass.png") ? grassMap_ : foliageMap_;
+            std::vector<u32>& map = n.ends_with("grass.png") ? grassMap_ : n.ends_with("dry_foliage.png") ? dryFoliageMap_ : foliageMap_;
             map.resize(size_t(w) * h);
             for (size_t i = 0; i < map.size(); ++i)
                 map[i] = (u32(img[i * 4]) << 16) | (u32(img[i * 4 + 1]) << 8) | img[i * 4 + 2];
@@ -106,6 +110,7 @@ u32 BiomeColors::compute(u8 biome, Kind kind) const {
         return c;
     }
     case Foliage: return d.foliage >= 0 ? u32(d.foliage) : colormap(foliageMap_, d.temperature, d.downfall, 0x77AB2F);
+    case DryFoliage: return d.dryFoliage >= 0 ? u32(d.dryFoliage) : colormap(dryFoliageMap_, d.temperature, d.downfall, 0x5C3B32);
     default: return u32(d.water);
     }
 }
@@ -132,7 +137,7 @@ void gatherColumnColors(const World& world, const BiomeColors& colors, int cx, i
     constexpr int kMaxR = 7, kMaxN = 18 + 2 * kMaxR;
     const int kR = gBlendRadius.load(std::memory_order_relaxed), kN = 18 + 2 * kR;
     const int x0 = cx * 16 - 1 - kR, z0 = cz * 16 - 1 - kR;
-    static constexpr u32 kDefaults[BiomeColors::KindCount] = {0x91BD59, 0x77AB2F, 0x3F76E4};
+    static constexpr u32 kDefaults[BiomeColors::KindCount] = {0x91BD59, 0x77AB2F, 0x3F76E4, 0x5C3B32};
     u8 biomes[kMaxN * kMaxN];
     bool any = false;
     for (int z = 0; z < kN; ++z)
@@ -145,7 +150,7 @@ void gatherColumnColors(const World& world, const BiomeColors& colors, int cx, i
         }
     for (int k = 0; k < BiomeColors::KindCount; ++k) {
         if (!any) {
-            std::fill(std::begin(out.index[k]), std::end(out.index[k]), u16(k == 0 ? 1 : k == 1 ? 2 : 5));
+            std::fill(std::begin(out.index[k]), std::end(out.index[k]), u16(k == 0 ? TintGrass : k == 1 ? TintFoliage : k == 2 ? TintWater : TintDryFoliage));
             continue;
         }
         u32 rgb[kMaxN * kMaxN][3];

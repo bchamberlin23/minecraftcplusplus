@@ -76,16 +76,6 @@ std::string stripNs(std::string_view s) {
     return std::string(s);
 }
 
-u8 tintForBlock(std::string_view n) {
-    if (n == "birch_leaves") return TintBirch;
-    if (n == "spruce_leaves") return TintSpruce;
-    if (n.ends_with("leaves") || n == "vine") return TintFoliage;
-    if (n == "water" || n == "bubble_column" || n == "water_cauldron") return TintWater;
-    if (n == "lily_pad") return TintLilyPad;
-    if (n == "redstone_wire") return TintRedstone;
-    if (n.ends_with("_stem")) return TintFoliage;
-    return TintGrass;
-}
 
 float num(const json& v, float def) { return v.is_number() ? v.get<float>() : def; }
 F3 vec3(const json& v, F3 def) {
@@ -183,6 +173,33 @@ bool condMatch(const Cond& c, const Props& props) {
         if (!value || std::find(vals.begin(), vals.end(), *value) == vals.end()) return false;
     }
     return true;
+}
+
+// BlockColors.createDefault: the tint of a face's tint layer (tintindex); blocks not listed there stay untinted.
+u8 tintForBlock(std::string_view n, const Props& props, int layer) {
+    if (layer < 0) return TintNone;
+    auto value = [&](std::string_view key) {
+        for (const auto& [k, v] : props)
+            if (k == key) return std::clamp(std::atoi(std::string(v).c_str()), 0, 15);
+        return 0;
+    };
+    if (n == "pink_petals" || n == "wildflowers") return layer == 1 ? TintGrass : TintNone;  // blank layer, then grass
+    if (layer != 0) return TintNone;
+    if (n == "grass_block" || n == "fern" || n == "short_grass" || n == "potted_fern" || n == "bush" || n == "large_fern" ||
+        n == "tall_grass" || n == "sugar_cane")
+        return TintGrass;
+    if (n == "spruce_leaves") return TintSpruce;
+    if (n == "birch_leaves") return TintBirch;
+    if (n == "oak_leaves" || n == "jungle_leaves" || n == "acacia_leaves" || n == "dark_oak_leaves" || n == "vine" ||
+        n == "mangrove_leaves")
+        return TintFoliage;
+    if (n == "leaf_litter") return TintDryFoliage;
+    if (n == "water" || n == "bubble_column" || n == "water_cauldron") return TintWater;
+    if (n == "redstone_wire") return u8(TintRedstone + value("power"));
+    if (n == "attached_melon_stem" || n == "attached_pumpkin_stem") return TintAttachedStem;
+    if (n == "melon_stem" || n == "pumpkin_stem") return u8(TintStem + std::min(value("age"), 7));
+    if (n == "lily_pad") return TintLilyPad;
+    return TintNone;
 }
 
 bool caseMatch(const Case& c, const Props& props) {
@@ -473,7 +490,7 @@ struct BlockRegistry::Impl {
         return &defs.emplace(name, std::move(d)).first->second;
     }
 
-    bool bakeFace(const Element& e, int d, const ModelRef& r, std::string_view blockName, ModelQuad& q) const {
+    bool bakeFace(const Element& e, int d, const ModelRef& r, std::string_view blockName, const Props& props, ModelQuad& q) const {
         const Face& f = e.faces[d];
         F3 lo = e.from * (1.0f / 16.0f), hi = e.to * (1.0f / 16.0f);
         int axis = d < 2 ? 1 : d < 4 ? 2 : 0;
@@ -540,7 +557,7 @@ struct BlockRegistry::Impl {
             q.uv[s][0] = uv[s][0], q.uv[s][1] = uv[s][1];
         }
         q.tex = u16(f.tex);
-        q.tint = f.tintIndex >= 0 ? tintForBlock(blockName) : TintNone;
+        q.tint = tintForBlock(blockName, props, f.tintIndex);
         q.layer = texClass[f.tex];
         q.cull = f.cull >= 0 ? i8(dirIndex(rotVariant(kDir[f.cull], r.x, r.y))) : i8(-1);
         float shade;
@@ -560,6 +577,24 @@ BlockRegistry::BlockRegistry() : impl_(std::make_unique<Impl>()) {}
 BlockRegistry::~BlockRegistry() = default;
 
 u32 BlockRegistry::textureCount() const { return impl_->texCount; }
+
+u32 fixedTintRgb(u8 tint) {
+    static constexpr u32 kFixed[TintRedstone] = {0xFFFFFF, 0x91BD59, 0x77AB2F, 0x80A755, 0x619961,
+                                                 0x3F76E4, 0x208030, 0x5C3B32, 0xE0C71C};
+    if (tint < TintRedstone) return kFixed[tint];
+    auto channel = [](float v) { return u32(std::floor(std::clamp(v, 0.0f, 1.0f) * 255.0f)); };
+    if (tint < TintStem) {  // RedStoneWireBlock.COLORS
+        const float power = float(tint - TintRedstone) / 15.0f;
+        const float red = power * 0.6f + (power > 0.0f ? 0.4f : 0.3f);
+        const float green = std::clamp(power * power * 0.7f - 0.5f, 0.0f, 1.0f), blue = std::clamp(power * power * 0.6f - 0.7f, 0.0f, 1.0f);
+        return channel(red) << 16 | channel(green) << 8 | channel(blue);
+    }
+    if (tint < TintCount) {  // BlockTintSources.stem
+        const u32 age = tint - TintStem;
+        return (age * 32) << 16 | (255 - age * 8) << 8 | (age * 4);
+    }
+    return 0xFFFFFF;
+}
 u16 BlockRegistry::textureLayer(std::string_view name) const {
     auto it = impl_->texIndex.find(std::string(name));
     return it == impl_->texIndex.end() ? 0 : it->second;
@@ -1168,7 +1203,7 @@ u16 BlockRegistry::create(std::string_view key) {
                     rot = a == kU[t] ? 0 : a == kV[t] ? 1 : a == -kU[t] ? 2 : 3;
                 }
                 rot = (rot + f.rot) & 3;
-                bi.faces[t] = {u16(f.tex), u8(rot), f.tintIndex >= 0 ? tintForBlock(shortName) : u8(TintNone)};
+                bi.faces[t] = {u16(f.tex), u8(rot), tintForBlock(shortName, props, f.tintIndex)};
                 layer = std::max(layer, im.texClass[f.tex]);
             }
             bi.layer = layer;
@@ -1183,7 +1218,7 @@ u16 BlockRegistry::create(std::string_view key) {
                 for (const Element& e : im.models[r.model].elements) {
                     for (int dir = 0; dir < 6; ++dir) {
                         ModelQuad q;
-                        if ((e.faceMask & (1 << dir)) && im.bakeFace(e, dir, r, shortName, q)) {
+                        if ((e.faceMask & (1 << dir)) && im.bakeFace(e, dir, r, shortName, props, q)) {
                             quads_.push_back(q);
                             layer = std::max(layer, q.layer);
                         }

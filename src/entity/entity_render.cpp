@@ -2643,7 +2643,6 @@ void EntityRenderer::emitBlock(u16 block, const Mat34& mm, u32 light, u32 overla
     const M34& m = *reinterpret_cast<const M34*>(&mm);
     BlockRegistry& reg = world_.registry();
     const BlockInfo& b = reg.infos()[block];
-    static const u32 kTints[8] = {0xFFFFFF, 0x91BD59, 0x77AB2F, 0x80A755, 0x619961, 0x3F76E4, 0x208030, 0x8B1A00};
     static const float kNormals[6][3] = {{0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}};
     if (b.kind == KindCube) {
         for (int f = 0; f < 6; ++f) {
@@ -2675,7 +2674,7 @@ void EntityRenderer::emitBlock(u16 block, const Mat34& mm, u32 light, u32 overla
             }
             float n[3];
             xformDir(m, nrm, n);
-            emitFree(pos, uv, n, face.tex, abgr(kTints[face.tint & 7]), light, overlay);
+            emitFree(pos, uv, n, face.tex, abgr(fixedTintRgb(face.tint)), light, overlay);
         }
     } else if (b.kind == KindModel) {
         for (u32 i = 0; i < b.quadCount; ++i) {
@@ -2691,7 +2690,7 @@ void EntityRenderer::emitBlock(u16 block, const Mat34& mm, u32 light, u32 overla
             const float nl[3] = {e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]};
             float n[3];
             xformDir(m, nl, n);
-            emitFree(pos, uv, n, q.tex, abgr(kTints[q.tint & 7]), light, overlay);
+            emitFree(pos, uv, n, q.tex, abgr(fixedTintRgb(q.tint)), light, overlay);
         }
     }
 }

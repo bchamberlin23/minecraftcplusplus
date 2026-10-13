@@ -1623,7 +1623,6 @@ int partIndex(const ent::Model& m, std::string_view name) {
 // Block faces / model quads of a block state in block-local [0,1] space (items shown as blocks).
 void emitBlockGeometry(const BlockRegistry& reg, u16 block, const M34& m, u32 light, std::vector<BeQuad>& out) {
     const BlockInfo& b = reg.infos()[block];
-    static const u32 kTints[8] = {0xFFFFFF, 0x91BD59, 0x77AB2F, 0x80A755, 0x619961, 0x3F76E4, 0x208030, 0x8B1A00};
     static const float kNormals[6][3] = {{0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}};
     // Double-sided (both windings): the block's own face winding does not matter here.
     auto push = [&](const float pos[4][3], const float uv[4][2], const float n[3], u32 tex, u32 tint) {
@@ -1633,7 +1632,7 @@ void emitBlockGeometry(const BlockRegistry& reg, u16 block, const M34& m, u32 li
             q.uv[c][0] = uv[c][0], q.uv[c][1] = uv[c][1];
         }
         q.normal = packNormal(m, n);
-        q.color = abgr(kTints[tint & 7]);
+        q.color = abgr(fixedTintRgb(u8(tint)));
         q.light = light;
         q.tex = tex;
         out.push_back(q);

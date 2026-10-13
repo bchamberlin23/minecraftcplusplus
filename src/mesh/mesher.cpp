@@ -91,9 +91,13 @@ void fillBorder(const World& world, int cx, int sy, int cz, int dx, int dy, int 
 
 struct ColorTableData {
     std::mutex mutex;
-    std::vector<u32> colors{0xFFFFFF, 0x91BD59, 0x77AB2F, 0x80A755, 0x619961, 0x3F76E4, 0x208030, 0x8B1A00};
+    std::vector<u32> colors = [] {
+        std::vector<u32> c(TintCount);
+        for (int t = 0; t < TintCount; ++t) c[t] = fixedTintRgb(u8(t));
+        return c;
+    }();
     std::unordered_map<u32, u16> indices;
-    std::atomic<size_t> size{8};
+    std::atomic<size_t> size{TintCount};
 };
 ColorTableData& colorTable() {
     static ColorTableData t;
@@ -101,7 +105,10 @@ ColorTableData& colorTable() {
 }
 
 // Which biome colour a face tint takes (-1: a fixed tint).
-inline int biomeKind(u32 tint) { return tint == 1 ? BiomeColors::Grass : tint == 2 ? BiomeColors::Foliage : tint == 5 ? BiomeColors::Water : -1; }
+inline int biomeKind(u32 tint) {
+    return tint == TintGrass ? BiomeColors::Grass : tint == TintFoliage ? BiomeColors::Foliage : tint == TintWater ? BiomeColors::Water
+         : tint == TintDryFoliage ? BiomeColors::DryFoliage : -1;
+}
 
 }  // namespace
 
@@ -487,7 +494,7 @@ void meshGrid(const u16* ids, const u8* light, const BlockRegistry& registry, bo
                         }
                         for (int w = 0; w < 6; ++w) sc.model.push_back(u32(pos[w * 2]) | (u32(pos[w * 2 + 1]) << 16));
                         for (int w = 0; w < 4; ++w) sc.model.push_back(u32(uv[w * 2]) | (u32(uv[w * 2 + 1]) << 16));
-                        sc.model.push_back(u32(m.tex) | (u32(m.tint) << 16) | (u32(m.shade) << 19));
+                        sc.model.push_back(u32(m.tex) | (u32(m.tint & 7) << 16) | (u32(m.shade) << 19));
                         const int kind = biomeKind(m.tint);
                         const u32 color = colors && kind >= 0 ? colors->index[kind][(z + 1) * 18 + (x + 1)] : m.tint;
                         sc.model.push_back((light ? light[p] : kFullSky) | (color << 8));

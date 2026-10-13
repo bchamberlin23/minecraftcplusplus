@@ -183,12 +183,12 @@ void Terrain::buildRegion(const CoarseJob& job, CoarseBuild& out, bool lockWorld
         ColumnColors& c = nodeColors[level][node];
         if (nodeColorsDone[level][node]) return c;
         nodeColorsDone[level][node] = 1;
-        static constexpr u16 kDefaults[BiomeColors::KindCount] = {1, 2, 5};
+        static constexpr u16 kDefaults[BiomeColors::KindCount] = {TintGrass, TintFoliage, TintWater, TintDryFoliage};
         const int s = 1 << level;
         std::shared_lock<std::shared_mutex> lock;
         if (lockWorld && job.source) lock = std::shared_lock(world_.mutex());
         u8 lastBiome = World::kUnknownBiome;
-        u16 last[BiomeColors::KindCount] = {kDefaults[0], kDefaults[1], kDefaults[2]};
+        u16 last[BiomeColors::KindCount] = {kDefaults[0], kDefaults[1], kDefaults[2], kDefaults[3]};
         for (int pz = -1; pz <= 16; ++pz)
             for (int px = -1; px <= 16; ++px) {
                 const int lx = std::clamp((nx * 16 + px) * s + s / 2, 0, 511), lz = std::clamp((nz * 16 + pz) * s + s / 2, 0, 511);

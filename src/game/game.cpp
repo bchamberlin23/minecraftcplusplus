@@ -15,7 +15,6 @@ namespace {
 constexpr double kPi = 3.14159265358979;
 constexpr int kDir[6][3] = {{0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}};
 constexpr const char* kFaceName[6] = {"down", "up", "north", "south", "west", "east"};
-constexpr u32 kTints[8] = {0xFFFFFF, 0x91BD59, 0x77AB2F, 0x80A755, 0x619961, 0x3F76E4, 0x208030, 0x8B1A00};
 
 u32 abgr(u32 rgb, u8 alpha) { return (u32(alpha) << 24) | ((rgb & 0xFF) << 16) | (rgb & 0xFF00) | ((rgb >> 16) & 0xFF); }
 }  // namespace
@@ -848,7 +847,7 @@ void Game::buildOverlay() {
         const float sx = x0 + slot * i;
         const BlockInfo& b = registry_.infos()[hotbar_[i]];
         if (hotbar_[i]) {
-            const u32 tint = b.kind == KindCube ? kTints[b.faces[3].tint & 7] : 0xFFFFFF;
+            const u32 tint = b.kind == KindCube ? fixedTintRgb(b.faces[3].tint) : 0xFFFFFF;
             quad(sx + pad, y0 + pad, sx + slot - pad, y0 + slot - pad, b.icon, abgr(tint, 255));
         }
         if (i == selected_) rect(sx, y0 - 1, sx + slot, y0 + slot + 1, 0xFFFFFFFF);

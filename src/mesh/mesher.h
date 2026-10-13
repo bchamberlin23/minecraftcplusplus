@@ -16,8 +16,8 @@ constexpr int kPad = 18;
 constexpr int kPadCells = kPad * kPad * kPad;
 inline int padIndex(int x, int y, int z) { return (y + 1) * kPad * kPad + (z + 1) * kPad + (x + 1); }
 
-// Tint colours that quads index (16 bits). Entries 0..7 are the fixed tints of BlockInfo faces (0 = none;
-// 1 grass, 2 foliage and 5 water are their defaults), biome colours are added on demand. Thread-safe and
+// Tint colours that quads index (16 bits). Entries 0..TintCount-1 are the fixed tints of BlockInfo faces (assets.h
+// Tint; the biome tints hold their defaults), biome colours are added on demand. Thread-safe and
 // append-only: the renderer uploads entries as the table grows.
 class ColorTable {
 public:

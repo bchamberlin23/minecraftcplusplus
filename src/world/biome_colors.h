@@ -13,7 +13,7 @@ class World;
 
 class BiomeColors {
 public:
-    enum Kind { Grass, Foliage, Water, KindCount };
+    enum Kind { Grass, Foliage, Water, DryFoliage, KindCount };
 
     BiomeColors();
     ~BiomeColors();
@@ -25,7 +25,7 @@ private:
     struct Def;
     u32 compute(u8 biome, Kind kind) const;
 
-    std::vector<u32> grassMap_, foliageMap_;  // 256x256 colormaps, 0xRRGGBB
+    std::vector<u32> grassMap_, foliageMap_, dryFoliageMap_;  // 256x256 colormaps, 0xRRGGBB
     std::unique_ptr<std::unordered_map<std::string, Def>> defs_;
     mutable std::array<std::atomic<u32>, 256 * KindCount> cache_{};  // bit 31 set = computed
 };

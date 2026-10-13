@@ -118,7 +118,6 @@ const std::pair<const char*, Opt> kOptions[] = {
     {"trail", Opt::Trail}, {"item", Opt::Item}, {"vibration", Opt::Vibration}, {"geyser", Opt::Geyser},
     {"geyser_plume", Opt::Geyser}, {"geyser_base", Opt::GeyserBase}, {"geyser_poof", Opt::GeyserBase}};
 
-constexpr u32 kTints[8] = {0xFFFFFF, 0x91BD59, 0x77AB2F, 0x80A755, 0x619961, 0x3F76E4, 0x208030, 0x8B1A00};
 
 u32 abgrF(float r, float g, float b, float a) {
     auto c = [](float v) { return u32(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
@@ -371,7 +370,7 @@ int Particles::blockSprite(u16 block, u32& tint) {
         const BlockInfo& bi = registry_.infos()[block];
         u8 t = bi.kind == KindCube ? bi.faces[1].tint : 0;
         if (bi.kind == KindModel && bi.quadCount) t = registry_.modelQuad(bi.quadFirst).tint;
-        blockTints_[block] = kTints[t & 7];
+        blockTints_[block] = fixedTintRgb(t);
         if (name == "minecraft:grass_block") blockTints_[block] = 0xFFFFFF;  // its particle texture is dirt
     }
     tint = blockTints_[block];
