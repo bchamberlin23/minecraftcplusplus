@@ -69,8 +69,20 @@ void anvilSendName(UiState& s, Menu& m) {  // AnvilScreen.onNameChanged
     if (in.empty()) return;
     std::string newName = anvil.name.value;
     if (!in.hasCustomName && newName == hoverNameOf(s, in)) newName.clear();
-    if (anvil.sentValid && newName == anvil.sent) return;
-    anvil.sent = newName, anvil.sentValid = true;
+    // AnvilMenu.setItemName / validateName: StringUtil.filterText (no section signs, control characters or DEL), at
+    // most 50 UTF-16 units, sent only when that differs from the menu's name (the packet carries the text as typed)
+    std::string filtered;
+    int units = 0;
+    for (size_t i = 0; i < newName.size();) {
+        const u8 c = u8(newName[i]);
+        const size_t len = c < 0x80 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
+        const bool section = len == 2 && i + 1 < newName.size() && c == 0xC2 && u8(newName[i + 1]) == 0xA7;
+        if (!section && !(len == 1 && (c < 0x20 || c == 0x7F))) filtered.append(newName, i, len), units += len == 4 ? 2 : 1;
+        i += len;
+    }
+    if (units > 50) return;
+    if (anvil.sentValid && filtered == anvil.sent) return;
+    anvil.sent = filtered, anvil.sentValid = true;
     if (!s.online()) return;
     net::Writer w;
     w.str(newName);
