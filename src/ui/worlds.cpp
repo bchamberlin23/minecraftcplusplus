@@ -180,8 +180,9 @@ void deleteWorld(State& s) {
                         openWorlds(*p);
                     } else {
                         LOG("ui: could not delete %s", utf8(dir).c_str());
-                        showMessage(*p, tr(*p, "selectWorld.delete_failure"), Text(utf8(dir)), p->res.translate("gui.back"),
-                                    [p] { openWorlds(*p); });
+                        // SystemToast.onWorldDeleteFailure (WORLD_ACCESS_FAILURE), then the reloaded list.
+                        showToast(tr(*p, "selectWorld.delete_failure"), Text(utf8(dir.filename())), "world_access_failure");
+                        openWorlds(*p);
                     }
                 },
                 Screen::Worlds);
