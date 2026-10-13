@@ -315,10 +315,9 @@ void openAdvancementsFromPause(UiState& s);  // advancements.cpp
 void openStatsFromPause(UiState& s);          // stats.cpp
 static std::vector<int> qcSlots;
 
-void Ui::State::containerClick(int slot, int button, int input) {
-    Menu& m = activeMenu();
-    const std::vector<ItemStack> before = m.slots;
-    Sim sim{*this, m, carried, creative()};
+// The menu's slot rules for the open menu (result slots, stations, the player inventory's start).
+static Sim makeSim(Ui::State& s, Menu& m, ItemStack& carried, bool creative) {
+    Sim sim{s, m, carried, creative};
     sim.playerStart = layoutFor(m).playerStart;
     if (m.type < 0) sim.resultSlot = 0, sim.craftGrid = {1, 2, 3, 4};
     else if (m.typeName == "crafting") sim.resultSlot = 0, sim.craftGrid = {1, 2, 3, 4, 5, 6, 7, 8, 9};
@@ -327,6 +326,13 @@ void Ui::State::containerClick(int slot, int button, int input) {
         if (const StationDef* d = stationFor(m.typeName)) {
             sim.station = d, sim.resultSlot = d->resultSlot, sim.partialResult = d->partialResult, sim.pickAll = d->pickAll;
         }
+    return sim;
+}
+
+void Ui::State::containerClick(int slot, int button, int input) {
+    Menu& m = activeMenu();
+    const std::vector<ItemStack> before = m.slots;
+    Sim sim = makeSim(*this, m, carried, creative());
     const int n = int(m.slots.size());
     auto valid = [&](int i) { return i >= 0 && i < n; };
     bundleSlotClicked(*this, m, slot, input);  // item_ui.h: BundleMouseActions.onSlotClicked
@@ -784,11 +790,9 @@ void Ui::State::drawScreen(Canvas& c) {
     if (isQuickCrafting && hoveredSlot >= 0 && !carried.empty() && size_t(hoveredSlot) < m.slots.size() &&
         std::find(quickCraftSlots.begin(), quickCraftSlots.end(), hoveredSlot) == quickCraftSlots.end() &&
         (carried.count > int(quickCraftSlots.size()) || quickCraftType == 2)) {
-        const ItemStack& cur = m.slots[size_t(hoveredSlot)];
-        const bool resultSlot = (m.type < 0 || m.typeName == "crafting") ? hoveredSlot == 0
-                                : (m.typeName == "furnace" || m.typeName == "smoker" || m.typeName == "blast_furnace") && hoveredSlot == 2;
-        if (!resultSlot && (cur.empty() || (cur.sameItemSameComponents(carried) && cur.count <= items.maxStack(carried))))
-            quickCraftSlots.push_back(hoveredSlot);
+        // AbstractContainerScreen.shouldAddSlotToQuickCraft: canItemQuickReplace, Slot.mayPlace (menu.canDragTo: always)
+        Sim sim = makeSim(*this, m, carried, creative());
+        if (sim.canQuickReplace(hoveredSlot, carried) && sim.mayPlace(hoveredSlot, carried)) quickCraftSlots.push_back(hoveredSlot);
     }
     if (hoveredSlot >= 0)
         blitSprite(c, sprites.sprite("container/slot_highlight_back"), left + float(l.slots[size_t(hoveredSlot)].x) - 4,
@@ -809,7 +813,7 @@ void Ui::State::drawScreen(Canvas& c) {
             quickCraftSlots.size() > 1) {
             const int carry = shown.empty() ? 0 : shown.count;
             const int per = quickCraftType == 0 ? carried.count / int(quickCraftSlots.size()) : quickCraftType == 1 ? 1 : items.maxStack(carried);
-            const int mx = items.maxStack(carried);
+            const int mx = makeSim(*this, m, carried, creative()).slotMax(int(i), carried);  // min(item max, Slot.getMaxStackSize)
             const int nc = std::min(per + carry, mx);
             shown = carried.withCount(nc);
             if (per + carry > mx) cnt = "\xC2\xA7" "e" + std::to_string(nc), countOverride = cnt.c_str();  // clamped
@@ -839,12 +843,14 @@ void Ui::State::drawScreen(Canvas& c) {
         bool none = false;
         if (isQuickCrafting && quickCraftSlots.size() > 1) {  // recalculateQuickCraftRemaining
             int left2 = quickCraftType == 2 ? items.maxStack(carried) : carried.count;  // cloning: a full stack, untouched
-            if (quickCraftType != 2)
+            if (quickCraftType != 2) {
+                const Sim sim = makeSim(*this, m, carried, creative());
                 for (int q : quickCraftSlots) {
                     const int carry = m.slots[size_t(q)].empty() ? 0 : m.slots[size_t(q)].count;
                     const int per = quickCraftType == 0 ? carried.count / int(quickCraftSlots.size()) : 1;
-                    left2 -= std::min(per + carry, items.maxStack(carried)) - carry;
+                    left2 -= std::min(per + carry, sim.slotMax(q, carried)) - carry;  // min(item max, Slot.getMaxStackSize)
                 }
+            }
             none = left2 <= 0;  // copyWithCount(0) is empty: nothing at the cursor
             remaining = std::to_string(left2);
         }
@@ -1004,12 +1010,16 @@ void Ui::State::screenInput(const Window::InputEvent& e) {
         const int slotId = outside ? -999 : slot;
         if (doubleClick && slot >= 0 && e.code == 0) {
             if (shift) {
-                if (!lastQuickMoved.empty())
+                // Slot.container identity: the result, the menu's own container (the crafting grid), the player's
+                // inventory (with the armour and offhand slots of the inventory menu)
+                Sim sim = makeSim(*this, m, carried, creative());
+                auto containerOf = [&](int i) { return i == sim.resultSlot ? 0 : (i < l.playerStart && !(m.type < 0 && i >= 5)) ? 1 : 2; };
+                if (!lastQuickMoved.empty() && sim.canPickAll(slot))
                     for (size_t i = 0; i < m.slots.size(); ++i)
-                        if (!m.slots[i].empty() && m.slots[i].sameItemSameComponents(lastQuickMoved) &&
-                            ((int(i) < l.playerStart) == (slot < l.playerStart)))
+                        if (!m.slots[i].empty() && containerOf(int(i)) == containerOf(slot) && sim.mayPickup(int(i)) &&
+                            m.slots[i].sameItemSameComponents(lastQuickMoved) && m.slots[i].count <= items.maxStack(lastQuickMoved))
                             containerClick(int(i), 0, QuickMove);
-            } else {
+            } else if (makeSim(*this, m, carried, creative()).canPickAll(slot)) {  // canTakeItemForPickAll(EMPTY, slot)
                 containerClick(slot, 0, PickupAll);
             }
             doubleClick = false;
