@@ -220,6 +220,12 @@ private:
     };
     std::vector<BlobShadow> blobs_;
     u32 blobFirst_ = 0, blobCount_ = 0;
+    // Translucent free quads (XP orbs, itemEntityTranslucentCull): emitted after the blob shadows, drawn with them.
+    struct LateFree {
+        float pos[4][3], uv[4][2], motion[3];
+        u32 color, light;
+    };
+    std::vector<LateFree> lateFree_;
     bool blobShadows_ = true;
     int skyDarken_ = 0;
     float ambient_ = 0;

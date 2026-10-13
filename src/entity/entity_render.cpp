@@ -2703,6 +2703,33 @@ void EntityRenderer::freeEntity(const Entity& e, const TypeDef& d, float pt, con
         emitBlock(block, *reinterpret_cast<const Mat34*>(&m), light, overlay);
         return;
     }
+    if (d.special == SpXpOrb) {
+        // ExperienceOrbRenderer: 0.1 up, camera-facing, 0.3 x (-0.5 .. 0.5, -0.25 .. 0.75); the icon by value; red and
+        // blue cycling with the age over full green, alpha 128 (translucent).
+        const TexRect& t = assets_.rect(d.sprite);
+        const i64 value = dataInt(e, "DATA_VALUE");
+        static constexpr int kIconAt[10] = {3, 7, 17, 37, 73, 149, 307, 617, 1237, 2477};  // ExperienceOrb.getIcon
+        int icon = 0;
+        while (icon < 10 && value >= kIconAt[icon]) ++icon;
+        const float up[3] = {camRight[3], camRight[4], camRight[5]};
+        LateFree q;
+        const float sx[4] = {-0.5f, 0.5f, 0.5f, -0.5f}, sy[4] = {-0.25f, -0.25f, 0.75f, 0.75f};
+        for (int k = 0; k < 4; ++k)
+            for (int a = 0; a < 3; ++a)
+                q.pos[k][a] = float(p[a]) + (a == 1 ? 0.1f : 0.0f) + (camRight[a] * sx[k] + up[a] * sy[k]) * 0.3f;
+        const float u0 = t.u0 + float(icon % 4) * 0.25f * t.du, v0 = t.v0 + float(icon / 4) * 0.25f * t.dv;
+        const float u1 = u0 + 0.25f * t.du, v1 = v0 + 0.25f * t.dv;
+        const float uv[4][2] = {{u0, v1}, {u1, v1}, {u1, v0}, {u0, v0}};
+        std::memcpy(q.uv, uv, sizeof(q.uv));
+        const float rr = (float(e.age) + pt) / 2.0f;
+        const u32 rc = u32((std::sin(rr) + 1.0f) * 0.5f * 255.0f), bc = u32((std::sin(rr + kPi * 4.0f / 3.0f) + 1.0f) * 0.1f * 255.0f);
+        q.color = 0x80000000u | bc << 16 | 0xFF00u | rc, q.light = light | 512u;
+        std::copy(freeMotion_, freeMotion_ + 3, q.motion);
+        const float n[3] = {0, 1, 0};
+        if (pack_ || shadowOnly_) emitFree(q.pos, q.uv, n, 0xFFFFFFFF, q.color, q.light, 0);
+        else lateFree_.push_back(q);
+        return;
+    }
     if (d.kind == Kind::Sprite) {
         // ThrownItemRenderer: a camera-facing item sprite (GROUND transform: 0.5 blocks, centre 2/16 up).
         const TexRect& t = assets_.rect(d.sprite);
@@ -2713,12 +2740,9 @@ void EntityRenderer::freeEntity(const Entity& e, const TypeDef& d, float pt, con
         const float sx[4] = {-0.5f, 0.5f, 0.5f, -0.5f}, sy[4] = {-0.5f, -0.5f, 0.5f, 0.5f};
         for (int k = 0; k < 4; ++k)
             for (int a = 0; a < 3; ++a) pos[k][a] = c[a] + (camRight[a] * sx[k] + up[a] * sy[k]) * size;
-        float du = t.du, dv = t.dv;
-        if (d.special == SpXpOrb) du *= 0.25f, dv *= 0.25f;
-        const float uv[4][2] = {{t.u0, t.v0 + dv}, {t.u0 + du, t.v0 + dv}, {t.u0 + du, t.v0}, {t.u0, t.v0}};
+        const float uv[4][2] = {{t.u0, t.v0 + t.dv}, {t.u0 + t.du, t.v0 + t.dv}, {t.u0 + t.du, t.v0}, {t.u0, t.v0}};
         const float n[3] = {0, 1, 0};
-        const u32 color = d.special == SpXpOrb ? abgr(0xB0FF40) : kWhite;
-        emitFree(pos, uv, n, 0xFFFFFFFF, color, light | 512u, 0);
+        emitFree(pos, uv, n, 0xFFFFFFFF, kWhite, light | 512u, 0);
         return;
     }
     // ItemEntityRenderer: bob and spin, GROUND display transform; several copies for larger stacks.
@@ -2870,6 +2894,7 @@ void EntityRenderer::build(const PassContext& ctx) {
     if ((entities.empty() && !localPlayer_ && !localShadow_) || !mapped_) return;
     frameBase_ = mapped_ + u64(ctx.frame) * kFrameBytes;
     matCount_ = instCount_ = refCount_ = freeCount_ = 0;
+    lateFree_.clear();
     pack_ = ctx.pack;
     translucent_.clear();
     additive_.clear();
@@ -3120,6 +3145,12 @@ void EntityRenderer::build(const PassContext& ctx) {
     camCutout_ = refCount_, camFree_ = freeCount_, camTranslucent_ = u32(translucent_.size() / 2);
     blobFirst_ = freeCount_;
     if (!pack_) emitBlobShadows(cam);
+    for (const LateFree& q : lateFree_) {
+        static constexpr float kUp[3] = {0, 1, 0};
+        std::copy(q.motion, q.motion + 3, freeMotion_);
+        emitFree(q.pos, q.uv, kUp, 0xFFFFFFFF, q.color, q.light, 0);
+    }
+    lateFree_.clear();
     blobCount_ = freeCount_ - blobFirst_;
     shadowOnly_ = true;
     for (const auto& [e, s] : shadowOnly) drawEntity(*e, s.data());
