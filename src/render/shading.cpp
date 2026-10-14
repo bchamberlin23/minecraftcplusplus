@@ -695,12 +695,12 @@ void Renderer::Shading::prepare(const FrameInput& in) {
     updateMask_ = 0;
     if (cascades) {
         // Near cascades every frame; the outer ones alternate (static terrain, slow sun: invisible lag), and at high frame
-        // rates update no more often than 240 (cascade 1), 120 (2) or 60 (3) times a second: cascade 2 alone took
-        // ~1.3 ms of a 2.3 ms frame at 400 fps.
+        // rates update no more often than 120 (cascade 1), 60 (2) or 30 (3) times a second: cascade 2 alone took
+        // ~1.3 ms of a 2.3 ms frame at 400 fps (at 240 / 120 / 60 the shadows were still 0.53 of a 2.3 ms frame).
         updateMask_ = cascades <= 2 ? 3u : 3u | (cascades == 3 ? (frameCounter_ & 1 ? 4u : 0u) : (frameCounter_ & 1 ? 4u : 8u));
         const double now = nowSeconds();
         for (u32 c = 1; c < cascades; ++c)
-            if (now - cascades_[c].updated < 1.0 / double(480 >> c)) updateMask_ &= ~(1u << c);
+            if (now - cascades_[c].updated < 1.0 / double(240 >> c)) updateMask_ &= ~(1u << c);
         if (r.pt_) {
             // Path tracing traces the opaque shadows inside its radius: the cascades only light translucent surfaces
             // and the volumetrics there, so the stalest one alone is redrawn, at most 60 (the nearest) or 30 times a
