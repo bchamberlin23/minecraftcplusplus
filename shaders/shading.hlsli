@@ -44,7 +44,7 @@ cbuffer PassConstants : register(b3) {
 // Texture slots (Tex in shading.cpp).
 static const uint kTexDepth = 0, kTexAlbedo = 1, kTexNormal = 2, kTexLdrSky = 3, kTexLdrFwd = 4, kTexScene = 5,
                   kTexSceneCopy = 6, kTexLinDepth = 7, kTexVol = 8, kTexHist0 = 9, kTexAo = 11, kTexBloom0 = 12,
-                  kTexMotion = 18, kTexExposure = 19, kTexUi = 20;
+                  kTexMotion = 18, kTexExposure = 19, kTexUi = 20, kTexEntNormal = 21;
 static const uint kRwScene = 0, kRwSceneCopy = 1, kRwLinDepth = 2, kRwVol = 3, kRwHist0 = 4, kRwAo = 6, kRwBloom0 = 7,
                   kRwMotion = 13, kRwExposure = 14;
 // The content of a render pixel was sampled at its centre + this offset (render pixels, +y down): the jitter.

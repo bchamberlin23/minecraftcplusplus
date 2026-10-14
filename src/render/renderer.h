@@ -81,6 +81,9 @@ struct PassContext {
     // +y down) with curUv = SV_Position.xy * motionScale.xy + motionScale.zw and prevUv from prevViewProj; they rebind
     // {colorRtv} before returning. Pixels nobody writes get camera motion. motionRtv.ptr == 0: not available.
     D3D12_CPU_DESCRIPTOR_HANDLE colorRtv{}, motionRtv{}, dsv{};
+    // World stage with motion: the entity normal target (R8G8B8A8, 0.5 + 0.5 n, alpha 1 where written), which the
+    // entity renderer binds third for its opaque draws (DLSS-RR guides); 0: not available.
+    D3D12_CPU_DESCRIPTOR_HANDLE normalRtv{};
     const float* prevViewProj = nullptr;  // camera-relative position (this frame's camera) -> previous clip, unjittered
     float motionScale[4] = {};
     // Shadow casters (pipeline): the cascades drawn this frame (bit c of shadowMask) and their camera-relative

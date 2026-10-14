@@ -601,6 +601,8 @@ void PtComposeCS(uint2 px : SV_DispatchThreadID) {
         float4 e = gTex[kTexLdrFwd].Load(int3(px, 0));
         if (e.a >= 0.499) {
             albedo = srgbToLinear(e.rgb);
+            float4 en = gTex[kTexEntNormal].Load(int3(px, 0));  // the entity pass's normal, where it wrote one
+            if (en.a > 0.5) n = normalize(en.xyz * 2 - 1);
         } else {
             albedo = srgbToLinear(gTex[kTexAlbedo].Load(int3(px, 0)).rgb);
             n = octDecode(gTex[kTexNormal].Load(int3(px, 0)).xy);
@@ -611,6 +613,10 @@ void PtComposeCS(uint2 px : SV_DispatchThreadID) {
     gPtRw[kPtSpecAlbedo][px] = float4(spec, 1);
     gPtRw[kPtNormalRough][px] = float4(n, rough);
     gPtHitDist[px] = 0;  // the water pass writes its reflections' distance
+    if (gPtOpts.x == 9) {  // MCPP_PT_DEBUG=9: the normal guide (0.5 + 0.5 n)
+        gRW[kRwScene][px] = gRW[kRwSceneCopy][px] = float4(n * 0.5 + 0.5, 1);
+        return;
+    }
 
     PtPixel p = ptPixel(px);
     if (!p.traced) {

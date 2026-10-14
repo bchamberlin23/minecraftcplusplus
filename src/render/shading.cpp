@@ -461,6 +461,7 @@ bool Renderer::Shading::createTargets() {
     zero.Format = kLdr;
     ldrSky_ = texture(kLdr, w, h, 1, rt, kSrv, &zero);
     ldrFwd_ = texture(kLdr, w, h, 1, rt, kSrv, &zero);
+    entNormal_ = texture(kLdr, w, h, 1, rt, kSrv, &zero);  // the World stage's entity normals (RR guides)
     scene_ = texture(kHdr, w, h, 1, rt | ua, kSrv, nullptr);
     sceneCopy_ = texture(kHdr, w, h, 1, ua, kSrv, nullptr);
     linDepth_ = texture(DXGI_FORMAT_R32_FLOAT, w, h, 1, ua, kSrv, nullptr);
@@ -472,7 +473,7 @@ bool Renderer::Shading::createTargets() {
         bloom_[i] = texture(kHdr, bloomW_[i], bloomH_[i], 1, ua, kUav, nullptr);
         if (!bloom_[i]) return false;
     }
-    if (!albedo_ || !normal_ || !ao_ || !ldrSky_ || !ldrFwd_ || !scene_ || !sceneCopy_ || !linDepth_ || !vol_ || !hist_[0] ||
+    if (!albedo_ || !normal_ || !ao_ || !ldrSky_ || !ldrFwd_ || !entNormal_ || !scene_ || !sceneCopy_ || !linDepth_ || !vol_ || !hist_[0] ||
         !hist_[1])
         return false;
     srv(TexDepth, sceneDepth_.Get(), DXGI_FORMAT_R32_FLOAT);
@@ -485,6 +486,7 @@ bool Renderer::Shading::createTargets() {
     srv(TexNormal, normal_.Get(), kLdr);
     srv(TexLdrSky, ldrSky_.Get(), kLdr);
     srv(TexLdrFwd, ldrFwd_.Get(), kLdr);
+    srv(TexEntNormal, entNormal_.Get(), kLdr);
     srv(TexScene, scene_.Get(), kHdr);
     srv(TexSceneCopy, sceneCopy_.Get(), kHdr);
     srv(TexLinDepth, linDepth_.Get(), DXGI_FORMAT_R32_FLOAT);
@@ -502,8 +504,9 @@ bool Renderer::Shading::createTargets() {
     uav(RwHist1, hist_[1].Get(), kHdr);
     for (u32 i = 0; i < kBloomLevels; ++i) uav(RwBloom0 + i, bloom_[i].Get(), kHdr);
     const D3D12_CPU_DESCRIPTOR_HANDLE base = rtvHeap_->GetCPUDescriptorHandleForHeapStart();
-    ID3D12Resource* rts[7] = {albedo_.Get(), normal_.Get(), ldrSky_.Get(), ldrFwd_.Get(), scene_.Get(), ui_.Get(), motion_.Get()};
-    for (u32 i = 0; i < 7; ++i) r.device_->CreateRenderTargetView(rts[i], nullptr, {base.ptr + size_t(i) * rtvStride_});
+    ID3D12Resource* rts[8] = {albedo_.Get(), normal_.Get(), ldrSky_.Get(), ldrFwd_.Get(), scene_.Get(), ui_.Get(), motion_.Get(),
+                              entNormal_.Get()};
+    for (u32 i = 0; i < 8; ++i) r.device_->CreateRenderTargetView(rts[i], nullptr, {base.ptr + size_t(i) * rtvStride_});
     historyValid_ = false;
     return true;
 }
@@ -966,16 +969,20 @@ void Renderer::Shading::record(ID3D12GraphicsCommandList* list, const FrameInput
 
     // ---- World stage (entities) -> LDR layer B; moving geometry writes its motion (until MotionCS) ----
     barrier(motion_.Get(), kSrv, kRt);
+    barrier(entNormal_.Get(), kSrv, kRt);
     flushBarriers(list);
     {
         const float clear[4] = {0, 0, 0, 0}, noMotion[4] = {kNoMotion, kNoMotion, 0, 0};
         list->ClearRenderTargetView(rtv(3), clear, 0, nullptr);
         list->ClearRenderTargetView(rtv(6), noMotion, 0, nullptr);
+        list->ClearRenderTargetView(rtv(7), clear, 0, nullptr);  // alpha 0: no entity normal
         const D3D12_CPU_DESCRIPTOR_HANDLE t = rtv(3);
         list->OMSetRenderTargets(1, &t, FALSE, &dsv);
-        pc.colorRtv = t, pc.motionRtv = rtv(6), pc.dsv = dsv;
+        pc.colorRtv = t, pc.motionRtv = rtv(6), pc.normalRtv = rtv(7), pc.dsv = dsv;
         runStage(PassStage::World);
+        pc.normalRtv = {};
     }
+    barrier(entNormal_.Get(), kRt, kSrv);
     mark(list, "entities");
 
     // ---- deferred lighting ----

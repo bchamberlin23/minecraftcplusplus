@@ -21,7 +21,7 @@
 struct Renderer::Shading {
     // Texture / UAV slots of the descriptor tables (shading.hlsli kTex* / kRw*).
     enum Tex : u32 { TexDepth, TexAlbedo, TexNormal, TexLdrSky, TexLdrFwd, TexScene, TexSceneCopy, TexLinDepth, TexVol,
-                     TexHist0, TexHist1, TexAo, TexBloom0, TexMotion = 18, TexExposure, TexUi, TexCount = 24 };
+                     TexHist0, TexHist1, TexAo, TexBloom0, TexMotion = 18, TexExposure, TexUi, TexEntNormal, TexCount = 24 };
     enum Rw : u32 { RwScene, RwSceneCopy, RwLinDepth, RwVol, RwHist0, RwHist1, RwAo, RwBloom0, RwMotion = 13, RwExposure,
                     RwCount = 24 };
     static constexpr u32 kBloomLevels = 6;
@@ -101,7 +101,7 @@ struct Renderer::Shading {
     // Targets. width_ / height_ = render (internal) resolution; outW_ / outH_ = swap chain.
     u32 width_ = 0, height_ = 0, renderW_ = 0, renderH_ = 0, outW_ = 0, outH_ = 0;
     ComPtr<ID3D12Resource> sceneDepth_, motion_, exposureTex_, ui_;
-    ComPtr<ID3D12Resource> albedo_, normal_, ldrSky_, ldrFwd_, scene_, sceneCopy_, linDepth_, vol_, hist_[2], ao_;
+    ComPtr<ID3D12Resource> albedo_, normal_, ldrSky_, ldrFwd_, entNormal_, scene_, sceneCopy_, linDepth_, vol_, hist_[2], ao_;
     ComPtr<ID3D12Resource> bloom_[kBloomLevels];
     u32 bloomW_[kBloomLevels] = {}, bloomH_[kBloomLevels] = {};
     ComPtr<ID3D12Resource> shadowMap_;

@@ -758,12 +758,15 @@ bool EntityRenderer::create(Renderer& r) {
         d.DepthStencilState.DepthWriteMask = blend ? D3D12_DEPTH_WRITE_MASK_ZERO : D3D12_DEPTH_WRITE_MASK_ALL;
         d.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_GREATER_EQUAL;  // reversed Z
         d.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-        d.NumRenderTargets = targets == 0 ? 0 : targets == 1 ? 1 : 2;
+        // targets: 0 shadow, 1 colour, 2 colour + motion + normal (opaque), 3 the same with only colour written
+        d.NumRenderTargets = targets == 0 ? 0 : targets == 1 ? 1 : 3;
         d.RTVFormats[0] = targets ? DXGI_FORMAT_R8G8B8A8_UNORM : DXGI_FORMAT_UNKNOWN;
         if (targets >= 2) {
             d.RTVFormats[1] = RenderPass::kMotionFormat;
+            d.RTVFormats[2] = DXGI_FORMAT_R8G8B8A8_UNORM;
             d.BlendState.IndependentBlendEnable = TRUE;
             d.BlendState.RenderTarget[1].RenderTargetWriteMask = targets == 2 ? D3D12_COLOR_WRITE_ENABLE_ALL : 0;
+            d.BlendState.RenderTarget[2].RenderTargetWriteMask = targets == 2 ? D3D12_COLOR_WRITE_ENABLE_ALL : 0;
         }
         if (targets == 0) {  // shadow caster: depth only, no depth clip, slope bias like the terrain's model shadows
             d.BlendState.RenderTarget[0].RenderTargetWriteMask = 0;
@@ -773,7 +776,7 @@ bool EntityRenderer::create(Renderer& r) {
             d.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
         }
         if (depthOnly) {  // RenderPipelines.WATER_MASK: depth written, no colour
-            for (int t = 0; t < 2; ++t) d.BlendState.RenderTarget[t].RenderTargetWriteMask = 0;
+            for (int t = 0; t < 3; ++t) d.BlendState.RenderTarget[t].RenderTargetWriteMask = 0;
             d.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
         }
         d.DSVFormat = DXGI_FORMAT_D32_FLOAT;
@@ -3453,10 +3456,11 @@ void EntityRenderer::record(const PassContext& ctx) {
         list->SetGraphicsRoot32BitConstants(1, 2, consts, 0);
         list->DrawInstanced(count * 6, 1, 0, 0);
     };
-    const bool mv = ctx.motionRtv.ptr != 0;  // shader pipeline: motion vectors into the second target
+    // shader pipeline: motion vectors into the second target, normals into the third (DLSS-RR guides)
+    const bool mv = ctx.motionRtv.ptr != 0 && ctx.normalRtv.ptr != 0;
     if (mv) {
-        const D3D12_CPU_DESCRIPTOR_HANDLE rts[2] = {ctx.colorRtv, ctx.motionRtv};
-        list->OMSetRenderTargets(2, rts, FALSE, &ctx.dsv);
+        const D3D12_CPU_DESCRIPTOR_HANDLE rts[3] = {ctx.colorRtv, ctx.motionRtv, ctx.normalRtv};
+        list->OMSetRenderTargets(3, rts, FALSE, &ctx.dsv);
     }
     drawRange((mv ? psoCutoutMv_ : psoCutout_).Get(), 0, camCutout_);
     drawRange((mv ? psoFreeMv_ : psoFree_).Get(), 0, camFree_);

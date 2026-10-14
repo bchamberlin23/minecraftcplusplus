@@ -299,6 +299,7 @@ game profile); the Online screen's Friends section has only In-Game Notification
 Path tracing ("Shaders: Path Traced", DXR 1.1 inline queries; DLSS Ray Reconstruction denoises and upscales when
 DLSS is the upscaler): hybrid, the raster G-buffer gives the primary surfaces, lighting is traced within 128..384
 blocks (Low..Ultra; Ultra 3 bounces, 2 spp). Entity hits (mobs, block entities, displays) are textured, lit by their
-light levels and alpha tested. Residuals: RR guides at entity pixels have no normal (the forward layer has none); water
-refraction is screen space; opaque blocks have no specular (vanilla has no specular maps); terminal bounce hits use
+light levels and alpha tested. RR's normal guide at entity pixels comes from the entity pass's third target
+(TexEntNormal; block entities and held items still fall back to the view direction; MCPP_PT_DEBUG=9 shows the guide).
+Residuals: water refraction is screen space; opaque blocks have no specular (vanilla has no specular maps); terminal bounce hits use
 the game's light levels; the built-in denoiser assumes a static world (moving entities ghost without RR).

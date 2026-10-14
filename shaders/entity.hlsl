@@ -76,6 +76,7 @@ struct VSOut {
     float2 rawUv : TEXCOORD1;  // texture coordinates within the entity texture (glint, scrolled textures)
     float4 prevClip : PREVCLIP;  // previous frame's clip position (motion vectors)
     nointerpolation float4 rect : RECT;  // atlas rect of a scrolled texture (light bit 10)
+    float3 n : NORMAL;                   // world normal (DLSS-RR's guide at entity pixels)
 };
 
 static const uint kCorner[6] = {0, 1, 2, 0, 2, 3};
@@ -114,6 +115,7 @@ VSOut finish(float3 rel, float3 n, float2 uv, uint layer, uint color, uint light
     o.rawUv = 0;
     o.prevClip = 0;
     o.rect = 0;
+    o.n = n;
     return o;
 }
 
@@ -235,11 +237,14 @@ float2 motionVector(float4 svPos, float4 prevClip) {
 struct MvOut {
     float4 color : SV_Target0;
     float2 motion : SV_Target1;
+    float4 normal : SV_Target2;  // the world normal (0.5 + 0.5 n), alpha 1: written (the path tracer's RR guides)
 };
-MvOut EntityCutoutMvPS(VSOut i) {
+MvOut EntityCutoutMvPS(VSOut i, bool front : SV_IsFrontFace) {
     MvOut o;
     o.color = shadePipeline(i, 0.1, false);
     o.motion = motionVector(i.pos, i.prevClip);
+    float3 n = dot(i.n, i.n) > 1e-8 ? normalize(i.n) : float3(0, 1, 0);
+    o.normal = float4((front ? n : -n) * 0.5 + 0.5, 1);
     return o;
 }
 float4 EntityTranslucentPS(VSOut i) : SV_Target {
