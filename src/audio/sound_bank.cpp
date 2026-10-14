@@ -35,10 +35,13 @@ bool SoundBank::load(const fs::path& mc, const std::string& indexId) {
                 if (!item.value().is_object()) continue;
                 const std::string key = ns == "minecraft" ? item.key() : ns + ":" + item.key();
                 nlohmann::json& ev = sounds[key];
-                if (!ev.is_object() || item.value().value("replace", false)) ev = {{"sounds", nlohmann::json::array()}};
+                // SoundManager.Preparations.handleRegistration: a new event or a replacing one takes its subtitle, a
+                // pack adding to an existing event keeps the earlier one
+                const bool fresh = !ev.is_object() || item.value().value("replace", false);
+                if (fresh) ev = {{"sounds", nlohmann::json::array()}};
                 if (item.value().contains("sounds") && item.value()["sounds"].is_array())
                     for (const auto& snd : item.value()["sounds"]) ev["sounds"].push_back(snd);
-                if (item.value().contains("subtitle") && item.value()["subtitle"].is_string()) ev["subtitle"] = item.value()["subtitle"];
+                if (fresh && item.value().contains("subtitle") && item.value()["subtitle"].is_string()) ev["subtitle"] = item.value()["subtitle"];
             }
         });
     StringMap<int> fileIds;  // "dig/stone1" / "mod:x" -> file index

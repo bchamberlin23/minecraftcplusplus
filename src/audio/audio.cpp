@@ -624,8 +624,13 @@ void AudioSystem::update(double dt, const CameraState& cam, const WorldInfo& inf
     if (!ready()) return;
     Timer timer;
     info_.gameMode = info.gameMode;
-    if (info.dimension != dimension_) {  // ClientPacketListener.handleRespawn: a new dimension stops the music
-        if (!dimension_.empty()) stopMusic_ = true;
+    if (info.dimension != dimension_) {  // a new level (Minecraft.updateLevelInEngines): SoundManager.stop, all of it
+        if (!dimension_.empty()) {
+            stopMusic_ = true;
+            engine_.stopMatching(-1, -1);
+            jukeboxes_.clear(), entitySounds_.clear(), loops_.clear();
+            loopEvent_ = -1;
+        }
         dimension_ = info.dimension;
     }
     info_.dimension = dimension_;

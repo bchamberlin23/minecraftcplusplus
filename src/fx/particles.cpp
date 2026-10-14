@@ -1284,6 +1284,7 @@ int Particles::itemIdOf(std::string_view name) {
 void Particles::globalLevelEvent(int type, int x, int y, int z) {
     // 1023 wither spawned, 1028 dragon died, 1038 end portal opened: heard from two blocks towards it from the camera
     if (type != 1023 && type != 1028 && type != 1038) return;
+    if (!camSet_) return;  // Camera.isInitialized
     audio::AudioSystem* a = audio::instance();
     if (!a) return;
     double d[3] = {x + 0.5 - cam_[0], y + 0.5 - cam_[1], z + 0.5 - cam_[2]};
@@ -1452,7 +1453,15 @@ void Particles::levelEvent(int type, int bx, int by, int bz, int data) {
         case 1054: sound("minecraft:entity.splash_potion.break", Category::Neutral, 1.0f, smallPitch()); break;
         case 1500: {  // ComposterBlock.handleFill
             sound(data > 0 ? "minecraft:block.composter.fill_success" : "minecraft:block.composter.fill", Category::Block, 1.0f, 1.0f);
-            const double h = shapeTop(bx, by, bz) + 0.03125;  // the shape's height at the middle
+            double top = 0;  // VoxelShape.max(Y, 0.5, 0.5): the shape's height over the middle column
+            if (const u16 id = blockAt(bx, by, bz)) {
+                const BlockInfo& b = registry_.infos()[id];
+                for (u32 i = 0; i < b.selectionCount; ++i) {
+                    const Box& box = registry_.box(b.selectionFirst + i);
+                    if (box.min[0] <= 0.5f && box.max[0] >= 0.5f && box.min[2] <= 0.5f && box.max[2] >= 0.5f) top = std::max(top, double(box.max[1]));
+                }
+            }
+            const double h = top + 0.03125;
             for (int i = 0; i < 10; ++i)
                 addNamed("composter", bx + 0.1875 + 0.625 * randf(), by + h + randf() * (1.0 - h), bz + 0.1875 + 0.625 * randf(), gauss() * 0.02,
                          gauss() * 0.02, gauss() * 0.02);
@@ -1485,7 +1494,9 @@ void Particles::levelEvent(int type, int bx, int by, int bz, int data) {
                                   n == "minecraft:pale_moss_block";
             if (spreader) spread(bx, by + 1, bz, data * 3, 3.0, 1.0, false, "happy_villager");
             else if (n.starts_with("minecraft:water")) spread(bx, by, bz, data * 3, 3.0, 1.0, false, "happy_villager");
-            else if (n != "minecraft:air") inBlock(bx, n == "minecraft:rooted_dirt" ? by - 1 : by, bz, data, "happy_villager");
+            else if (n == "minecraft:rooted_dirt") inBlock(bx, by - 1, bz, data, "happy_villager");
+            else if (n != "minecraft:air" && !registry_.infos()[blockAt(bx, by, bz)].occludes)  // a BonemealableBlock
+                inBlock(bx, by, bz, data, "happy_villager");
             sound("minecraft:item.bone_meal.use", Category::Block, 1.0f, 1.0f);
             break;
         }
@@ -1639,15 +1650,15 @@ void Particles::levelEvent(int type, int bx, int by, int bz, int data) {
         case 3009: onFaces("egg_crack", 3, 6); break;
         case 3011: trialSpawn(flameOf(data)); break;
         case 3012:
-            sound("minecraft:block.trial_spawner.spawn_mob", Category::Block, 1.0f, variedPitch());
+            delayedSound("minecraft:block.trial_spawner.spawn_mob", Category::Block, 1.0f, variedPitch());
             trialSpawn(flameOf(data));
             break;
         case 3013:
-            sound("minecraft:block.trial_spawner.detect_player", Category::Block, 1.0f, variedPitch());
+            delayedSound("minecraft:block.trial_spawner.detect_player", Category::Block, 1.0f, variedPitch());
             detectPlayer(data, "trial_spawner_detection");
             break;
         case 3014:
-            sound("minecraft:block.trial_spawner.eject_item", Category::Block, 1.0f, variedPitch());
+            delayedSound("minecraft:block.trial_spawner.eject_item", Category::Block, 1.0f, variedPitch());
             ejectItem();
             break;
         case 3015:  // VaultBlockEntity.Client.emitActivationParticles
@@ -1670,11 +1681,11 @@ void Particles::levelEvent(int type, int bx, int by, int bz, int data) {
             delayedSound("minecraft:block.cobweb.place", Category::Block, 1.0f, variedPitch());
             break;
         case 3019:
-            sound("minecraft:block.trial_spawner.detect_player", Category::Block, 1.0f, variedPitch());
+            delayedSound("minecraft:block.trial_spawner.detect_player", Category::Block, 1.0f, variedPitch());
             detectPlayer(data, "trial_spawner_detection_ominous");
             break;
         case 3020:
-            sound("minecraft:block.trial_spawner.ominous_activate", Category::Block, data == 0 ? 0.3f : 1.0f, variedPitch());
+            delayedSound("minecraft:block.trial_spawner.ominous_activate", Category::Block, data == 0 ? 0.3f : 1.0f, variedPitch());
             detectPlayer(0, "trial_spawner_detection_ominous");
             for (int i = 0; i < 20; ++i) {  // addBecomeOminousParticles
                 const double x = bx + 0.5 + (rnd() - 0.5) * 2.0, y = by + 0.5 + (rnd() - 0.5) * 2.0, z = bz + 0.5 + (rnd() - 0.5) * 2.0;
@@ -1684,7 +1695,7 @@ void Particles::levelEvent(int type, int bx, int by, int bz, int data) {
             }
             break;
         case 3021:
-            sound("minecraft:block.trial_spawner.spawn_item", Category::Block, 1.0f, variedPitch());
+            delayedSound("minecraft:block.trial_spawner.spawn_item", Category::Block, 1.0f, variedPitch());
             trialSpawn(flameOf(data));
             break;
         default: break;
@@ -3615,6 +3626,7 @@ void Particles::frame(double dt, const double cam[3]) {
     Timer t;
     frameTicks_ = float(std::clamp(dt, 0.0, 0.1) * 20.0);
     std::copy(cam, cam + 3, cam_);
+    camSet_ = true;
     std::vector<NetSpawn>& spawns = spawnsLocal_;
     std::vector<NetBreak>& breaks = breaksLocal_;
     spawns.clear(), breaks.clear();

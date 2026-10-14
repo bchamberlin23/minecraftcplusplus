@@ -216,6 +216,7 @@ private:
     std::vector<Particle> spawnQueue_;         // spawned while ticking
     std::mt19937 rng_{0x51A7E5u};
     double tickClock_ = 0, cam_[3] = {};
+    bool camSet_ = false;  // the camera has a position (Camera.isInitialized)
     float viewYaw_ = 0, viewPitch_ = 0;
     bool scoping_ = false;
     double scopeEye_[3] = {};
