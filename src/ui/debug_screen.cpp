@@ -165,9 +165,10 @@ std::string cpuName() {
 
 void eSystem(UiState& s, Displayer& d) {  // DebugEntrySystemSpecs
     d.group("system", {fmt("C++: MSVC %d 64bit", _MSC_VER), fmt("CPU: %s", cpuName().c_str()),
-                       fmt("Display: %ux%u (%s)", s.renderer->width(), s.renderer->height(), s.renderer->adapterName().c_str()),
+                       fmt("Display: %ux%u (%s)", s.renderer->width(), s.renderer->height(), s.renderer->adapterVendor().c_str()),
                        fmt("Window: %ux%u (%.2fx pixel density)", s.window->width(), s.window->height(), 1.0),
-                       s.renderer->adapterName(), "Direct3D 12"});
+                       s.renderer->adapterName() + s.renderer->adapterType(),  // DeviceInfo name + type
+                       "Direct3D 12 " + s.renderer->driverVersion()});           // backend + the driver
 }
 
 // The crosshair's targets within 20 blocks (DebugEntryLookingAt: Minecraft.getCameraEntity().pick(20)).
@@ -343,7 +344,9 @@ void ePosition(UiState& s, Displayer& d) {  // DebugEntryPosition
     const int dir = int(std::floor(yaw / 90.0f + 0.5f)) & 3;
     d.group("position", {fmt("XYZ: %.3f / %.5f / %.3f", p.pos[0], p.pos[1], p.pos[2]), fmt("Block: %d %d %d", bx, by, bz),
                          fmt("Chunk: %d %d %d [%d %d in r.%d.%d.mca]", bx >> 4, by >> 4, bz >> 4, (bx >> 4) & 31, (bz >> 4) & 31, bx >> 9, bz >> 9),
-                         fmt("Facing: %s (%s) (%.1f / %.1f)", kDirNames[dir], kTowards[dir], yaw, pitch)});
+                         fmt("Facing: %s (%s) (%.1f / %.1f)", kDirNames[dir], kTowards[dir], yaw, pitch),
+                         // the level and its force-loaded chunks (the integrated server's: 0 with a server of its own)
+                         (s.session ? s.session->dimension().name : std::string("minecraft:overworld")) + " FC: 0"});
 }
 void eSectionPosition(UiState& s, Displayer& d) {
     d.group("position", {fmt("Section-relative: %02d %02d %02d", blockX(s) & 15, blockY(s) & 15, blockZ(s) & 15)});
@@ -388,10 +391,14 @@ void eGpu(UiState& s, Displayer& d) {  // DebugEntryGpuUtilization: the GPU's sh
     d.line(u > 100 ? "GPU: \xC2\xA7" "c100%" : fmt("GPU: %d%%", int(std::round(u))));
 }
 void eImpactors(UiState& s, Displayer& d) {  // DebugEntrySimplePerformanceImpactors
-    d.line(fmt("%sfancy-clouds B: %d", s.settings.improvedTransparency ? "improved-transparency " : "", 2));
-    const u32 mode = s.settings.textureFiltering;
-    if (mode == 2) d.line(fmt("Filtering: anisotropic %dx", 1 << std::clamp(s.settings.maxAnisotropyBit, 1, 3)));
-    else d.line(mode == 1 ? "Filtering: rgss" : "Filtering: none");
+    const int clouds = s.settings.cloudStatus;
+    d.line(fmt("%s%sB: %d", s.settings.improvedTransparency ? "improved-transparency " : "",
+               clouds == 0 ? "" : clouds == 1 ? "fast-clouds " : "fancy-clouds ", s.settings.biomeBlendRadius));
+    const u32 mode = s.settings.textureFiltering;  // TextureFilteringMethod captions
+    const std::string caption = s.res.translate(mode == 2 ? "options.textureFiltering.anisotropic"
+                                                : mode == 1 ? "options.textureFiltering.rgss" : "options.textureFiltering.none");
+    if (mode == 2) d.line(fmt("Filtering: %s %dx", caption.c_str(), 1 << std::clamp(s.settings.maxAnisotropyBit, 1, 3)));
+    else d.line("Filtering: " + caption);
     d.line("Terrain Rendering: multidrawindirect");
 }
 

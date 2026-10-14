@@ -335,6 +335,9 @@ public:
 
     const RenderStats& stats() const { return stats_; }
     const std::string& adapterName() const { return adapterName_; }
+    const std::string& adapterVendor() const { return adapterVendor_; }  // "NVIDIA", "AMD", "Intel"...
+    const std::string& adapterType() const { return adapterType_; }      // " (dGPU)" / " (iGPU)" / ""
+    const std::string& driverVersion() const { return driverVersion_; }
     u64 arenaBytesUsed() const;
     u64 arenaBytesTotal() const;
 
@@ -484,7 +487,7 @@ private:
     u32 width_ = 0, height_ = 0;
     bool vsync_ = false, tearing_ = false;
     RenderStats stats_;
-    std::string adapterName_;
+    std::string adapterName_, adapterVendor_, adapterType_, driverVersion_;
     HWND hwnd_ = nullptr;
     u32 jitterPhase_ = 0;
     std::unique_ptr<Packs> packs_;

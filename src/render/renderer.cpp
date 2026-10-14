@@ -169,6 +169,18 @@ bool Renderer::init(HWND hwnd, u32 width, u32 height, bool debug, bool vsync) {
             char name[256];
             WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, name, sizeof(name), nullptr, nullptr);
             adapterName_ = name;
+            // DeviceInfo for the F3 screen: the vendor, discrete or integrated (unified memory), the driver version
+            adapterVendor_ = desc.VendorId == 0x10DE ? "NVIDIA" : desc.VendorId == 0x1002 ? "AMD" : desc.VendorId == 0x8086 ? "Intel"
+                             : desc.VendorId == 0x5143 ? "Qualcomm" : "Unknown";
+            D3D12_FEATURE_DATA_ARCHITECTURE arch{};
+            if (SUCCEEDED(device_->CheckFeatureSupport(D3D12_FEATURE_ARCHITECTURE, &arch, sizeof(arch))))
+                adapterType_ = arch.UMA ? " (iGPU)" : " (dGPU)";
+            LARGE_INTEGER umd{};
+            if (SUCCEEDED(adapter->CheckInterfaceSupport(__uuidof(IDXGIDevice), &umd))) {
+                const u64 v = u64(umd.QuadPart);
+                driverVersion_ = std::to_string(v >> 48) + "." + std::to_string((v >> 32) & 0xFFFF) + "." +
+                                 std::to_string((v >> 16) & 0xFFFF) + "." + std::to_string(v & 0xFFFF);
+            }
             break;
         }
     }

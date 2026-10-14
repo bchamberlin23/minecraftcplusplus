@@ -865,7 +865,7 @@ void Sky::buildBorder(const CameraState& cam) {
     const double x0 = std::max(std::floor(x - rd), bMinX), x1 = std::min(std::ceil(x + rd), bMaxX);
     const float u0z = float(i64(std::floor(z0)) & 1) * 0.5f, u1z = float(z1 - z0) / 2.0f;
     const float u0x = float(i64(std::floor(x0)) & 1) * 0.5f, u1x = float(x1 - x0) / 2.0f;
-    const float h = float(std::max(rd * 4.0, 2048.0));  // Camera depthFar (the cloud range's 2048 at least)
+    const float h = float(std::max(rd * 4.0, double(options_.cloudRange) * 16.0));  // Camera depthFar: max(rd * 4, cloud range * 16)
     const float v0 = -float(cam.y * 0.5 - std::floor(cam.y * 0.5)), v1 = v0 + h;
     // TextureMat: the texture slides by (t, t) every 3 seconds.
     const float slide = float(std::fmod(nowSeconds() * 1000.0, 3000.0) / 3000.0);
