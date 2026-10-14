@@ -458,8 +458,10 @@ void drawServers(State& s, Canvas& c) {
         Text statusTip;
         std::vector<Text> playersTip;
         // ServerData.State.PINGING: the animated icon (100 ms frames, two apart per row); it stays so when the
-        // connection opened without a status (onPingFailed: "can't connect") or the pong never came
-        const bool pinging = !done || (!st->ok && st->connected) || (st->ok && !st->legacy && st->pingMs < 0);
+        // connection opened without a status (onPingFailed: "can't connect"), the host did not resolve (onPingFailed
+        // too), or the pong never came
+        const bool unresolved = done && !st->ok && st->error == "unknown host";
+        const bool pinging = !done || (!st->ok && st->connected) || unresolved || (st->ok && !st->legacy && st->pingMs < 0);
         if (pinging) {
             const int frame = int(i64(s.clock * 1000.0) / 100 + row * 2) & 7;
             const int k = frame > 4 ? 8 - frame : frame;
@@ -470,13 +472,11 @@ void drawServers(State& s, Canvas& c) {
         }
         if (!done) {
             motd = Text(s.res.translate("multiplayer.status.pinging"), colorStyle(0x808080));
-        } else if (!st->ok && st->connected) {
+        } else if (!st->ok && (st->connected || unresolved)) {
             motd = Text(s.res.translate("multiplayer.status.cannot_connect"), colorStyle(0xFF0000));
         } else if (!st->ok) {
             statusSprite = "server_list/unreachable";
-            motd = Text(s.res.translate(st->error == "unknown host" ? "multiplayer.status.cannot_resolve"
-                                                                   : "multiplayer.status.cannot_connect"),
-                        colorStyle(0xFF0000));
+            motd = Text(s.res.translate("multiplayer.status.cannot_connect"), colorStyle(0xFF0000));  // a refused connection
             statusTip = tr(s, "multiplayer.status.no_connection");
         } else {
             motd = st->description.is_null() ? Text() : parseJsonComponent(st->description, s.lang());
@@ -559,8 +559,8 @@ void serversInput(State& s, const Window::InputEvent& e) {
     if (e.type == E::Key && e.down && (e.code == VK_UP || e.code == VK_DOWN) && s.window->keyDown(VK_SHIFT) &&
         f.serverSel >= 0 && f.serverSel < n) {
         const int to = f.serverSel + (e.code == VK_DOWN ? 1 : -1);
-        if (to >= 0 && to < n) moveServer(s, f.serverSel, e.code == VK_DOWN ? 1 : -1);
-        return;
+        if (to >= 0 && to < n) return moveServer(s, f.serverSel, e.code == VK_DOWN ? 1 : -1);
+        // (at the edge: the list's own arrow navigation)
     }
     if (e.type == E::Key && e.down && (e.code == VK_UP || e.code == VK_DOWN)) {
         int row = f.serverSel;
