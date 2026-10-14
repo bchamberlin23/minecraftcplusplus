@@ -116,7 +116,7 @@ void drawAdvancement(UiState& s, Canvas& c, const Toast& t, float x, float y) {
         if (ms < 1500.0) {
             s.drawText(c, label, x + 30, y + 11, alpha(titleColor, float((1500.0 - ms) / 300.0)), false);
         } else {
-            const float a = float((ms - 1500.0) / 300.0) * 252.0f / 255.0f;
+            const float a = std::min(1.0f, float((ms - 1500.0) / 300.0)) * 252.0f / 255.0f;  // floor(clamp(..) * 252)
             float ly = y + float(16 - int(lines.size()) * 9 / 2);  // height / 2 - lines * 9 / 2 (integers)
             for (const Text& l : lines) s.drawText(c, l, x + 30, ly, alpha(0xFFFFFF, a), false), ly += 9;
         }
@@ -154,6 +154,7 @@ struct NowPlaying {
     bool visible = false, wanted = false, updating = false, finished = true;
     float portion = 0;
     int shows = 0, hides = 0, mode = -1;  // the audio system's counters / the option, as last seen
+    float displayMultiplier = 1.0f;       // notificationDisplayTime when shown (NowPlayingToast.showToast)
 };
 NowPlaying g_np;
 int g_noteTick = 0;
@@ -185,6 +186,8 @@ Text nowPlayingText(UiState& s, const std::string& key) { return Text(s.res.tran
 
 void drawToasts(UiState& s, Canvas& c) {
     const double now = s.clock;
+    float nowPlayingX = 0;  // drawn after the other toasts (ToastManager.extractRenderState)
+    bool nowPlaying = false;
     if (audio::AudioSystem* a = audio::instance()) {  // ToastManager: showNowPlayingToast / hideNowPlayingToast
         const int mode = s.settings.musicToast;
         if (mode != g_np.mode) {  // setMusicToastDisplayState: a new instance, shown at once with music audible
@@ -192,12 +195,13 @@ void drawToasts(UiState& s, Canvas& c) {
             g_np = NowPlaying{};
             g_np.mode = mode, g_np.shows = a->nowPlayingShows(), g_np.hides = a->nowPlayingHides();
             if (!wasNone && mode == 2 && a->volume(audio::Category::Music) * a->volume(audio::Category::Master) > 0.0f)
-                g_np.updating = g_np.wanted = true;
+                g_np.updating = g_np.wanted = true, g_np.displayMultiplier = float(s.settings.notificationDisplayTime);
         }
         if (a->nowPlayingShows() != g_np.shows) {
             g_np.shows = a->nowPlayingShows();
             if (mode != 0) {
                 g_np = NowPlaying{-1, -1, false, true, true, true, 0, g_np.shows, g_np.hides, mode};  // resetToast + showToast
+                g_np.displayMultiplier = float(s.settings.notificationDisplayTime);
             }
         }
         if (a->nowPlayingHides() != g_np.hides) g_np.hides = a->nowPlayingHides(), g_np.wanted = false;
@@ -210,7 +214,7 @@ void drawToasts(UiState& s, Canvas& c) {
             p *= p;
             n.portion = n.visible ? p : 1.0f - p;
             if (n.updating) {  // NowPlayingToast.update
-                n.wanted = fullyVisibleFor < kDisplay * s.settings.notificationDisplayTime;
+                n.wanted = fullyVisibleFor < kDisplay * n.displayMultiplier;
                 tickNowPlayingNotes(s);
             }
             if (n.wanted != n.visible) {
@@ -224,7 +228,7 @@ void drawToasts(UiState& s, Canvas& c) {
                 const std::string& key = a->currentSongKey();
                 if (!key.empty()) {
                     const float w = float(30 + s.font.width(nowPlayingText(s, key)) + 7);
-                    drawNowPlaying(s, c, w * n.portion - w, 0);
+                    nowPlayingX = w * n.portion - w, nowPlaying = true;
                 }
             }
         }
@@ -311,6 +315,7 @@ void drawToasts(UiState& s, Canvas& c) {
             case Kind::Friend: drawFriend(s, c, t, x, y); break;
         }
     }
+    if (nowPlaying) drawNowPlaying(s, c, nowPlayingX, 0);
 }
 
 const UiModuleRegistrar g_module({.name = "toasts", .drawTop = drawToasts});
