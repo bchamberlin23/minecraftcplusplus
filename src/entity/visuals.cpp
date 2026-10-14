@@ -1490,7 +1490,8 @@ void Visuals::Impl::updateItemOwner(float pt) {
             w.fishingSlot = models.itemName(item) == "fishing_rod" ? w.selectedSlot : 45;
             break;
         }
-    w.cooldown = [g = game, it = items.get(), pt](const ui::ItemStack& s) { return g->cooldownPercent(it->cooldownGroup(s), pt); };
+    // Cooldown.get: getCooldownPercent(stack, 0): the fraction steps once a tick
+    w.cooldown = [g = game, it = items.get()](const ui::ItemStack& s) { return g->cooldownPercent(it->cooldownGroup(s), 0.0f); };
 }
 
 const Visuals::Impl::PaintingInfo* Visuals::Impl::painting(int id) {

@@ -492,7 +492,8 @@ float rangeValue(const Items& items, const json& n, const ItemStack& s, const It
     }
     if (prop == "crossbow/pull") {
         if (!(o.present && o.living) || selectValue(items, json{{"property", "charge_type"}}, s, c) != "none") return 0;
-        return o.usingThis ? o.useTicks / std::max(1.0f, float(crossbowChargeTicks(items, s))) : 0.0f;
+        // CrossbowPull: getUseDuration - remaining whatever is being used (not using: the whole 72000)
+        return (o.usingThis ? o.useTicks : 72000.0f) / std::max(1.0f, float(crossbowChargeTicks(items, s)));
     }
     if (prop == "use_cycle") {
         const float period = num(n.value("period", json()), 1.0f);
