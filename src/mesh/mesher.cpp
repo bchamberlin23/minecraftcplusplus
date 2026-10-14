@@ -717,7 +717,12 @@ void meshGrid(const u16* ids, const u8* light, const BlockRegistry& registry, bo
                     // ModelBlockRenderer.tesselateBlock: smooth lighting unless the block emits light or its model opts
                     // out; else flat (BlockModelLighter.prepareQuadFlat).
                     const bool ao = light && smooth && b.emission == 0 && b.modelAo;
-                    const bool fullCollision = sc.solid[p];  // isCollisionShapeFullBlock (approximately: its shade solidity)
+                    bool fullCollision = false;  // isCollisionShapeFullBlock: one box filling the cell
+                    if (b.collisionCount == 1) {
+                        const Box& cb = registry.box(b.collisionFirst);
+                        fullCollision = cb.min[0] <= 0 && cb.min[1] <= 0 && cb.min[2] <= 0 && cb.max[0] >= 1 && cb.max[1] >= 1 &&
+                                        cb.max[2] >= 1;
+                    }
                     const LightGrid grid{ids, light, infos, sc.solid, ring};
                     for (u32 qi = quadFirst; qi < quadFirst + quadCount; ++qi) {
                         const ModelQuad& m = registry.modelQuad(qi);
