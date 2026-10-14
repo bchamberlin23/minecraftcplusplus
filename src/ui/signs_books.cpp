@@ -354,9 +354,9 @@ size_t nextCp(const std::string& s, size_t i) {
     while (i < s.size() && (u8(s[i]) & 0xC0) == 0x80) ++i;
     return i;
 }
-size_t cpCount(const std::string& s) {
+size_t utf16Count(const std::string& s) {  // String.length(): UTF-16 units
     size_t n = 0;
-    for (size_t i = 0; i < s.size(); ++n) nextCodepoint(s, i);
+    for (size_t i = 0; i < s.size();) n += nextCodepoint(s, i) > 0xFFFF ? 2 : 1;
     return n;
 }
 
@@ -393,13 +393,14 @@ bool mlInsert(UiState& s, MultiLine& m, const std::string& text) {
         if ((cp >= 32 && cp != 127 && cp != 0xA7) || cp == '\n') appendUtf8(clean, cp);  // StringUtil.filterText (keep \n)
     }
     // truncateInsertionText: what fits in the limit less the whole current text (the selection still counted)
-    const int room = m.charLimit - int(cpCount(m.value));
+    const int room = m.charLimit - int(utf16Count(m.value));
     std::string fit;
     int used = 0;
     for (size_t i = 0; i < clean.size() && used < room;) {
         const size_t from = i;
-        nextCodepoint(clean, i);
-        fit += clean.substr(from, i - from), ++used;
+        const int units = nextCodepoint(clean, i) > 0xFFFF ? 2 : 1;
+        if (used + units > room) break;
+        fit += clean.substr(from, i - from), used += units;
     }
     clean = fit;
     const size_t a = std::min(m.cursor, m.selection), b = std::max(m.cursor, m.selection);
@@ -425,12 +426,10 @@ void mlKey(UiState& s, MultiLine& m, const InputEvent& e) {
     using E = InputEvent;
     if (e.type == E::Char) {
         if (e.code >= 32) mlInsert(s, m, utf8Of(u32(e.code)));
-        m.blinkStart = s.clock;
         return;
     }
     if (e.type != E::Key || !e.down) return;
     const bool shift = s.window->keyDown(VK_SHIFT), ctrl = s.window->keyDown(VK_CONTROL);
-    m.blinkStart = s.clock;
     auto move = [&](size_t to) {
         m.cursor = to;
         if (!shift) m.selection = m.cursor;
@@ -489,7 +488,6 @@ void mlSeek(UiState& s, MultiLine& m, float left, float top, float mx, float my,
     const int li = std::clamp(int(std::floor((my - top) / 9.0f)), 0, int(lines.size()) - 1);
     m.cursor = indexAtX(s, m.value, lines[size_t(li)], mx - left);
     if (!selecting) m.selection = m.cursor;
-    m.blinkStart = s.clock;
 }
 
 void mlClick(UiState& s, MultiLine& m, float left, float top, float mx, float my) {
@@ -572,8 +570,19 @@ void editTurn(UiState& s, bool forward, bool sound = true) {  // keys: Button.on
 
 void editSend(UiState& s, bool sign) {
     editStore();
-    if (!sign)
+    if (!sign) {
         while (!edit.pages.empty() && edit.pages.back().empty()) edit.pages.pop_back();  // eraseEmptyTrailingPages
+        // updateLocalCopy: the held book's writable_book_content becomes the pages (Filterable.passThrough)
+        ItemStack& held = s.inventory.slots[size_t(edit.hand == 0 ? 36 + s.game->selectedSlot() : 45)];
+        if (const int type = s.items.componentType("writable_book_content"); type >= 0 && !held.empty()) {
+            net::Writer c;
+            c.varInt(i32(edit.pages.size()));
+            for (const std::string& page : edit.pages) c.str(page), c.boolean(false);
+            std::erase(held.removed, type);
+            std::erase_if(held.added, [type](const ItemStack::Component& x) { return x.type == type; });
+            held.added.push_back({type, std::string(c.buf.begin(), c.buf.end())});
+        }
+    }
     if (!s.online()) return;
     net::Writer w;  // ServerboundEditBookPacket
     w.varInt(edit.hand == 0 ? s.game->selectedSlot() : 40);
@@ -756,6 +765,11 @@ bool bookClick(UiState& s, const TextEvents& ev) {
     } else if (ev.click == "open_url") {  // ConfirmLinkScreen, back to the book
         const std::string url = ev.clickValue;
         if (!url.starts_with("http://") && !url.starts_with("https://")) return true;
+        if (!s.settings.chatLinks) return true;
+        if (!s.settings.chatLinksPrompt) {
+            ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            return true;
+        }
         UiState* sp = &s;
         const std::vector<Text> pages = view.pages;
         const int page = view.page;
@@ -882,7 +896,7 @@ bool lecternInput(UiState& s, const InputEvent& e, Menu& m, const Layout&, float
         Style st;
         if (bookStyleAt(s, *s.canvas, st) && st.events && !st.events->click.empty()) {
             if (st.events->click == "change_page") {
-                const int to = std::clamp(std::atoi(st.events->clickValue.c_str()) - 1, 0, std::max(count - 1, 0));
+                const int to = std::atoi(st.events->clickValue.c_str()) - 1;
                 if (to != page) sendContainerButton(s, 100 + to);
             } else {
                 bookClick(s, *st.events);
