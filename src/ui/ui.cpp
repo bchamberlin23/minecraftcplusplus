@@ -1293,34 +1293,40 @@ void Ui::predictFilledResult(int hand, const std::string& item) {
     if (!s.game || id < 0) return;
     auto& slots = s.inventory.slots;
     ItemStack& held = slots[size_t(hand == 0 ? 36 + s.game->selectedSlot() : 45)];
-    // Inventory.add: a stack with room (the selected slot, the off hand, then 0..35), else the first empty slot
-    auto add = [&](const ItemStack& filled) {
-        const int maxStack = s.items.maxStack(filled);
-        std::vector<int> order{36 + s.game->selectedSlot(), 45};
-        for (int i = 0; i < 9; ++i) order.push_back(36 + i);
-        for (int i = 9; i < 36; ++i) order.push_back(i);
-        for (int slot : order)
-            if (!slots[size_t(slot)].empty() && slots[size_t(slot)].sameItemSameComponents(filled) && slots[size_t(slot)].count < maxStack) {
-                slots[size_t(slot)].count += 1;
-                return true;
-            }
-        for (int slot : order)
-            if (slot != 45 && slots[size_t(slot)].empty()) {
-                slots[size_t(slot)] = filled;
-                return true;
-            }
-        return false;
-    };
     const ItemStack filled{id, 1};
     if (s.game->instabuild) {  // limitCreativeStackSize: the full one joins the inventory once, the empty one stays
         for (const ItemStack& st : slots)
             if (!st.empty() && st.item == id) return;
-        add(filled);
+        predictAdd(filled);
         return;
     }
     held = held.withCount(held.count - 1);
     if (held.empty()) held = filled;
-    else add(filled);  // (a full inventory drops it: the server's)
+    else predictAdd(filled);
+}
+
+void Ui::predictAdd(const ItemStack& stack) {
+    State& s = *s_;
+    if (!s.game || stack.empty()) return;
+    auto& slots = s.inventory.slots;
+    // Inventory.add: stacks with room (the selected slot, the off hand, the hotbar, then 9..35), then empty slots
+    std::vector<int> order{36 + s.game->selectedSlot(), 45};
+    for (int i = 0; i < 9; ++i) order.push_back(36 + i);
+    for (int i = 9; i < 36; ++i) order.push_back(i);
+    const int maxStack = s.items.maxStack(stack);
+    int left = stack.count;
+    for (int slot : order) {
+        ItemStack& st = slots[size_t(slot)];
+        if (left > 0 && !st.empty() && st.sameItemSameComponents(stack) && st.count < maxStack) {
+            const int moved = std::min(left, maxStack - st.count);
+            st.count += moved, left -= moved;
+        }
+    }
+    for (int slot : order)
+        if (left > 0 && slot != 45 && slots[size_t(slot)].empty()) {
+            const int moved = std::min(left, maxStack);
+            slots[size_t(slot)] = stack.withCount(moved), left -= moved;
+        }
 }
 
 const ItemStack* Ui::playerSlot(int slot) const {

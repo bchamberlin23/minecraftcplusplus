@@ -272,6 +272,7 @@ public:
     // hand's stack (not with infinite materials), and ItemUtils.createFilledResult (a bucket / bowl turned into `item`).
     void predictConsumeHeld(int hand, int count = 1);
     void predictFilledResult(int hand, const std::string& item);
+    void predictAdd(const ItemStack& stack);  // Inventory.add on the client (a full inventory: the server drops it)
     const Items& items() const;
     // LivingEntity.getEquipmentSlotForItem / isEquippableInSlot for the player (the stack's equippable component, set
     // by the gameplay layer): the EquipmentSlot id (0 main hand, 1 feet .. 4 head, 5 off hand...), allowed: the

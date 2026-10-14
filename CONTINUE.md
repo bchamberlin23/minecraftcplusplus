@@ -175,7 +175,8 @@ camera section). Sound engine and level events audited; residuals: the voice poo
 from the device's source count) and a full pool replaces its quietest voice (deliberate), streams buffer 0.5 s.
 Entity interaction and attack audited; the client now predicts held-stack changes (placement, one-item uses, buckets,
 milking, stew, feeding) and tells SUCCESS from CONSUME / SUCCESS_SERVER. Tame animals know their owner (DATA_OWNERUUID_ID)
-and max health (update_attributes). Residuals: the allay's give / take is not predicted; wolf armour repair. Not ported:
+and max health (update_attributes). The allay's give / take / duplicate is predicted
+(its hand and the player's stack). Residual: wolf armour repair. Not ported:
 filtered sign text (needs the account's profanity filter flag). The bell's raider particles (showBellParticles) are
 invisible in 26.3 (ColorParticleOption.create(ENTITY_EFFECT, 0xFED839 + 5i) has alpha 0, which SpellParticle keeps),
 so they are not drawn here either. Toasts follow ToastInstance now (the

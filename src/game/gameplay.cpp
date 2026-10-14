@@ -5,6 +5,7 @@
 #include "assets/game_reports.h"
 #include "audio/audio.h"
 #include "entity/entities.h"
+#include "entity/species.h"
 #include "game/game.h"
 #include "game/riding.h"
 #include "net/client.h"
@@ -898,7 +899,28 @@ int Gameplay::entityInteraction(const ent::Entity& e, int hand) {
     if (horse && !e.baby) return 1;  // riding, the inventory, feeding, equipping
     if ((n == "pig" || n == "strider") && !e.baby && e.equipment[7] >= 0 && !sneaking) return 1;  // ride the saddled pig
     if (n == "happy_ghast" && !e.baby && e.equipment[6] >= 0 && !sneaking) return 1;  // ride the harnessed ghast
-    if (n == "allay") return 1;
+    if (n == "allay") {  // Allay.mobInteract: duplicating, giving and taking all happen on the client too
+        ent::Entity* allay = entities_ ? entities_->entity(e.id) : nullptr;
+        if (ent::dataInt(e, "DATA_DANCING") && inTag("minecraft:duplicates_allays") && ent::dataInt(e, "DATA_CAN_DUPLICATE")) {
+            if (ui_) ui_->predictConsumeHeld(hand);
+            return 1;
+        }
+        if (e.equipment[0] < 0 && !empty) {  // the item given: one into its hand
+            if (allay) {
+                allay->equipment[0] = held->item, allay->equipDye[0] = -1;
+                allay->equipStack[0] = std::make_shared<const ui::ItemStack>(held->withCount(1));
+            }
+            if (ui_) ui_->predictConsumeHeld(hand);
+            return 1;
+        }
+        if (e.equipment[0] >= 0 && hand == 0 && empty) {  // taken back into the player's inventory
+            const ui::ItemStack taken = e.equipStack[0] ? *e.equipStack[0] : ui::ItemStack{e.equipment[0], 1};
+            if (allay) allay->equipment[0] = -1, allay->equipStack[0] = nullptr;
+            if (ui_) ui_->predictAdd(taken);
+            return 1;
+        }
+        return pass();
+    }
     const bool hurt = e.maxHealth > 0 && e.health < e.maxHealth;
     // Animal.mobInteract's food rule: a baby eats it and grows (SUCCESS, the food taken here), an adult breeds on the
     // server (CONSUME on the client)
