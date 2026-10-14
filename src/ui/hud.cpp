@@ -819,7 +819,9 @@ void Ui::State::drawChat(Canvas& c, bool focused) {
     if (restricted) {  // ChatScreen with restrictions: the red, underlined prompt (opens the Restrictions screen)
         Style st = colorStyle(0xFF5555);
         st.underlined = 1;
-        font.draw(c, Text(res.translate("chat_screen.restricted"), st), 0, float(lineAboveMessagesY + entryHeight - entryBottomToMessageY - 1),
+        std::string prompt = res.translate("chat_screen.restricted");  // ComponentRenderUtils.clipText to the chat width
+        if (font.width(Text(prompt)) > maxWidth) prompt = font.headByWidth(prompt, maxWidth - font.width(Text("..."))) + "...";
+        font.draw(c, Text(prompt, st), 0, float(lineAboveMessagesY + entryHeight - entryBottomToMessageY - 1),
                   withAlpha(0xFFFFFF, textOpacity), true);
     }
     if (focused && total > 0) {  // scroll bar
@@ -856,7 +858,9 @@ int chatSpecialAt(UiState& s, float mx, float my) {
         const int entryBottomToMessageY = int(std::lround(8.0 * (spacing + 1.0) - 4.0 * spacing));
         const int count = std::max(0, std::min(int(s.chatLines.size()) - s.chatScroll, s.chatLinesPerPage()));
         const int top = chatBottom - (count + 1) * entryHeight + entryHeight - entryBottomToMessageY - 1;
-        if (x < float(s.font.width(Text(s.res.translate("chat_screen.restricted")))) && y >= float(top) && y < float(top + 9)) return 2;
+        const int maxWidth = int(std::ceil(float(chatWidthPixels(s.settings.chatWidth)) / scale));
+        const int width = std::min(s.font.width(Text(s.res.translate("chat_screen.restricted"))), maxWidth);  // clipped
+        if (x < float(width) && y >= float(top) && y < float(top + 9)) return 2;
     }
     return 0;
 }

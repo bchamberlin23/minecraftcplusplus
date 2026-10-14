@@ -284,7 +284,7 @@ void handlePlayerChat(UiState& s, PlayerChat& m) {
                 if (sp.style.font >= 0 && !(fontDesc(sp.style.font) == FontDesc{FontDesc::Resource, "minecraft:default"})) modified = true;
         if (modified) tag = chatModifiedTag(m.content);
     }
-    bool shown = false;
+    bool queued = false;
     // Only Show Secure Chat: the signed body without the server's unsigned decoration, and nothing unsigned (our own
     // messages are secure).
     const bool secureOnly = s.settings.onlyShowSecureChat;
@@ -296,16 +296,21 @@ void handlePlayerChat(UiState& s, PlayerChat& m) {
         LOG("[chat] %s", decorated.plain().c_str());
         ChatMessage msg{decorated, s.guiTicks, signature.value_or(Sig()), tag, 2};
         UiState* sp = &s;
-        s.handleChatMessage([sp, msg] {  // ChatListener: after the Chat Delay
-            if (!sp->chatVisible(2)) return false;
-            ChatMessage shownMsg = msg;
-            shownMsg.addedTick = sp->guiTicks;
-            sp->addChatMessage(std::move(shownMsg));
-            return true;
+        // ChatListener.handlePlayerChatMessage: after the Chat Delay, shown if player messages are allowed then, and
+        // marked processed with that result
+        s.handleChatMessage([sp, msg, signature] {
+            const bool visible = sp->chatVisible(2);
+            if (visible) {
+                ChatMessage shownMsg = msg;
+                shownMsg.addedTick = sp->guiTicks;
+                sp->addChatMessage(std::move(shownMsg));
+            }
+            if (signature) markProcessed(*sp, *signature, visible);
+            return visible;
         });
-        shown = true;
+        queued = true;
     }
-    if (signature) markProcessed(s, *signature, shown);
+    if (signature && !queued) markProcessed(s, *signature, false);
     if (signature) g_signedSenders.insert(m.sender);  // ChatLog: a signed message of theirs
 }
 
@@ -316,7 +321,7 @@ bool deleteMessage(UiState& s, const Sig& signature) {
         if (s.guiTicks < msg.addedTick + 60) return false;
         Style st = colorStyle(0xAAAAAA);
         st.italic = 1;
-        msg = ChatMessage{translatable("chat.deleted_marker", {}, s.lang(), st), msg.addedTick, {}, kTagSystem, msg.source};
+        msg = ChatMessage{translatable("chat.deleted_marker", {}, s.lang(), st), msg.addedTick, {}, kTagSystem, 1};  // SYSTEM_SERVER
         s.refreshChatLines();
         return true;
     }
