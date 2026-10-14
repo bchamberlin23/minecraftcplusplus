@@ -303,3 +303,13 @@ light levels and alpha tested. RR's normal guide at entity pixels comes from the
 (TexEntNormal; block entities and held items still fall back to the view direction; MCPP_PT_DEBUG=9 shows the guide).
 Residuals: water refraction is screen space; opaque blocks have no specular (vanilla has no specular maps); terminal bounce hits use
 the game's light levels; the built-in denoiser assumes a static world (moving entities ghost without RR).
+
+Performance (October 2026, RTX 5070 Ti, 1080p, Shaders Off + DLSS Quality): about 1130 fps, p99 frame 2.8 ms, with
+CPU (~0.55 ms) and GPU (~0.68 ms) roughly balanced (`--profile` prints the main thread's phases at exit). Load times:
+- Launch to the first frame takes ~2.5 s. ~2.1 s of it is the Streamline chain (slInit ~0.9 s on the preinit thread,
+  then slSetD3DDevice ~1.15 s of serial NGX feature init in the driver); the rest of the game is ready by ~0.45 s.
+- The local server is launched directly from the bundler's classpath with a JDK AOT class cache
+  (`server/26.3/aot/`, trained once in the background), at above-normal priority until it is up.
+- Entering a world: in the world at ~4.3 s (the server's own bootstrap is the critical path).
+- Save and Quit to Title: the title instance starts while the world saves (handoff gate) and shows in ~3 s.
+- JVM flags (ParallelGC, -UsePerfData, CICompilerCount, C1 only) measured no faster.
