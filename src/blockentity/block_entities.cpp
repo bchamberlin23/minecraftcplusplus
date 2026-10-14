@@ -949,6 +949,7 @@ void BlockEntityRenderer::attach(net::Client& client) {
         NetEvent e;
         r.blockPos(e.x, e.y, e.z);
         e.type = r.u8v(), e.param = r.u8v();
+        e.block = r.varInt();
         if (!r.ok) return;
         std::lock_guard lock(netMutex_);
         netEvents_.push_back(e);
@@ -1327,7 +1328,20 @@ void BlockEntityRenderer::applyBlockEvents() {
         std::lock_guard lock(netMutex_);
         events.swap(netEvents_);
     }
+    if (blockNames_.empty()) {
+        const nlohmann::json& reg = reports_.registries();
+        if (reg.is_object() && reg.contains("minecraft:block"))
+            for (const auto& b : reg["minecraft:block"]["entries"].items())
+                if (const int id = b.value().value("protocol_id", -1); id >= 0) {
+                    if (size_t(id) >= blockNames_.size()) blockNames_.resize(size_t(id) + 1);
+                    blockNames_[size_t(id)] = b.key();
+                }
+    }
     for (const NetEvent& e : events) {
+        if (e.block >= 0 && size_t(e.block) < blockNames_.size()) {  // ClientLevel.blockEvent: blockState.is(block)
+            const std::string& here = registry_.name(world_.block(e.x, e.y, e.z));
+            if (std::string_view(here).substr(0, here.find('[')) != blockNames_[size_t(e.block)]) continue;
+        }
         pistonEvent(e.x, e.y, e.z, e.type, e.param);
         handleEvent(e.x, e.y, e.z, e.type, e.param);
     }

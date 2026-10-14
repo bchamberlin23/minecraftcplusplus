@@ -354,7 +354,9 @@ private:
     };
     struct NetEvent {
         int x, y, z, type, param;
+        int block = -1;  // the block registry id it is for (ClientLevel.blockEvent: only while that block is there)
     };
+    std::vector<std::string> blockNames_;  // the block registry by network id (from the reports)
     std::mutex netMutex_;
     std::vector<NetChunk> netChunks_;
     std::vector<NetBlockEntity> netData_;
