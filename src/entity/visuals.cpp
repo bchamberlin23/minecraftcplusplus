@@ -475,6 +475,8 @@ void Visuals::attach(net::Client& client) {
     if (impl_->particles) impl_->particles->attach(client);
 }
 
+ID3D12Resource* Visuals::itemAtlasTexture() const { return impl_->itemTex.Get(); }
+
 bool Visuals::addPasses(Renderer& renderer) {
     Impl& m = *impl_;
     if (!m.loaded) return false;

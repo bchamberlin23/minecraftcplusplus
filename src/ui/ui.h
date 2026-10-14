@@ -9,6 +9,8 @@
 
 #include <array>
 #include <functional>
+
+struct ID3D12Resource;
 #include <iosfwd>
 #include <memory>
 #include <string_view>
@@ -270,6 +272,7 @@ public:
     void setEntities(ent::EntityWorld* entities);
     // Item models (equipment layers worn in the entity previews); set by the entity visuals.
     void setItemModels(ent::ItemModels* models);
+    void setWorldTextures(ID3D12Resource* items, ID3D12Resource* entity);  // entity previews' held item models
     // Player inventory menu slot (5-8 armour, 36-44 hotbar, 45 offhand); nullptr when empty.
     const ItemStack* playerSlot(int slot) const;
     // The client's own stack changes of an item use (the server's slot updates follow): ItemStack.consume(n) of the

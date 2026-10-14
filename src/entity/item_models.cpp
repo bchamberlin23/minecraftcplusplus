@@ -1284,6 +1284,7 @@ bool ItemModels::takePending(const MeshQuad*& data, u32& count, u32& firstOut) {
 }
 
 void ItemModels::releasePending() {
+    uploadedQuads_.insert(uploadedQuads_.end(), store_.begin(), store_.end());
     uploaded_ += u32(store_.size());
     store_.clear();
 }

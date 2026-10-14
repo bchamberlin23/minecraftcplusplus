@@ -50,7 +50,8 @@ public:
     // componentReports: the game's item component reports (reports/minecraft/components/item).
     bool load(const fs::path& jar, const fs::path& minecraftDir, const GameReports& reports, const fs::path& componentReports);
     void attach(net::Client& client);  // particle / weather packets; before Client::start
-    bool addPasses(Renderer& renderer);  // World, AfterTranslucent and Hud stages (+ an update in the Sky stage)
+    bool addPasses(Renderer& renderer);
+    ID3D12Resource* itemAtlasTexture() const;  // the item model atlas (GUI entity previews)  // World, AfterTranslucent and Hud stages (+ an update in the Sky stage)
     // The local player: inventory from the UI, input hooks on the game. After the game, the UI and audio exist.
     void setPlayer(Game& game, ui::Ui& ui, const std::string& name, std::function<int()> gameMode);
     void setItemRules(ItemRules* rules);  // item default components (spear timing in the arm / item animations)

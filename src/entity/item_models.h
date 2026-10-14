@@ -149,6 +149,8 @@ public:
     bool takePending(const MeshQuad*& data, u32& count, u32& firstOut);
     void releasePending();
     u32 quadCount() const { return u32(store_.size()); }
+    // A quad by its store index (uploaded or pending; GUI entity previews draw them on the CPU).
+    const MeshQuad& quad(u32 i) const { return i < uploaded_ ? uploadedQuads_[i] : store_[i - uploaded_]; }
     static constexpr u32 kMaxQuads = 1 << 18;
 
     // Equipment: slot (EquipmentSlot ordinal: 0 main hand .. 5 head, 6 body) and asset; false if not equippable.
@@ -179,6 +181,7 @@ private:
     std::vector<Rect> rects_;
     std::vector<MeshQuad> store_;
     u32 uploaded_ = 0;
+    std::vector<MeshQuad> uploadedQuads_;  // CPU copy of the uploaded ones
     friend struct Impl;
 };
 

@@ -17,6 +17,8 @@ public:
     Canvas& canvas() { return canvas_; }
     // Enchantment glint: texture rect in the GUI atlas (u0 v0 du dv), scroll offset, screen pixels per repeat.
     float glint[8] = {};
+    // The world's item model and entity atlases for ModeItems / ModeEntity (null: none).
+    void setWorldTextures(ID3D12Resource* items, ID3D12Resource* entity);
     // The menu background blur at the canvas's blur mark (PostEffects.blur over the frame drawn so far).
     std::function<void(const PassContext&)> blur;
 
@@ -36,7 +38,9 @@ private:
     ComPtr<ID3D12Resource> guiTex_, iconTex_, vertices_, upload_;
     u8* vertexMapped_ = nullptr;
     u8* uploadMapped_ = nullptr;
-    u32 descriptors_ = 0;
+    u32 descriptors_ = UINT32_MAX;
+    ID3D12Resource* worldTex_[2] = {};
+    void writeWorldDescriptors();
 };
 
 }  // namespace ui

@@ -38,6 +38,9 @@ enum TexMode : u32 {
     ModeGui = 1,    // GUI atlas (sprites, fonts), point sampled
     ModeIcon = 2,   // item icon atlas, point sampled
     ModeGlint = 3,  // enchantment glint masked by an item icon (use with blend 2)
+    ModeItems = 4,  // the item model atlas (UiPass::setWorldTextures), cutout
+    ModeEntity = 5, // the entity atlas, cutout
+    ModeBlocks = 6, // the block texture array, cutout: ModeBlocks | layer << 8
 };
 
 struct UiVertex {

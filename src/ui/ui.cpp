@@ -1373,6 +1373,10 @@ void Ui::setEntities(ent::EntityWorld* entities) {
         openMinecartCommandEditor(*s, e.id, e.minecartCommand, parseComponent(e.minecartLastOutput, s->lang()));
     };
 }
+void Ui::setWorldTextures(ID3D12Resource* items, ID3D12Resource* entity) {
+    if (s_->pass) s_->pass->setWorldTextures(items, entity);
+}
+
 void Ui::setItemModels(ent::ItemModels* models) {
     s_->itemModels = models;
     s_->icons.setItemModels(models);

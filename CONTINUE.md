@@ -143,8 +143,7 @@ sampled at the box after the move, not along the swept path (Entity.checkInsideB
 Fluid rendering audited: residuals are BlockState.isSolid and #blocks_fluid_flow approximated by the collision shape
 (+ signs) in the mesher, heights in 1/240 steps and the flow angle in 255 steps, no 0.001 inset on the sides' edges,
 no lava back faces. Loom / stonecutter / smithing / mount screens audited; residuals: the loom predicts no result and
-draws its banner preview flat (no BannerFlagModel), the smithing preview shows no head item without an equipment
-asset, mount slots use fixed type lists (not #can_equip_saddle / #can_wear_horse_armor). Boss bars / titles / action
+draws its banner preview flat (no BannerFlagModel), mount slots use fixed type lists (not #can_equip_saddle / #can_wear_horse_armor). Boss bars / titles / action
 bar and the beam renderers audited and fixed (the end crystal beam's black-to-white shading is per vertex:
 MeshQuad kQuadGreyGradient). Added: DatapackLoadFailureScreen (a local
 server stopping on its datapacks offers Safe Mode = --safeMode; tested with a broken dimension_type), the symlink
@@ -256,8 +255,9 @@ game profile); the Online screen's Friends section has only In-Game Notification
   server upgrades on start, without Java's "upgradeWorld.done / joinNow" confirmation; Optimize World shows one bar and
   the total from the server's log (no per-dimension bars or converted / skipped counts); a failed backup's toast has
   no reason line.
-- Station residuals: the loom's banner preview is a flat quad (Java: the 3D BannerFlagModel); the smithing armor
-  stand shows no item model on its head for head items without an equippable asset.
+- Station residuals: the loom's banner preview is a flat quad (Java: the 3D BannerFlagModel). GUI entity previews
+  draw held and head items as their item models (UiPass binds the item / entity atlases and block textures); a
+  worn skull there is its item model, not SkullBlockRenderer's head.
 - Pack screens: Options' Resource Packs and Create World's Data Packs are this port's Mods & Packs manager (one list
   of switches) rather than PackSelectionScreen's Available / Selected lists.
 - SystemToasts: chunk load / save failures and low disk space come from the local server's log, pack load failures

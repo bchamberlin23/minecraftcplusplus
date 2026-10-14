@@ -131,6 +131,8 @@ bool previewSmithingArmorStand(UiState& s, const ItemStack& result, PreviewEntit
     if (eq.slot >= 2 && eq.slot <= 5 && !eq.asset.empty())  // FEET .. HEAD with an equipment asset
         addArmorLayers(s, out, a.model(std::string("armor_stand") + kPieces[5 - eq.slot]), result, eq.asset,
                        eq.slot == 3 ? "humanoid_leggings" : "humanoid");
+    else if (eq.slot == 5)
+        out.headItem = result;  // no humanoid layer: its item model on the head (headItem, ItemDisplayContext.HEAD)
     else if (eq.slot < 2 || eq.slot > 5)
         out.held[1] = result;  // the left hand (THIRD_PERSON_LEFT_HAND)
     return true;
@@ -165,6 +167,10 @@ bool previewLocalPlayer(UiState& s, PreviewEntity& out) {
             const ItemStack* st = stack(menuSlot);
             if (!st) continue;
             const ent::ItemModels::Equippable& eq = s.itemModels->equippable(st->item);
+            if (slot == 5 && (eq.slot != 5 || eq.asset.empty())) {  // CustomHeadLayer: anything else on the head
+                out.headItem = *st;  // (skulls: their item model, not SkullBlockRenderer's worn head)
+                continue;
+            }
             if (eq.slot != slot || eq.asset.empty()) continue;
             addArmorLayers(s, out, a.model(set + kPieces[5 - slot]), *st, eq.asset, slot == 3 ? "humanoid_leggings" : "humanoid");
         }
@@ -272,8 +278,8 @@ void drawEntityFollowsMouse(UiState& s, Canvas& c, const PreviewEntity& pe, int 
     std::vector<Face> faces;
     std::vector<ent::PartPose> poses;
     std::vector<M34> mats;
-    M34 hand[2];  // ItemInHandLayer anchors: the base model's right / left arm
-    bool haveHand[2] = {};
+    M34 hand[2], head;  // ItemInHandLayer / CustomHeadLayer anchors: the base model's right / left arm, head
+    bool haveHand[2] = {}, haveHead = false;
     for (size_t li = 0; li < pe.layers.size(); ++li) {
         const PreviewLayer& layer = pe.layers[li];
         if (layer.model < 0) continue;
@@ -306,6 +312,7 @@ void drawEntityFollowsMouse(UiState& s, Canvas& c, const PreviewEntity& pe, int 
                 const int k = part.role == ent::RightArm ? 0 : 1;
                 hand[k] = mats[i], haveHand[k] = true;
             }
+            if (li == 0 && part.role == ent::Head && !partHidden[i]) head = mats[i], haveHead = true;
             if (partHidden[i]) continue;
             for (u32 q = part.quadFirst; q < part.quadFirst + part.quadCount; ++q) {
                 const ent::GpuQuad& g = a.quads()[q];
@@ -334,47 +341,65 @@ void drawEntityFollowsMouse(UiState& s, Canvas& c, const PreviewEntity& pe, int 
             }
         }
     }
-    // ItemInHandLayer: the held items as flat cards with their inventory icon (flat items: the third-person display
-    // transform of the item model; block items: a small card facing the viewer at the transformed centre).
-    for (int k = 0; k < 2 && s.itemModels; ++k) {
-        const ItemStack& held = pe.held[k];
-        float iuv[4];
-        if (!haveHand[k] || held.empty() || !s.icons.icon(held, iuv)) continue;
+    // Item models (ItemStackRenderState.submit) in a display context at `base`: each part's display transform, their
+    // quads from the item / entity atlases and block textures (UiPass world textures), lit like the entity.
+    auto drawItem = [&](const ItemStack& stack, ItemDisplay context, ent::Display display, const M34& base) {
         ItemContext ic;
-        ic.display = k == 0 ? ItemDisplay::ThirdRight : ItemDisplay::ThirdLeft;
-        const ent::ItemMesh& mesh = s.itemModels->mesh(held, ic);
-        if (mesh.empty()) continue;
-        M34 m = mul(hand[k], rotX(-kPi / 2));
-        m = mul(m, rotY(kPi));
-        m = mul(m, translate((k == 1 ? -1.0f : 1.0f) / 16.0f, 2.0f / 16.0f, -10.0f / 16.0f));
-        M34 disp;
-        std::copy(mesh.parts[0].display[size_t(k == 0 ? ent::Display::ThirdRight : ent::Display::ThirdLeft)].m,
-                  mesh.parts[0].display[size_t(k == 0 ? ent::Display::ThirdRight : ent::Display::ThirdLeft)].m + 12, disp.m);
-        m = mul(m, disp);
-        Face f;
-        f.mode = ModeIcon;
-        f.color = 0xFFFFFFFF;
-        const float iu[4] = {iuv[0], iuv[2], iuv[2], iuv[0]}, iv[4] = {iuv[3], iuv[3], iuv[1], iuv[1]};
-        if (s.items.isBlockItem(held.item)) {
-            const float centre[3] = {0.5f, 0.5f, 0.5f};
-            float o[3];
-            xform(m, centre, o);
-            const float h = 0.16f;
-            const float dx[4] = {-h, h, h, -h}, dy[4] = {h, h, -h, -h};
-            for (int q = 0; q < 4; ++q) f.xy[q][0] = cx + (o[0] + dx[q]) * size, f.xy[q][1] = cy + (o[1] + dy[q]) * size;
-            f.depth = o[2] - 0.05f;
-        } else {
-            const float corner[4][3] = {{0, 0, 0.5f}, {1, 0, 0.5f}, {1, 1, 0.5f}, {0, 1, 0.5f}};
-            f.depth = 0;
-            for (int q = 0; q < 4; ++q) {
-                float o[3];
-                xform(m, corner[q], o);
-                f.xy[q][0] = cx + o[0] * size, f.xy[q][1] = cy + o[1] * size;
-                f.depth += o[2] / 4.0f;
-            }
+        ic.display = context;
+        const ent::ItemMesh& mesh = s.itemModels->mesh(stack, ic);
+        for (int pi = 0; pi < mesh.partCount; ++pi) {
+            const ent::ItemMesh::Part& part = mesh.parts[pi];
+            M34 disp;
+            std::copy(part.display[size_t(display)].m, part.display[size_t(display)].m + 12, disp.m);
+            const M34 m = mul(base, disp);
+            for (const auto& [first, count] : {std::pair{part.first, part.count}, std::pair{part.tfirst, part.tcount}})
+                for (u32 qi = first; qi < first + count; ++qi) {
+                    const ent::MeshQuad& mq = s.itemModels->quad(qi);
+                    if (mq.tex == ent::kTexFont) continue;  // (none on held items)
+                    const TexMode mode = mq.tex == ent::kTexItems    ? ModeItems
+                                         : mq.tex == ent::kTexEntity ? ModeEntity
+                                         : mq.tex == ent::kTexSolid  ? ModeSolid
+                                                                     : TexMode(ModeBlocks | (mq.tex & 0xFFFF) << 8);
+                    const float nl[3] = {float(i8(mq.normal & 255)) / 127.0f, float(i8((mq.normal >> 8) & 255)) / 127.0f,
+                                         float(i8((mq.normal >> 16) & 255)) / 127.0f};
+                    float n[3];
+                    xformDir(m, nl, n);
+                    if (n[2] >= -1e-4f) continue;  // facing away
+                    Face f;
+                    f.mode = mode;
+                    f.depth = 0;
+                    for (int c4 = 0; c4 < 4; ++c4) {
+                        float o[3];
+                        xform(m, mq.pos[c4], o);
+                        f.xy[c4][0] = cx + o[0] * size, f.xy[c4][1] = cy + o[1] * size;
+                        f.depth += o[2] / 4.0f;
+                        f.uv[c4][0] = mq.uv[c4][0], f.uv[c4][1] = mq.uv[c4][1];
+                    }
+                    static const float L0[3] = {0.16f, -0.79f, -0.59f}, L1[3] = {-0.16f, -0.79f, -0.59f};
+                    const float d0 = std::max(0.0f, n[0] * L0[0] + n[1] * L0[1] + n[2] * L0[2]);
+                    const float d1 = std::max(0.0f, n[0] * L1[0] + n[1] * L1[1] + n[2] * L1[2]);
+                    const float light = (mq.flags & ent::kQuadNoShade) ? 1.0f : std::min(1.0f, 0.4f + 0.6f * (d0 + d1));
+                    const u32 argb = (mq.color & 0xFF00FF00u) | ((mq.color & 255) << 16) | ((mq.color >> 16) & 255);  // from ABGR
+                    f.color = scaleRgb(argb, light);
+                    faces.push_back(f);
+                }
         }
-        for (int q = 0; q < 4; ++q) f.uv[q][0] = iu[q], f.uv[q][1] = iv[q];
-        faces.push_back(f);
+    };
+    // ItemInHandLayer: the held items in the third-person displays.
+    for (int k = 0; k < 2 && s.itemModels; ++k) {
+        if (!haveHand[k] || pe.held[k].empty()) continue;
+        M34 arm = mul(hand[k], rotX(-kPi / 2));
+        arm = mul(arm, rotY(kPi));
+        arm = mul(arm, translate((k == 1 ? -1.0f : 1.0f) / 16.0f, 2.0f / 16.0f, -10.0f / 16.0f));
+        drawItem(pe.held[k], k == 0 ? ItemDisplay::ThirdRight : ItemDisplay::ThirdLeft,
+                 k == 0 ? ent::Display::ThirdRight : ent::Display::ThirdLeft, arm);
+    }
+    // CustomHeadLayer.translateToHead: 0.25 up, turned around, scaled 0.625 (y and z flipped), the HEAD display.
+    if (s.itemModels && haveHead && !pe.headItem.empty()) {
+        M34 m = mul(head, translate(0, -0.25f, 0));
+        m = mul(m, rotY(kPi));
+        m = mul(m, scale(0.625f, -0.625f, -0.625f));
+        drawItem(pe.headItem, ItemDisplay::Head, ent::Display::Head, m);
     }
     // Far first; layers of the same part (hat, jacket) sit slightly nearer and draw after the base at equal depth.
     std::stable_sort(faces.begin(), faces.end(), [](const Face& l, const Face& r) { return l.depth > r.depth; });

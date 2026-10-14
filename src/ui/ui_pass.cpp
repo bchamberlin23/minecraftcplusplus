@@ -69,17 +69,40 @@ bool UiPass::createTexture(Atlas& atlas, ComPtr<ID3D12Resource>& tex, u32 descri
     return true;
 }
 
+void UiPass::setWorldTextures(ID3D12Resource* items, ID3D12Resource* entity) {
+    if (worldTex_[0] == items && worldTex_[1] == entity) return;
+    worldTex_[0] = items, worldTex_[1] = entity;
+    writeWorldDescriptors();
+}
+
+void UiPass::writeWorldDescriptors() {
+    if (!renderer_ || descriptors_ == UINT32_MAX) return;
+    for (int i = 0; i < 2; ++i) {
+        D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+        srv.Format = worldTex_[i] ? worldTex_[i]->GetDesc().Format : DXGI_FORMAT_R8G8B8A8_UNORM;
+        srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srv.Texture2D.MipLevels = UINT(-1);
+        renderer_->device()->CreateShaderResourceView(worldTex_[i], &srv, renderer_->cpuDescriptor(descriptors_ + 2 + u32(i)));
+    }
+}
+
 bool UiPass::create(Renderer& renderer) {
     renderer_ = &renderer;
     ID3D12Device* device = renderer.device();
-    descriptors_ = renderer.allocDescriptors(2);
+    descriptors_ = renderer.allocDescriptors(4);
     if (descriptors_ == UINT32_MAX) return ok(E_OUTOFMEMORY, "descriptor allocation");
     if (!createTexture(gui_, guiTex_, descriptors_) || !createTexture(icons_, iconTex_, descriptors_ + 1)) return false;
+    writeWorldDescriptors();
 
     D3D12_DESCRIPTOR_RANGE range{};
     range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    range.NumDescriptors = 2;
-    D3D12_ROOT_PARAMETER params[2]{};
+    range.NumDescriptors = 4;
+    D3D12_DESCRIPTOR_RANGE blockRange{};  // t4: the frame's block texture array (PassContext::blockTextures)
+    blockRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    blockRange.NumDescriptors = 1;
+    blockRange.BaseShaderRegister = 4;
+    D3D12_ROOT_PARAMETER params[3]{};
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     params[0].Constants.Num32BitValues = 12;
     params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
@@ -87,13 +110,17 @@ bool UiPass::create(Renderer& renderer) {
     params[1].DescriptorTable.NumDescriptorRanges = 1;
     params[1].DescriptorTable.pDescriptorRanges = &range;
     params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[2].DescriptorTable.NumDescriptorRanges = 1;
+    params[2].DescriptorTable.pDescriptorRanges = &blockRange;
+    params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     D3D12_STATIC_SAMPLER_DESC sampler{};
     sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
     sampler.AddressU = sampler.AddressV = sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
     sampler.MaxLOD = D3D12_FLOAT32_MAX;
     sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     D3D12_ROOT_SIGNATURE_DESC rd{};
-    rd.NumParameters = 2;
+    rd.NumParameters = 3;
     rd.pParameters = params;
     rd.NumStaticSamplers = 1;
     rd.pStaticSamplers = &sampler;
@@ -212,6 +239,9 @@ void UiPass::draw(const PassContext& ctx) {
                               glint[2], glint[3], std::max(1.0f, glint[6]), glint[7], 0, 0};
     list->SetGraphicsRoot32BitConstants(0, 12, consts, 0);
     list->SetGraphicsRootDescriptorTable(1, renderer_->gpuDescriptor(descriptors_));
+    // without a world's block textures the table points at the GUI atlas (nothing samples it then)
+    const D3D12_GPU_DESCRIPTOR_HANDLE blocks = ctx.blockTextures.ptr ? ctx.blockTextures : renderer_->gpuDescriptor(descriptors_);
+    list->SetGraphicsRootDescriptorTable(2, blocks);
     list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     D3D12_VERTEX_BUFFER_VIEW vbv{vertices_->GetGPUVirtualAddress() + offset, u32(bytes), sizeof(UiVertex)};
     list->IASetVertexBuffers(0, 1, &vbv);
@@ -221,6 +251,7 @@ void UiPass::draw(const PassContext& ctx) {
         list->SetGraphicsRootSignature(root_.Get());
         list->SetGraphicsRoot32BitConstants(0, 12, consts, 0);
         list->SetGraphicsRootDescriptorTable(1, renderer_->gpuDescriptor(descriptors_));
+        list->SetGraphicsRootDescriptorTable(2, blocks);
         list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         list->IASetVertexBuffers(0, 1, &vbv);
         list->SetPipelineState(blend == 1   ? psoInvert_.Get()

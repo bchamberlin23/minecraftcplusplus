@@ -24,7 +24,8 @@ struct PreviewEntity {
     ent::AnimState state;              // headYaw / pitch are set from the mouse
     float height = 1.8f;               // bounding box height (blocks)
     float modelScale = 1.0f;           // the renderer's own scale (players 0.9375)
-    ItemStack held[2];                 // ItemInHandLayer: right arm, left arm (drawn as flat cards)
+    ItemStack held[2];                 // ItemInHandLayer: right arm, left arm
+    ItemStack headItem;                // CustomHeadLayer: an item model on the head (HEAD display)
     std::vector<std::string> hiddenParts;  // parts not drawn (chests of unchested animals, reins when not ridden)
     // GuiGraphicsExtractor.entity with a fixed view instead of following the mouse: translation y, rotation
     // rotationXYZ(viewRotX, 0, viewRotZ) and the body's rotation (degrees).
