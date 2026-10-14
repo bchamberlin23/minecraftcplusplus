@@ -1102,7 +1102,9 @@ void Ui::State::screenInput(const Window::InputEvent& e) {
     }
     if (e.type == E::Button && !e.down) {
         const int slotId = outside ? -999 : slot;
-        if (doubleClick && slot >= 0 && e.code == 0) {
+        // AbstractContainerScreen.mouseReleased: a double click collects only where canTakeItemForPickAll(EMPTY, slot);
+        // elsewhere the release does what a single one would
+        if (doubleClick && slot >= 0 && e.code == 0 && makeSim(*this, m, carried, creative()).canPickAll(slot)) {
             if (shift) {
                 // Slot.container identity: the result, the menu's own container (the crafting grid), the player's
                 // inventory (with the armour and offhand slots of the inventory menu)
@@ -1113,12 +1115,12 @@ void Ui::State::screenInput(const Window::InputEvent& e) {
                 auto containerOf = [&](int i) {
                     return i == sim.resultSlot && !sharedResult ? 0 : (i < l.playerStart && !(m.type < 0 && i >= 5)) ? 1 : 2;
                 };
-                if (!lastQuickMoved.empty() && sim.canPickAll(slot))
+                if (!lastQuickMoved.empty())
                     for (size_t i = 0; i < m.slots.size(); ++i)
                         if (!m.slots[i].empty() && containerOf(int(i)) == containerOf(slot) && sim.mayPickup(int(i)) &&
                             m.slots[i].sameItemSameComponents(lastQuickMoved) && m.slots[i].count <= items.maxStack(lastQuickMoved))
                             containerClick(int(i), 0, QuickMove);
-            } else if (makeSim(*this, m, carried, creative()).canPickAll(slot)) {  // canTakeItemForPickAll(EMPTY, slot)
+            } else {
                 containerClick(slot, 0, PickupAll);
             }
             doubleClick = false;

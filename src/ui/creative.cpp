@@ -687,7 +687,8 @@ void gridClick(UiState& s, int cell, int button, int input) {  // slotClicked fo
     ItemStack& carried = s.carried;
     const bool quick = input == QuickMove;
     if (input == Swap) {
-        if (!clicked.empty()) s.creativeSetSlot(36 + button, clicked.withCount(s.items.maxStack(clicked)));
+        // Inventory.setItem(buttonNum): the hotbar slot, or 40 the off hand
+        if (!clicked.empty()) s.creativeSetSlot(button == 40 ? 45 : 36 + button, clicked.withCount(s.items.maxStack(clicked)));
         return;
     }
     if (input == Clone) {
@@ -739,6 +740,7 @@ void input(UiState& s, const InputEvent& e) {
         int hotbar = -1;
         for (int i = 0; i < 9; ++i)
             if (s.isKey(Key(int(Key::Hotbar1) + i), e)) hotbar = i;
+        if (s.isKey(Key::SwapOffhand, e)) hotbar = 40;  // keySwapOffhand: SWAP with the off hand
         // Hotbar keys over a slot (checkHotbarKeyPressed).
         auto hotbarKey = [&] {
             if (hotbar < 0 || !s.carried.empty()) return false;
@@ -830,7 +832,7 @@ void input(UiState& s, const InputEvent& e) {
     if (!hit) {
         if (!inside && !s.carried.empty()) {  // clicked outside: drop (THROW; the inventory tab drops the whole stack)
             if (tab().kind == TabKind::Inventory) {
-                if (input == Pickup) dropStack(s, s.carried), s.carried = ItemStack{};
+                if (input != Clone) dropStack(s, s.carried), s.carried = ItemStack{};  // (shift does not quick-move outside)
             } else if (button == 0) dropStack(s, s.carried), s.carried = ItemStack{};
             else if (button == 1) dropStack(s, s.carried.withCount(1)), s.carried = s.carried.withCount(s.carried.count - 1);
         }
