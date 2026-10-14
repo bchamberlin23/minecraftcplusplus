@@ -130,7 +130,12 @@ background is approximated (no END_PORTAL pipeline in the GUI). Network residual
 (the server sends every registry in full), packets after a transfer in the same stream are dropped, the brand payload
 is read in the configuration phase only. Pickups (a flying copy for orbs and partial stacks) and the living render
 effects (upside-down xRot, creeper flash steps / ignited swelling, invisible hurt tint, skeleton shake) audited and
-fixed; residual: remote players' eye height for the pickup target is the type's constant (no pose). Not ported: the bell's raider particles (showBellParticles), the
+fixed; residual: remote players' eye height for the pickup target is the type's constant (no pose). Anvil /
+grindstone / cartography, brewing / crafter / beacon / bundles and the death / win screens audited and fixed;
+residuals: no client-side result prediction (createResult: anvil, grindstone, cartography results wait for the
+server), screens are not narrated on opening (Screen.getNarrationMessage, e.g. the credits), the win screen's End
+portal background is approximated, the death screen is not reopened (nor the player respawned) when another screen
+closes while dead, no draft-report icon on the death screen's title button. Not ported: the bell's raider particles (showBellParticles), the
 darkness pulse on the player's own tick count, filtered sign text (needs the account's profanity filter flag). Toasts follow ToastInstance now (the
 server pack download toast shows its progress). Toast residuals: no toasts
 for world access / chunk load or save /
