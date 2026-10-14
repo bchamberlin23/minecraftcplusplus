@@ -2575,7 +2575,7 @@ void Visuals::Impl::buildTags(const PassContext& ctx) {
             const int dir = std::clamp(e.direction, 0, 5);
             p[0] += kStepXZ[dir][0] * 0.3, p[1] -= 0.25, p[2] += kStepXZ[dir][1] * 0.3;
         }
-        const bool discrete = e.pose == 5;  // crouching
+        const bool discrete = (e.sharedFlags & 0x02) != 0;  // Entity.isDiscrete: isShiftKeyDown (FLAG_SHIFT_KEY_DOWN)
         double bw, bh;  // the current dimensions (poses, sleeping, age and scale): the name tag attachment's height
         entitySize(e, bw, bh);
         // the NAME_TAG attachment: the entity's height (AT_HEIGHT), the sniffer's nameTagOffset(2.05) scaled with it
