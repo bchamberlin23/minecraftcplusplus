@@ -95,8 +95,16 @@ void anvilSync(UiState& s, Menu& m) {  // slotChanged(0): the field shows the ne
     const int item = in.empty() ? -1 : in.item;
     if (item == anvil.lastItem && hn == anvil.lastName) return;
     anvil.lastItem = item, anvil.lastName = hn;
-    anvil.name.value = hn;
-    anvil.name.cursor = anvil.name.selection = int(hn.size());
+    // EditBox.setValue: cut to the 50 (UTF-16) character limit
+    size_t end = 0;
+    for (int units = 0; end < hn.size();) {
+        const u8 c = u8(hn[end]);
+        const size_t len = c < 0x80 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
+        if ((units += len == 4 ? 2 : 1) > anvil.name.maxLength) break;
+        end += len;
+    }
+    anvil.name.value = hn.substr(0, end);
+    anvil.name.cursor = anvil.name.selection = int(anvil.name.value.size());
     anvil.name.scroll = 0;
     anvil.name.blinkStart = s.clock;
     anvilSendName(s, m);
@@ -104,6 +112,7 @@ void anvilSync(UiState& s, Menu& m) {  // slotChanged(0): the field shows the ne
 
 void anvilDrawBg(UiState& s, Canvas& c, Menu& m, const Layout&, float left, float top) {
     anvilSync(s, m);
+    s.xpDisplayStart = s.guiTicks;  // AnvilScreen.containerTick: the experience bar stays up while the anvil is open
     const bool has0 = !m.slots[0].empty();
     blitSprite(c, sp(s, has0 ? "container/anvil/text_field" : "container/anvil/text_field_disabled"), left + 59, top + 20, 110, 16);
     if ((has0 || !m.slots[1].empty()) && m.slots[2].empty())
@@ -155,7 +164,8 @@ int anvilQuickMove(UiState&, const Menu&, int index, const ItemStack&, const std
 bool anvilMayPickup(UiState& s, const Menu& m, int slot) {  // AnvilMenu.mayPickup: the level cost (any in creative)
     return slot != 2 || ((s.creative() || s.xpLevel >= m.data[0]) && m.data[0] > 0);
 }
-void anvilOnTake(UiState&, Menu& m) {  // AnvilMenu.onTake: the item and the addition are used (repair counts: the server)
+void anvilOnTake(UiState& s, Menu& m) {  // AnvilMenu.onTake: the item and the addition are used (repair counts: the server)
+    if (!s.creative()) s.xpLevel = std::max(0, s.xpLevel - m.data[0]);  // giveExperienceLevels(-cost)
     m.slots[0] = ItemStack{};
     m.slots[1] = ItemStack{};
     m.data[0] = 0;
