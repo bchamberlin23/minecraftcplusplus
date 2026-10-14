@@ -288,13 +288,15 @@ VideoSettings Upscalers::apply(VideoSettings s) {
     // Shader preset, then the render scale and sharpening on top of it.
     const ShaderPreset preset = ShaderPreset(s.shaders);
     if (preset != r.shaderPreset()) r.setShaderPreset(preset);
+    const bool plain = preset == ShaderPreset::Off && s.plainAntialiasing;  // Shaders Off, anti-aliased
+    r.setPlainTemporal(plain);
     s.pathTracing = std::min<u8>(s.pathTracing, 3);
     if (preset == ShaderPreset::PathTraced) {  // bounces, samples and radius of the path tracing quality
         ShaderSettings ss = r.shaderSettings(), q = ss;
         q.setPathTraceQuality(PathTraceQuality(s.pathTracing));
         if (q.ptBounces != ss.ptBounces || q.ptSamples != ss.ptSamples || q.ptRadius != ss.ptRadius) r.setShaderSettings(q);
     }
-    if (preset != ShaderPreset::Off) {
+    if (preset != ShaderPreset::Off || plain) {
         ShaderSettings ss = r.shaderSettings();
         const float scale = s.upscaler == UpscalerKind::Taa && s.renderScaleOverride > 0 ? s.renderScaleOverride
                                                                                          : renderScale(s.upscaler, s.quality);
@@ -308,7 +310,7 @@ VideoSettings Upscalers::apply(VideoSettings s) {
     r.setUpscaler(up ? up->upscaler() : nullptr);
     if (old.upscaler != s.upscaler || old.quality != s.quality) r.resetTemporal();
     const float ratio = r.renderWidth() ? float(r.renderWidth()) / float(std::max(r.width(), 1u)) : 1.0f;
-    mipBias_ = preset == ShaderPreset::Off ? 0.0f : std::log2(std::min(ratio, 1.0f)) + (up ? up->mipBiasOffset() : 0.0f);
+    mipBias_ = preset == ShaderPreset::Off && !plain ? 0.0f : std::log2(std::min(ratio, 1.0f)) + (up ? up->mipBiasOffset() : 0.0f);
 
     // Frame generation: a different SDK needs its own swap chain; the multiplier changes live.
     const FrameGenKind newFg = effectiveFrameGen();
@@ -338,11 +340,13 @@ void Upscalers::waitIdle() { r.waitIdle(); }
 std::string Upscalers::status() const {
     char buf[512];
     const UpscalerKind k = settings_.upscaler;
-    const bool on = r.shaderPreset() != ShaderPreset::Off;
-    int n = std::snprintf(buf, sizeof(buf), "%s %s%s%s | %ux%u -> %ux%u", upscalerName(k), qualityName(k, settings_.quality),
+    const bool plain = r.shaderPreset() == ShaderPreset::Off && r.plainTemporal();  // Shaders Off, anti-aliased
+    const bool on = r.shaderPreset() != ShaderPreset::Off || plain;
+    int n = std::snprintf(buf, sizeof(buf), "%s%s %s%s%s | %ux%u -> %ux%u", plain ? "shaders off, " : "", upscalerName(k),
+                          qualityName(k, settings_.quality),
                           caps_.version[int(k)].empty() ? "" : " ", caps_.version[int(k)].c_str(), r.renderWidth(),
                           r.renderHeight(), r.width(), r.height());
-    if (!on) n = std::snprintf(buf, sizeof(buf), "shaders off: no upscaling | %ux%u", r.width(), r.height());
+    if (!on) n = std::snprintf(buf, sizeof(buf), "shaders off: no anti-aliasing | %ux%u", r.width(), r.height());
     if (on && r.shaderPreset() == ShaderPreset::PathTraced)
         n += std::snprintf(buf + n, sizeof(buf) - n, " | path traced %s, %s", VideoSettings::pathTracingKey(settings_.pathTracing),
                            rayReconstruction() ? "DLSS Ray Reconstruction" : "built-in denoiser");

@@ -241,7 +241,8 @@ struct MvOut {
 };
 MvOut EntityCutoutMvPS(VSOut i, bool front : SV_IsFrontFace) {
     MvOut o;
-    o.color = shadePipeline(i, 0.1, false);
+    // (Shaders Off with temporal anti-aliasing: the vanilla look with motion vectors)
+    o.color = gFogParams.w > 0.5 ? shadePipeline(i, 0.1, false) : shade(i, 0.1);
     o.motion = motionVector(i.pos, i.prevClip);
     float3 n = dot(i.n, i.n) > 1e-8 ? normalize(i.n) : float3(0, 1, 0);
     o.normal = float4((front ? n : -n) * 0.5 + 0.5, 1);

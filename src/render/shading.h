@@ -21,7 +21,8 @@
 struct Renderer::Shading {
     // Texture / UAV slots of the descriptor tables (shading.hlsli kTex* / kRw*).
     enum Tex : u32 { TexDepth, TexAlbedo, TexNormal, TexLdrSky, TexLdrFwd, TexScene, TexSceneCopy, TexLinDepth, TexVol,
-                     TexHist0, TexHist1, TexAo, TexBloom0, TexMotion = 18, TexExposure, TexUi, TexEntNormal, TexCount = 24 };
+                     TexHist0, TexHist1, TexAo, TexBloom0, TexMotion = 18, TexExposure, TexUi, TexEntNormal, TexPlain,
+                     TexCount = 24 };
     enum Rw : u32 { RwScene, RwSceneCopy, RwLinDepth, RwVol, RwHist0, RwHist1, RwAo, RwBloom0, RwMotion = 13, RwExposure,
                     RwCount = 24 };
     static constexpr u32 kBloomLevels = 6;
@@ -64,6 +65,13 @@ struct Renderer::Shading {
                 D3D12_GPU_VIRTUAL_ADDRESS activeVa, u32 activeCount, PassContext& pc, ID3D12Resource* backbuffer,
                 D3D12_CPU_DESCRIPTOR_HANDLE backbufferRtv);
     void compositeUi(ID3D12GraphicsCommandList* list, D3D12_GPU_VIRTUAL_ADDRESS cb, D3D12_CPU_DESCRIPTOR_HANDLE backbufferRtv);
+    // Shaders Off with temporal anti-aliasing: the vanilla frame's targets (render resolution), then its upscale and
+    // present (the overlays' output-resolution depth included).
+    void beginPlain(ID3D12GraphicsCommandList* list, const float fog[4], PassContext& pc, D3D12_CPU_DESCRIPTOR_HANDLE& rtv,
+                    D3D12_CPU_DESCRIPTOR_HANDLE& dsv);
+    void resolvePlain(ID3D12GraphicsCommandList* list, const FrameInput& in, D3D12_GPU_VIRTUAL_ADDRESS cb, PassContext& pc,
+                      D3D12_CPU_DESCRIPTOR_HANDLE backbufferRtv);
+    u32 upscale(ID3D12GraphicsCommandList* list, const FrameInput& in, D3D12_GPU_VIRTUAL_ADDRESS cb, ID3D12Resource* depth);
     bool uiComposite();
     u32 renderSize(u32 output) const;
     void readTimings(u32 frame);
@@ -84,7 +92,7 @@ struct Renderer::Shading {
 
     // Device objects.
     ComPtr<ID3D12PipelineState> psoGbuf_, psoGbufCutout_, psoGbufModel_, psoShadow_, psoShadowCutout_, psoShadowModel_,
-        psoFwd_, psoTonemap_;
+        psoFwd_, psoTonemap_, psoPlainPresent_, psoPlainPrep_;
     ComPtr<ID3D12PipelineState> psoShadowCull_, psoDeferred_, psoVolumetric_, psoComposite_, psoTaa_, psoBloomDown_,
         psoBloomUp_, psoExposure_, psoAo_, psoMotion_, psoDepthUp_, psoUiComposite_;
     ComPtr<ID3D12DescriptorHeap> rtvHeap_, dsvHeap_;
@@ -101,6 +109,7 @@ struct Renderer::Shading {
     // Targets. width_ / height_ = render (internal) resolution; outW_ / outH_ = swap chain.
     u32 width_ = 0, height_ = 0, renderW_ = 0, renderH_ = 0, outW_ = 0, outH_ = 0;
     ComPtr<ID3D12Resource> sceneDepth_, motion_, exposureTex_, ui_;
+    ComPtr<ID3D12Resource> plain_;  // Shaders Off with temporal anti-aliasing: the vanilla image (render resolution)
     ComPtr<ID3D12Resource> albedo_, normal_, ldrSky_, ldrFwd_, entNormal_, scene_, sceneCopy_, linDepth_, vol_, hist_[2], ao_;
     ComPtr<ID3D12Resource> bloom_[kBloomLevels];
     u32 bloomW_[kBloomLevels] = {}, bloomH_[kBloomLevels] = {};

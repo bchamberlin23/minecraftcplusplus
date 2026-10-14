@@ -19,6 +19,8 @@
 #include "MotionCS.h"
 #include "ShadowCullCS.h"
 #include "TaaCS.h"
+#include "PlainPrepCS.h"
+#include "PlainPresentPS.h"
 #include "TerrainFwdPS.h"
 #include "TerrainFwdVS.h"
 #include "TerrainGbufPS.h"
@@ -195,11 +197,19 @@ void Renderer::setShaderPreset(ShaderPreset preset) {
     else if (pt_) waitIdle(), pt_.reset();
 }
 
+void Renderer::setPlainTemporal(bool on) {
+    if (plainTemporal_ == on) return;
+    plainTemporal_ = on;
+    if (on && shaderPreset_ == ShaderPreset::Off) setShaderSettings(shaderSettings_);  // the pipeline's targets
+    if (shading_) shading_->historyValid_ = false;
+}
+
 void Renderer::setShaderSettings(const ShaderSettings& settings) {
     shaderSettings_ = settings;
     shaderSettings_.cascades = std::min(shaderSettings_.cascades, 4u);
     shaderSettings_.renderScale = std::clamp(shaderSettings_.renderScale, 0.33f, 1.0f);
-    if (!device_ || shaderPreset_ == ShaderPreset::Off) return;  // created by init / on the next preset
+    const bool off = shaderPreset_ == ShaderPreset::Off;
+    if (!device_ || (off && !plainTemporal_)) return;  // created by init / on the next preset
     waitIdle();
     if (!shading_) {
         shading_ = std::make_unique<Shading>(*this);
@@ -211,11 +221,11 @@ void Renderer::setShaderSettings(const ShaderSettings& settings) {
         }
         if (!textureNames_.empty()) shading_->setMaterials(textureNames_);
     }
-    shading_->createShadowMap();
+    if (!off) shading_->createShadowMap();
     if (shading_->renderW_ != shading_->renderSize(width_) || shading_->renderH_ != shading_->renderSize(height_))
         shading_->createTargets();
     // The path tracer exists while Shaders: Path Traced is selected (its acceleration structures free with it).
-    if (shaderSettings_.pathTrace && !pt_ && pathTracingSupported()) {
+    if (shaderSettings_.pathTrace && !off && !pt_ && pathTracingSupported()) {
         pt_ = std::make_unique<PathTracer>(*this);
         if (!pt_->create()) {
             LOG("error: path tracing unavailable; using the High pipeline");
@@ -274,7 +284,7 @@ bool Renderer::Shading::create() {
     ID3D12Device* dev = r.device_.Get();
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-    hd.NumDescriptors = 8;
+    hd.NumDescriptors = 9;  // ... motion, entity normals, the vanilla image (Shaders Off with anti-aliasing)
     if (!check(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&rtvHeap_)), "rtv heap")) return false;
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
     hd.NumDescriptors = 5;  // shadow cascades, scene depth
@@ -381,6 +391,8 @@ bool Renderer::Shading::create() {
            graphics(SH(DetailShadowVS), SH(DetailShadowPS), 0, nullptr, true, true, le, none, false, true, psoShadowModel_) &&
            graphics(SH(TerrainFwdVS), SH(TerrainFwdPS), 1, hdr, true, true, ge, none, true, false, psoFwd_) &&
            graphics(SH(TonemapVS), SH(TonemapPS), 1, ldr, false, false, ge, none, false, false, psoTonemap_) &&
+           graphics(SH(TonemapVS), SH(PlainPresentPS), 1, ldr, false, false, ge, none, false, false, psoPlainPresent_) &&
+           compute(SH(PlainPrepCS), psoPlainPrep_) &&
            graphics(SH(TonemapVS), SH(DepthUpsamplePS), 0, nullptr, true, true, D3D12_COMPARISON_FUNC_ALWAYS, none, false,
                     false, psoDepthUp_) &&
            uiComposite() &&
@@ -462,6 +474,7 @@ bool Renderer::Shading::createTargets() {
     ldrSky_ = texture(kLdr, w, h, 1, rt, kSrv, &zero);
     ldrFwd_ = texture(kLdr, w, h, 1, rt, kSrv, &zero);
     entNormal_ = texture(kLdr, w, h, 1, rt, kSrv, &zero);  // the World stage's entity normals (RR guides)
+    plain_ = texture(kLdr, w, h, 1, rt, kSrv, &zero);
     scene_ = texture(kHdr, w, h, 1, rt | ua, kSrv, nullptr);
     sceneCopy_ = texture(kHdr, w, h, 1, ua, kSrv, nullptr);
     linDepth_ = texture(DXGI_FORMAT_R32_FLOAT, w, h, 1, ua, kSrv, nullptr);
@@ -473,7 +486,7 @@ bool Renderer::Shading::createTargets() {
         bloom_[i] = texture(kHdr, bloomW_[i], bloomH_[i], 1, ua, kUav, nullptr);
         if (!bloom_[i]) return false;
     }
-    if (!albedo_ || !normal_ || !ao_ || !ldrSky_ || !ldrFwd_ || !entNormal_ || !scene_ || !sceneCopy_ || !linDepth_ || !vol_ || !hist_[0] ||
+    if (!albedo_ || !normal_ || !ao_ || !ldrSky_ || !ldrFwd_ || !entNormal_ || !plain_ || !scene_ || !sceneCopy_ || !linDepth_ || !vol_ || !hist_[0] ||
         !hist_[1])
         return false;
     srv(TexDepth, sceneDepth_.Get(), DXGI_FORMAT_R32_FLOAT);
@@ -487,6 +500,7 @@ bool Renderer::Shading::createTargets() {
     srv(TexLdrSky, ldrSky_.Get(), kLdr);
     srv(TexLdrFwd, ldrFwd_.Get(), kLdr);
     srv(TexEntNormal, entNormal_.Get(), kLdr);
+    srv(TexPlain, plain_.Get(), kLdr);
     srv(TexScene, scene_.Get(), kHdr);
     srv(TexSceneCopy, sceneCopy_.Get(), kHdr);
     srv(TexLinDepth, linDepth_.Get(), DXGI_FORMAT_R32_FLOAT);
@@ -504,9 +518,9 @@ bool Renderer::Shading::createTargets() {
     uav(RwHist1, hist_[1].Get(), kHdr);
     for (u32 i = 0; i < kBloomLevels; ++i) uav(RwBloom0 + i, bloom_[i].Get(), kHdr);
     const D3D12_CPU_DESCRIPTOR_HANDLE base = rtvHeap_->GetCPUDescriptorHandleForHeapStart();
-    ID3D12Resource* rts[8] = {albedo_.Get(), normal_.Get(), ldrSky_.Get(), ldrFwd_.Get(), scene_.Get(), ui_.Get(), motion_.Get(),
-                              entNormal_.Get()};
-    for (u32 i = 0; i < 8; ++i) r.device_->CreateRenderTargetView(rts[i], nullptr, {base.ptr + size_t(i) * rtvStride_});
+    ID3D12Resource* rts[9] = {albedo_.Get(), normal_.Get(), ldrSky_.Get(), ldrFwd_.Get(), scene_.Get(), ui_.Get(), motion_.Get(),
+                              entNormal_.Get(), plain_.Get()};
+    for (u32 i = 0; i < 9; ++i) r.device_->CreateRenderTargetView(rts[i], nullptr, {base.ptr + size_t(i) * rtvStride_});
     historyValid_ = false;
     return true;
 }
@@ -1089,41 +1103,8 @@ void Renderer::Shading::record(ID3D12GraphicsCommandList* list, const FrameInput
     mark(list, "motion");
 
     // ---- temporal upscale (built-in TAA or an SDK upscaler) -> history (output resolution) ----
-    const u32 cur = histSlot_ ^ 1;
-    barrier(hist_[cur].Get(), kSrv, kUav);
-    flushBarriers(list);
-    {
-        UpscaleInputs u;
-        u.list = list;
-        u.color = scene_.Get();
-        u.depth = depth;
-        u.motion = motion_.Get();
-        u.reactive = ldrFwd_.Get();
-        u.exposure = exposureTex_.Get();
-        u.output = hist_[cur].Get();
-        u.jitter[0] = -in.jitter[0] * 0.5f * float(w);
-        u.jitter[1] = in.jitter[1] * 0.5f * float(h);
-        u.renderSize[0] = w, u.renderSize[1] = h;
-        u.outputSize[0] = outW_, u.outputSize[1] = outH_;
-        u.fovY = in.cam->fovY;
-        u.aspect = float(outW_) / float(std::max(outH_, 1u));
-        u.frameTimeMs = dt_ * 1000.0f;
-        u.reset = !historyValid_;
-        Upscaler* up = r.upscaler_ ? r.upscaler_ : &taa_;
-        if (r.pt_ && r.pt_->rayReconstruction()) {  // path tracing: DLSS-RR denoises and upscales
-            up = r.pt_->rayReconstruction();
-            r.pt_->fillGuides(u);
-        }
-        up->evaluate(u);
-        if (up != &taa_) {  // external: restore the pipeline's bindings
-            list->SetDescriptorHeaps(1, heaps);
-            bindCompute(list, cb);
-        }
-    }
-    barrier(hist_[cur].Get(), kUav, kSrv);
-    flushBarriers(list);
+    const u32 cur = upscale(list, in, cb, depth);
     mark(list, "taa/upscale");
-
     // ---- bloom + exposure ----
     {
         const u32 consts[8] = {TexHist0 + cur, asUint(dt_), exposureReset_ ? 1u : 0u};
@@ -1199,6 +1180,129 @@ void Renderer::Shading::record(ID3D12GraphicsCommandList* list, const FrameInput
     pc.width = outW_, pc.height = outH_;
     histSlot_ = cur;
     historyValid_ = true;
+}
+
+// Shaders Off with temporal anti-aliasing (Renderer::render): the vanilla frame is drawn into plain_ / the scene depth
+// at render resolution (jittered, entities writing their motion); then it is upscaled like the pipeline's scene and
+// presented sharpened, with an output-resolution depth for the overlays drawn next.
+void Renderer::Shading::beginPlain(ID3D12GraphicsCommandList* list, const float fog[4], PassContext& pc,
+                                   D3D12_CPU_DESCRIPTOR_HANDLE& rtvOut, D3D12_CPU_DESCRIPTOR_HANDLE& dsvOut) {
+    const D3D12_CPU_DESCRIPTOR_HANDLE rtvBase = rtvHeap_->GetCPUDescriptorHandleForHeapStart();
+    auto rtv = [&](u32 i) { return D3D12_CPU_DESCRIPTOR_HANDLE{rtvBase.ptr + size_t(i) * rtvStride_}; };
+    const D3D12_CPU_DESCRIPTOR_HANDLE dsv{dsvHeap_->GetCPUDescriptorHandleForHeapStart().ptr + size_t(4) * dsvStride_};
+    barrier(plain_.Get(), kSrv, kRt);
+    barrier(motion_.Get(), kSrv, kRt);
+    barrier(entNormal_.Get(), kSrv, kRt);
+    flushBarriers(list);
+    const float clear[4] = {0, 0, 0, 0}, noMotion[4] = {kNoMotion, kNoMotion, 0, 0};
+    list->ClearRenderTargetView(rtv(8), fog, 0, nullptr);
+    list->ClearRenderTargetView(rtv(6), noMotion, 0, nullptr);
+    list->ClearRenderTargetView(rtv(7), clear, 0, nullptr);
+    list->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
+    rtvOut = rtv(8), dsvOut = dsv;
+    pc.colorRtv = rtv(8), pc.motionRtv = rtv(6), pc.normalRtv = rtv(7), pc.dsv = dsv;
+    pc.width = width_, pc.height = height_;
+}
+
+void Renderer::Shading::resolvePlain(ID3D12GraphicsCommandList* list, const FrameInput& in, D3D12_GPU_VIRTUAL_ADDRESS cb,
+                                     PassContext& pc, D3D12_CPU_DESCRIPTOR_HANDLE backbufferRtv) {
+    const ShaderSettings& set = r.shaderSettings_;
+    const u32 w = width_, h = height_;
+    ID3D12Resource* depth = sceneDepth_.Get();
+    auto groups = [](u32 n, u32 g) { return (n + g - 1) / g; };
+    ID3D12DescriptorHeap* heaps[] = {r.srvHeap_.Get()};
+    barrier(plain_.Get(), kRt, kSrv);
+    barrier(entNormal_.Get(), kRt, kSrv);
+    barrier(depth, kDepthWrite, kDepthRead);
+    // The entity marks the built-in TAA and the reactive mask read (alpha > 0 where the World stage drew).
+    barrier(entNormal_.Get(), kSrv, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    barrier(ldrFwd_.Get(), kSrv, D3D12_RESOURCE_STATE_COPY_DEST);
+    flushBarriers(list);
+    list->CopyResource(ldrFwd_.Get(), entNormal_.Get());
+    barrier(entNormal_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, kSrv);
+    barrier(ldrFwd_.Get(), D3D12_RESOURCE_STATE_COPY_DEST, kSrv);
+    barrier(scene_.Get(), kSrv, kUav);
+    barrier(exposureTex_.Get(), kSrv, kUav);
+    barrier(motion_.Get(), kRt, kUav);
+    flushBarriers(list);
+    list->SetDescriptorHeaps(1, heaps);
+    bindCompute(list, cb);
+    list->SetPipelineState(psoPlainPrep_.Get());
+    list->Dispatch(groups(w, 8), groups(h, 8), 1);
+    list->SetPipelineState(psoMotion_.Get());  // camera motion where no entity wrote its own
+    list->Dispatch(groups(w, 8), groups(h, 8), 1);
+    barrier(scene_.Get(), kUav, kSrv);
+    barrier(exposureTex_.Get(), kUav, kSrv);
+    barrier(motion_.Get(), kUav, kSrv);
+    flushBarriers(list);
+    const u32 cur = upscale(list, in, cb, depth);
+    // Present: the history, sharpened, to the swap chain (output resolution).
+    const D3D12_VIEWPORT outViewport{0, 0, float(outW_), float(outH_), 0, 1};
+    const D3D12_RECT outScissor{0, 0, LONG(outW_), LONG(outH_)};
+    list->SetDescriptorHeaps(1, heaps);
+    list->OMSetRenderTargets(1, &backbufferRtv, FALSE, nullptr);
+    list->RSSetViewports(1, &outViewport);
+    list->RSSetScissorRects(1, &outScissor);
+    bindGraphics(list, cb);
+    const u32 consts[8] = {cur, asUint(set.sharpen)};
+    passConstants(list, false, consts);
+    list->SetPipelineState(psoPlainPresent_.Get());
+    list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    list->DrawInstanced(3, 1, 0, 0);
+    // Output-resolution depth for the block outline (the scene depth is the renderer's own when not scaled).
+    if (depth != r.depth_.Get()) {
+        const D3D12_CPU_DESCRIPTOR_HANDLE overlayDsv = r.dsvHeap_->GetCPUDescriptorHandleForHeapStart();
+        list->ClearDepthStencilView(overlayDsv, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
+        list->OMSetRenderTargets(0, nullptr, FALSE, &overlayDsv);
+        list->SetPipelineState(psoDepthUp_.Get());
+        list->DrawInstanced(3, 1, 0, 0);
+    }
+    barrier(depth, kDepthRead, kDepthWrite);
+    flushBarriers(list);
+    pc.motionRtv = {}, pc.normalRtv = {};
+    pc.width = outW_, pc.height = outH_;
+    histSlot_ = cur;
+    historyValid_ = true;
+}
+
+u32 Renderer::Shading::upscale(ID3D12GraphicsCommandList* list, const FrameInput& in, D3D12_GPU_VIRTUAL_ADDRESS cb,
+                               ID3D12Resource* depth) {
+    const u32 w = width_, h = height_;
+    ID3D12DescriptorHeap* heaps[] = {r.srvHeap_.Get()};
+    const u32 cur = histSlot_ ^ 1;
+    barrier(hist_[cur].Get(), kSrv, kUav);
+    flushBarriers(list);
+    {
+        UpscaleInputs u;
+        u.list = list;
+        u.color = scene_.Get();
+        u.depth = depth;
+        u.motion = motion_.Get();
+        u.reactive = ldrFwd_.Get();
+        u.exposure = exposureTex_.Get();
+        u.output = hist_[cur].Get();
+        u.jitter[0] = -in.jitter[0] * 0.5f * float(w);
+        u.jitter[1] = in.jitter[1] * 0.5f * float(h);
+        u.renderSize[0] = w, u.renderSize[1] = h;
+        u.outputSize[0] = outW_, u.outputSize[1] = outH_;
+        u.fovY = in.cam->fovY;
+        u.aspect = float(outW_) / float(std::max(outH_, 1u));
+        u.frameTimeMs = dt_ * 1000.0f;
+        u.reset = !historyValid_;
+        Upscaler* up = r.upscaler_ ? r.upscaler_ : &taa_;
+        if (r.pt_ && r.pt_->rayReconstruction()) {  // path tracing: DLSS-RR denoises and upscales
+            up = r.pt_->rayReconstruction();
+            r.pt_->fillGuides(u);
+        }
+        up->evaluate(u);
+        if (up != &taa_) {  // external: restore the pipeline's bindings
+            list->SetDescriptorHeaps(1, heaps);
+            bindCompute(list, cb);
+        }
+    }
+    barrier(hist_[cur].Get(), kUav, kSrv);
+    flushBarriers(list);
+    return cur;
 }
 
 bool Renderer::Shading::uiComposite() {

@@ -26,6 +26,7 @@ struct VideoSettings {
     bool vsync = false;
     u32 fpsLimit = 0;                     // 0 = unlimited
     float renderScaleOverride = 0;        // --render-scale for the built-in TAA (not saved; 0 = from the quality mode)
+    bool plainAntialiasing = true;        // Shaders Off: temporal anti-aliasing / upscaling with the upscaler above
 
     bool operator==(const VideoSettings&) const = default;
 

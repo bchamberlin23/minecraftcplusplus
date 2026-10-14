@@ -288,6 +288,10 @@ public:
     // Shader pipeline. setShaderPreset can be called any time (the UI's options screen); Off restores vanilla.
     void setShaderPreset(ShaderPreset preset);
     ShaderPreset shaderPreset() const { return shaderPreset_; }
+    // Shaders Off with temporal anti-aliasing / upscaling (built-in TAA, DLSS, FSR, XeSS): the vanilla frame at render
+    // resolution through the pipeline's upscale step (Shading::beginPlain / resolvePlain).
+    void setPlainTemporal(bool on);
+    bool plainTemporal() const { return plainTemporal_ && shaderPreset_ == ShaderPreset::Off && shading_; }
     void setShaderSettings(const ShaderSettings& settings);  // fine tuning on top of a preset (not Off)
     const ShaderSettings& shaderSettings() const { return shaderSettings_; }
     static bool parseShaderPreset(std::string_view name, ShaderPreset& out);  // off|low|medium|high|ultra|pathtraced
@@ -473,6 +477,7 @@ private:
     std::unique_ptr<Shading> shading_;
     std::unique_ptr<PathTracer> pt_;  // Shaders: Path Traced only
     ShaderPreset shaderPreset_ = ShaderPreset::High;
+    bool plainTemporal_ = false;
     ShaderSettings shaderSettings_;
     SkyLighting skyLighting_;
     std::vector<std::string> textureNames_;

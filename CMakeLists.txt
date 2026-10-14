@@ -146,6 +146,8 @@ add_shader(post.hlsl BloomUpCS cs_6_0)
 add_shader(post.hlsl ExposureCS cs_6_0)
 add_shader(post.hlsl TonemapVS vs_6_0)
 add_shader(post.hlsl TonemapPS ps_6_0)
+add_shader(post.hlsl PlainPrepCS cs_6_0)
+add_shader(post.hlsl PlainPresentPS ps_6_0)
 # Path tracer (src/render/pathtrace.cpp): inline ray queries need shader model 6.5.
 add_shader(pathtrace.hlsl BlasGenCS cs_6_5)
 add_shader(pathtrace.hlsl PathTraceCS cs_6_5)

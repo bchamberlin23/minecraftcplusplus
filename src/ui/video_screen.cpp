@@ -392,6 +392,7 @@ void extraBuild(UiState& s) {
     VideoSettings cur = up.settings();  // what is in effect (may include command-line overrides)
     cur.renderScaleOverride = 0;
     const bool shaders = cur.shaders != 0;
+    const bool upscaling = shaders || cur.plainAntialiasing;  // Shaders Off upscales with anti-aliasing on
     {  // the shader pack's state under the title
         const auto st = packs::packStatus(*s.init.renderer);
         if (!st.loading.empty()) l.subtitle(Text("Loading shader pack " + st.loading + "..."), 0xFFFFD060);
@@ -409,8 +410,8 @@ void extraBuild(UiState& s) {
                                     p->settings.save();
                                 },
                                 [p] {
-                                    std::string why, t = "The built-in renderer's lighting and effects. Off is the plain look; upscaling and "
-                                                         "frame generation need Low or higher.";
+                                    std::string why, t = "The built-in renderer's lighting and effects. Off is the plain look (anti-aliasing "
+                                                         "and upscaling still apply); frame generation needs Low or higher.";
                                     if (p->init.renderer->pathTracingSupported(&why))
                                         t += "\nPath Traced: ray traced light, shadows and reflections near you (DirectX Raytracing).";
                                     else
@@ -481,7 +482,22 @@ void extraBuild(UiState& s) {
         l.half(std::move(quality), std::move(denoiser));
     }
 
-    l.header(Text("Upscaling"));
+    l.header(Text("Anti-Aliasing & Upscaling"));
+    Button aa = cycleButton([p, cur, shaders] {
+                                return value(*p, "Anti-Aliasing", shaders || cur.plainAntialiasing ? "Temporal" : "Off");
+                            },
+                            [p, cur]() mutable {
+                                cur.plainAntialiasing = !cur.plainAntialiasing;
+                                p->applyVideo(cur);
+                                p->settings.save();
+                            },
+                            [shaders] {
+                                return Text(shaders ? "The shader pipeline always anti-aliases with the upscaler below."
+                                                    : "Shaders Off: temporal anti-aliasing against shimmering edges and textures, "
+                                                      "with the upscaler below (TAA, DLSS / DLAA, FSR, XeSS). Off: no anti-aliasing.");
+                            });
+    aa.active = !shaders;
+    l.half(std::move(aa));
     Button upscaler = cycleButton([p, cur] { return value(*p, "Upscaler", Upscalers::upscalerName(cur.upscaler)); },
                                   [p, cur, &caps]() mutable {
                                       int k = int(cur.upscaler);
@@ -498,10 +514,11 @@ void extraBuild(UiState& s) {
                                           const std::string name = Upscalers::upscalerName(UpscalerKind(k));
                                           t += name + (caps.upscaler[k] ? ": " + std::string(caps.version[k]) : ": unavailable - " + std::string(caps.why[k])) + "\n";
                                       }
-                                      if (u.settings().shaders == 0) t += "Needs the shader pipeline (Shaders: Low or higher)\n";
+                                      if (u.settings().shaders == 0 && !u.settings().plainAntialiasing)
+                                          t += "Needs Anti-Aliasing (or Shaders: Low or higher)\n";
                                       return Text(t + u.status());
                                   });
-    upscaler.active = shaders;
+    upscaler.active = upscaling;
     Button quality = cycleButton([p, cur, &up] { return value(*p, "Quality", up.qualityName(cur.upscaler, cur.quality)); },
                                  [p, cur, &up]() mutable {
                                      const auto modes = up.qualityModes(cur.upscaler);
@@ -510,8 +527,8 @@ void extraBuild(UiState& s) {
                                      p->applyVideo(cur);
                                      p->settings.save();
                                  },
-                                 shaders ? std::function<Text()>() : needsShaders);
-    quality.active = shaders;
+                                 upscaling ? std::function<Text()>() : needsShaders);
+    quality.active = upscaling;
     l.half(std::move(upscaler), std::move(quality));
     Button sharpness = sliderButton(cur.sharpness,
                                     [p] {
@@ -526,7 +543,7 @@ void extraBuild(UiState& s) {
                                             p->settings.videoSaved = true;
                                         }
                                     });
-    sharpness.active = shaders;
+    sharpness.active = upscaling;
     l.half(std::move(sharpness));
 
     l.header(Text("Frame Generation & Latency"));

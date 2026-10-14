@@ -938,6 +938,8 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     }
     const bool packActive = packs_ && packs_->active();  // an OptiFine / Iris shader pack replaces the pipeline
     const bool shaded = !packActive && shading_ && shaderPreset_ != ShaderPreset::Off;
+    const bool plainAa = !packActive && plainTemporal();  // Shaders Off, anti-aliased / upscaled
+    const bool temporal = shaded || plainAa;
     bool packUi = false;  // a pack with frame generation: UI layer like the built-in pipeline (Packs::frameGenUi)
     if (!shaded) stats_.passCount = 0;
 
@@ -964,7 +966,7 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     }
     const Mat4 vpNoJitter = proj * view;
     float jitter[2] = {0, 0};
-    if (shaded) {  // TAA / upscalers: sub-pixel Halton (2, 3) jitter, 8 * (output / render)^2 phases (vendor guidance)
+    if (temporal) {  // TAA / upscalers: sub-pixel Halton (2, 3) jitter, 8 * (output / render)^2 phases (vendor guidance)
         const u32 phases = upscalers_->jitterPhases(shading_->renderW_, width_);
         const u32 phase = jitterPhase_ = (jitterPhase_ + 1) % phases;
         auto halton = [](u32 i, u32 b) {
@@ -1017,7 +1019,7 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
         fc.fade[0] = now;
         fc.fade[1] = fadeSeconds_ > 0 ? 1.0f / fadeSeconds_ : 0.0f;
         fc.fade[2] = float(fadeFrame_++ & 1023);
-        fc.fade[3] = shaded ? 1.0f : 0.0f;  // temporal accumulation (TAA / upscalers) blends a moving dither
+        fc.fade[3] = temporal ? 1.0f : 0.0f;  // temporal accumulation (TAA / upscalers) blends a moving dither
     }
     const u32 activeCount = u32(std::min<size_t>(drawList_.size(), kMaxActive));
     {  // CardinalLighting of the dimension (the vanilla terrain path's cube faces)
@@ -1030,14 +1032,14 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     fc.misc[3] = u32(translucent_.size());
     fc.misc[2] = textureFiltering_;
     {  // texture LOD bias for the upscaler's render scale (common.hlsli sampleBlock)
-        const float bias = shaded ? upscalers_->mipBias() : 0.0f;
+        const float bias = temporal ? upscalers_->mipBias() : 0.0f;
         std::memcpy(&fc.misc[1], &bias, 4);
     }
     std::memcpy(constantsMapped_ + size_t(fi) * kConstantSlotBytes, &fc, sizeof(fc));
     const D3D12_GPU_VIRTUAL_ADDRESS cb = constants_->GetGPUVirtualAddress() + u64(fi) * kConstantSlotBytes;
     // Overlays (block outline) draw after TAA: unjittered copy of the constants.
     D3D12_GPU_VIRTUAL_ADDRESS overlayCb = cb;
-    if (shaded) {
+    if (temporal) {
         std::memcpy(fc.viewProj, vpNoJitter.m, sizeof(fc.viewProj));
         std::memcpy(constantsMapped_ + size_t(kFrames + fi) * kConstantSlotBytes, &fc, sizeof(fc));
         overlayCb = constants_->GetGPUVirtualAddress() + u64(kFrames + fi) * kConstantSlotBytes;
@@ -1059,7 +1061,7 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
         shadeIn.rayUp = {inv[0][1], inv[1][1], inv[2][1]};
         shadeIn.rayFwd = {inv[0][2], inv[1][2], inv[2][2]};
     }
-    if (shaded) {  // camera for the vendor SDKs (DLSS / FSR / XeSS constants, frame generation)
+    if (temporal) {  // camera for the vendor SDKs (DLSS / FSR / XeSS constants, frame generation)
         upscale::CameraFrame c;
         c.pos[0] = cam.x, c.pos[1] = cam.y, c.pos[2] = cam.z;
         const Vec3 basis[3] = {right, up, fwd};
@@ -1074,7 +1076,7 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
         upscalers_->setCamera(c);
     }
     Timer shadeTimer;
-    if (shaded) shading_->prepare(shadeIn);
+    if (temporal) shading_->prepare(shadeIn);
     double shadeCpu = shadeTimer.ms();
     if (activeCount) std::memcpy(activeMapped_ + size_t(fi) * kMaxActive * 2, drawList_.data(), size_t(activeCount) * 4);
     if (!translucent_.empty())  // right after the active list (CullCS)
@@ -1135,7 +1137,8 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     pc.shading = shaded;
     pc.textureRemap = remapVa;
     std::memcpy(pc.lightmap, fc.lightmap, sizeof(pc.lightmap));
-    if (shaded) shading_->fillPassContext(pc, shadeIn);
+    if (temporal) shading_->fillPassContext(pc, shadeIn);
+    if (plainAa) pc.shadowCascades = 0, pc.shadowMask = 0, pc.width = width_, pc.height = height_;
     if (!packActive) preparePasses(pc);  // shadow casters: this frame's entity geometry before the shadow maps
     if (shaded) {
         shading_->mark(list_.Get(), "cull");
@@ -1173,11 +1176,22 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
             list_->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
         }
     } else {
-    list_->ClearRenderTargetView(rtv, fogColor_, 0, nullptr);
-    list_->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
-    list_->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
-    list_->RSSetViewports(1, &vpRect);
-    list_->RSSetScissorRects(1, &scissor);
+    // Shaders Off: straight to the swap chain, or (anti-aliased / upscaled) into the pipeline's render-resolution
+    // targets, then Shading::resolvePlain.
+    D3D12_CPU_DESCRIPTOR_HANDLE sceneRtv = rtv, sceneDsv = dsv;
+    D3D12_VIEWPORT sceneVp = vpRect;
+    D3D12_RECT sceneScissor = scissor;
+    if (plainAa) {
+        shading_->beginPlain(list_.Get(), fogColor_, pc, sceneRtv, sceneDsv);
+        sceneVp = {0, 0, float(shading_->renderW_), float(shading_->renderH_), 0, 1};
+        sceneScissor = {0, 0, LONG(shading_->renderW_), LONG(shading_->renderH_)};
+    } else {
+        list_->ClearRenderTargetView(rtv, fogColor_, 0, nullptr);
+        list_->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
+    }
+    list_->OMSetRenderTargets(1, &sceneRtv, FALSE, &sceneDsv);
+    list_->RSSetViewports(1, &sceneVp);
+    list_->RSSetScissorRects(1, &sceneScissor);
 
     auto bindWorld = [&] {
         list_->SetDescriptorHeaps(1, heaps);
@@ -1185,9 +1199,9 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
         list_->SetGraphicsRootConstantBufferView(1, cb);
         list_->SetGraphicsRootDescriptorTable(4, srvHeap_->GetGPUDescriptorHandleForHeapStart());
         list_->SetGraphicsRootShaderResourceView(13, remapVa);
-        list_->RSSetViewports(1, &vpRect);
-        list_->RSSetScissorRects(1, &scissor);
-        list_->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
+        list_->RSSetViewports(1, &sceneVp);
+        list_->RSSetScissorRects(1, &sceneScissor);
+        list_->OMSetRenderTargets(1, &sceneRtv, FALSE, &sceneDsv);
         if (!haveWorld) return;
         list_->SetGraphicsRootShaderResourceView(8, colors_->GetGPUVirtualAddress());
         list_->SetGraphicsRootShaderResourceView(3, sections_->GetGPUVirtualAddress());
@@ -1219,6 +1233,16 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
             runPasses(PassStage::AfterTranslucent, pc);
             bindWorld();
         }
+    }
+    if (plainAa) {  // the anti-aliased / upscaled image to the swap chain; the overlays then draw unjittered
+        shading_->resolvePlain(list_.Get(), shadeIn, cb, pc, rtv);
+        list_->SetDescriptorHeaps(1, heaps);
+        list_->SetGraphicsRootSignature(rootSig_.Get());
+        list_->SetGraphicsRootConstantBufferView(1, overlayCb);
+        list_->SetGraphicsRootDescriptorTable(4, srvHeap_->GetGPUDescriptorHandleForHeapStart());
+        list_->RSSetViewports(1, &vpRect);
+        list_->RSSetScissorRects(1, &scissor);
+        list_->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
     }
     }  // vanilla
 
@@ -1355,11 +1379,11 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
 
 u32 Renderer::renderWidth() const {
     if (packs_ && packs_->active()) return packs_->renderSize(false);
-    return shading_ && shaderPreset_ != ShaderPreset::Off ? shading_->renderW_ : width_;
+    return shading_ && (shaderPreset_ != ShaderPreset::Off || plainTemporal()) ? shading_->renderW_ : width_;
 }
 u32 Renderer::renderHeight() const {
     if (packs_ && packs_->active()) return packs_->renderSize(true);
-    return shading_ && shaderPreset_ != ShaderPreset::Off ? shading_->renderH_ : height_;
+    return shading_ && (shaderPreset_ != ShaderPreset::Off || plainTemporal()) ? shading_->renderH_ : height_;
 }
 
 void Renderer::updateTextureLayers(const std::vector<u32>& layers, const std::vector<u8>& pixels) {

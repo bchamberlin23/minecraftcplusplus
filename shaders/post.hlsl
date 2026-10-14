@@ -252,26 +252,27 @@ float3 tonyMcMapface(float3 c) {
     return pow(saturate(r * 1.12), 1.08);
 }
 
+// Contrast-adaptive sharpening (cross neighbourhood) of history pixel px to counter the temporal blur.
+float3 sharpenHistory(uint tex, int2 px, float3 c, float sharp) {
+    if (sharp <= 0) return c;
+    int2 maxp = int2(gOutput.xy) - 1;
+    float3 n = gTex[tex].Load(int3(clamp(px + int2(0, -1), 0, maxp), 0)).rgb;
+    float3 s = gTex[tex].Load(int3(clamp(px + int2(0, 1), 0, maxp), 0)).rgb;
+    float3 w = gTex[tex].Load(int3(clamp(px + int2(-1, 0), 0, maxp), 0)).rgb;
+    float3 e = gTex[tex].Load(int3(clamp(px + int2(1, 0), 0, maxp), 0)).rgb;
+    float3 tc = tmWeight(c), tn = tmWeight(n), ts = tmWeight(s), tw = tmWeight(w), te = tmWeight(e);
+    float3 mn = min(tc, min(min(tn, ts), min(tw, te))), mx = max(tc, max(max(tn, ts), max(tw, te)));
+    float3 amp = sqrt(saturate(min(mn, 1 - mx) / max(mx, 1e-4)));
+    float3 wgt = -amp * sharp * 0.2;
+    float3 r = (tc + (tn + ts + tw + te) * wgt) / (1 + 4 * wgt);
+    return tmUnweight(saturate(r));
+}
+
 // gPassA.x = history slot to show, gPassA.y = sharpening (asfloat).
 float4 TonemapPS(ScreenOut i) : SV_Target {
     int2 px = int2(i.pos.xy);
     uint tex = kTexHist0 + gPassA.x;
-    float3 c = gTex[tex].Load(int3(px, 0)).rgb;
-    // Contrast-adaptive sharpening (cross neighbourhood) to counter the TAA blur.
-    float sharp = asfloat(gPassA.y);
-    if (sharp > 0) {
-        int2 maxp = int2(gOutput.xy) - 1;
-        float3 n = gTex[tex].Load(int3(clamp(px + int2(0, -1), 0, maxp), 0)).rgb;
-        float3 s = gTex[tex].Load(int3(clamp(px + int2(0, 1), 0, maxp), 0)).rgb;
-        float3 w = gTex[tex].Load(int3(clamp(px + int2(-1, 0), 0, maxp), 0)).rgb;
-        float3 e = gTex[tex].Load(int3(clamp(px + int2(1, 0), 0, maxp), 0)).rgb;
-        float3 tc = tmWeight(c), tn = tmWeight(n), ts = tmWeight(s), tw = tmWeight(w), te = tmWeight(e);
-        float3 mn = min(tc, min(min(tn, ts), min(tw, te))), mx = max(tc, max(max(tn, ts), max(tw, te)));
-        float3 amp = sqrt(saturate(min(mn, 1 - mx) / max(mx, 1e-4)));
-        float3 wgt = -amp * sharp * 0.2;
-        float3 r = (tc + (tn + ts + tw + te) * wgt) / (1 + 4 * wgt);
-        c = tmUnweight(saturate(r));
-    }
+    float3 c = sharpenHistory(tex, px, gTex[tex].Load(int3(px, 0)).rgb, asfloat(gPassA.y));
     float exposure = gState[0].x;
     // Night vision (Purkinje): dim scenes lose colour towards blue.
     float scotopic = saturate(1.0 - log2(max(gState[0].y, 1e-5) / 0.002) / 4.0);
@@ -303,6 +304,23 @@ float4 TonemapPS(ScreenOut i) : SV_Target {
 // ---- after tonemapping ------------------------------------------------------------------------------------
 
 // Output-resolution depth for the overlays (block outline) when rendering below the output resolution.
+// ---- Shaders Off with temporal anti-aliasing / upscaling (Renderer::Shading::resolvePlain) ----------------------
+
+// The vanilla image (render resolution, display encoded) into the scene target the upscalers read; a unit exposure.
+[numthreads(8, 8, 1)]
+void PlainPrepCS(uint2 px : SV_DispatchThreadID) {
+    if (all(px == 0)) gRW[kRwExposure][uint2(0, 0)] = float4(1, 1, 1, 1);
+    if (any(px >= uint2(gScreen.xy))) return;
+    gRW[kRwScene][px] = float4(gTex[kTexPlain].Load(int3(px, 0)).rgb, 1);
+}
+
+// The anti-aliased (upscaled) vanilla image -> swap chain, sharpened. gPassA.x = history slot, gPassA.y = sharpening.
+float4 PlainPresentPS(ScreenOut i) : SV_Target {
+    int2 px = int2(i.pos.xy);
+    uint tex = kTexHist0 + gPassA.x;
+    return float4(saturate(sharpenHistory(tex, px, gTex[tex].Load(int3(px, 0)).rgb, asfloat(gPassA.y))), 1);
+}
+
 float DepthUpsamplePS(ScreenOut i) : SV_Depth {
     float2 uv = i.pos.xy * gOutput.zw;
     return gTex[kTexDepth].Load(int3(min(uint2(uv * gScreen.xy), uint2(gScreen.xy) - 1), 0)).r;

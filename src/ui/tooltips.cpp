@@ -992,7 +992,7 @@ void Items::addDetails(const ItemStack& s, bool advanced, bool creative, bool pl
         const int md = maxDamage(s);
         // isDamaged: damageable (max damage, damage, not unbreakable) with some damage
         if (s.damage > 0 && md > 0 && !component(s, "unbreakable").present() && shown("damage"))
-            out.push_back(tr("item.durability", {Text(std::to_string(md - s.damage)), Text(std::to_string(md))}));
+            out.push_back(tr("item.durability", {Text(std::to_string(md - std::clamp(s.damage, 0, md))), Text(std::to_string(md))}));  // getDamageValue: clamped
         out.push_back(Text(itemId, fmt("dark_gray")));
         if (const int count = componentCount(s); count > 0) out.push_back(tr("item.components", {Text(std::to_string(count))}, fmt("dark_gray")));
     }
