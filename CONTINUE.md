@@ -137,7 +137,10 @@ server), screens are not narrated on opening (Screen.getNarrationMessage, e.g. t
 portal background is approximated, the death screen is not reopened (nor the player respawned) when another screen
 closes while dead, no draft-report icon on the death screen's title button. Books / lectern and the operator block
 editors audited and fixed; residuals: writable pages ignore text filtering (getPages(isTextFilteringEnabled)), the
-test instance's error message is the one it had when opened. Not ported: the bell's raider particles (showBellParticles), the
+test instance's error message is the one it had when opened. Merchant / enchanting and special-block movement
+(bubble columns per cell, stuck order, straw beds) audited and fixed; residual: the player's block effects are
+sampled at the box after the move, not along the swept path (Entity.checkInsideBlocks over the movement segments).
+Not ported: the bell's raider particles (showBellParticles), the
 darkness pulse on the player's own tick count, filtered sign text (needs the account's profanity filter flag). Toasts follow ToastInstance now (the
 server pack download toast shows its progress). Toast residuals: no toasts
 for world access / chunk load or save /
