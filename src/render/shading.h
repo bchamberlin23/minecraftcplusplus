@@ -146,8 +146,8 @@ struct Renderer::Shading {
     u32 barrierCount_ = 0;
 
     // Timing statistics: rolling per-pass samples for medians at exit.
-    static constexpr u32 kTimingHistory = 256;
-    std::vector<float> timingSamples_[RenderStats::kMaxPasses];
+    // --profile: each pass's GPU time summed by name (a frame without it adds 0), over the frames after start-up
+    double timingSums_[RenderStats::kMaxPasses] = {};
     const char* timingNames_[RenderStats::kMaxPasses] = {};
     u32 timingFrames_ = 0;
     double cpuMs_ = 0, passCpuMs_ = 0;  // prepare + record, summed; the extension passes' share of it

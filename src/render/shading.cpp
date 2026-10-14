@@ -333,7 +333,6 @@ bool Renderer::Shading::create() {
     qh.Count = kMaxMarks * Renderer::kFrames;
     if (!check(dev->CreateQueryHeap(&qh, IID_PPV_ARGS(&queries_)), "query heap")) return false;
     queryReadback_ = r.createBuffer(u64(kMaxMarks) * 8 * Renderer::kFrames, D3D12_HEAP_TYPE_READBACK);
-    for (auto& v : timingSamples_) v.reserve(kTimingHistory);
 
     // Pipelines (the renderer's root signature).
     auto graphics = [&](const void* vs, size_t vsSize, const void* ps, size_t psSize, u32 rtCount, const DXGI_FORMAT* rts,
@@ -702,6 +701,17 @@ void Renderer::Shading::prepare(const FrameInput& in) {
         const double now = nowSeconds();
         for (u32 c = 1; c < cascades; ++c)
             if (now - cascades_[c].updated < 1.0 / double(480 >> c)) updateMask_ &= ~(1u << c);
+        if (r.pt_) {
+            // Path tracing traces the opaque shadows inside its radius: the cascades only light translucent surfaces
+            // and the volumetrics there, so the stalest one alone is redrawn, at most 60 (the nearest) or 30 times a
+            // second (they took ~0.85 ms of an 8.5 ms frame drawn every frame).
+            updateMask_ = 0;
+            double stalest = 0;
+            for (u32 c = 0; c < cascades; ++c) {
+                const double age = now - cascades_[c].updated;
+                if (age >= (c == 0 ? 1.0 / 60.0 : 1.0 / 30.0) && age > stalest) stalest = age, updateMask_ = 1u << c;
+            }
+        }
         if (shadowFresh_) updateMask_ = (1u << cascades) - 1;
         double f[3] = {-lightDir[0], -lightDir[1], -lightDir[2]};
         const double hint[3] = {std::abs(f[2]) < 0.9 ? 0.0 : 1.0, 0.0, std::abs(f[2]) < 0.9 ? 1.0 : 0.0};
@@ -1381,10 +1391,11 @@ void Renderer::Shading::readTimings(u32 frame) {
     }
     if (++timingFrames_ > 30) {  // skip start-up
         for (u32 i = 0; i < s.passCount; ++i) {
-            timingNames_[i] = s.passNames[i];
-            auto& v = timingSamples_[i];
-            if (v.size() < kTimingHistory) v.push_back(s.passMs[i]);
-            else v[timingFrames_ % kTimingHistory] = s.passMs[i];
+            u32 slot = 0;  // by name: the passes a frame runs vary (shadow cascades at their own rates)
+            while (slot < RenderStats::kMaxPasses && timingNames_[slot] && std::strcmp(timingNames_[slot], s.passNames[i]) != 0) ++slot;
+            if (slot == RenderStats::kMaxPasses) continue;
+            timingNames_[slot] = s.passNames[i];
+            timingSums_[slot] += s.passMs[i];
         }
     }
 }
@@ -1392,15 +1403,14 @@ void Renderer::Shading::readTimings(u32 frame) {
 void Renderer::Shading::logTimings() const {
     if (timingFrames_ <= 30) return;
     char line[1024];
-    int len = std::snprintf(line, sizeof(line), "shaders %s: gpu ms per pass (median of %zu frames):",
-                            Renderer::shaderPresetName(r.shaderPreset_), timingSamples_[0].size());
-    float total = 0;
+    const u32 frames = timingFrames_ - 30;
+    int len = std::snprintf(line, sizeof(line), "shaders %s: gpu ms per pass (mean of %u frames):",
+                            Renderer::shaderPresetName(r.shaderPreset_), frames);
+    double total = 0;
     for (u32 i = 0; i < RenderStats::kMaxPasses && timingNames_[i] && len < int(sizeof(line)) - 64; ++i) {
-        std::vector<float> v = timingSamples_[i];
-        if (v.empty()) continue;
-        std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
-        total += v[v.size() / 2];
-        len += std::snprintf(line + len, sizeof(line) - len, " %s %.3f |", timingNames_[i], v[v.size() / 2]);
+        const double ms = timingSums_[i] / double(frames);
+        total += ms;
+        len += std::snprintf(line + len, sizeof(line) - len, " %s %.3f |", timingNames_[i], ms);
     }
     std::snprintf(line + len, sizeof(line) - len, " sum %.3f | pipeline cpu %.3f ms/frame (+ %.3f in Sky/World/Late passes)",
                   total, cpuFrames_ ? (cpuMs_ - passCpuMs_) / double(cpuFrames_) : 0.0,

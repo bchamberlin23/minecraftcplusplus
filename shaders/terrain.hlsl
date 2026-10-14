@@ -353,10 +353,11 @@ float4 fwdShade(FwdVSOut i, bool traced) {
             RtSurface h;
             float3 tr;
             float hitT = 1e4;
-            if (rtClosestThrough(i.rel + float3(0, 0.02, 0), r, gPtParams.x * 1.5, h, tr)) {
+            // a reflection ray only where the reflection shows (like the SSR's threshold); else the sky's
+            if (fresnel > 0.04 && rtClosestThrough(i.rel + float3(0, 0.02, 0), r, gPtParams.x * 1.5, h, tr)) {
                 refl = tr * rtHitRadiance(h, dist);
                 hitT = length(h.pos - i.rel);
-            } else {
+            } else if (fresnel > 0.04) {
                 refl = tr * skyRefl;
             }
             const uint2 gp = uint2(pixel);
@@ -371,10 +372,14 @@ float4 fwdShade(FwdVSOut i, bool traced) {
             refl = lerp(skyRefl, ssr.rgb, ssr.a);
         }
         float shadowThick;
-        float shadow = dot(gLightColor.rgb, 1) > 0 ? shadowVisibility(i.rel, float3(0, 1, 0), pixel, shadowThick) : 0;
+        float shadow = 0;
+        if (dot(gLightColor.rgb, 1) > 0) {
 #if TRACED
-        if (rt) shadow = dot(gLightColor.rgb, 1) > 0 ? rtVisibility(i.rel + float3(0, 0.02, 0), gLightDir.xyz, 1e4).g : 0;
+            if (rt) shadow = rtVisibility(i.rel + float3(0, 0.02, 0), gLightDir.xyz, 1e4).g;
+            else
 #endif
+                shadow = shadowVisibility(i.rel, float3(0, 1, 0), pixel, shadowThick);
+        }
         float3 h = normalize(gLightDir.xyz + v);
         float ndh = saturate(dot(n, h));
         float a2 = 0.02 * 0.02;
