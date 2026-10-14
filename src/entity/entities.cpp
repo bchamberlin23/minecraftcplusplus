@@ -4,6 +4,7 @@
 #include "assets/assets.h"
 #include "assets/game_reports.h"
 #include "audio/audio.h"
+#include "game/player.h"
 #include "net/client.h"
 #include "net/protocol.h"
 #include "ui/items.h"
@@ -1795,6 +1796,71 @@ void EntityWorld::tickEntity(Entity& e) {
             if (h > 1e-4 || std::abs(e.vel[1]) > 1e-4) {  // ProjectileUtil.rotateTowardsMovement(0.2)
                 e.yaw = rotLerp(0.2f, e.yaw, float(std::atan2(e.vel[0], e.vel[2]) * 180.0 / kPi));
                 e.pitch = lerpf(0.2f, e.pitch, float(std::atan2(e.vel[1], h) * 180.0 / kPi));
+            }
+            return tickSpecies(e, gameTime_, entities_);
+        }
+        const bool throwable = name == "minecraft:snowball" || name == "minecraft:egg" || name == "minecraft:ender_pearl" ||
+                               name == "minecraft:experience_bottle" || name == "minecraft:splash_potion" ||
+                               name == "minecraft:lingering_potion";
+        if (arrowLike || throwable) {
+            if (!physics_) physics_ = std::make_unique<Physics>(world_, registry_);
+            std::shared_lock lock(world_.mutex());
+            const int cx = int(std::floor(e.pos[0])), cy = int(std::floor(e.pos[1])), cz = int(std::floor(e.pos[2]));
+            const u16 at = world_.block(cx, cy, cz);
+            const BlockInfo& b = registry_.infos()[at];
+            const bool water = b.waterlogged || (b.fluid && registry_.name(at).find("water") != std::string::npos);
+            auto lerpRotation = [](float current, float target) {  // Projectile.lerpRotation
+                while (target - current < -180.0f) current -= 360.0f;
+                while (target - current >= 180.0f) current += 360.0f;
+                return lerpf(0.2f, current, target);
+            };
+            auto face = [&](const double v[3]) {
+                const double h = std::sqrt(v[0] * v[0] + v[2] * v[2]);
+                e.pitch = lerpRotation(e.pitch, float(std::atan2(v[1], h) * 180.0 / kPi));
+                e.yaw = lerpRotation(e.yaw, float(std::atan2(v[0], v[2]) * 180.0 / kPi));
+            };
+            // The move along v through the collision shapes (ClipContext.Block.COLLIDER): the hit point, if any.
+            auto clip = [&](const double v[3], double out[3]) {
+                const double len = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+                if (len < 1e-7) return false;
+                const double dir[3] = {v[0] / len, v[1] / len, v[2] / len};
+                const RayHit h = physics_->raycast(e.pos, dir, len, false, true);
+                if (!h.hit) return false;
+                std::copy(h.point, h.point + 3, out);
+                return true;
+            };
+            if (arrowLike) {  // AbstractArrow.tick
+                const bool noPhysics = (dataInt(e, "ID_FLAGS") & 2) != 0;  // FLAG_NOPHYSICS (a returning trident)
+                for (u32 i = 0; i < b.collisionCount && !noPhysics; ++i) {  // inside a collision box: in the ground
+                    const Box& s = registry_.box(b.collisionFirst + i);
+                    if (e.pos[0] >= cx + s.min[0] && e.pos[0] <= cx + s.max[0] && e.pos[1] >= cy + s.min[1] && e.pos[1] <= cy + s.max[1] &&
+                        e.pos[2] >= cz + s.min[2] && e.pos[2] <= cz + s.max[2]) {
+                        e.vel[0] = e.vel[1] = e.vel[2] = 0;
+                        e.inGround = true;
+                        break;
+                    }
+                }
+                if (e.inGround) return tickSpecies(e, gameTime_, entities_);
+                const double movement[3] = {e.vel[0], e.vel[1], e.vel[2]};
+                if (water) for (double& v : e.vel) v *= 0.6;  // getWaterInertia
+                face(movement);
+                double hit[3];
+                if (!noPhysics && clip(movement, hit)) {  // onHitBlock: backed off 0.05, stopped, in the ground
+                    for (int a = 0; a < 3; ++a) e.pos[a] = hit[a] - (movement[a] > 0 ? 0.05 : movement[a] < 0 ? -0.05 : 0.0);
+                    e.vel[0] = e.vel[1] = e.vel[2] = 0;
+                    e.inGround = true;
+                } else {
+                    for (int a = 0; a < 3; ++a) e.pos[a] += movement[a];
+                    if (!water) for (double& v : e.vel) v *= 0.99;
+                    if (!noPhysics && !e.noGravity) e.vel[1] -= 0.05;
+                }
+            } else {  // ThrowableProjectile.tick: gravity, inertia (0.8 in water), then the move up to what it hits
+                if (!e.noGravity) e.vel[1] -= 0.03;
+                for (double& v : e.vel) v *= water ? 0.8 : 0.99;
+                double hit[3];
+                if (clip(e.vel, hit)) std::copy(hit, hit + 3, e.pos);
+                else for (int a = 0; a < 3; ++a) e.pos[a] += e.vel[a];
+                face(e.vel);
             }
             return tickSpecies(e, gameTime_, entities_);
         }

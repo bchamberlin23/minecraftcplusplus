@@ -4,6 +4,7 @@
 // gravity, drag, block friction and the bounces; an orb's own interpolation shifts with what it moves itself
 // (AbstractInterpolationHandler.applyPredictedMovement).
 #include "entity/entities.h"
+#include "entity/species.h"
 
 #include "game/player.h"
 #include "world/world.h"
@@ -17,7 +18,7 @@ namespace ent {
 
 namespace {
 
-constexpr int kItem = 1, kOrb = 2, kFallingBlock = 3;
+constexpr int kItem = 1, kOrb = 2, kFallingBlock = 3, kTnt = 4, kFirework = 5;
 
 AABB boxOf(const Entity& e) {
     double w, h;
@@ -122,7 +123,8 @@ void move(const Physics& ph, Entity& e, const double in[3], double gravity) {
 bool EntityWorld::simulateClient(Entity& e) {
     if (!e.info) return false;
     const std::string& n = e.info->name;
-    const int kind = n == "minecraft:item" ? kItem : n == "minecraft:experience_orb" ? kOrb : n == "minecraft:falling_block" ? kFallingBlock : 0;
+    const int kind = n == "minecraft:item" ? kItem : n == "minecraft:experience_orb" ? kOrb : n == "minecraft:falling_block" ? kFallingBlock
+                   : n == "minecraft:tnt" ? kTnt : n == "minecraft:firework_rocket" ? kFirework : 0;
     if (!kind) return false;
     if (!physics_) physics_ = std::make_unique<Physics>(world_, registry_);
     const Physics& ph = *physics_;
@@ -136,6 +138,38 @@ bool EntityWorld::simulateClient(Entity& e) {
     }
     const double gravity = e.noGravity ? 0.0 : kind == kOrb ? 0.03 : 0.04;
     const int bx = int(std::floor(e.pos[0])), bz = int(std::floor(e.pos[2]));
+    if (kind == kTnt) {  // PrimedTnt.tick: gravity, the move, air drag, the bounce on the ground, the fluids
+        e.vel[1] -= gravity;
+        move(ph, e, e.vel, gravity);
+        for (double& v : e.vel) v *= 0.98;
+        if (e.onGround) e.vel[0] *= 0.7, e.vel[1] *= -0.5, e.vel[2] *= 0.7;
+        updateFluids(ph, e);
+        return true;
+    }
+    if (kind == kFirework) {  // FireworkRocketEntity.tick
+        if (e.attachedTo >= 0) {  // held by a (gliding) entity: at it (the hand offset left out)
+            const Entity* holder = e.attachedTo == selfId ? nullptr : entity(e.attachedTo);
+            const double* at = e.attachedTo == selfId ? localPlayer.pos : holder ? holder->pos : nullptr;
+            if (at) std::copy(at, at + 3, e.pos);
+            if (holder) std::copy(holder->vel, holder->vel + 3, e.vel);
+            return true;
+        }
+        if (!dataInt(e, "DATA_SHOT_AT_ANGLE")) {  // rising: speeds up sideways (not against a wall), 0.04 up
+            const double a = e.horizontalCollision ? 1.0 : 1.15;
+            e.vel[0] *= a, e.vel[2] *= a, e.vel[1] += 0.04;
+        }
+        const double movement[3] = {e.vel[0], e.vel[1], e.vel[2]};
+        move(ph, e, movement, 0.0);
+        std::copy(movement, movement + 3, e.vel);  // no gravity, no drag
+        const double h = std::sqrt(e.vel[0] * e.vel[0] + e.vel[2] * e.vel[2]);  // updateRotation: lerped 0.2
+        float yaw = float(std::atan2(e.vel[0], e.vel[2]) * 180.0 / 3.14159265358979323846), pitch = float(std::atan2(e.vel[1], h) * 180.0 / 3.14159265358979323846);
+        while (pitch - e.pitch < -180.0f) e.pitch -= 360.0f;
+        while (pitch - e.pitch >= 180.0f) e.pitch += 360.0f;
+        while (yaw - e.yaw < -180.0f) e.yaw -= 360.0f;
+        while (yaw - e.yaw >= 180.0f) e.yaw += 360.0f;
+        e.pitch += (pitch - e.pitch) * 0.2f, e.yaw += (yaw - e.yaw) * 0.2f;
+        return true;
+    }
     if (kind == kFallingBlock) {  // FallingBlockEntity.tick (no baseTick: no fluid interaction)
         e.vel[1] -= gravity;
         move(ph, e, e.vel, gravity);

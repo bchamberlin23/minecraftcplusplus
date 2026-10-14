@@ -343,7 +343,7 @@ float Physics::slipperiness(int x, int y, int z) const {
 }
 
 // Amanatides-Woo voxel walk, testing each cell's selection boxes with a slab test.
-RayHit Physics::raycast(const double o[3], const double d[3], double maxDistance, bool visual) const {
+RayHit Physics::raycast(const double o[3], const double d[3], double maxDistance, bool visual, bool collider) const {
     RayHit best;
     const BlockInfo* infos = registry_.infos();
     int cell[3] = {int(std::floor(o[0])), int(std::floor(o[1])), int(std::floor(o[2]))};
@@ -365,7 +365,8 @@ RayHit Physics::raycast(const double o[3], const double d[3], double maxDistance
         const double at[3] = {cell[0] + off[0], cell[1] + off[1], cell[2] + off[2]};
         u32 first = b.selectionFirst, count = b.selectionCount;
         bool fullBlock = false;
-        if (holdingScaffolding && !visual && specialKind(world_.block(cell[0], cell[1], cell[2])) == 2) fullBlock = true, count = 1;
+        if (holdingScaffolding && !visual && !collider && specialKind(world_.block(cell[0], cell[1], cell[2])) == 2) fullBlock = true, count = 1;
+        if (collider) first = b.collisionFirst, count = b.collisionCount;
         if (visual) {  // BlockBehaviour.getVisualShape: the collision shape, with its block overrides
             const u16 id = world_.block(cell[0], cell[1], cell[2]);
             if (visual_.size() <= id) visual_.resize(size_t(id) + 1, 0);

@@ -35,8 +35,9 @@ public:
     // Entity.collideWithShapes: moves box `b` by `in` through `boxes` (Y first, then the larger horizontal axis).
     static void collideBoxes(const std::vector<AABB>& boxes, AABB& b, double out[3], const double in[3]);
     // Block hit along a ray against the outline shapes (ClipContext.Block.OUTLINE), or with `visual` against the
-    // visual shapes (VISUAL: the third-person camera).
-    RayHit raycast(const double origin[3], const double dir[3], double maxDistance, bool visual = false) const;
+    // visual shapes (VISUAL: the third-person camera), or with `collider` against the collision shapes (COLLIDER:
+    // projectiles).
+    RayHit raycast(const double origin[3], const double dir[3], double maxDistance, bool visual = false, bool collider = false) const;
     bool inFluid(const AABB& box) const;
     bool inLava(const AABB& box) const;
     bool containsLiquid(const AABB& box) const;  // any cell the box touches holds a fluid
