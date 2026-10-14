@@ -28,10 +28,11 @@ struct WorldEntry {
     bool experimental = false;    // enabled_features beyond vanilla (FeatureFlags.isExperimental)
     bool hardcore = false, cheats = false, locked = false;
     bool broken = false;  // level.dat unreadable (LevelSummary.CorruptedLevelSummary): Play recovers it
+    bool symlink = false;  // level.dat a forbidden symlink (LevelSummary.SymlinkLevelSummary): Play shows the warning
     Image icon;  // icon.png (64x64), empty when the world has none
 };
 bool readWorld(const fs::path& dir, WorldEntry& out);       // level.dat summary; false: not a world
-std::vector<WorldEntry> scanWorlds(const fs::path& saves);  // most recently played first
+std::vector<WorldEntry> scanWorlds(const fs::path& saves, const fs::path& minecraftDir = {});  // most recently played first
 bool worldLocked(const fs::path& dir);                      // session.lock held by a running game / server
 std::string worldFolderFor(const fs::path& saves, const std::string& name);  // FileUtil.findAvailableName
 // Gzipped NBT files of a save (level.dat...); writing keeps the old file as <name>_old like the game.
@@ -171,7 +172,12 @@ void showConfirm(State& s, Text title, Text text, std::string yes, std::function
 // mods_screen.cpp: PackSelectionScreen.onFilesDrop into the mods folder (confirm, copy, rescan, then `after`).
 void dropIntoModsFolder(State& s, const std::vector<fs::path>& files, Screen back, std::function<void()> after);
 void requestTitle(State& s, const std::string& menu);
-void serverFailure(State& s, bool datapacks, bool safeMode, std::function<void()> safeModeFn);  // datapack_failure.cpp  // leave this world ("" title, "servers", "worlds")
+void serverFailure(State& s, bool datapacks, bool safeMode, std::function<void()> safeModeFn);  // datapack_failure.cpp
+void openWorldSymlinkWarning(State& s, std::function<void()> onClose);  // notice_link.cpp (NoticeWithLinkScreen)
+// DirectoryValidator with <game dir>/allowed_symlinks.txt (LevelStorageSource.parseValidator): whether a symlink's
+// target may be followed, and whether a save holds a symlink that may not (validateDirectory(dir, true)).
+bool symlinkTargetAllowed(const fs::path& minecraftDir, const fs::path& target);
+bool forbiddenSymlinks(const fs::path& minecraftDir, const fs::path& dir);  // leave this world ("" title, "servers", "worlds")
 std::wstring widen(const std::string& utf8);
 std::string utf8(const fs::path& p);  // paths for display / keys (fs::path::string throws on some names)
 

@@ -12,9 +12,11 @@
 #include <shellapi.h>
 
 #include <algorithm>
+#include <cstring>
 #include <cwctype>
 #include <fstream>
 #include <future>
+#include <regex>
 
 namespace ui {
 
@@ -119,19 +121,19 @@ int currentDataVersion(State& s) {
     return v;
 }
 bool compatible(const WorldEntry& w) { return w.series == "main"; }
-bool manualConversion(const WorldEntry& w) { return !w.broken && w.storageVersion != 19133; }
+bool manualConversion(const WorldEntry& w) { return !w.broken && !w.symlink && w.storageVersion != 19133; }
 bool fileFixing(const WorldEntry& w) {  // FileFixerUpper.requiresFileFixing: below the last file fix (4899)
-    return !w.broken && (w.dataVersion < 4772 ? 0 : w.dataVersion) < 4899;
+    return !w.broken && !w.symlink && (w.dataVersion < 4772 ? 0 : w.dataVersion) < 4899;
 }
 enum class Backup { None, Downgrade, FileFixing };  // BackupStatus (no UPGRADE_TO_SNAPSHOT in a release)
 Backup backupStatus(State& s, const WorldEntry& w) {
-    if (w.broken) return Backup::None;
+    if (w.broken || w.symlink) return Backup::None;
     if (fileFixing(w)) return Backup::FileFixing;
     const int current = currentDataVersion(s);
     return current && w.versionId > current ? Backup::Downgrade : Backup::None;
 }
-bool disabled(const WorldEntry& w) { return !w.broken && (w.locked || manualConversion(w) || !compatible(w)); }
-bool canEdit(const WorldEntry& w) { return !w.broken && !disabled(w) && !fileFixing(w); }
+bool disabled(const WorldEntry& w) { return !w.broken && !w.symlink && (w.locked || manualConversion(w) || !compatible(w)); }
+bool canEdit(const WorldEntry& w) { return !w.broken && !w.symlink && !disabled(w) && !fileFixing(w); }
 Text versionName(State& s, const WorldEntry& w) {
     return w.versionName.empty() ? tr(s, "selectWorld.versionUnknown") : Text(w.versionName);
 }
@@ -143,6 +145,10 @@ void continuePlay(State& s, int step);
 void playWorld(State& s, bool play) {
     WorldEntry* w = selected(s);
     if (!w) return;
+    if (w->symlink) {  // SymlinkLevelSummary: More Info
+        State* p = &s;
+        return openWorldSymlinkWarning(s, [p] { openWorlds(*p); });
+    }
     if (w->broken) return openRecover(s);  // CorruptedLevelSummary: the primary action recovers
     if (disabled(*w)) return;
     if (!play) {  // this port's read-only viewer (Shift)
@@ -279,13 +285,66 @@ bool readWorld(const fs::path& dir, WorldEntry& out) {
     return true;
 }
 
-std::vector<WorldEntry> scanWorlds(const fs::path& saves) {
+bool symlinkTargetAllowed(const fs::path& minecraftDir, const fs::path& target) {
+    // PathAllowList: "#" comments, "[prefix]" / "[glob]" / "[regex]" entries, plain lines are prefixes; no file: none
+    std::ifstream in(minecraftDir / "allowed_symlinks.txt");
+    const std::string t = utf8(target);
+    std::string line;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty() || line[0] == '#' || std::all_of(line.begin(), line.end(), [](char ch) { return ch == ' ' || ch == '\t'; }))
+            continue;
+        std::string type = "prefix", pattern = line;
+        if (line[0] == '[') {
+            const size_t close = line.find(']', 1);
+            if (close == std::string::npos) continue;
+            type = line.substr(1, close - 1), pattern = line.substr(close + 1);
+        }
+        if (type == "prefix" && t.starts_with(pattern)) return true;
+        try {
+            if (type == "regex" && std::regex_match(t, std::regex(pattern))) return true;
+            if (type == "glob") {  // FileSystem.getPathMatcher("glob:..."): * ? within a name, ** across
+                std::string re;
+                for (size_t i = 0; i < pattern.size(); ++i) {
+                    const char ch = pattern[i];
+                    if (ch == '*' && i + 1 < pattern.size() && pattern[i + 1] == '*') re += ".*", ++i;
+                    else if (ch == '*') re += "[^\\\\/]*";
+                    else if (ch == '?') re += "[^\\\\/]";
+                    else if (std::strchr(".+()^$|{}[]\\", ch)) re += '\\', re += ch;
+                    else re += ch;
+                }
+                if (std::regex_match(t, std::regex(re, std::regex::icase))) return true;
+            }
+        } catch (const std::regex_error&) {
+        }
+    }
+    return false;
+}
+
+bool forbiddenSymlinks(const fs::path& minecraftDir, const fs::path& dir) {
+    std::error_code ec;
+    fs::path root = dir;
+    if (fs::is_symlink(root, ec)) root = fs::read_symlink(root, ec);  // allowTopSymlink: walk its target
+    for (auto it = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec);
+         !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+        if (!it->is_symlink(ec)) continue;
+        if (!symlinkTargetAllowed(minecraftDir, fs::read_symlink(it->path(), ec))) return true;
+        it.disable_recursion_pending();  // walkFileTree does not follow links
+    }
+    return false;
+}
+
+std::vector<WorldEntry> scanWorlds(const fs::path& saves, const fs::path& minecraftDir) {
     std::vector<WorldEntry> out;
     std::error_code ec;
     for (const auto& d : fs::directory_iterator(saves, ec)) {
         if (!d.is_directory(ec)) continue;
         WorldEntry w;
-        if (readWorld(d.path(), w)) {
+        if (fs::is_symlink(d.path() / "level.dat", ec) &&  // readLevelSummary: SymlinkLevelSummary
+            !symlinkTargetAllowed(minecraftDir, fs::read_symlink(d.path() / "level.dat", ec))) {
+            w.dir = d.path(), w.folder = w.name = utf8(d.path().filename()), w.symlink = true;
+            out.push_back(std::move(w));
+        } else if (readWorld(d.path(), w)) {
             out.push_back(std::move(w));
         } else if (fs::exists(d.path() / "level.dat", ec) || fs::exists(d.path() / "level.dat_old", ec)) {
             // A save whose level.dat cannot be read (LevelStorageSource: CorruptedLevelSummary).
@@ -328,7 +387,7 @@ void openWorlds(State& s) {
     FrontEndState& f = *s.fe;
     fs::path sel;
     if (const WorldEntry* w = selected(s)) sel = w->dir;
-    f.worlds = scanWorlds(f.cfg.savesDir);
+    f.worlds = scanWorlds(f.cfg.savesDir, f.cfg.minecraftDir);
     f.worldSel = -1;
     for (size_t i = 0; i < f.worlds.size(); ++i)
         if (f.worlds[i].dir == sel) f.worldSel = int(i);
@@ -348,11 +407,11 @@ void buildWorlds(State& s) {
     f.worldSearch.x = float(W / 2 - 100), f.worldSearch.y = 22, f.worldSearch.w = 200;
     setFields(s, {&f.worldSearch}, 0);  // setInitialFocus(searchBox) (a rebuild keeps the focus)
     const WorldEntry* w = selected(s);
-    const bool active = w && (w->broken || !disabled(*w));  // primaryActionActive
+    const bool active = w && (w->broken || w->symlink || !disabled(*w));  // primaryActionActive
     const float x0 = float(W / 2 - 154), y0 = float(H - 52), y1 = float(H - 28);
     // Shift: the world in the fast local viewer instead (read only, no server): this port's own.
-    const bool view = s.window->keyDown(VK_SHIFT) && active && !w->broken;
-    Text play = w && w->broken ? tr(s, "recover_world.button") : view ? Text("View Only")
+    const bool view = s.window->keyDown(VK_SHIFT) && active && !w->broken && !w->symlink;
+    Text play = w && w->symlink ? tr(s, "symlink_warning.more_info") : w && w->broken ? tr(s, "recover_world.button") : view ? Text("View Only")
               : w && fileFixing(*w) ? tr(s, "selectWorld.upgrade_and_play") : tr(s, "selectWorld.select");
     Button& playButton = addButton(s, x0, y0, 150, play, [p, view] { playWorld(*p, !view); }, active);
     addButton(s, x0 + 158, y0, 150, tr(s, "selectWorld.create"), [p] { openCreateWorld(*p); });
@@ -419,7 +478,9 @@ void drawWorlds(State& s, Canvas& c) {
         // LevelSummary.getInfo (merged over gray)
         const Backup backup = backupStatus(s, w);
         Text info;
-        if (w.broken) {
+        if (w.symlink) {
+            info = Text(s.res.translate("symlink_warning.title"), colorStyle(0xFF0000));
+        } else if (w.broken) {
             info = Text(s.res.translate("recover_world.warning"), colorStyle(0xFF0000));
         } else if (w.locked) {
             info = Text(s.res.translate("selectWorld.locked"), colorStyle(0xFF5555));
@@ -454,7 +515,7 @@ void drawWorlds(State& s, Canvas& c) {
             auto tip = [&](const char* key) {
                 if (overIcon) tooltip = s.font.split(Text(s.res.translate(key), colorStyle(0xFF5555)), 175);
             };
-            if (w.broken) {
+            if (w.broken || w.symlink) {
                 sprite("error"), sprite("marked_join");
             } else if (w.locked) {
                 sprite("error"), tip("selectWorld.locked");
@@ -653,6 +714,10 @@ void continuePlay(State& s, int step) {
         s.openScreen(Screen::EditWorld);
     };
     if (step <= 0) {
+        if (forbiddenSymlinks(s.fe->cfg.minecraftDir, w->dir)) {
+            LOG("ui: %s holds a symbolic link outside allowed_symlinks.txt", w->folder.c_str());
+            return openWorldSymlinkWarning(s, [p] { p->openScreen(Screen::Title); });
+        }
         if (!compatible(*w)) {
             return showMessage(s, Text(s.res.translate("selectWorld.incompatible.title"), colorStyle(0xFF0000)),
                                trf(s, "selectWorld.incompatible.description", {versionName(s, *w)}), s.res.translate("gui.back"),

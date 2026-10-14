@@ -137,6 +137,7 @@ enum class Screen {
     SocialInteractions,  // social_screen.cpp
     LevelLoading,        // level_loading.cpp
     DatapackFailure,     // datapack_failure.cpp
+    NoticeWithLink,      // notice_link.cpp
     DebugOptions,        // debug_screen.cpp
     MultiplayerWarning,  // servers.cpp: SafetyScreen
     // Front end (frontend.h)
