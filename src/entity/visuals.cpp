@@ -2298,7 +2298,34 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
             continue;
         }
         const bool frame = e.type == frameType || e.type == glowFrameType;
-        if (!frame && e.type != paintingType && e.category != Category::Item && e.type != ominousType) continue;
+        // ThrownItemRenderer / FireworkEntityRenderer: the projectile's item (ItemSupplier.getItem: its synced stack, or
+        // the type's default item when that was never sent), scale, full bright for the eye and the fireballs
+        struct Thrown {
+            const char* type;
+            const char* item;
+            float scale;
+            bool fullBright, firework;
+            int typeId = -2, itemId = -1;
+        };
+        static Thrown thrownDefs[] = {{"snowball", "snowball", 1, false, false}, {"egg", "egg", 1, false, false},
+                                      {"ender_pearl", "ender_pearl", 1, false, false},
+                                      {"experience_bottle", "experience_bottle", 1, false, false},
+                                      {"splash_potion", "splash_potion", 1, false, false},
+                                      {"lingering_potion", "lingering_potion", 1, false, false},
+                                      {"eye_of_ender", "ender_eye", 1, true, false}, {"fireball", "fire_charge", 3, true, false},
+                                      {"small_fireball", "fire_charge", 0.75f, true, false},
+                                      {"firework_rocket", "firework_rocket", 1, false, true}};
+        if (thrownDefs[0].typeId == -2)
+            for (Thrown& t : thrownDefs) {
+                t.typeId = assets.typeId(std::string("minecraft:") + t.type);
+                const auto& names = assets.itemNames();
+                t.itemId = int(std::find(names.begin(), names.end(), std::string(t.item)) - names.begin());
+                if (t.itemId >= int(names.size())) t.itemId = -1;
+            }
+        const Thrown* thrown = nullptr;
+        for (const Thrown& t : thrownDefs)
+            if (e.type == t.typeId) thrown = &t;
+        if (!frame && e.type != paintingType && e.category != Category::Item && e.type != ominousType && !thrown) continue;
         double p[3];
         for (int a = 0; a < 3; ++a) p[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt;
         if (e.pickupBy != INT_MIN) {  // ItemPickupParticleGroup: towards the collector's middle, (time / 3)^2
@@ -2325,6 +2352,20 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
         Lists& L = *target;
         L.begin(u64(u32(id)) << 4 | 3);
         u32 light = lightAt(p[0], p[1], p[2]);
+        if (thrown) {  // scaled, turned to the camera (camera.orientation), the item in its GROUND display
+            const int item = e.itemId >= 0 ? e.itemId : thrown->itemId;
+            if (item < 0) continue;
+            if (thrown->fullBright) light |= 0x0Fu;  // getBlockLightLevel: 15
+            const ItemMesh& mesh = models.mesh(stackOf(e.itemId >= 0 ? e.itemStack : nullptr, item, e.itemDye),
+                                               contextOf(e, ui::ItemDisplay::Ground, pt));
+            if (mesh.empty()) continue;
+            Xf m = xfMul(xfTranslate(rx, ry, rz), xfScale(thrown->scale, thrown->scale, thrown->scale));
+            m = xfMul(xfMul(m, xfRotY((180.0f - camYaw) * kDeg)), xfRotX(-camPitch * kDeg));
+            if (thrown->firework && dataInt(e, "DATA_SHOT_AT_ANGLE"))  // shot at an angle: Z 180, Y 180, X 90
+                m = xfMul(xfMul(xfMul(m, xfRotZ(kPi)), xfRotY(kPi)), xfRotX(kPi / 2));
+            pushItem(L, mesh, Display::Ground, m, light, e.itemFoil);
+            continue;
+        }
         if (frame) {  // ItemFrameRenderer
             const int dir = std::clamp(e.direction, 0, 5);
             Xf m = xfTranslate(rx, ry, rz);

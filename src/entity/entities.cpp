@@ -186,7 +186,9 @@ EntityWorld::EntityWorld(EntityAssets& assets, World& world, BlockRegistry& regi
         d.baby = id({"DATA_BABY_ID"});
         d.wool = id({"DATA_WOOL_ID"});
         d.variant = id({"DATA_VARIANT_ID", "DATA_VARIANT", "DATA_TYPE_ID", "DATA_TYPE"});
-        d.item = id({"DATA_ITEM"});
+        // the item an entity carries or is: ItemEntity / ItemFrame DATA_ITEM, the thrown items' and fireballs' (and the
+        // eye of ender's) DATA_ITEM_STACK, the firework's DATA_ID_FIREWORKS_ITEM
+        d.item = id({"DATA_ITEM", "DATA_ITEM_STACK", "DATA_ID_FIREWORKS_ITEM"});
         d.size = id({"ID_SIZE"});
         d.swellDir = id({"DATA_SWELL_DIR"});
         d.powered = id({"DATA_IS_POWERED"});

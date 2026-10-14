@@ -371,12 +371,9 @@ void EntityRenderer::buildDefs() {
         else if (n == "item") d.kind = Kind::Item;
         else if (n == "falling_block") d.kind = Kind::Block;
         else if (n == "tnt") d.kind = Kind::Block, d.block = "minecraft:tnt";
-        else if (n == "snowball" || n == "egg" || n == "ender_pearl" || n == "experience_bottle" || n == "firework_rocket")
-            sprite(assets_.itemTexture(n), 1.0f);
-        else if (n == "splash_potion" || n == "lingering_potion") sprite(assets_.itemTexture(n), 1.0f);
-        else if (n == "eye_of_ender") sprite(assets_.itemTexture("ender_eye"), 1.0f);
-        else if (n == "fireball") sprite(assets_.itemTexture("fire_charge"), 3.0f);
-        else if (n == "small_fireball") sprite(assets_.itemTexture("fire_charge"), 0.75f);
+        else if (n == "snowball" || n == "egg" || n == "ender_pearl" || n == "experience_bottle" || n == "firework_rocket" ||
+                 n == "splash_potion" || n == "lingering_potion" || n == "eye_of_ender" || n == "fireball" || n == "small_fireball")
+            d.kind = Kind::None;  // ThrownItemRenderer / FireworkEntityRenderer: their item models, in visuals.cpp
         else if (n == "dragon_fireball") sprite(T("enderdragon/dragon_fireball"), 2.0f);
         else if (n == "fishing_bobber") sprite(T("fishing/fishing_hook"), 1.0f);
         else if (n == "experience_orb") sprite(T("experience/experience_orb"), 0.6f), d.special = SpXpOrb;
