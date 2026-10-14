@@ -856,7 +856,8 @@ int Gameplay::componentType(const char* name) {
 // (component reports and the item classes) with the stack's own patch of consumable, food, blocks_attacks,
 // kinetic_weapon and use_effects.
 // Player.interactOn as the client predicts it: Entity.interact (riding, trading, feeding, milking, shearing, leashing,
-// equipping...) then ItemStack.interactLivingEntity (name tags, dyes, saddles...). 1 consumes, 0 passes, -1 an empty
+// equipping...) then ItemStack.interactLivingEntity (name tags, dyes, saddles...). 1 SUCCESS (swings), 2 CONSUME /
+// SUCCESS_SERVER (taken, no swing here), 0 passes, -1 an empty
 // hand (passes). An approximation by entity type and held item; spectators pass.
 int Gameplay::entityInteraction(const ent::Entity& e, int hand) {
     if (!e.info || !game_) return 1;
@@ -881,11 +882,13 @@ int Gameplay::entityInteraction(const ent::Entity& e, int hand) {
     }
     if (n == "item_frame" || n == "glow_item_frame") return e.itemId >= 0 || !empty ? 1 : pass();
     if (n == "interaction" || n == "leash_knot") return 1;
-    if (n == "armor_stand") return !empty || e.equipment[0] >= 0 || e.equipment[1] >= 0 || e.equipment[2] >= 0 || e.equipment[3] >= 0 ||
-                                           e.equipment[4] >= 0 || e.equipment[5] >= 0 ? 1 : pass();
+    // ArmorStand.interactAt: a name tag passes on (NameTagItem), anything else is SUCCESS_SERVER on the client
+    if (n == "armor_stand") return item == "name_tag" ? (held->hasCustomName ? 1 : pass()) : 2;
     if (e.category != ent::Category::Living) return pass();
-    // Mob.checkAndHandleImportantInteractions / Leashable: leads, spawn eggs of the same type, name tags.
-    if (item == "lead" || item == n + "_spawn_egg") return 1;
+    // Entity.interact (Leashable): a lead attaches (CONSUME on the client); Mob.checkAndHandleImportantInteractions:
+    // a spawn egg is SUCCESS_SERVER; a named name tag SUCCESS.
+    if (item == "lead") return 2;
+    if (item.ends_with("_spawn_egg")) return 2;
     if (item == "name_tag" && held->hasCustomName) return 1;
     // Mob.mobInteract by type.
     if (n == "villager" || n == "wandering_trader") return item == "villager_spawn_egg" ? pass() : 1;
@@ -896,18 +899,38 @@ int Gameplay::entityInteraction(const ent::Entity& e, int hand) {
     if (n == "happy_ghast" && !e.baby && e.equipment[6] >= 0 && !sneaking) return 1;  // ride the harnessed ghast
     if (n == "allay") return 1;
     if ((n == "wolf" || n == "cat" || n == "parrot" || n == "nautilus") && e.tame) return 1;  // sitting, healing, dyeing
-    if ((n == "cow" || n == "goat" || n == "mooshroom") && item == "bucket" && !e.baby) return 1;
-    if (n == "mooshroom" && (item == "bowl" || item == "shears") && !e.baby) return 1;
-    if (n == "sheep" && item == "shears" && !e.baby && !(e.wool & 0x10)) return 1;
-    if (n == "sheep" && item.ends_with("_dye") && !(e.wool & 0x10)) return 1;
+    if (n == "parrot" && !e.tame && inTag("minecraft:parrot_food")) {  // Parrot.mobInteract: taming food, eaten here too
+        if (ui_) ui_->predictConsumeHeld(hand);
+        return 1;
+    }
+    if ((n == "cow" || n == "goat" || n == "mooshroom") && item == "bucket" && !e.baby) {
+        if (ui_) ui_->predictFilledResult(hand, "milk_bucket");  // AbstractCow / Goat: ItemUtils.createFilledResult
+        return 1;
+    }
+    if (n == "mooshroom" && item == "bowl" && !e.baby) {  // MushroomCow: a bowl of stew (suspicious: the server's)
+        if (ui_) ui_->predictFilledResult(hand, "mushroom_stew");
+        return 1;
+    }
+    if (n == "mooshroom" && item == "shears" && !e.baby) return 2;  // Shearable: the server shears (CONSUME here)
+    if (n == "sheep" && item == "shears" && !e.baby && !(e.wool & 0x10)) return 2;
+    if (n == "sheep" && item.ends_with("_dye") && !(e.wool & 0x10)) {  // DyeItem: only another colour
+        static const char* const kDyes[16] = {"white", "orange", "magenta", "light_blue", "yellow", "lime", "pink", "gray",
+                                              "light_gray", "cyan", "purple", "blue", "brown", "green", "red", "black"};
+        return item != std::string(kDyes[e.wool & 15]) + "_dye" ? 1 : pass();
+    }
     if ((n == "snow_golem" || n == "bogged") && item == "shears") return 1;
     if (n == "creeper" && (item == "flint_and_steel" || item == "fire_charge")) return 1;
     if (n == "iron_golem" && item == "iron_ingot") return 1;
     if (n == "armadillo" && item == "brush") return 1;
     if (item == "water_bucket" && (n == "axolotl" || n == "tadpole" || n == "cod" || n == "salmon" || n == "pufferfish" || n == "tropical_fish"))
         return 1;
-    // Animal.mobInteract: its food (the <type>_food item tag) feeds, breeds or grows it; saddles / body armour equip.
-    if (inTag(("minecraft:" + n + "_food").c_str())) return 1;
+    // Animal.mobInteract: its food (the <type>_food item tag): a baby eats it and grows (SUCCESS, the food taken here),
+    // an adult breeds on the server (CONSUME on the client)
+    if (inTag(("minecraft:" + n + "_food").c_str())) {
+        if (!e.baby) return 2;
+        if (ui_) ui_->predictConsumeHeld(hand);
+        return 1;
+    }
     if (!empty && held && (item == "saddle" || item.ends_with("_horse_armor") || item.ends_with("_carpet") || item == "wolf_armor" ||
                            item.ends_with("_harness")))
         return 1;
@@ -1177,7 +1200,6 @@ int Gameplay::predictItemUse(int hand, const RayHit* target) {
 // BucketItem.use on the client: an empty bucket picks up the fluid source it looks at (or empties a waterlogged
 // block), a filled one places its fluid in front of the targeted block (or waterlogs a block that can hold water).
 int Gameplay::predictBucket(int hand, const std::string& name) {
-    (void)hand;
     Player& p = game_->player();
     const CameraState c = game_->camera();
     const double eye[3] = {c.x, c.y, c.z}, cp = std::cos(c.pitch);
@@ -1201,10 +1223,12 @@ int Gameplay::predictBucket(int hand, const std::string& name) {
             if (!registry_.property(state, "waterlogged").empty()) {  // SimpleWaterloggedBlock.pickupBlock
                 game_->predictBlock(x, y, z, registry_.withProperty(state, "waterlogged", "false"));
                 sound("minecraft:item.bucket.fill", audio::Category::Player, p.pos[0], p.pos[1], p.pos[2]);
+                if (ui_) ui_->predictFilledResult(hand, "water_bucket");
                 return Game::kUseConsume;
             }
             if (!registry_.infos()[state].fluid) return Game::kUseFail;  // kelp, seagrass: not a BucketPickup
             game_->predictBlock(x, y, z, 0);  // LiquidBlock.pickupBlock
+            if (ui_) ui_->predictFilledResult(hand, lava ? "lava_bucket" : "water_bucket");
             sound(lava ? "minecraft:item.bucket.fill_lava" : "minecraft:item.bucket.fill", audio::Category::Player, p.pos[0], p.pos[1],
                   p.pos[2]);
             return Game::kUseConsume;
@@ -1256,7 +1280,11 @@ int Gameplay::predictBucket(int hand, const std::string& name) {
     const bool container = water && registry_.property(world_.block(block.x, block.y, block.z), "waterlogged") == "false" &&
                            !p.lastInput.sneak;  // BucketItem.emptyContents: not while sneaking
     const bool ok = container ? tryPlace(block.x, block.y, block.z) : (tryPlace(fx, fy, fz));
-    (void)p;
+    // BucketItem.getEmptySuccessItem: an empty bucket back in the hand (kept with infinite materials)
+    if (ok && ui_ && !game_->instabuild && (name == "water_bucket" || name == "lava_bucket")) {
+        ui_->predictConsumeHeld(hand);
+        ui_->predictFilledResult(hand, "bucket");
+    }
     return ok ? Game::kUseConsume : Game::kUseFail;
 }
 

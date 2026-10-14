@@ -801,6 +801,7 @@ bool Ui::init(const Init& in) {
         operatorBoxes(*s_, lines, cam, w, h);  // block_editors.cpp
         debugLines(*s_, lines, cam, w, h);     // debug_screen.cpp: chunk borders, hitboxes
     };
+    in.game->onConsumeHeld = [this](int hand, int count) { predictConsumeHeld(hand, count); };
     in.game->onInteract = [this](int x, int y, int z, int hand) -> int {
         State& st = *s_;
         if (!st.online()) return 0;
@@ -1278,6 +1279,49 @@ void Ui::setMenuBlur(std::function<void(const PassContext&, float radius)> blur)
 void Ui::setEngineInfo(std::function<std::string(std::string_view)> fn) { s_->engineInfo = std::move(fn); }
 
 const Items& Ui::items() const { return s_->items; }
+
+void Ui::predictConsumeHeld(int hand, int count) {
+    State& s = *s_;
+    if (!s.game || s.game->instabuild) return;  // hasInfiniteMaterials
+    ItemStack& held = s.inventory.slots[size_t(hand == 0 ? 36 + s.game->selectedSlot() : 45)];
+    if (!held.empty()) held = held.withCount(held.count - count);
+}
+
+void Ui::predictFilledResult(int hand, const std::string& item) {
+    State& s = *s_;
+    const int id = s.items.id(item.find(':') == std::string::npos ? "minecraft:" + item : item);
+    if (!s.game || id < 0) return;
+    auto& slots = s.inventory.slots;
+    ItemStack& held = slots[size_t(hand == 0 ? 36 + s.game->selectedSlot() : 45)];
+    // Inventory.add: a stack with room (the selected slot, the off hand, then 0..35), else the first empty slot
+    auto add = [&](const ItemStack& filled) {
+        const int maxStack = s.items.maxStack(filled);
+        std::vector<int> order{36 + s.game->selectedSlot(), 45};
+        for (int i = 0; i < 9; ++i) order.push_back(36 + i);
+        for (int i = 9; i < 36; ++i) order.push_back(i);
+        for (int slot : order)
+            if (!slots[size_t(slot)].empty() && slots[size_t(slot)].sameItemSameComponents(filled) && slots[size_t(slot)].count < maxStack) {
+                slots[size_t(slot)].count += 1;
+                return true;
+            }
+        for (int slot : order)
+            if (slot != 45 && slots[size_t(slot)].empty()) {
+                slots[size_t(slot)] = filled;
+                return true;
+            }
+        return false;
+    };
+    const ItemStack filled{id, 1};
+    if (s.game->instabuild) {  // limitCreativeStackSize: the full one joins the inventory once, the empty one stays
+        for (const ItemStack& st : slots)
+            if (!st.empty() && st.item == id) return;
+        add(filled);
+        return;
+    }
+    held = held.withCount(held.count - 1);
+    if (held.empty()) held = filled;
+    else add(filled);  // (a full inventory drops it: the server's)
+}
 
 const ItemStack* Ui::playerSlot(int slot) const {
     const auto& slots = s_->inventory.slots;

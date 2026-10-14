@@ -343,7 +343,8 @@ void Game::handleClicks(Window& w, double dt, int rightPresses, int middlePresse
         repeatTimer_ = 0.2;  // rightClickDelay: held, it repeats every 4 ticks
         // Minecraft.startUseItem on an entity: each hand's interaction, then that hand's item use, until one goes through
         for (int hand = 0; hand < 2; ++hand) {
-            if (entityInteract && entityInteract(hand) == 1) {  // Success: the hand swings
+            const int interaction = entityInteract ? entityInteract(hand) : 0;
+            if (interaction == 1) {  // SUCCESS: the hand swings
                 if (onSwing) {
                     const int attackSwing = swingTicks;
                     swingTicks = useSwingTicksOf[hand];
@@ -352,6 +353,7 @@ void Game::handleClicks(Window& w, double dt, int rightPresses, int middlePresse
                 }
                 return;
             }
+            if (interaction == 2) return;  // CONSUME / SUCCESS_SERVER: taken, the server swings if at all
             if (!usingItem_ && startUseItem(true, hand)) return;
         }
         return;
@@ -373,6 +375,8 @@ bool Game::startUseItem(bool afterEntity, int onlyHand) {
                 // (hasInfiniteMaterials) moves the hand.
                 const bool hasItem = handHasItem ? handHasItem(hand) : hand == 0;
                 if (r == kUseConsume && hasItem && (placedLast_ || useOnTakesItem || instabuild) && onItemUsed) onItemUsed(hand);
+                // BlockItem.place / the item's useOn: itemStack.consume(1, player) on the client too
+                if (r == kUseConsume && hasItem && (placedLast_ || useOnTakesItem) && onConsumeHeld) onConsumeHeld(hand, 1);
                 return true;
             }
         }

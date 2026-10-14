@@ -142,6 +142,7 @@ public:
     // The targeted block's own use on the client (BlockState.useItemOn / useWithoutItem, with its local state
     // changes): 0 does not take the click, 1 SUCCESS (the hand swings), 2 CONSUME / SUCCESS_SERVER (no local swing).
     std::function<int(int x, int y, int z, int hand)> onInteract;
+    std::function<void(int hand, int count)> onConsumeHeld;  // ItemStack.consume on the client (Ui::predictConsumeHeld)
     std::function<bool(int hand, const char* tag)> handInTag;  // the hand's item is in the item tag
     // Multiplayer: every attack press (Minecraft.startAttack sends ServerboundPunchPacket: the arm swing others see,
     // attack cooldown), a right press that did not place a block or use one (the held item is used: food, bows,

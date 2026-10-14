@@ -268,6 +268,10 @@ public:
     void setItemModels(ent::ItemModels* models);
     // Player inventory menu slot (5-8 armour, 36-44 hotbar, 45 offhand); nullptr when empty.
     const ItemStack* playerSlot(int slot) const;
+    // The client's own stack changes of an item use (the server's slot updates follow): ItemStack.consume(n) of the
+    // hand's stack (not with infinite materials), and ItemUtils.createFilledResult (a bucket / bowl turned into `item`).
+    void predictConsumeHeld(int hand, int count = 1);
+    void predictFilledResult(int hand, const std::string& item);
     const Items& items() const;
     // LivingEntity.getEquipmentSlotForItem / isEquippableInSlot for the player (the stack's equippable component, set
     // by the gameplay layer): the EquipmentSlot id (0 main hand, 1 feet .. 4 head, 5 off hand...), allowed: the
