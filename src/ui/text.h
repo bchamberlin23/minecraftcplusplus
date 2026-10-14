@@ -90,7 +90,8 @@ Style colorStyle(u32 rgb);
 
 // Chat components from the network (NBT: type byte + payload) and JSON.
 Text parseComponent(std::string_view nbt, const Lang* lang);
-Text parseJsonComponent(const nlohmann::json& j, const Lang* lang);
+// sanitizeStatus: a server status description (ServerStatusPinger.sanitizeDescription).
+Text parseJsonComponent(const nlohmann::json& j, const Lang* lang, bool sanitizeStatus = false);
 // Style.Serializer as network NBT (a component's style fields: colour, flags, events).
 Style parseStyle(std::string_view nbt, const Lang* lang);
 // Translatable text with plain arguments.

@@ -41,6 +41,7 @@ struct Node {
     std::string click, clickValue, clickNbt, hover, hoverId, hoverUuid, insertion;
     int hoverCount = 1;
     bool hasEvents = false, hasInsertion = false;
+    bool sourced = false;  // selector / score / nbt contents: resolved against a command source
     std::vector<Node> hoverValue;  // show_text value / show_entity name (0 or 1)
 };
 
@@ -284,6 +285,7 @@ Node parseJson(const nlohmann::json& j, int depth) {
     }
     if (j.contains("keybind") && j["keybind"].is_string()) n.kind = Node::Keybind, n.key = j["keybind"].get<std::string>();
     if (j.contains("selector") && j["selector"].is_string()) n.text = j["selector"].get<std::string>();
+    if (j.contains("selector") || j.contains("score") || j.contains("nbt")) n.sourced = true;
     if (j.contains("extra") && j["extra"].is_array())
         for (const auto& e : j["extra"]) n.extra.push_back(parseJson(e, depth + 1));
     if (j.contains("color") && j["color"].is_string()) n.style.color = colorByName(j["color"].get<std::string>());
@@ -518,9 +520,32 @@ Style parseStyle(std::string_view nbt, const Lang* lang) {
     return t.spans.empty() ? Style{} : t.spans[0].style;
 }
 
-Text parseJsonComponent(const nlohmann::json& j, const Lang* lang) {
+namespace {
+// ServerStatusPinger.sanitizeDescription: ComponentUtils.resolve without a command source (depth limit 16, discarding
+// the rest as "..."; player sprites rejected): selector / score / nbt parts resolve to nothing, a player head to its
+// default fallback text.
+void sanitize(Node& n, int depth) {
+    if (depth > 16) {
+        n = Node{};
+        n.text = "...";
+        return;
+    }
+    if (n.sourced) n.text.clear(), n.kind = Node::Literal;
+    if (n.kind == Node::Object && n.object.kind == FontDesc::Player) {  // PlayerSprite.defaultFallback
+        n.kind = Node::Literal;
+        n.text = n.object.name.empty() ? "[unknown player head]" : "[" + n.object.name + " head]";
+    }
+    for (Node& w : n.with) sanitize(w, depth + 1);
+    for (Node& e : n.extra) sanitize(e, depth + 1);
+    for (Node& h : n.hoverValue) sanitize(h, depth + 1);
+}
+}  // namespace
+
+Text parseJsonComponent(const nlohmann::json& j, const Lang* lang, bool sanitizeStatus) {
     Text out;
-    flatten(parseJson(j, 0), Style{}, lang, out, 0);
+    Node n = parseJson(j, 0);
+    if (sanitizeStatus) sanitize(n, 0);
+    flatten(n, Style{}, lang, out, 0);
     return out;
 }
 

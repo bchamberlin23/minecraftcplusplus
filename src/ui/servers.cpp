@@ -282,6 +282,9 @@ std::vector<ServerEntry> loadServers(const fs::path& json, const fs::path& dat) 
     return out;
 }
 
+// Favicons the list dropped (not a 64 x 64 PNG): a later ping of the same server does not put them back.
+std::unordered_set<std::string> gRejectedIcons;
+
 void saveServers(const fs::path& json, const std::vector<ServerEntry>& servers) {
     nlohmann::json j;
     j["servers"] = nlohmann::json::array();
@@ -338,7 +341,7 @@ void serversFrame(State& s) {
     for (ServerEntry& e : f.servers) {
         auto it = f.pings->results.find(e.ip);
         if (it == f.pings->results.end() || !it->second.done || it->second.status.faviconBase64.empty()) continue;
-        if (e.icon != it->second.status.faviconBase64) {
+        if (e.icon != it->second.status.faviconBase64 && !gRejectedIcons.count(it->second.status.faviconBase64)) {
             e.icon = it->second.status.faviconBase64;
             f.serversDirty = true;
         }
@@ -420,7 +423,7 @@ void drawServers(State& s, Canvas& c) {
                        true);
             continue;
         }
-        const ServerEntry& e = f.servers[size_t(row)];
+        ServerEntry& e = f.servers[size_t(row)];
         startPing(s, e.ip);
         const auto it = results.find(e.ip);
         const bool done = it != results.end() && it->second.done;
@@ -444,9 +447,16 @@ void drawServers(State& s, Canvas& c) {
                         if (bits >= 8) bits -= 8, png.push_back(u8(acc >> bits));
                     }
                 }
-                // FaviconTexture.upload: 64 x 64 only (anything else is dropped from the list)
+                // FaviconTexture.upload: 64 x 64 only; anything else is dropped from the list (OnlineServerEntry
+                // .refreshStatus: setIconBytes(null), updateServerList)
                 Image img;
-                if (decodeImage(png, img) && img.w == 64 && img.h == 64) icon = iconSprite(s, key, img, e.icon);
+                if (decodeImage(png, img) && img.w == 64 && img.h == 64) {
+                    icon = iconSprite(s, key, img, e.icon);
+                } else {
+                    gRejectedIcons.insert(e.icon);
+                    e.icon.clear();
+                    f.serversDirty = true;
+                }
             }
         }
         if (icon) blitSprite(c, icon, rowLeft, y, 32, 32);
@@ -479,7 +489,7 @@ void drawServers(State& s, Canvas& c) {
             motd = Text(s.res.translate("multiplayer.status.cannot_connect"), colorStyle(0xFF0000));  // a refused connection
             statusTip = tr(s, "multiplayer.status.no_connection");
         } else {
-            motd = st->description.is_null() ? Text() : parseJsonComponent(st->description, s.lang());
+            motd = st->description.is_null() ? Text() : parseJsonComponent(st->description, s.lang(), true);
             // no version: "(old)" and protocol 0; the legacy ping always shows incompatible
             const Text version = st->hasVersion ? Text(st->versionName) : tr(s, "multiplayer.status.old");
             const bool incompatible = st->legacy || (f.protocol && (st->hasVersion ? st->protocol : 0) != f.protocol);
