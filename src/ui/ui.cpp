@@ -611,6 +611,16 @@ void Ui::State::closeScreen(bool sendClose) {
     chatInput = TextField{};
     window->setClickCaptures(true);
     window->setMouseCaptured(true);
+    // Minecraft.setScreen(null) while dead: the death screen again (a new one), or the respawn at once without it
+    if (old != Screen::Death && session && health <= 0.0f) {
+        if (showDeathScreen) {
+            openScreen(Screen::Death);
+        } else if (client) {
+            net::Writer w;
+            w.varInt(0);  // ServerboundClientCommandPacket.Action.PERFORM_RESPAWN
+            client->sendPlay("client_command", w);
+        }
+    }
 }
 
 namespace {

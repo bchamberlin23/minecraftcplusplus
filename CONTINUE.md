@@ -134,8 +134,8 @@ effects (upside-down xRot, creeper flash steps / ignited swelling, invisible hur
 fixed; residual: remote players' eye height for the pickup target is the type's constant (no pose). Anvil /
 grindstone / cartography, brewing / crafter / beacon / bundles and the death / win screens audited and fixed;
 residuals: screens without a known title narrate only the usage hint on opening, the win screen's End
-portal background is approximated, the death screen is not reopened (nor the player respawned) when another screen
-closes while dead, no draft-report icon on the death screen's title button. Books / lectern and the operator block
+portal background is approximated (closing another screen while dead reopens the death screen or respawns, like
+Minecraft.setScreen(null)), no draft-report icon on the death screen's title button. Books / lectern and the operator block
 editors audited and fixed; residuals: writable pages ignore text filtering (getPages(isTextFilteringEnabled)), the
 test instance's error message is the one it had when opened. Merchant / enchanting and special-block movement
 (bubble columns per cell, stuck order, straw beds) audited and fixed; residual: the player's block effects are
@@ -189,11 +189,10 @@ match; a crafting remainder that does not fit swings the arm like Player.drop, t
 spectated entity's hurt tilt, bob, eye height and FOV follow it (Game::entityCamera).
 Audited and matching: maps, name tags, tab list, sidebar, boss bars, toasts, chat, advancements. Residuals: command
 suggestions ask the server for every argument (Java lists entity / registry / position suggestions locally), no
-suggestion narration; friend toasts have no face; no resource pack load-failure toast; the advancements screen
-ignores the horizontal wheel. Boats: no client outOfControlTicks (the server ejects; the bubble column splash and
-the rider's 105 degree clamp on mouse turns are done). Server list: a favicon that is not 64x64 is kept in
-servers.dat (Java drops it), the MOTD is not sanitised (depth 16, player sprites rejected). Create World: a blank
-name is stored as "New World" (Java stores it empty), no narration. The allay's give / take / duplicate is predicted
+suggestion narration; friend toasts have no face; the advancements screen ignores the horizontal wheel (no such
+input). Boats: no client outOfControlTicks (the server ejects; the bubble column splash and the rider's 105 degree
+clamp on mouse turns are done). The resource pack load-failure toast, the server list's favicon / MOTD sanitising and
+Create World's blank name are done. The allay's give / take / duplicate is predicted
 (its hand and the player's stack). Not ported:
 filtered sign text (needs the account's profanity filter flag). The bell's raider particles (showBellParticles) are
 invisible in 26.3 (ColorParticleOption.create(ENTITY_EFFECT, 0xFED839 + 5i) has alpha 0, which SpellParticle keeps),
