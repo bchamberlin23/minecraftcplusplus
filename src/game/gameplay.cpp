@@ -1220,6 +1220,7 @@ int Gameplay::predictItemUse(int hand, const RayHit* target) {
             if (!f.type || !f.source || eye[1] + dir[1] * t > y + game_->physics().fluidHeight(x, y, z, f)) continue;
             if (registry_.name(world_.block(x, y, z)).starts_with("minecraft:lava")) return Game::kUsePass;
             localSound("minecraft:item.bottle.fill", audio::Category::Neutral, 1.0f, 1.0f);
+            if (ui_) ui_->predictFilledResult(hand, ui_->waterBottle());  // ItemUtils.createFilledResult
             return Game::kUseConsume;
         }
         return Game::kUsePass;
@@ -1227,10 +1228,15 @@ int Gameplay::predictItemUse(int hand, const RayHit* target) {
     if (name == "bucket" || name == "water_bucket" || name == "lava_bucket" || name.ends_with("_bucket") && name != "milk_bucket" &&
         name != "powder_snow_bucket")
         return predictBucket(hand, name);
+    // Thrown items and the knowledge book: itemStack.consume(1, player) on the client too
     if (name == "ender_pearl" || name == "snowball" || name == "egg" || name == "blue_egg" || name == "brown_egg" ||
         name == "wind_charge" || name == "experience_bottle" || name == "splash_potion" || name == "lingering_potion" ||
-        name == "fishing_rod" || name == "writable_book" || name == "written_book" || name == "knowledge_book" || name == "map" ||
-        name == "ender_eye")
+        name == "knowledge_book") {
+        const int r = instant();  // (the cooldown reads the stack first)
+        if (ui_) ui_->predictConsumeHeld(hand);
+        return r;
+    }
+    if (name == "fishing_rod" || name == "writable_book" || name == "written_book" || name == "map" || name == "ender_eye")
         return instant();
     if (name == "firework_rocket") return game_->player().fallFlying ? instant() : Game::kUsePass;
     if (name == "carrot_on_a_stick" || name == "warped_fungus_on_a_stick") return Game::kUsePass;  // steering: riding.cpp
@@ -1246,8 +1252,11 @@ int Gameplay::predictItemUse(int hand, const RayHit* target) {
         if (!allowed || slot == 6 || slot == 7) return Game::kUsePass;
         static constexpr int kMenuSlot[6] = {-1, 8, 7, 6, 5, 45};  // feet .. head, off hand
         const ui::ItemStack* worn = ui_ ? ui_->playerSlot(kMenuSlot[slot]) : nullptr;
+        if (worn && !creative && ui_->items().hasEnchantmentEffect(*worn, "minecraft:prevent_armor_change")) return Game::kUseFail;
         if (worn && worn->sameItemSameComponents(*s)) return Game::kUseFail;
-        return instant();
+        const int r = instant();
+        if (ui_) ui_->predictEquipSwap(hand, kMenuSlot[slot]);  // after the cooldown: it reads the held stack
+        return r;
     }
     if (u.anim == ItemRules::Anim::Spear) {  // KineticWeapon: the use sound, heard by the user only here
         const std::string sound = weaponSound(*s, "kinetic_weapon");

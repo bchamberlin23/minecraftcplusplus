@@ -272,6 +272,11 @@ public:
     // hand's stack (not with infinite materials), and ItemUtils.createFilledResult (a bucket / bowl turned into `item`).
     void predictConsumeHeld(int hand, int count = 1);
     void predictFilledResult(int hand, const std::string& item);
+    void predictFilledResult(int hand, const ItemStack& filled);
+    // Equippable.swapWithEquipmentSlot on the client: the held stack and the worn one (menu slot) trade places.
+    void predictEquipSwap(int hand, int wornSlot);
+    // A water bottle (PotionContents.createItemStack(POTION, WATER)).
+    ItemStack waterBottle() const;
     void predictAdd(const ItemStack& stack);  // Inventory.add on the client (a full inventory: the server drops it)
     const Items& items() const;
     // LivingEntity.getEquipmentSlotForItem / isEquippableInSlot for the player (the stack's equippable component, set

@@ -1288,15 +1288,47 @@ void Ui::predictConsumeHeld(int hand, int count) {
 }
 
 void Ui::predictFilledResult(int hand, const std::string& item) {
+    const int id = s_->items.id(item.find(':') == std::string::npos ? "minecraft:" + item : item);
+    if (id >= 0) predictFilledResult(hand, ItemStack{id, 1});
+}
+
+ItemStack Ui::waterBottle() const {
+    ItemStack st{s_->items.id("minecraft:potion"), 1};
+    const int t = s_->items.componentType("potion_contents"), water = s_->items.potionId("water");
+    if (st.item < 0 || t < 0 || water < 0) return st;
+    net::Writer w;  // PotionContents: the potion, no colour, no effects, no name
+    w.boolean(true), w.varInt(water), w.boolean(false), w.varInt(0), w.boolean(false);
+    st.added.push_back({t, std::string(w.buf.begin(), w.buf.end())});
+    st.potion = water;
+    return st;
+}
+
+void Ui::predictEquipSwap(int hand, int wornSlot) {
     State& s = *s_;
-    const int id = s.items.id(item.find(':') == std::string::npos ? "minecraft:" + item : item);
+    if (!s.game) return;
+    auto& slots = s.inventory.slots;
+    ItemStack& held = slots[size_t(hand == 0 ? 36 + s.game->selectedSlot() : 45)];
+    ItemStack& worn = slots[size_t(wornSlot)];
+    const ItemStack oldHeld = held, oldWorn = worn;
+    if (oldHeld.count <= 1) {  // the two trade places (creative keeps the held one when nothing was worn)
+        worn = oldHeld;
+        held = !oldWorn.empty() ? oldWorn : s.creative() ? oldHeld : ItemStack{};
+        return;
+    }
+    worn = oldHeld.withCount(1);  // one of the stack worn (consumeAndReturn), the old piece into the inventory
+    if (!s.game->instabuild) held = oldHeld.withCount(oldHeld.count - 1);
+    predictAdd(oldWorn);
+}
+
+void Ui::predictFilledResult(int hand, const ItemStack& filled) {
+    State& s = *s_;
+    const int id = filled.item;
     if (!s.game || id < 0) return;
     auto& slots = s.inventory.slots;
     ItemStack& held = slots[size_t(hand == 0 ? 36 + s.game->selectedSlot() : 45)];
-    const ItemStack filled{id, 1};
     if (s.game->instabuild) {  // limitCreativeStackSize: the full one joins the inventory once, the empty one stays
         for (const ItemStack& st : slots)
-            if (!st.empty() && st.item == id) return;
+            if (!st.empty() && st.sameItemSameComponents(filled)) return;
         predictAdd(filled);
         return;
     }
