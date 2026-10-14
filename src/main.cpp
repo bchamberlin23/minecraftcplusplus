@@ -395,7 +395,7 @@ int wmain(int argc, wchar_t** argv) {
         sc.ownerUuid = ownership.playerId;
         {  // Video Settings: Simulation Distance (IntegratedServer.setSimulationDistance)
             ui::Settings saved;
-            if (saved.load()) sc.simulationDistance = saved.simulationDistance;
+            if (saved.load()) sc.simulationDistance = saved.simulationDistance, sc.entityDistanceScaling = saved.entityDistanceScaling;
         }
         serverConfig = sc;
         if (!localServer->start(sc)) return 1;

@@ -209,7 +209,7 @@ void UiPass::draw(const PassContext& ctx) {
     list->SetPipelineState(pso_.Get());
     u8 blend = 0;
     const float consts[12] = {2.0f / float(ctx.width), 2.0f / float(ctx.height), glint[4], glint[5], glint[0], glint[1],
-                              glint[2], glint[3], std::max(1.0f, glint[6]), 0, 0, 0};
+                              glint[2], glint[3], std::max(1.0f, glint[6]), glint[7], 0, 0};
     list->SetGraphicsRoot32BitConstants(0, 12, consts, 0);
     list->SetGraphicsRootDescriptorTable(1, renderer_->gpuDescriptor(descriptors_));
     list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);

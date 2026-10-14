@@ -4,7 +4,8 @@ cbuffer UiConstants : register(b0) {
     float2 gGlintOffset;  // enchantment glint scroll (texture units)
     float4 gGlintRect;    // glint texture in the GUI atlas: u0 v0 du dv
     float gGlintScale;    // screen pixels per glint repeat
-    float3 gPad;
+    float gGlintAlpha;    // the Glint Strength option (glint.fsh GlintAlpha)
+    float2 gPad;
 };
 Texture2D gGui : register(t0);
 Texture2D gIcons : register(t1);
@@ -42,7 +43,7 @@ float4 UiPS(UiOut i) : SV_Target {
         const float a = 0.17453292;  // rotated 10 degrees like the game's glint texturing
         float2 r = float2(p.x * cos(a) - p.y * sin(a), p.x * sin(a) + p.y * cos(a)) + gGlintOffset;
         float4 g = gGui.SampleLevel(gPoint, gGlintRect.xy + frac(r) * gGlintRect.zw, 0);
-        c = float4(g.rgb * c.a, 1);
+        c = float4(g.rgb * c.a * gGlintAlpha, 1);
     }
     if (c.a < 0.004) discard;
     return c;

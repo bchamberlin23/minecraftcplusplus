@@ -1479,6 +1479,7 @@ void Ui::endFrame() {
         s.pass->glint[0] = g->u0, s.pass->glint[1] = g->v0, s.pass->glint[2] = g->u1 - g->u0, s.pass->glint[3] = g->v1 - g->v0;
         s.pass->glint[4] = -float(std::fmod(ms, 110000.0) / 110000.0), s.pass->glint[5] = float(std::fmod(ms, 30000.0) / 30000.0);
         s.pass->glint[6] = float(16 * scale) * 2.0f;
+        s.pass->glint[7] = float(s.settings.glintStrength);  // GlintAlpha
     }
     s.sprites.tick(u64(s.guiTicks));  // animated GUI sprites and textures, item icons
     s.pendingCursor = 0;  // GuiGraphicsExtractor.requestCursor: this frame's request

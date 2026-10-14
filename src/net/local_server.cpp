@@ -532,6 +532,7 @@ bool LocalServer::start(const Config& config) {
           << "view-distance=" << std::clamp(config.viewDistance, 2, 32) << "\n"
           << "simulation-distance="
           << (config.simulationDistance > 0 ? std::clamp(config.simulationDistance, 2, 32) : std::clamp(config.viewDistance, 2, 10)) << "\n"
+          << "entity-broadcast-range-percentage=" << std::clamp(int(std::lround(config.entityDistanceScaling * 100.0)), 10, 1000) << "\n"
           << "network-compression-threshold=" << (config.lan ? 256 : -1) << "\n"
           << "sync-chunk-writes=false\n"
           << "spawn-protection=0\n"

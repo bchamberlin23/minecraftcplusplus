@@ -27,6 +27,8 @@ public:
         bool lan = false;       // listen on all interfaces (friends can join) instead of loopback only
         int viewDistance = 12;  // chunks the server sends; farther terrain is this engine's own LOD
         int simulationDistance = -1;  // the Simulation Distance option (IntegratedServer); < 0: min(view, 10)
+        // the Entity Distance option: IntegratedServer.getScaledTrackingDistance (entity-broadcast-range-percentage)
+        double entityDistanceScaling = 1.0;
         // A new world (Create New World): the server creates `world` with these settings; once it stops, level.dat
         // gets the singleplayer setup the game expects (LevelName, cheats, the owner's player data).
         struct Create {
