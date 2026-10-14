@@ -159,7 +159,9 @@ every clientbound packet is handled except the debug/* values (development build
 empty combat enter/end; every serverbound packet is sent except chat_session_update (profile keys: Microsoft).
 Video settings audit: Improved Transparency is stored but the renderer has no Fabulous-style separate translucency
 targets (its own sorting stays); the Entity Distance option reaches the local server only at launch (the integrated
-server reads it live); no graphics backend choice (D3D12 only). Not ported:
+server reads it live); no graphics backend choice (D3D12 only). Placement prediction audited (two passes over ~40
+block families) and fixed; the client's redstone view (placement.cpp hasNeighborSignal) reads block-entity outputs
+(jukebox songs, trapped chest viewers, comparator levels) as 0 and treats opaque cubes as the conductors. Not ported:
 filtered sign text (needs the account's profanity filter flag). The bell's raider particles (showBellParticles) are
 invisible in 26.3 (ColorParticleOption.create(ENTITY_EFFECT, 0xFED839 + 5i) has alpha 0, which SpellParticle keeps),
 so they are not drawn here either. Toasts follow ToastInstance now (the
