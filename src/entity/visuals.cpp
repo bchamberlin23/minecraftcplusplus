@@ -239,7 +239,7 @@ struct Visuals::Impl {
     std::unordered_map<int, u8> wasInWater;   // Entity.wasTouchingWater (the splash on entering)
     int activationTicks = 0, activationItem = -1;  // LocalPlayer.itemActivation (the totem popping): ticks left, item
     float activationOff[2] = {};
-    bool localWasInWater = false;
+    bool localWasInWater = false, localFirstTick = true;
     // Entity.doWaterSplashEffect's particles and spawnSprintParticle (world lock held).
     void waterAndSprint(const double pos[3], const double vel[3], float width, bool inWater, bool& wasIn, bool sprinting);
     std::unordered_map<int, int> stunnedTicks;  // Ravager.stunnedTick (event 39)
@@ -1863,7 +1863,9 @@ void Visuals::Impl::update() {
         if (activationTicks > 0) --activationTicks;
         if (game && !(gameMode && gameMode() == 3)) {  // the local player (not a spectator)
             const Player& p = game->player();
-            waterAndSprint(p.pos, p.vel, 0.6f, p.inWater, localWasInWater, p.sprinting && !p.sneaking && !p.inLava);
+            if (localFirstTick) localWasInWater = p.inWater, localFirstTick = false;  // no splash on the first tick
+            // canSpawnSprintParticle: not while flying (LocalPlayer), alive
+            waterAndSprint(p.pos, p.vel, 0.6f, p.inWater, localWasInWater, p.sprinting && !p.sneaking && !p.inLava && !p.flying && !game->dead);
         }
     }
     if (particles) {

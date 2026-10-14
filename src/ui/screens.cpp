@@ -151,6 +151,8 @@ struct Sim {
         if (inventoryMenu() && slot >= 5 && slot <= 8)  // ArmorSlot(HEAD .. FEET): Player.isEquippableInSlot
             return s.items.equipmentSlot(st) == 4 - (slot - 5) && s.items.canBeEquippedBy(st, "player");
         if (furnace() && slot == 1) return isFuel(st) || name(st) == "bucket";  // FurnaceFuelSlot
+        // ShulkerBoxSlot: canFitInsideContainerItems (not a shulker box)
+        if (m.typeName == "shulker_box" && own(slot) && name(st).ends_with("shulker_box")) return false;
         if (station && station->mayPlace && own(slot) && !station->mayPlace(s, m, slot, st)) return false;
         return true;
     }

@@ -430,8 +430,9 @@ void AudioSystem::onPlayerTick() {
         const std::string& full = registry_->name(underId);
         const std::string block = full.substr(0, full.find('['));
         if (block == "minecraft:hay_block" || block == "minecraft:honey_block") modifier = 0.2;
-        else if (block == "minecraft:slime_block" && !p.sneaking) modifier = 0.0;  // unless isSuppressingBounce
-        else if (block.ends_with("_bed")) fall *= 0.5;                            // BedBlock: half the distance
+        // SlimeBlock.fallOn: no damage (multiplier 0; suppressing the bounce, no fallOn at all)
+        else if (block == "minecraft:slime_block") modifier = 0.0;
+        else if (block.ends_with("_bed") || block == "minecraft:shelf_mushroom") fall *= 0.5;  // fallDistanceReduction 0.5
         if (block == "minecraft:honey_block")                                    // HoneyBlock.fallOn
             playerSound(bank_.eventId("minecraft:block.honey_block.slide"), 1.0f, 1.0f);
         if (!creative) {
@@ -440,9 +441,10 @@ void AudioSystem::onPlayerTick() {
             if (damage > 0) {
                 playerSound(bank_.eventId(damage > 4 ? "minecraft:entity.player.big_fall" : "minecraft:entity.player.small_fall"),
                             1.0f, 1.0f);
-                if (!under.air) {  // playBlockFallSound
+                if (!under.air) {  // playBlockFallSound (HoneyBlock.fallOn plays it once more after the damage)
                     const BlockSoundType& t = game_.type(under.type);
                     playerSound(t.fall, t.volume * 0.5f, t.pitch * 0.75f);
+                    if (block == "minecraft:honey_block") playerSound(t.fall, t.volume * 0.5f, t.pitch * 0.75f);
                 }
             }
         }
