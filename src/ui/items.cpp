@@ -111,6 +111,25 @@ std::unordered_map<std::string, std::string> nbtFields(std::string_view nbt) {
     return out;
 }
 
+// A HolderSet in network NBT: "#tag", one id, or a list of ids.
+void holderNames(const std::unordered_map<std::string, std::string>& f, const char* key, std::string& tag,
+                 std::vector<std::string>& ids) {
+    auto it = f.find(key);
+    if (it == f.end() || it->second.size() < 2) return;
+    net::Reader r(reinterpret_cast<const u8*>(it->second.data()) + 1, it->second.size() - 1);
+    if (it->second[0] == 8) {
+        std::string v(r.bytes(r.u16v()));
+        if (v.starts_with('#')) tag = v.substr(1);
+        else ids.push_back(std::move(v));
+    } else if (it->second[0] == 9 && r.u8v() == 8) {
+        for (i32 n = r.i32v(); n > 0 && r.ok; --n) ids.emplace_back(r.bytes(r.u16v()));
+    }
+}
+
+std::string withNamespace(std::string_view id) {
+    return id.find(':') == std::string_view::npos ? "minecraft:" + std::string(id) : std::string(id);
+}
+
 int nbtInt(const std::string& v, int fallback) {
     if (v.size() < 2) return fallback;
     net::Reader r(reinterpret_cast<const u8*>(v.data()) + 1, v.size() - 1);
@@ -138,6 +157,9 @@ void Items::setRegistries(const net::Client& client) {
             };
             text("description", info.description);
             if (auto it = f.find("max_level"); it != f.end()) info.maxLevel = nbtInt(it->second, 1);
+            if (auto it = f.find("anvil_cost"); it != f.end()) info.anvilCost = nbtInt(it->second, 1);
+            holderNames(f, "supported_items", info.supportedTag, info.supportedList);
+            holderNames(f, "exclusive_set", info.exclusiveTag, info.exclusiveList);
             if (auto it = f.find("width"); it != f.end()) info.width = nbtInt(it->second, 0);
             if (auto it = f.find("height"); it != f.end()) info.height = nbtInt(it->second, 0);
             info.hasTitle = text("title", info.title);
@@ -282,6 +304,77 @@ int Items::maxDamage(const ItemStack& s) const {
     if (auto it = defaults(s.item).find("minecraft:max_damage"); it != defaults(s.item).end() && it->is_number_integer())
         return it->get<int>();
     return toolDurability(shortName(name(s.item)));
+}
+
+bool Items::enchantmentSupports(int enchantment, int item) const {
+    if (enchantment < 0 || size_t(enchantment) >= enchantments_.size()) return false;
+    const RegistryInfo& e = enchantments_[size_t(enchantment)];
+    if (!e.supportedTag.empty()) {
+        const std::vector<int>* t = tag("minecraft:item", withNamespace(e.supportedTag));
+        return t && std::find(t->begin(), t->end(), item) != t->end();
+    }
+    for (const std::string& n : e.supportedList)
+        if (id(withNamespace(n)) == item) return true;
+    return false;
+}
+
+bool Items::enchantmentsCompatible(int a, int b) const {
+    auto excludes = [&](int x, int y) {  // y is in x's exclusive set
+        if (x < 0 || size_t(x) >= enchantments_.size() || y < 0 || size_t(y) >= enchantments_.size()) return false;
+        const RegistryInfo& e = enchantments_[size_t(x)];
+        if (!e.exclusiveTag.empty()) {
+            const std::vector<int>* t = tag("minecraft:enchantment", withNamespace(e.exclusiveTag));
+            return t && std::find(t->begin(), t->end(), y) != t->end();
+        }
+        for (const std::string& n : e.exclusiveList)
+            if (withNamespace(n) == enchantments_[size_t(y)].id) return true;
+        return false;
+    };
+    return a != b && !excludes(a, b) && !excludes(b, a);
+}
+
+bool Items::enchantmentIsCurse(int enchantment) const {
+    const std::vector<int>* t = tag("minecraft:enchantment", "minecraft:curse");
+    return t && std::find(t->begin(), t->end(), enchantment) != t->end();
+}
+
+bool Items::repairableWith(const ItemStack& s, int item) const {
+    const ComponentValue v = component(s, "repairable");
+    if (v.patched) {  // Repairable: HolderSet stream codec (size + 1 ids, or 0 and a tag)
+        net::Reader r(reinterpret_cast<const u8*>(v.patched->data()), v.patched->size());
+        const i32 n = r.varInt();
+        if (n == 0) {
+            const std::vector<int>* t = tag("minecraft:item", withNamespace(r.str()));
+            return t && std::find(t->begin(), t->end(), item) != t->end();
+        }
+        for (i32 i = 1; i < n && r.ok; ++i)
+            if (r.varInt() == item) return true;
+        return false;
+    }
+    if (!v.fallback || !v.fallback->is_object()) return false;
+    const nlohmann::json& items = v.fallback->value("items", nlohmann::json());
+    auto match = [&](const nlohmann::json& j) {
+        if (!j.is_string()) return false;
+        const std::string n = j.get<std::string>();
+        if (!n.starts_with('#')) return id(withNamespace(n)) == item;
+        const std::vector<int>* t = tag("minecraft:item", withNamespace(n.substr(1)));
+        return t && std::find(t->begin(), t->end(), item) != t->end();
+    };
+    if (items.is_array()) return std::any_of(items.begin(), items.end(), match);
+    return match(items);
+}
+
+void Items::setComponent(ItemStack& s, std::string_view name, const std::string* data) const {
+    const int type = componentType(name);
+    if (type < 0 || s.empty()) return;
+    std::erase_if(s.added, [&](const ItemStack::Component& c) { return c.type == type; });
+    std::erase(s.removed, type);
+    if (data) s.added.push_back({type, *data});
+    net::Writer w;  // decoded again from the patch, like a stack from the network
+    write(w, s, false);
+    net::Reader r(w.buf.data(), w.buf.size());
+    ItemStack decoded;
+    if (read(r, decoded)) decoded.bundleSelected = s.bundleSelected, s = std::move(decoded);
 }
 
 // --- protocol ---------------------------------------------------------------------------------------

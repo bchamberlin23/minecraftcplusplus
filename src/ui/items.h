@@ -118,6 +118,10 @@ public:
         std::string id;              // "minecraft:sharpness"
         Text description;            // enchantment / instrument description
         int maxLevel = 1;            // enchantment max_level
+        int anvilCost = 1;           // enchantment anvil_cost
+        // Enchantment supported_items / exclusive_set: a tag (without '#'), else the listed ids.
+        std::string supportedTag, exclusiveTag;
+        std::vector<std::string> supportedList, exclusiveList;
         int width = 0, height = 0;   // painting size (blocks)
         bool hasTitle = false, hasAuthor = false;
         Text title, author;          // painting
@@ -133,6 +137,15 @@ public:
         auto it = enchantmentNbt_.find(id);
         return it == enchantmentNbt_.end() ? nullptr : &it->second;
     }
+    // Enchantment definitions by network id (an index of enchantments()): Enchantment.canEnchant (supported_items),
+    // Enchantment.areCompatible (exclusive sets), the #minecraft:curse tag.
+    bool enchantmentSupports(int enchantment, int item) const;
+    bool enchantmentsCompatible(int a, int b) const;
+    bool enchantmentIsCurse(int enchantment) const;
+    bool repairableWith(const ItemStack& s, int item) const;  // ItemStack.isValidRepairItem (the repairable component)
+    // Sets a component of the stack's patch (data: its network encoding; null: back to the item's default); the
+    // decoded fields follow.
+    void setComponent(ItemStack& s, std::string_view name, const std::string* data) const;
     const std::vector<RegistryInfo>& paintings() const { return paintings_; }
     const std::vector<RegistryInfo>& instruments() const { return instruments_; }
     const std::vector<std::string>& bannerPatterns() const { return bannerPatterns_; }

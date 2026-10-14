@@ -41,6 +41,56 @@ int combinerQuickMove(int resultSlot, int index, const std::function<bool(int, i
 }
 bool hasComponent(UiState& s, const ItemStack& st, const char* name) { return s.items.component(st, name).present(); }
 
+// ---- the item logic of the combining stations, run on the client like the game's menus (slotsChanged ->
+// createResult); the server's result replaces it when it arrives ----
+
+using Enchants = std::vector<std::pair<int, int>>;  // (enchantment network id, level)
+
+bool isEnchantedBook(UiState& s, const ItemStack& st) { return !st.empty() && s.items.name(st.item) == "minecraft:enchanted_book"; }
+// ItemStack.isDamageableItem
+bool damageable(UiState& s, const ItemStack& st) {
+    return hasComponent(s, st, "max_damage") && !hasComponent(s, st, "unbreakable") && hasComponent(s, st, "damage");
+}
+int maxDamageOf(UiState& s, const ItemStack& st) { return hasComponent(s, st, "max_damage") ? s.items.maxDamage(st) : 0; }
+int intComponent(UiState& s, const ItemStack& st, const char* name) {  // a VarInt component, else its default, else 0
+    const Items::ComponentValue v = s.items.component(st, name);
+    if (v.patched) {
+        net::Reader r(reinterpret_cast<const u8*>(v.patched->data()), v.patched->size());
+        return r.varInt();
+    }
+    return v.fallback && v.fallback->is_number_integer() ? v.fallback->get<int>() : 0;
+}
+// Sets a VarInt component (a value equal to the item's default leaves no patch entry, like ItemStack.set).
+void setInt(UiState& s, ItemStack& st, const char* name, int value) {
+    const nlohmann::json* d = s.items.component(ItemStack{st.item, 1}, name).fallback;
+    if (d && d->is_number_integer() && d->get<int>() == value) return s.items.setComponent(st, name, nullptr);
+    net::Writer w;
+    w.varInt(value);
+    const std::string data(w.buf.begin(), w.buf.end());
+    s.items.setComponent(st, name, &data);
+}
+// EnchantmentHelper.getEnchantmentsForCrafting / setEnchantments: stored_enchantments on enchanted books.
+const Enchants& enchantsOf(UiState& s, const ItemStack& st) { return isEnchantedBook(s, st) ? st.storedEnchants : st.enchantList; }
+void setEnchants(UiState& s, ItemStack& st, const Enchants& e) {
+    const char* name = isEnchantedBook(s, st) ? "stored_enchantments" : "enchantments";
+    if (e.empty() && s.items.component(ItemStack{st.item, 1}, name).present()) return s.items.setComponent(st, name, nullptr);
+    net::Writer w;  // ItemEnchantments.STREAM_CODEC: a map of holder ids to VarInt levels
+    w.varInt(i32(e.size()));
+    for (const auto& [id, level] : e) w.varInt(id), w.varInt(level);
+    const std::string data(w.buf.begin(), w.buf.end());
+    s.items.setComponent(st, name, &data);
+}
+int levelOf(const Enchants& e, int id) {
+    for (const auto& [k, v] : e)
+        if (k == id) return v;
+    return 0;
+}
+void setLevel(Enchants& e, int id, int level) {  // ItemEnchantments.Mutable.set (0 removes)
+    std::erase_if(e, [&](const auto& p) { return p.first == id; });
+    if (level > 0) e.emplace_back(id, level);
+}
+int increasedRepairCost(int cost) { return int(std::min<i64>(i64(cost) * 2 + 1, INT32_MAX)); }  // calculateIncreasedRepairCost
+
 // --- anvil -----------------------------------------------------------------------------------------------------
 
 struct AnvilState {
@@ -48,7 +98,22 @@ struct AnvilState {
     int lastItem = -2;
     std::string lastName, sent;
     bool sentValid = false;
+    std::string predicted;           // the inputs and name the result was last computed for
+    int repairItemCountCost = 0;     // AnvilMenu.repairItemCountCost / onlyRenaming of that result
+    bool onlyRenaming = false;
 } anvil;
+
+// What a combining station's result depends on: its inputs (and the anvil's name).
+std::string inputsKey(const Menu& m, int inputs, const std::string& extra = {}) {
+    std::string k = extra;
+    for (int i = 0; i < inputs; ++i) {
+        const ItemStack& st = m.slots[size_t(i)];
+        k += '|' + std::to_string(st.empty() ? -1 : st.item) + ':' + std::to_string(st.count);
+        for (const auto& c : st.added) k += ',' + std::to_string(c.type) + '=' + c.data;
+        for (int t : st.removed) k += ",-" + std::to_string(t);
+    }
+    return k;
+}
 
 std::string hoverNameOf(UiState& s, const ItemStack& st) { return st.empty() ? std::string() : s.items.displayName(st).plain(); }
 
@@ -110,8 +175,108 @@ void anvilSync(UiState& s, Menu& m) {  // slotChanged(0): the field shows the ne
     anvilSendName(s, m);
 }
 
+// AnvilMenu.createResult: repairs with material, combines with a copy or an enchanted book, renames; the level cost in
+// data slot 0.
+void anvilPredict(UiState& s, Menu& m) {
+    const std::string key = inputsKey(m, 2, anvil.sentValid ? anvil.sent : std::string("\x01"));
+    if (key == anvil.predicted) return;
+    anvil.predicted = key;
+    const ItemStack& input = m.slots[0];
+    const ItemStack& addition = m.slots[1];
+    anvil.onlyRenaming = false;
+    int cost = 1, price = 0, namingCost = 0;
+    auto fail = [&] { m.slots[2] = ItemStack{}, m.data[0] = 0; };
+    if (input.empty() || !hasComponent(s, input, isEnchantedBook(s, input) ? "stored_enchantments" : "enchantments")) return fail();
+    ItemStack result = input;
+    Enchants enchantments = enchantsOf(s, result);
+    const i64 tax = i64(intComponent(s, input, "repair_cost")) + intComponent(s, addition, "repair_cost");
+    anvil.repairItemCountCost = 0;
+    if (!addition.empty()) {
+        const bool usingBook = hasComponent(s, addition, "stored_enchantments");
+        if (damageable(s, result) && s.items.repairableWith(input, addition.item)) {
+            const int maxDamage = maxDamageOf(s, result);
+            int damage = result.damage, repairAmount = std::min(damage, maxDamage / 4);
+            if (repairAmount <= 0) return fail();
+            int count = 0;
+            for (; repairAmount > 0 && count < addition.count; ++count) {
+                damage -= repairAmount;
+                ++price;
+                repairAmount = std::min(damage, maxDamage / 4);
+            }
+            setInt(s, result, "damage", damage);
+            anvil.repairItemCountCost = count;
+        } else {
+            if (!usingBook && (result.item != addition.item || !damageable(s, result))) return fail();
+            if (damageable(s, result) && !usingBook) {
+                const int remaining1 = maxDamageOf(s, input) - input.damage, remaining2 = maxDamageOf(s, addition) - addition.damage;
+                const int remaining = remaining1 + remaining2 + maxDamageOf(s, result) * 12 / 100;
+                const int resultDamage = std::max(0, maxDamageOf(s, result) - remaining);
+                if (resultDamage < result.damage) {
+                    setInt(s, result, "damage", resultDamage);
+                    price += 2;
+                }
+            }
+            bool anyCompatible = false, anyNotCompatible = false;
+            for (const auto& [enchantment, addLevel] : enchantsOf(s, addition)) {
+                const int current = levelOf(enchantments, enchantment);
+                int level = current == addLevel ? addLevel + 1 : std::max(addLevel, current);
+                bool compatible = s.items.enchantmentSupports(enchantment, input.item);
+                if (s.creative() || isEnchantedBook(s, input)) compatible = true;
+                for (const auto& [other, otherLevel] : enchantments)
+                    if (other != enchantment && !s.items.enchantmentsCompatible(enchantment, other)) compatible = false, ++price;
+                if (!compatible) {
+                    anyNotCompatible = true;
+                    continue;
+                }
+                anyCompatible = true;
+                const auto& defs = s.items.enchantments();
+                const bool known = enchantment >= 0 && size_t(enchantment) < defs.size();
+                level = std::min(level, known ? defs[size_t(enchantment)].maxLevel : level);
+                setLevel(enchantments, enchantment, level);
+                int fee = known ? defs[size_t(enchantment)].anvilCost : 1;
+                if (usingBook) fee = std::max(1, fee / 2);
+                price += fee * level;
+                if (input.count > 1) price = 40;
+            }
+            if (anyNotCompatible && !anyCompatible) return fail();
+        }
+    }
+    const std::string& itemName = anvil.sent;  // AnvilMenu.itemName (null before the screen set it)
+    const bool blank = std::all_of(itemName.begin(), itemName.end(), [](char ch) { return ch == ' ' || (ch >= 9 && ch <= 13); });
+    if (anvil.sentValid && !blank) {
+        if (itemName != hoverNameOf(s, input)) {
+            namingCost = 1, price += namingCost;
+            net::Writer w;  // Component.literal: a plain text component is a network NBT string
+            w.buf.push_back(8);
+            w.u16v(u16(itemName.size()));
+            w.bytes(itemName.data(), itemName.size());
+            const std::string data(w.buf.begin(), w.buf.end());
+            s.items.setComponent(result, "custom_name", &data);
+        }
+    } else if (input.hasCustomName) {
+        namingCost = 1, price += namingCost;
+        s.items.setComponent(result, "custom_name", nullptr);
+    }
+    cost = price <= 0 ? 0 : int(std::clamp<i64>(tax + price, 0, INT32_MAX));
+    if (price <= 0) result = ItemStack{};
+    if (namingCost == price && namingCost > 0) {
+        if (cost >= 40) cost = 39;
+        anvil.onlyRenaming = true;
+    }
+    if (cost >= 40 && !s.creative()) result = ItemStack{};
+    if (!result.empty()) {
+        int baseCost = std::max(intComponent(s, result, "repair_cost"), intComponent(s, addition, "repair_cost"));
+        if (namingCost != price || namingCost == 0) baseCost = increasedRepairCost(baseCost);
+        setInt(s, result, "repair_cost", baseCost);
+        setEnchants(s, result, enchantments);
+    }
+    m.slots[2] = result;
+    m.data[0] = cost;
+}
+
 void anvilDrawBg(UiState& s, Canvas& c, Menu& m, const Layout&, float left, float top) {
     anvilSync(s, m);
+    anvilPredict(s, m);
     s.xpDisplayStart = s.guiTicks;  // AnvilScreen.containerTick: the experience bar stays up while the anvil is open
     const bool has0 = !m.slots[0].empty();
     blitSprite(c, sp(s, has0 ? "container/anvil/text_field" : "container/anvil/text_field_disabled"), left + 59, top + 20, 110, 16);
@@ -164,10 +329,16 @@ int anvilQuickMove(UiState&, const Menu&, int index, const ItemStack&, const std
 bool anvilMayPickup(UiState& s, const Menu& m, int slot) {  // AnvilMenu.mayPickup: the level cost (any in creative)
     return slot != 2 || ((s.creative() || s.xpLevel >= m.data[0]) && m.data[0] > 0);
 }
-void anvilOnTake(UiState& s, Menu& m) {  // AnvilMenu.onTake: the item and the addition are used (repair counts: the server)
+void anvilOnTake(UiState& s, Menu& m) {  // AnvilMenu.onTake: the item and the addition (the repair count of it) are used
     if (!s.creative()) s.xpLevel = std::max(0, s.xpLevel - m.data[0]);  // giveExperienceLevels(-cost)
     m.slots[0] = ItemStack{};
-    m.slots[1] = ItemStack{};
+    if (anvil.repairItemCountCost > 0) {
+        ItemStack& addition = m.slots[1];
+        if (!addition.empty() && addition.count > anvil.repairItemCountCost) addition.count -= anvil.repairItemCountCost;
+        else addition = ItemStack{};
+    } else if (!anvil.onlyRenaming) {
+        m.slots[1] = ItemStack{};
+    }
     m.data[0] = 0;
 }
 
@@ -185,7 +356,52 @@ void grindLayout(const Menu&, Layout& l) {
     l.slots = {{49, 19}, {49, 40}, {129, 34}};
     playerSlots(l, 3);
 }
+// GrindstoneMenu.computeResult: one enchanted item loses its non-curse enchantments; two of the same item combine their
+// durability (+5%) and enchantments, then lose the non-curses.
+ItemStack grindRemoveNonCurses(UiState& s, ItemStack item) {
+    Enchants kept;
+    for (const auto& e : enchantsOf(s, item))
+        if (s.items.enchantmentIsCurse(e.first)) kept.push_back(e);
+    setEnchants(s, item, kept);
+    if (isEnchantedBook(s, item) && kept.empty()) {  // transmuteCopy(BOOK)
+        item.item = s.items.id("minecraft:book");
+        s.items.setComponent(item, "stored_enchantments", nullptr);
+    }
+    int repairCost = 0;
+    for (size_t i = 0; i < kept.size(); ++i) repairCost = increasedRepairCost(repairCost);
+    setInt(s, item, "repair_cost", repairCost);
+    return item;
+}
+ItemStack grindResult(UiState& s, const ItemStack& input, const ItemStack& additional) {
+    if (input.empty() && additional.empty()) return {};
+    if ((!input.empty() && input.count > 1) || (!additional.empty() && additional.count > 1)) return {};
+    if (input.empty() || additional.empty()) {
+        const ItemStack& item = input.empty() ? additional : input;
+        return item.enchantList.empty() && item.storedEnchants.empty() ? ItemStack{} : grindRemoveNonCurses(s, item);
+    }
+    if (input.item != additional.item) return {};  // mergeItems
+    const int durability = std::max(maxDamageOf(s, input), maxDamageOf(s, additional));
+    const int remaining = (maxDamageOf(s, input) - input.damage) + (maxDamageOf(s, additional) - additional.damage) + durability * 5 / 100;
+    int count = 1;
+    if (!damageable(s, input)) {
+        if (s.items.maxStack(input) < 2 || !(input.count == additional.count && input.sameItemSameComponents(additional))) return {};
+        count = 2;
+    }
+    ItemStack item = input.withCount(count);
+    if (damageable(s, item)) {
+        setInt(s, item, "max_damage", durability);
+        setInt(s, item, "damage", std::max(durability - remaining, 0));
+    }
+    Enchants merged = enchantsOf(s, item);  // mergeEnchantsFrom: upgrade (curses only where absent)
+    for (const auto& [e, level] : enchantsOf(s, additional))
+        if (!s.items.enchantmentIsCurse(e) || levelOf(merged, e) == 0) setLevel(merged, e, std::max(levelOf(merged, e), level));
+    setEnchants(s, item, merged);
+    return grindRemoveNonCurses(s, item);
+}
+
 void grindDrawBg(UiState& s, Canvas& c, Menu& m, const Layout&, float left, float top) {
+    static std::string predicted;
+    if (const std::string key = inputsKey(m, 2); key != predicted) predicted = key, m.slots[2] = grindResult(s, m.slots[0], m.slots[1]);
     if ((!m.slots[0].empty() || !m.slots[1].empty()) && m.slots[2].empty())
         blitSprite(c, sp(s, "container/grindstone/error"), left + 92, top + 31, 28, 21);
 }

@@ -132,8 +132,7 @@ is read in the configuration phase only. Pickups (a flying copy for orbs and par
 effects (upside-down xRot, creeper flash steps / ignited swelling, invisible hurt tint, skeleton shake) audited and
 fixed; residual: remote players' eye height for the pickup target is the type's constant (no pose). Anvil /
 grindstone / cartography, brewing / crafter / beacon / bundles and the death / win screens audited and fixed;
-residuals: no client-side result prediction (createResult: anvil, grindstone, cartography results wait for the
-server), screens are not narrated on opening (Screen.getNarrationMessage, e.g. the credits), the win screen's End
+residuals: screens are not narrated on opening (Screen.getNarrationMessage, e.g. the credits), the win screen's End
 portal background is approximated, the death screen is not reopened (nor the player respawned) when another screen
 closes while dead, no draft-report icon on the death screen's title button. Books / lectern and the operator block
 editors audited and fixed; residuals: writable pages ignore text filtering (getPages(isTextFilteringEnabled)), the
