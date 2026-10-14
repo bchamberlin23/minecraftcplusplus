@@ -332,6 +332,7 @@ struct Ui::State {
     // with the arrow keys while sliderEditing (AbstractSliderButton.canChangeValue). -1: none (reset per screen).
     int focusedButton = -1;
     bool sliderEditing = false;
+    bool keyboardFocus = false;  // Minecraft.getLastInputType().isKeyboard(): the focus came from the keys
     Text narrationTitle;  // Screen.getNarrationMessage of the open screen (set by its build; empty: none)
     float mouseX = 0, mouseY = 0;  // GUI coordinates
     bool leftDown = false, rightDown = false;
@@ -425,7 +426,8 @@ struct Ui::State {
     // widget (x, y, w, h): a widget's own tooltip, placed by MenuTooltipPositioner beside the mouse and below or above
     // the widget; else DefaultTooltipPositioner at the mouse.
     void drawTooltip(Canvas& c, const std::vector<Text>& lines, float x, float y, const TooltipImage* image = nullptr,
-                     bool itemTooltip = false, const std::string& style = {}, const float* widget = nullptr);
+                     bool itemTooltip = false, const std::string& style = {}, const float* widget = nullptr,
+                     bool belowOrAbove = false);  // widget + belowOrAbove: a focused widget's (BelowOrAboveWidgetTooltipPositioner)
     void drawText(Canvas& c, const Text& t, float x, float y, u32 color, bool shadow) { font.draw(c, t, x, y, color, shadow); }
     void drawCentered(Canvas& c, const Text& t, float cx, float y, u32 color, bool shadow = true) {
         font.draw(c, t, cx - float(font.width(t) / 2), y, color, shadow);

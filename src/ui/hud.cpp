@@ -274,14 +274,20 @@ void Ui::State::drawItem(Canvas& c, const ItemStack& s, float x, float y, bool d
 }
 
 void Ui::State::drawTooltip(Canvas& c, const std::vector<Text>& lines, float mx, float my, const TooltipImage* image,
-                            bool itemTooltip, const std::string& style, const float* widget) {
+                            bool itemTooltip, const std::string& style, const float* widget, bool belowOrAbove) {
     if (lines.empty()) return;
     const size_t count = lines.size() + (image ? 1 : 0);
     int w = 0, h = itemTooltip && count != 1 ? 0 : -2;
     for (const Text& l : lines) w = std::max(w, font.width(l)), h += 10;
     if (image) w = std::max(w, image->width), h += image->height;
     float x = mx + 12, y = my - 12;
-    if (widget) {  // MenuTooltipPositioner
+    if (widget && belowOrAbove) {  // BelowOrAboveWidgetTooltipPositioner
+        const int sw = c.guiWidth(), sh = c.guiHeight();
+        int rx = int(widget[0]) + 3, ry = int(widget[1] + widget[3]) + 3 + 1;
+        if (ry + h + 3 > sh) ry = int(widget[1]) - h - 3 - 1;
+        if (rx + w > sw) rx = std::max(int(widget[0] + widget[2]) - w - 3, 4);
+        x = float(rx), y = float(ry);
+    } else if (widget) {  // MenuTooltipPositioner
         const int sw = c.guiWidth(), sh = c.guiHeight(), top = int(widget[1]), height = int(widget[3]), bottom = top + height;
         auto offset = [&](int mouseY, int widgetY) {  // getOffset
             const int distance = std::min(std::abs(mouseY - widgetY), height);

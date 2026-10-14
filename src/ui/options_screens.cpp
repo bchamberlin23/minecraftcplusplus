@@ -310,7 +310,10 @@ void drawOptionsList(UiState& s, Canvas& c, const std::function<void(Canvas&, fl
     if (!g.subtitle.empty()) s.drawCentered(c, g.subtitle, float(W / 2), titleY + 11, g.subtitleColor);
     for (size_t i = g.rowY.size(); i < s.buttons.size(); ++i) s.drawButton(c, i, !dropOpen(s));
     if (dropOpen(s)) return drawDropdown(s, c);
-    // Tooltip of the hovered widget.
+    static float lastMouse[2] = {-1, -1};  // a mouse move makes the mouse the last input again
+    if (s.mouseX != lastMouse[0] || s.mouseY != lastMouse[1]) s.keyboardFocus = false, lastMouse[0] = s.mouseX, lastMouse[1] = s.mouseY;
+    // Tooltip of the hovered widget, else of the keyboard-focused one (WidgetTooltipHolder).
+    bool tooltipShown = false;
     for (size_t i = 0; i < s.buttons.size(); ++i) {
         const Button& b = s.buttons[i];
         if (!b.tooltip || (i < g.rowY.size() && !inList)) continue;
@@ -318,7 +321,17 @@ void drawOptionsList(UiState& s, Canvas& c, const std::function<void(Canvas&, fl
         const std::vector<Text> lines = tooltipLines(s, b.tooltip());
         const float rect[4] = {b.x, b.y, b.w, b.h};  // the widget's own tooltip (MenuTooltipPositioner)
         if (!lines.empty()) s.drawTooltip(c, lines, s.mouseX, s.mouseY, nullptr, false, {}, rect);
+        tooltipShown = true;
         break;
+    }
+    if (!tooltipShown && s.keyboardFocus && s.focusedButton >= 0 && size_t(s.focusedButton) < s.buttons.size()) {
+        const Button& b = s.buttons[size_t(s.focusedButton)];
+        const bool visible = size_t(s.focusedButton) >= g.rowY.size() || (b.y >= listTop() && b.y + b.h <= listBottom(s));
+        if (b.tooltip && visible) {
+            const std::vector<Text> lines = tooltipLines(s, b.tooltip());
+            const float rect[4] = {b.x, b.y, b.w, b.h};
+            if (!lines.empty()) s.drawTooltip(c, lines, s.mouseX, s.mouseY, nullptr, false, {}, rect, true);
+        }
     }
 }
 

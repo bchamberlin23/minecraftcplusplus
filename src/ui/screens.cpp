@@ -735,7 +735,7 @@ bool Ui::State::buttonsInput(const Window::InputEvent& e, size_t first, size_t l
     for (size_t i = first; i < buttons.size() && i < last; ++i) {
         Button& b = buttons[i];
         if (!b.active || mouseX < b.x || mouseY < b.y || mouseX >= b.x + b.w || mouseY >= b.y + b.h) continue;
-        focusedButton = int(i), sliderEditing = b.slider;  // the clicked widget takes the focus (a slider: editing)
+        focusedButton = int(i), sliderEditing = b.slider, keyboardFocus = false;  // the clicked widget takes the focus
         if (b.slider) {
             draggingSlider = int(i);
             b.value = std::clamp((mouseX - (b.x + 4)) / (b.w - 8), 0.f, 1.f);
@@ -809,7 +809,7 @@ bool Ui::State::buttonsNavigate(const Window::InputEvent& e, size_t first, size_
         return false;
     }
     if (next < 0) return false;
-    focusedButton = next;
+    focusedButton = next, keyboardFocus = true;
     sliderEditing = buttons[size_t(next)].slider && e.code == VK_TAB;  // AbstractSliderButton.setFocused
     return true;
 }
