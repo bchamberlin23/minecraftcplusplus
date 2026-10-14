@@ -513,7 +513,7 @@ int EntityRenderer::resolveUncached(const Entity& e, const TypeDef& d, Layer* ou
             }
             break;
         }
-        case SpMooshroom: tex = withBaby(e.variant == 1 ? "cow/mooshroom_brown" : "cow/mooshroom_red"); break;
+        case SpMooshroom: tex = withBaby(e.variant >= 1 ? "cow/mooshroom_brown" : "cow/mooshroom_red"); break;  // CLAMP
         case SpWolf:
             if (const Variant* v = variantOf("wolf_variant")) {
                 const int t = e.tame ? (baby ? v->babyTame : v->tame) : e.angry ? (baby ? v->babyAngry : v->angry)
@@ -544,7 +544,7 @@ int EntityRenderer::resolveUncached(const Entity& e, const TypeDef& d, Layer* ou
         case SpRabbit: {
             static const char* kTypes[6] = {"brown", "white", "black", "white_splotched", "gold", "salt"};
             tex = withBaby(e.variant == 99 ? "rabbit/rabbit_caerbannog"
-                                           : std::string("rabbit/rabbit_") + kTypes[std::clamp(e.variant, 0, 5)]);
+                                           : std::string("rabbit/rabbit_") + kTypes[e.variant >= 0 && e.variant <= 5 ? e.variant : 0]);  // sparse: unknown -> brown
             break;
         }
         case SpParrot: {
@@ -555,12 +555,12 @@ int EntityRenderer::resolveUncached(const Entity& e, const TypeDef& d, Layer* ou
         case SpFox: tex = withBaby(e.variant == 1 ? "fox/fox_snow" : "fox/fox"); break;
         case SpAxolotl: {
             static const char* kTypes[5] = {"lucy", "wild", "gold", "cyan", "blue"};
-            tex = withBaby(std::string("axolotl/axolotl_") + kTypes[std::clamp(e.variant, 0, 4)]);
+            tex = withBaby(std::string("axolotl/axolotl_") + kTypes[e.variant >= 0 && e.variant <= 4 ? e.variant : 0]);  // ZERO
             break;
         }
         case SpPanda: {
             // Visible gene: recessive genes (brown 4, weak 5) only show when both genes match.
-            int gene = std::clamp(e.variant, 0, 6);
+            int gene = e.variant >= 0 && e.variant <= 6 ? e.variant : 0;  // Panda.Gene.byId: ZERO (normal)
             if ((gene == 4 || gene == 5) && e.variant2 != gene) gene = 0;
             static const char* kGenes[7] = {"", "lazy", "worried", "playful", "brown", "weak", "aggressive"};
             if (gene == 0) tex = withBaby("panda/panda");
