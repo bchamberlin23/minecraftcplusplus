@@ -116,9 +116,10 @@ binds, the spectator menu (residual: teams listed alphabetically, Java's hash or
 one fades in; deliberate: the live world panorama without the overlay, Mods & Packs in the Realms slot, the port in
 the version line) and command suggestions. Then: name tags, advancements, boats (push rule), camels, elytra (the
 server ends the glide), item use (crossbow 72000, the unclamped counter, horn durations), the attack's item dip.
-Residuals noted by the audits: the first tick's lava guard (Entity.firstTick), the shield's block delay and head-yaw
-limit, the local nudge of a hit boat / minecart, the hurtClient rules of frames / paintings / cushions in adventure,
-a mount's Jump Boost, the camel passenger's sprint (held key only), horizontal wheel scrolling (no such input).
+Residuals noted by the audits (the lava first tick, the shield's block delay / 15 degree head limit, the hit boat /
+minecart nudge, mount Jump Boost, the camel standing up on forward input are done): the hurtClient rules of frames /
+paintings / cushions in adventure, the camel passenger's sprint (held key only, no double tap), horizontal wheel
+scrolling (no such input).
 Later: armor (black dye, wings on piglins / drowned), riding / dead walk animation, spectator bodies, map label
 depth, the camera's fluid (near plane), weather (biome precipitation data, instant levels). Fog residuals: the
 render-distance fog cylinder follows the far-terrain fog distance, not the chunk setting (deliberate for the LOD
@@ -188,9 +189,8 @@ spectated entity gets no hurt tilt / bob and FOV 1 (Java uses its own state; the
 Audited and matching: maps, name tags, tab list, sidebar, boss bars, toasts, chat, advancements. Residuals: command
 suggestions ask the server for every argument (Java lists entity / registry / position suggestions locally), no
 suggestion narration; friend toasts have no face; no resource pack load-failure toast; the advancements screen
-ignores the horizontal wheel. Boats: no client splash above a
-bubble column (onAboveBubbleColumn's local sound and particle), the rider's head / body yaw do not follow the boat's
-turn, no client outOfControlTicks (the server ejects). Server list: a favicon that is not 64x64 is kept in
+ignores the horizontal wheel. Boats: no client outOfControlTicks (the server ejects; the bubble column splash and
+the rider's 105 degree clamp on mouse turns are done). Server list: a favicon that is not 64x64 is kept in
 servers.dat (Java drops it), the MOTD is not sanitised (depth 16, player sprites rejected). Create World: a blank
 name is stored as "New World" (Java stores it empty), no narration. The allay's give / take / duplicate is predicted
 (its hand and the player's stack). Not ported:
@@ -231,7 +231,7 @@ game profile); the Online screen's Friends section has only In-Game Notification
   the pause, death, options, notice / confirmation and button-only front-end screens (the world / server lists: Tab
   to their buttons), with the focus highlight, slider editing and the focused widget's tooltip below it; containers,
   books, editors and the screens with search fields keep their own keys.
-- **Audit leftovers (2026-10-13)**: remote entities are not pushed by client-side pistons (Entity.move(PISTON) and its applyPredictedMovement), passengers are placed at render time; keyboard-focused widget tooltips (BelowOrAboveWidgetTooltipPositioner) and the widget tooltips of the other screens' own widgets (recipe book buttons, server / world list buttons) still use the mouse positioner; the chat's MODIFIED tag and RestrictionsScreen. (Minecarts under minecart_improvements: NO_OP interpolation, untested without an experimental world.)
+- **Audit leftovers (2026-10-13)**: remote entities are not pushed by client-side pistons (Entity.move(PISTON) and its applyPredictedMovement); riders are placed each tick (positionRider, babies' dimensions dumped) but a horse's seat uses standAnimO of our own animation; keyboard-focused widget tooltips (BelowOrAboveWidgetTooltipPositioner) and the widget tooltips of the other screens' own widgets (recipe book buttons, server / world list buttons) still use the mouse positioner; the chat's MODIFIED tag and RestrictionsScreen. (Minecarts under minecart_improvements: NO_OP interpolation, untested without an experimental world.)
 - **VIS-06 residual**: glowing outlines under a shader pack (entities go through the pack's gbuffers there).
 - Test instance blocks: optional tests' failure beam is red, not orange (the test registry is not sent to clients);
   the error markers and game test highlights are drawn in the UI layer (no depth test).
