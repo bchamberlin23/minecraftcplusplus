@@ -46,6 +46,7 @@ struct Editor {
     int testMode = 2;  // TestBlockMode: start, log, fail, accept
     Field message, testId;
     Text info;
+    Text errorMessage;  // the test instance block's error_message (TestInstanceBlockEntity.errorMessage)
     bool includeEntities = true;
 };
 Editor g;
@@ -302,6 +303,13 @@ void jigsawDraw(UiState& s, Canvas& c) {
     if (g.vertical) label(s, c, "jigsaw_block.joint_label", float(W / 2 + 53), 150);
     drawFields(s, c);
     s.drawButtons(c);
+    // the priority boxes' tooltips (EditBox.setTooltip), placed by the widget (MenuTooltipPositioner)
+    for (auto [f, key] : {std::pair{&g.selectionPriority, "jigsaw_block.selection_priority.tooltip"},
+                          std::pair{&g.placementPriority, "jigsaw_block.placement_priority.tooltip"}}) {
+        const float rect[4] = {f->x - 1, f->y - 1, f->w + 2, f->h + 2};
+        if (s.mouseX >= rect[0] && s.mouseY >= rect[1] && s.mouseX < rect[0] + rect[2] && s.mouseY < rect[1] + rect[3])
+            s.drawTooltip(c, s.font.split(Text(s.res.translate(key)), 170), s.mouseX, s.mouseY, nullptr, false, {}, rect);
+    }
 }
 
 void jigsawInput(UiState& s, const Window::InputEvent& e) {
@@ -386,7 +394,9 @@ void structureBuild(UiState& s) {
         Button& strict = addButton(s, float(W / 2 + 104), 120, 50, Text(), [] { g.strict = !g.strict; });
         strict.labelFn = [p] { return onOff(*p, g.strict); };
         Button& mirror = addButton(s, float(W / 2 - 20), 185, 40, Text(), [] { g.mirror = (g.mirror + 1) % 3; });
-        mirror.labelFn = [] { return Text(g.mirror == 0 ? "|" : g.mirror == 1 ? "< >" : "^ v"); };  // Mirror.symbol
+        mirror.labelFn = [p] {  // Mirror.symbol
+            return Text(p->res.translate(g.mirror == 0 ? "mirror.none" : g.mirror == 1 ? "mirror.left_right" : "mirror.front_back"));
+        };
         Button& box = addButton(s, float(W / 2 + 104), 80, 50, Text(), [] { g.showBoundingBox = !g.showBoundingBox; });
         box.labelFn = [p] { return onOff(*p, g.showBoundingBox); };
         static const char* const kRot[4] = {"0", "90", "180", "270"};
@@ -446,6 +456,17 @@ void structureInput(UiState& s, const Window::InputEvent& e) {
     using E = Window::InputEvent;
     if (e.type == E::Key && e.down && e.code == VK_ESCAPE) return s.buttons[1].onPress();  // Cancel
     if (e.type == E::Key && e.down && e.code == VK_RETURN) return s.buttons[0].onPress();  // Done
+    if (e.type == E::Char && s.fe->focus >= 0 && size_t(s.fe->focus) < s.fe->fields.size() &&
+        s.fe->fields[size_t(s.fe->focus)] == &g.structName) {  // the name's charTyped: Screen.isValidCharacterForName
+        const std::string& v = g.structName.text.value;
+        const size_t colon = v.find(':'), slash = v.find('/');
+        const size_t cursor = size_t(g.structName.text.cursor);
+        const u32 ch = u32(e.code);
+        const bool ok = ch == ':' ? (slash == std::string::npos || cursor <= slash) && colon == std::string::npos
+                        : ch == '/' ? colon != std::string::npos && cursor > colon
+                                    : ch == '_' || ch == '-' || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '.';
+        if (!ok) return;
+    }
     if (fieldsInput(s, e)) return;
     s.buttonsInput(e);
 }
@@ -531,7 +552,10 @@ void testInstanceBuild(UiState& s) {
         sizes[i]->x = x + 1, sizes[i]->y = 161, sizes[i]->w = float(int(w)) - 2, sizes[i]->h = 18;
     }
     const auto [rx, rw] = column(3, 5);
-    Button& rot = addButton(s, rx, 160, float(int(rw)), Text(), [] { g.rotation = (g.rotation + 1) % 4; });
+    Button& rot = addButton(s, rx, 160, float(int(rw)), Text(), [p] {
+        g.rotation = (g.rotation + 1) % 4;
+        p->buildButtons();  // updateSaveState
+    });
     rot.labelFn = [] {
         static const char* const kRot[4] = {"0", "90", "180", "270"};
         return Text(kRot[g.rotation]);
@@ -543,12 +567,16 @@ void testInstanceBuild(UiState& s) {
     const auto [r1, rw3] = column(1, 2);
     (void)rw3;
     addButton(s, r0, 185, float(int(rw2)), tr(s, "test_instance.action.reset"), [p] { sendTestInstance(*p, 3), p->closeScreen(); });
-    const bool saveOk = g.rotation == 0 && validId(g.testId.text.value) && !g.testId.text.value.empty();
+    const bool saveOk = g.rotation == 0 && validId(g.testId.text.value);
     addButton(s, r1, 185, float(int(rw2)), tr(s, "test_instance.action.save"), [p] { sendTestInstance(*p, 4), p->closeScreen(); }, saveOk);
     addButton(s, L, 210, 100, tr(s, "test_instance.action.run"), [p] { sendTestInstance(*p, 6), p->closeScreen(); });
     addButton(s, L + 108, 210, 100, tr(s, "gui.done"), [p] { sendTestInstance(*p, 2), p->closeScreen(); });
     addButton(s, L + 216, 210, 100, tr(s, "gui.cancel"), [p] { p->closeScreen(); });
     setFields(s, {&g.testId, &g.sizeX, &g.sizeY, &g.sizeZ}, 0);
+}
+
+Text invalidTestId(UiState& s) {  // test_instance.description.invalid_id in red
+    return Text(s.res.translate("test_instance.description.invalid_id"), colorStyle(0xFF5555));
 }
 
 void testInstanceDraw(UiState& s, Canvas& c) {
@@ -579,6 +607,7 @@ void testInstanceInput(UiState& s, const Window::InputEvent& e) {
     if (fieldsInput(s, e)) {
         if (g.testId.text.value != before) {  // updateTestInfo(QUERY) as the id changes
             sendTestInstance(s, 1);
+            if (!validId(g.testId.text.value)) g.info = invalidTestId(s);
             s.buildButtons();
         }
         return;
@@ -609,7 +638,14 @@ void registerHandlers(UiState& s, net::Client& client) {
         if (!r.ok) return;
         sp->post([sp, status, hasSize, size] {
             if (sp->screen != Screen::TestInstanceEdit) return;
-            g.info = status;
+            g.info = Text();
+            if (!g.errorMessage.empty()) {  // test_instance.description.failed with the error in red, then a blank line
+                Text error = Text("", colorStyle(0xFF5555));
+                error.append(g.errorMessage);
+                g.info = translatable("test_instance.description.failed", {error}, sp->lang());
+                g.info.append("\n\n");
+            }
+            g.info.append(status);
             if (hasSize) setField(g.sizeX, std::to_string(size[0]), 15), setField(g.sizeY, std::to_string(size[1]), 15),
                 setField(g.sizeZ, std::to_string(size[2]), 15);
             sp->buildButtons();
@@ -780,8 +816,10 @@ bool openBlockEditor(UiState& s, int x, int y, int z) {
         for (int i = 0; i < 4; ++i)
             if (rot == kRot[i]) g.rotation = i;
         g.includeEntities = num(d, "ignore_entities", 0) == 0;
+        g.errorMessage = componentText(s, nbtString(d, "error_message"));
         s.openScreen(Screen::TestInstanceEdit);
         sendTestInstance(s, 0);  // updateTestInfo(INIT)
+        if (!validId(g.testId.text.value)) g.info = invalidTestId(s);
         return true;
     }
     return false;
