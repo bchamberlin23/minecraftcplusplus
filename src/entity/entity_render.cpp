@@ -54,6 +54,7 @@ enum LayerFlags : u16 {
     DisplayBlock = 4096,  // a minecart's display block drawn as a model (the chest): under the display transform
     Dissolve = 8192,      // entityCutoutDissolve: scroll[] = the mask texture's atlas offset; alpha in the colour
     Shoulder = 16384,     // ParrotOnShoulderLayer: scroll[0] = the side (+0.4 left, -0.4 right)
+    HideInvisible = 32768,  // LivingEntityEmissiveLayer without alwaysVisible: not drawn on an invisible entity
     Stuck = 32768,        // StuckInBodyLayer: scroll[0] = the item's index, scroll[1] = 0 arrow (in cube) / 1 stinger
 };
 enum Special : u8 {
@@ -1350,17 +1351,17 @@ int EntityRenderer::speciesLayers(const Entity& e, const TypeDef& d, float pt, L
                                            "copper_golem/copper_golem_eyes_weathered", "copper_golem/copper_golem_eyes_oxidized"};
             const int w = std::clamp(int(dataInt(e, "DATA_WEATHER_STATE")), 0, 3);
             setTex(tex(kTex[w]));
-            add(L[0].model, tex(kEyes[w]), kWhite, Emissive | Translucent | NoOverlay);
+            add(L[0].model, tex(kEyes[w]), kWhite, Emissive | Translucent | NoOverlay | HideInvisible);
             break;
         }
         case Anim::Warden: {  // WardenRenderer's LivingEntityEmissiveLayers (entity translucent emissive, with alpha)
             auto lerpA = [&](int i) { return (e.sp.ao[i] + (e.sp.a[i] - e.sp.ao[i]) * pt) / 10.0f; };
-            add(model("warden#bioluminescent"), tex("warden/warden_bioluminescent_layer"), kWhite, Emissive | Translucent);
+            add(model("warden#bioluminescent"), tex("warden/warden_bioluminescent_layer"), kWhite, Emissive | Translucent | HideInvisible);
             const float spots = std::cos(age * 0.045f) * 0.25f;
-            if (spots > 1e-5f) add(model("warden#pulsating_spots"), tex("warden/warden_pulsating_spots_1"), white(spots), Emissive | Translucent);
-            if (-spots > 1e-5f) add(model("warden#pulsating_spots"), tex("warden/warden_pulsating_spots_2"), white(-spots), Emissive | Translucent);
-            if (const float t = lerpA(kTendril); t > 1e-5f) add(model("warden#tendrils"), tex("warden/warden"), white(t), Emissive | Translucent);
-            if (const float h = lerpA(kHeart); h > 1e-5f) add(model("warden#heart"), tex("warden/warden_heart"), white(h), Emissive | Translucent);
+            if (spots > 1e-5f) add(model("warden#pulsating_spots"), tex("warden/warden_pulsating_spots_1"), white(spots), Emissive | Translucent | HideInvisible);
+            if (-spots > 1e-5f) add(model("warden#pulsating_spots"), tex("warden/warden_pulsating_spots_2"), white(-spots), Emissive | Translucent | HideInvisible);
+            if (const float t = lerpA(kTendril); t > 1e-5f) add(model("warden#tendrils"), tex("warden/warden"), white(t), Emissive | Translucent | HideInvisible);
+            if (const float h = lerpA(kHeart); h > 1e-5f) add(model("warden#heart"), tex("warden/warden_heart"), white(h), Emissive | Translucent | HideInvisible);
             break;
         }
         case Anim::IronGolem: {  // IronGolemCrackinessLayer (Crackiness.GOLEM by health, 100 max)
@@ -2291,7 +2292,8 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
             // LivingEntityRenderer.getRenderType: an invisible glowing body is drawn only into the outline (fully
             // transparent here, which the outline pass's silhouette still picks up)
             else if (li == 0 && outlineColor && outlineColor(e) >= 0) alpha = 0.0f;
-            else if (li == 0 || !(L.flags & (Armor | Emissive | Elytra | Glint | Scroll | Stuck | Shoulder))) continue;
+            else if (li == 0 || (L.flags & HideInvisible) || !(L.flags & (Armor | Emissive | Elytra | Glint | Scroll | Stuck | Shoulder)))
+                continue;
         }
         const TexRect& tr = assets_.rect(L.tex);
         const u32 layerColor = alpha >= 0 ? u32(alpha * 255.0f) << 24 | (L.color & 0xFFFFFF) : L.color;
