@@ -144,7 +144,9 @@ Fluid rendering audited: residuals are BlockState.isSolid and #blocks_fluid_flow
 (+ signs) in the mesher, heights in 1/240 steps and the flow angle in 255 steps, no 0.001 inset on the sides' edges,
 no lava back faces. Loom / stonecutter / smithing / mount screens audited; residuals: the loom predicts no result and
 draws its banner preview flat (no BannerFlagModel), the smithing preview shows no head item without an equipment
-asset, mount slots use fixed type lists (not #can_equip_saddle / #can_wear_horse_armor). Not ported: the bell's raider particles (showBellParticles), the
+asset, mount slots use fixed type lists (not #can_equip_saddle / #can_wear_horse_armor). Boss bars / titles / action
+bar and the beam renderers audited and fixed; residual: the end crystal beam's black-to-white shading is stepped over
+its slices (one colour per quad) instead of interpolated per vertex. Not ported: the bell's raider particles (showBellParticles), the
 darkness pulse on the player's own tick count, filtered sign text (needs the account's profanity filter flag). Toasts follow ToastInstance now (the
 server pack download toast shows its progress). Toast residuals: no toasts
 for world access / chunk load or save /
