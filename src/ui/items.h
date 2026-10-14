@@ -206,11 +206,11 @@ public:
     void writeHashed(net::Writer& w, const ItemStack& s) const;  // HashedStack (HashOps CRC32C per component)
     bool componentHash(const ItemStack::Component& c, u32& out) const;  // false: not reproduced (sent as 0)
     bool readTemplate(net::Reader& r, ItemStack& out) const;     // ItemStackTemplate (item, count, patch)
+    const std::string& registryName(const char* registry, int id) const;  // static registries from the reports
 
 private:
     // ItemStack.addDetailsToTooltip (tooltips.cpp); player: a local player exists (the attack base values).
     void addDetails(const ItemStack& s, bool advanced, bool creative, bool player, std::vector<Text>& out) const;
-    const std::string& registryName(const char* registry, int id) const;  // static registries from the reports
     bool readPatch(net::Reader& r, ItemStack& out, int depth) const;
     bool templateHash(net::Reader& r, u32& out) const;  // an ItemStackTemplate off the wire, hashed (HashOps)
     bool explosionHash(net::Reader& r, u32& out) const;  // a FireworkExplosion off the wire, hashed

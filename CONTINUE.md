@@ -144,7 +144,7 @@ Fluid rendering audited: residuals are BlockState.isSolid and #blocks_fluid_flow
 (+ signs) in the mesher, heights in 1/240 steps and the flow angle in 255 steps, no 0.001 inset on the sides' edges.
 FluidRenderer's backward faces are emitted (the surface's when shouldRenderBackwardUpFace, the sides' unless against
 glass / leaves; fluid quad bit 31) and translucent terrain culls back faces like the game. Loom / stonecutter / smithing / mount screens audited (the loom predicts its result; its banner preview is the
-flag's front, which is what the orthographic BannerFlagModel at phase 0 shows); residual: mount slots use fixed type lists (not #can_equip_saddle / #can_wear_horse_armor). Boss bars / titles / action
+flag's front, which is what the orthographic BannerFlagModel at phase 0 shows; mount slots read the server's #can_equip_saddle / #can_wear_horse_armor). Boss bars / titles / action
 bar and the beam renderers audited and fixed (the end crystal beam's black-to-white shading is per vertex:
 MeshQuad kQuadGreyGradient). Added: DatapackLoadFailureScreen (a local
 server stopping on its datapacks offers Safe Mode = --safeMode; tested with a broken dimension_type), the symlink

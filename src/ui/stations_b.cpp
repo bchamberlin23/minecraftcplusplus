@@ -666,6 +666,7 @@ struct MountState {
     std::string type = "horse";  // entity type without namespace
     bool baby = false;
     bool tamed = false;  // AbstractHorse.isTamed (DATA_ID_FLAGS & 2) / TamableAnimal.isTame (DATA_FLAGS_ID & 4)
+    bool saddleTag = false, armorTag = false;  // in #can_equip_saddle / #can_wear_horse_armor (the server's tags)
 } g_mount;
 
 bool mountNautilus() { return g_mount.type == "nautilus" || g_mount.type == "zombie_nautilus"; }
@@ -674,13 +675,13 @@ bool mountLlama() { return g_mount.type == "llama" || g_mount.type == "trader_ll
 // tamed; AbstractNautilus the saddle and the body when adult and tame.
 bool mountSaddle() {  // canUseSlot(SADDLE) && #can_equip_saddle
     const std::string& t = g_mount.type;
-    if (t == "horse" || t == "skeleton_horse" || t == "zombie_horse") return true;
-    if (t == "donkey" || t == "mule" || t == "camel" || t == "camel_husk" || mountNautilus()) return !g_mount.baby && g_mount.tamed;
-    return false;
+    if (mountNautilus()) return !g_mount.baby && g_mount.tamed;
+    const bool every = t == "horse" || t == "skeleton_horse" || t == "zombie_horse" || mountLlama();
+    return (every || (!g_mount.baby && g_mount.tamed)) && g_mount.saddleTag;
 }
 bool mountArmor() {  // canUseSlot(BODY) && (#can_wear_horse_armor || llama); nautili: canUseSlot(BODY)
     if (mountNautilus()) return !g_mount.baby && g_mount.tamed;
-    return g_mount.type == "horse" || g_mount.type == "zombie_horse" || mountLlama();
+    return g_mount.armorTag || mountLlama();
 }
 void mountLayout(const Menu&, Layout& l) {
     l.background = mountNautilus() ? "gui/container/nautilus" : "gui/container/horse";
@@ -830,6 +831,17 @@ void registerHandlers(State& st, net::Client& client) {
                     g_mount.baby = it->second.baby;
                     g_mount.tamed = mountNautilus() ? (ent::dataInt(it->second, "DATA_FLAGS_ID") & 4) != 0
                                                     : (ent::dataInt(it->second, "DATA_ID_FLAGS") & 2) != 0;
+                    // entity type tags from the server, else the vanilla members
+                    auto inTag = [&](const char* tag, std::initializer_list<std::string_view> vanilla) {
+                        const std::vector<int>* ids = s->items.tag("minecraft:entity_type", tag);
+                        if (!ids) return std::find(vanilla.begin(), vanilla.end(), g_mount.type) != vanilla.end();
+                        for (int tid : *ids)
+                            if (s->items.registryName("minecraft:entity_type", tid) == it->second.info->name) return true;
+                        return false;
+                    };
+                    g_mount.saddleTag = inTag("minecraft:can_equip_saddle", {"horse", "skeleton_horse", "zombie_horse", "donkey", "mule",
+                                                                           "camel", "camel_husk", "pig", "strider", "nautilus", "zombie_nautilus"});
+                    g_mount.armorTag = inTag("minecraft:can_wear_horse_armor", {"horse", "zombie_horse"});
                     title = it->second.name.empty() ? Text(s->res.translate("entity.minecraft." + g_mount.type)) : Text(it->second.name);
                 }
             }
