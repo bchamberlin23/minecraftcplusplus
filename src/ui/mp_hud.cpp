@@ -479,6 +479,21 @@ void drawTabHearts(UiState& s, Canvas& c, const std::string& key, int score, int
     }
 }
 
+// String.compareToIgnoreCase / CASE_INSENSITIVE_ORDER: per UTF-16 unit, upper then lower case.
+static std::u16string foldCase(const std::string& v) {
+    std::u16string out;
+    for (size_t i = 0; i < v.size();) {
+        const u32 cp = nextCodepoint(v, i);
+        if (cp > 0xFFFF) {
+            out.push_back(char16_t(0xD800 + ((cp - 0x10000) >> 10)));
+            out.push_back(char16_t(0xDC00 + ((cp - 0x10000) & 0x3FF)));
+        } else {
+            out.push_back(char16_t(std::towlower(std::towupper(wint_t(cp)))));
+        }
+    }
+    return out;
+}
+
 void drawPlayerList(UiState& s, Canvas& c) {
     const Objective* listObj = displayObjective(0);
     const std::string listName = listObj ? g.slots[0] : std::string();
@@ -493,26 +508,15 @@ void drawPlayerList(UiState& s, Canvas& c) {
         g.tabVisible = false;
         return;
     }
-    const bool shown = !g.tabVisible;  // setVisible(true): narrated below
+    const bool shown = !g.tabVisible;  // setVisible(true): narrated below; the heart states start afresh
+    if (shown) g.health.clear();
     g.tabVisible = true;
-    auto lower = [](const std::string& v) {  // String.compareToIgnoreCase: per UTF-16 unit, upper then lower case
-        std::u16string out;
-        for (size_t i = 0; i < v.size();) {
-            const u32 cp = nextCodepoint(v, i);
-            if (cp > 0xFFFF) {
-                out.push_back(char16_t(0xD800 + ((cp - 0x10000) >> 10)));
-                out.push_back(char16_t(0xDC00 + ((cp - 0x10000) & 0x3FF)));
-            } else {
-                out.push_back(char16_t(std::towlower(std::towupper(wint_t(cp)))));
-            }
-        }
-        return out;
-    };
+    const auto& lower = foldCase;
     auto teamName = [](const PlayerEntry* p) {
         auto it = g.playerTeam.find(p->name);
         return it == g.playerTeam.end() ? std::string() : it->second;
     };
-    std::sort(list.begin(), list.end(), [&](const PlayerEntry* a, const PlayerEntry* b) {  // PLAYER_COMPARATOR
+    std::stable_sort(list.begin(), list.end(), [&](const PlayerEntry* a, const PlayerEntry* b) {  // PLAYER_COMPARATOR (a stable sort)
         if (a->listOrder != b->listOrder) return a->listOrder > b->listOrder;
         const int sa = a->gameMode == 3, sb = b->gameMode == 3;
         if (sa != sb) return sa < sb;
@@ -784,14 +788,10 @@ void drawScoreboardSidebar(UiState& s, Canvas& c) {
         if (it == m.end() || owner.starts_with("#")) continue;  // PlayerScoreEntry.isHidden
         rows.push_back({owner, it->second.value, {}, {}, 0});
     }
-    // SCORE_DISPLAY_ORDER: value descending, then the owner case-insensitively.
-    auto lower = [](std::string v) {
-        for (char& ch : v) ch = char(std::tolower(u8(ch)));
-        return v;
-    };
-    std::sort(rows.begin(), rows.end(), [&](const Row& a, const Row& b) {
+    // SCORE_DISPLAY_ORDER: value descending, then the owner (String.CASE_INSENSITIVE_ORDER).
+    std::stable_sort(rows.begin(), rows.end(), [&](const Row& a, const Row& b) {
         if (a.value != b.value) return a.value > b.value;
-        return lower(a.owner) < lower(b.owner);
+        return foldCase(a.owner) < foldCase(b.owner);
     });
     if (rows.size() > 15) rows.resize(15);
     const Text title = obj->display;
