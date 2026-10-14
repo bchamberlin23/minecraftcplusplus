@@ -2912,13 +2912,16 @@ void Particles::ambient(const double cam[3]) {
                 o.block = netState(id);
                 static int marker = -2;
                 if (marker == -2) marker = typeId("block_marker");
-                add(marker, x + 0.5, y + 0.5, z + 0.5, 0, 0, 0, &o);
+                if (levelAllows(marker, false, false, x + 0.5, y + 0.5, z + 0.5)) add(marker, x + 0.5, y + 0.5, z + 0.5, 0, 0, 0, &o);
             }
             if (!fullCollision(id)) {  // EnvironmentAttributes.AMBIENT_PARTICLES of the biome
                 const u8 biome = world_.biomeAt(x, z);
                 if (biome != World::kUnknownBiome)
                     for (const auto& [type, chance] : biomeParticles(biome))
-                        if (randf() <= chance) add(type, x + double(randf()), y + double(randf()), z + double(randf()), 0, 0, 0);
+                        if (randf() <= chance) {
+                            const double px = x + double(randf()), py = y + double(randf()), pz = z + double(randf());
+                            if (levelAllows(type, false, false, px, py, pz)) add(type, px, py, pz, 0, 0, 0);
+                        }
             }
         }
 }
@@ -2934,11 +2937,19 @@ void Particles::redstoneOre(int x, int y, int z) {
         for (int k = 0; k < 3; ++k) p[k] = k == axis ? 0.5 + 0.5625 * kStep[d][k] : double(randf());
         Options o;
         o.hasColor = true, o.color = 0xFFFF0000, o.scale = 1.0f;
-        add(it->second, x + p[0], y + p[1], z + p[2], 0, 0, 0, &o);
+        if (levelAllows(it->second, false, false, x + p[0], y + p[1], z + p[2])) add(it->second, x + p[0], y + p[1], z + p[2], 0, 0, 0, &o);
     }
 }
 
 void Particles::animateBlock(u16 id, int x, int y, int z) {
+    // Block.animateTick's level.addParticle: through the Particles option and the 32-block limit (doAddParticle);
+    // addAlwaysVisibleParticle (bubble columns, potent sulfur) with alwaysShow
+    auto add = [this](int t, double px, double py, double pz, double xa, double ya, double za, const Options* o = nullptr) {
+        if (levelAllows(t, false, false, px, py, pz)) this->add(t, px, py, pz, xa, ya, za, o);
+    };
+    auto addAlwaysVisible = [this](int t, double px, double py, double pz, double xa, double ya, double za) {
+        if (levelAllows(t, false, true, px, py, pz)) this->add(t, px, py, pz, xa, ya, za);
+    };
     auto R = [&] { return double(randf()); };
     auto ri = [&](int n) { return int(rng_() % u32(n)); };
     auto type = [&](const char* n) {
@@ -3046,7 +3057,7 @@ void Particles::animateBlock(u16 id, int x, int y, int z) {
             break;
         case AmbSulfur:  // PotentSulfurBlock: bubbles in the water above, now and then the gas sound
             if (prop(id, "potent_sulfur_state") != "dry" && waterSource(x, y + 1, z)) {
-                for (int i = 0; i < 2; ++i) add(type("sulfur_bubbles"), x + R(), y + 1 + R(), z + R(), 0, 0, 0);
+                for (int i = 0; i < 2; ++i) addAlwaysVisible(type("sulfur_bubbles"), x + R(), y + 1 + R(), z + R(), 0, 0, 0);
                 if (ri(10) == 0) localSound("block.potent_sulfur.noxious_gas", x, y, z, 1, 1, true);
             }
             break;
@@ -3118,11 +3129,11 @@ void Particles::animateBlock(u16 id, int x, int y, int z) {
             break;
         case AmbBubbleColumn:
             if (prop(id, "drag") == "true") {
-                add(type("current_down"), x + 0.5, y + 0.8, z, 0, 0, 0);
+                addAlwaysVisible(type("current_down"), x + 0.5, y + 0.8, z, 0, 0, 0);
                 if (ri(200) == 0) localSound("block.bubble_column.whirlpool_ambient", x, y, z, float(0.2 + R() * 0.2), float(0.9 + R() * 0.15), false);
             } else {
-                add(type("bubble_column_up"), x + 0.5, y, z + 0.5, 0, 0.04, 0);
-                add(type("bubble_column_up"), x + R(), y + R(), z + R(), 0, 0.04, 0);
+                addAlwaysVisible(type("bubble_column_up"), x + 0.5, y, z + 0.5, 0, 0.04, 0);
+                addAlwaysVisible(type("bubble_column_up"), x + R(), y + R(), z + R(), 0, 0.04, 0);
                 if (ri(200) == 0) localSound("block.bubble_column.upwards_ambient", x, y, z, float(0.2 + R() * 0.2), float(0.9 + R() * 0.15), false);
             }
             break;
@@ -3446,7 +3457,8 @@ void Particles::fluidDrip(u16 fluidBlock, int x, int y, int z, int drip) {
         return b.fluid || b.waterlogged || registry_.name(id).starts_with("minecraft:bubble_column");
     };
     auto spawn = [&](double x0, double x1, double z0, double z1, double py) {
-        add(drip, x0 + (x1 - x0) * double(randf()), py, z0 + (z1 - z0) * double(randf()), 0, 0, 0);
+        const double px = x0 + (x1 - x0) * double(randf()), pz = z0 + (z1 - z0) * double(randf());
+        if (levelAllows(drip, false, false, px, py, pz)) add(drip, px, py, pz, 0, 0, 0);
     };
     const u16 below = blockAt(x, y - 1, z);
     if (hasFluid(below)) return;
