@@ -562,6 +562,22 @@ bool loomInput(UiState& s, const InputEvent& e, Menu& m, const Layout&, float le
             const int index = (row + loom.startRow) * 4 + col;
             if (index >= int(sel.size())) return false;  // LoomMenu.clickMenuButton: a valid pattern index
             m.data[0] = index;
+            // LoomMenu.clickMenuButton runs here too: setupResultSlot, the banner (one) with the pattern added in
+            // the dye's colour (registry ids known; layers of inline patterns are left to the server)
+            std::vector<std::pair<int, int>> layers = bannerLayers(s, m.slots[0]);
+            const int dye = dyeIndex(itemName(s, m.slots[1]));
+            const bool inline_ = std::any_of(layers.begin(), layers.end(), [](const auto& l) { return l.first < 0; });
+            if (!m.slots[0].empty() && dye >= 0 && !inline_ && !s.items.registry("minecraft:banner_pattern").empty()) {
+                layers.push_back({sel[size_t(index)], dye});
+                net::Writer w;  // BannerPatternLayers.STREAM_CODEC: (holder id + 1, dye) per layer
+                w.varInt(i32(layers.size()));
+                for (const auto& [id, d] : layers) w.varInt(id + 1), w.varInt(d);
+                const std::string data(w.buf.begin(), w.buf.end());
+                ItemStack result = m.slots[0];
+                result.count = 1;
+                s.items.setComponent(result, "banner_patterns", &data);
+                m.slots[3] = result;
+            }
             uiSound("minecraft:ui.loom.select_pattern");
             sendContainerButton(s, index);
             return true;
