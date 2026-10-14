@@ -18,7 +18,7 @@ namespace ent {
 
 namespace {
 
-constexpr int kItem = 1, kOrb = 2, kFallingBlock = 3, kTnt = 4, kFirework = 5;
+constexpr int kItem = 1, kOrb = 2, kFallingBlock = 3, kTnt = 4, kFirework = 5, kHook = 6;
 
 AABB boxOf(const Entity& e) {
     double w, h;
@@ -124,7 +124,7 @@ bool EntityWorld::simulateClient(Entity& e) {
     if (!e.info) return false;
     const std::string& n = e.info->name;
     const int kind = n == "minecraft:item" ? kItem : n == "minecraft:experience_orb" ? kOrb : n == "minecraft:falling_block" ? kFallingBlock
-                   : n == "minecraft:tnt" ? kTnt : n == "minecraft:firework_rocket" ? kFirework : 0;
+                   : n == "minecraft:tnt" ? kTnt : n == "minecraft:firework_rocket" ? kFirework : n == "minecraft:fishing_bobber" ? kHook : 0;
     if (!kind) return false;
     if (!physics_) physics_ = std::make_unique<Physics>(world_, registry_);
     const Physics& ph = *physics_;
@@ -144,6 +144,65 @@ bool EntityWorld::simulateClient(Entity& e) {
         for (double& v : e.vel) v *= 0.98;
         if (e.onGround) e.vel[0] *= 0.7, e.vel[1] *= -0.5, e.vel[2] *= 0.7;
         updateFluids(ph, e);
+        return true;
+    }
+    if (kind == kHook) {  // FishingHook.tick on the client: flying, hooked in an entity, bobbing on the water
+        static std::mt19937 rng(0xF15E);
+        std::uniform_real_distribution<float> unit(0.0f, 1.0f);
+        const bool biting = dataInt(e, "DATA_BITING") != 0;
+        if (biting && !e.hookBiting) e.vel[1] = -0.4 * (0.6 + 0.4 * unit(rng));  // onSyncedDataUpdated: the dip
+        e.hookBiting = biting;
+        const int hooked = int(dataInt(e, "DATA_HOOKED_ENTITY")) - 1;
+        const Entity* hookedIn = hooked >= 0 && hooked != selfId ? entity(hooked) : nullptr;
+        const bool hookedSelf = hooked >= 0 && hooked == selfId;
+        const int by = int(std::floor(e.pos[1]));
+        const Physics::Fluid f = ph.fluid(bx, by, bz);
+        const double liquidHeight = f.type == 1 ? ph.fluidHeight(bx, by, bz, f) : 0.0;
+        const bool inWater = liquidHeight > 0;
+        if (e.hookState == 0) {
+            if (hookedIn || hookedSelf) {
+                e.vel[0] = e.vel[1] = e.vel[2] = 0;
+                e.hookState = 1;
+                return true;
+            }
+            if (inWater) {
+                e.vel[0] *= 0.3, e.vel[1] *= 0.2, e.vel[2] *= 0.3;
+                e.hookState = 2;
+                return true;
+            }
+        } else if (e.hookState == 1) {  // at the hooked entity, 0.8 of its height up
+            if (hookedSelf) {
+                std::copy(localPlayer.pos, localPlayer.pos + 3, e.pos);
+                e.pos[1] += 1.8 * 0.8;
+            } else if (hookedIn) {
+                double w, h;
+                entitySize(*hookedIn, w, h);
+                std::copy(hookedIn->pos, hookedIn->pos + 3, e.pos);
+                e.pos[1] += h * 0.8;
+            } else if (hooked < 0) {
+                e.hookState = 0;
+            }
+            return true;
+        } else {  // bobbing: pulled to the surface, the bite pulling it under
+            double force = e.pos[1] + e.vel[1] - by - liquidHeight;
+            if (std::abs(force) < 0.01) force += (force > 0 ? 1 : force < 0 ? -1 : 0) * 0.1;
+            e.vel[0] *= 0.9, e.vel[1] -= force * unit(rng) * 0.2, e.vel[2] *= 0.9;
+            if (inWater && biting) e.vel[1] += -0.1 * unit(rng) * unit(rng);
+        }
+        if (f.type != 1 && !e.onGround && !hookedIn && !hookedSelf) e.vel[1] -= 0.03;
+        move(ph, e, e.vel, 0.03);
+        const double h = std::sqrt(e.vel[0] * e.vel[0] + e.vel[2] * e.vel[2]);  // updateRotation
+        if (h > 1e-7 || std::abs(e.vel[1]) > 1e-7) {
+            const float yaw = float(std::atan2(e.vel[0], e.vel[2]) * 180.0 / 3.14159265358979323846);
+            const float pitch = float(std::atan2(e.vel[1], h) * 180.0 / 3.14159265358979323846);
+            while (pitch - e.pitch < -180.0f) e.pitch -= 360.0f;
+            while (pitch - e.pitch >= 180.0f) e.pitch += 360.0f;
+            while (yaw - e.yaw < -180.0f) e.yaw -= 360.0f;
+            while (yaw - e.yaw >= 180.0f) e.yaw += 360.0f;
+            e.pitch += (pitch - e.pitch) * 0.2f, e.yaw += (yaw - e.yaw) * 0.2f;
+        }
+        if (e.hookState == 0 && (e.onGround || e.horizontalCollision)) e.vel[0] = e.vel[1] = e.vel[2] = 0;
+        for (double& v : e.vel) v *= 0.92;
         return true;
     }
     if (kind == kFirework) {  // FireworkRocketEntity.tick

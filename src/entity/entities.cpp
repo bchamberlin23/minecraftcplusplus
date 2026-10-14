@@ -1864,6 +1864,29 @@ void EntityWorld::tickEntity(Entity& e) {
             }
             return tickSpecies(e, gameTime_, entities_);
         }
+        auto turnTo = [&](const double v[3], float amount) {  // ProjectileUtil.rotateTowardsMovement / updateRotation
+            const double h = std::sqrt(v[0] * v[0] + v[2] * v[2]);
+            if (h < 1e-7 && std::abs(v[1]) < 1e-7) return;
+            e.yaw = rotLerp(amount, e.yaw, float(std::atan2(v[0], v[2]) * 180.0 / kPi));
+            e.pitch = rotLerp(amount, e.pitch, float(std::atan2(v[1], h) * 180.0 / kPi));
+        };
+        if (name == "minecraft:eye_of_ender") {  // EyeOfEnder.tick: steered on the server only, the client moves on
+            for (int a = 0; a < 3; ++a) e.pos[a] += e.vel[a];
+            return tickSpecies(e, gameTime_, entities_);
+        }
+        if (name == "minecraft:shulker_bullet") {  // ShulkerBullet.tick: homing and gravity on the server only
+            for (int a = 0; a < 3; ++a) e.pos[a] += e.vel[a];
+            turnTo(e.vel, 0.5f);
+            return tickSpecies(e, gameTime_, entities_);
+        }
+        if (name == "minecraft:llama_spit") {  // LlamaSpit.tick: the move, then drag 0.99 and gravity 0.06 (no block stop)
+            const double movement[3] = {e.vel[0], e.vel[1], e.vel[2]};
+            turnTo(movement, 0.2f);
+            for (double& v : e.vel) v *= 0.99;
+            if (!e.noGravity) e.vel[1] -= 0.06;
+            for (int a = 0; a < 3; ++a) e.pos[a] += movement[a];
+            return tickSpecies(e, gameTime_, entities_);
+        }
         const double gravity = e.category == Category::Projectile ? (arrowLike ? 0.05 : 0.03) : 0.04;
         const double drag = e.category == Category::Projectile ? 0.99 : 0.98;
         if (!e.onGround || e.vel[1] > 0) {

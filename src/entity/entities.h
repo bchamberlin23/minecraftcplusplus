@@ -211,6 +211,8 @@ struct Entity {
     u8 livingFlags = 0;   // LivingEntity DATA_LIVING_ENTITY_FLAGS: 1 using an item, 2 with the off hand, 4 spin attack
     int useTicks = 0;     // ticks the current item use has lasted (getTicksUsingItem)
     u8 chargedCrossbow = 0;  // bit 0: the main hand holds a charged crossbow, bit 1: the off hand (local player only)
+    u8 hookState = 0;         // FishingHook.currentState: 0 flying, 1 hooked in an entity, 2 bobbing
+    bool hookBiting = false;  // DATA_BITING as last seen (the dip on the change)
     int attachedTo = -1;     // firework rocket: the entity it is attached to (DATA_ATTACHED_TO_TARGET), -1 none
     std::string fireworks;   // firework rocket: its item's "fireworks" component (encoded), "" without one
     bool silent = false;     // DATA_SILENT
