@@ -375,7 +375,7 @@ private:
     float fadeNow() const;
     float fadeProgress(float fade, float now) const;
     // Active slots with translucent quads, far to near: blending needs back-to-front order between sections.
-    void sortTranslucent(const CameraState& cam, u32 activeCount);
+    void sortTranslucent(const CameraState& cam);
 
     ComPtr<ID3D12Resource> createBuffer(u64 size, D3D12_HEAP_TYPE heap,
                                         D3D12_RESOURCE_FLAGS flags = D3D12_RESOURCE_FLAG_NONE);
@@ -467,12 +467,13 @@ private:
     double revealX_ = 0, revealZ_ = 0;
     float entranceTime(const Slot& slot, float now) const;
     std::vector<u32> translucent_;
-    struct TranslucentSlot {
-        double center[3];
-        u32 slot;
-    };
-    std::vector<TranslucentSlot> translucentSlots_;  // those of the cut (rebuilt when it changes), unsorted
-    u64 activeVersion_ = 0, sortedVersion_ = ~u64(0);
+    // The drawn slots with translucent quads (in the cut or fading out), kept as they change (trackTranslucent) so the
+    // sort needs no scan of the cut (0.25 ms a frame while the far terrain streams in); their centres by slot.
+    std::vector<u32> trMembers_, trPos_;
+    std::vector<std::array<float, 3>> translucentCenters_;
+    u64 trVersion_ = 0, trSortedVersion_ = ~u64(0);
+    void trackTranslucent(u32 slot);
+    u64 activeVersion_ = 0;
     double sortedCam_[3] = {};
     u32 segBase_[4] = {}, segCap_[4] = {};
 

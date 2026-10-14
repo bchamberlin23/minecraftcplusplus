@@ -780,6 +780,11 @@ u32 Renderer::addMesh(const SectionMesh& m, int level, i32 x, i32 y, i32 z) {
     for (int r = 0; r < 6; ++r) slots_[slot].opaque += m.counts[r];
     for (int r = 6; r < 2 * 6; ++r) slots_[slot].cutout += m.counts[r];
     for (int r = 2 * 6; r < 3 * 6; ++r) slots_[slot].translucent += m.counts[r];
+    if (slots_[slot].translucent) {
+        if (translucentCenters_.size() <= slot) translucentCenters_.resize(size_t(slot) + 65536);
+        const float half = float(8 << level);
+        translucentCenters_[slot] = {float(x) + half, float(y) + 8.0f, float(z) + half};
+    }
 
     GpuSection g{};
     g.origin[0] = x, g.origin[1] = y, g.origin[2] = z, g.origin[3] = level;
@@ -816,6 +821,22 @@ void Renderer::setOccluded(const std::vector<u32>& slots) {
     occludedDirty_ = kFrames;
 }
 
+void Renderer::trackTranslucent(u32 slot) {
+    const bool want = slot < slots_.size() && slots_[slot].translucent && (slots_[slot].inCut || slots_[slot].retiring);
+    if (trPos_.size() <= slot) trPos_.resize(size_t(slot) + 65536, UINT32_MAX);
+    if (want == (trPos_[slot] != UINT32_MAX)) return;
+    ++trVersion_;
+    if (want) {
+        trPos_[slot] = u32(trMembers_.size());
+        trMembers_.push_back(slot);
+    } else {
+        const u32 last = trMembers_.back();
+        trMembers_[trPos_[slot]] = last, trPos_[last] = trPos_[slot];
+        trMembers_.pop_back();
+        trPos_[slot] = UINT32_MAX;
+    }
+}
+
 void Renderer::freeSlot(u32 slot) {
     if (slot < kOccludedWords * 32 && (occludedBits_[slot >> 5] >> (slot & 31) & 1))  // a reused slot starts visible
         occludedBits_[slot >> 5] &= ~(1u << (slot & 31)), occludedDirty_ = kFrames;
@@ -823,6 +844,7 @@ void Renderer::freeSlot(u32 slot) {
     if (s.cubeCount) cubeAlloc_.free(s.cubeOffset, s.cubeCount);
     if (s.modelCount) modelAlloc_.free(s.modelOffset, s.modelCount);
     s = {};
+    trackTranslucent(slot);
     freeSlots_.push_back(slot);
 }
 
@@ -885,6 +907,7 @@ void Renderer::setActive(const std::vector<u32>& slots) {
             Slot& old = slots_[it->second];
             setFade(s, old.fade > 0 ? old.fade : 0.0f);  // continue the old one's fade-in, if any
             old.inCut = false;
+            trackTranslucent(it->second);
             if (old.freeLater) freeSlot(it->second);
             leaving.erase(it);
         } else if (e.retiring) {  // back while fading out: fade in from the share it still shows
@@ -894,11 +917,13 @@ void Renderer::setActive(const std::vector<u32>& slots) {
         } else {
             setFade(s, entranceTime(e, now));
         }
+        trackTranslucent(s);
     }
     for (auto& [k, s] : leaving) {
         Slot& l = slots_[s];
         l.inCut = false;
         if (fadeSeconds_ <= 0) {
+            trackTranslucent(s);
             if (l.freeLater) freeSlot(s);
             continue;
         }
@@ -906,6 +931,7 @@ void Renderer::setActive(const std::vector<u32>& slots) {
         const float start = now - (1.0f - fadeProgress(l.fade > 0 ? l.fade : 0.0f, now)) * fadeSeconds_;
         setFade(s, -start);
         l.retiring = true;
+        trackTranslucent(s);
         retiring_.push_back({s, start + fadeSeconds_});
     }
     active_ = slots;
@@ -919,42 +945,30 @@ u64 Renderer::arenaBytesTotal() const {
     return cubeAlloc_.capacity() * kCubeQuadBytes + modelAlloc_.capacity() * kModelQuadWords * 4;
 }
 
-void Renderer::sortTranslucent(const CameraState& cam, u32 activeCount) {
+void Renderer::sortTranslucent(const CameraState& cam) {
     // Re-sorted when the cut changes or the camera has moved a block; in between the order is close enough.
     const double dx = cam.x - sortedCam_[0], dy = cam.y - sortedCam_[1], dz = cam.z - sortedCam_[2];
-    if (sortedVersion_ == activeVersion_ && dx * dx + dy * dy + dz * dz < 1.0) return;
-    if (sortedVersion_ != activeVersion_) {  // the translucent sections of the cut and their centres
-        sortedVersion_ = activeVersion_;
-        translucentSlots_.clear();
-        for (u32 i = 0; i < activeCount; ++i) {
-            const u32 id = drawList_[i];
-            if (id >= slotCapacity_ || !slots_[id].translucent) continue;
-            const i32* o = slots_[id].origin;
-            const double half = double(8 << o[3]);
-            translucentSlots_.push_back({{o[0] + half, o[1] + 8.0, o[2] + half}, id});
-        }
-    }
+    if (trSortedVersion_ == trVersion_ && dx * dx + dy * dy + dz * dz < 1.0) return;
+    trSortedVersion_ = trVersion_;
     sortedCam_[0] = cam.x, sortedCam_[1] = cam.y, sortedCam_[2] = cam.z;
-    // Far to near: an LSD radix sort on the float bits of the squared distance (positive floats order as their bits,
-    // inverted for far first) over (key << 32 | slot). std::sort took 2.8 ms for the 45k sections of the far terrain.
-    const size_t n = translucentSlots_.size();
+    // Far to near: an LSD radix sort (two passes of 10 bits) on the distance in 1/16 blocks, inverted for far first, over
+    // (key << 32 | slot). std::sort took 2.8 ms for the 45k sections of the far terrain.
+    const size_t n = trMembers_.size();
     thread_local std::vector<u64> keyed, scratch;
     keyed.resize(n), scratch.resize(n);
     for (size_t i = 0; i < n; ++i) {
-        const TranslucentSlot& t = translucentSlots_[i];
-        const double x = t.center[0] - cam.x, y = t.center[1] - cam.y, z = t.center[2] - cam.z;
-        const float d = float(x * x + y * y + z * z);
-        u32 bits;
-        std::memcpy(&bits, &d, 4);
-        const u32 key = ~bits;
-        keyed[i] = u64(key) << 32 | t.slot;
+        const u32 slot = trMembers_[i];
+        const auto& c = translucentCenters_[slot];
+        const double x = c[0] - cam.x, y = c[1] - cam.y, z = c[2] - cam.z;
+        const u32 q = u32(std::min(std::sqrt(float(x * x + y * y + z * z)) * 16.0f, 1048575.0f));
+        keyed[i] = u64(1048575 - q) << 32 | slot;
     }
-    for (int shift = 32; shift < 64; shift += 11) {
-        u32 start[2048] = {};
-        for (const u64 k : keyed) ++start[(k >> shift) & 2047];
+    for (int shift = 32; shift < 52; shift += 10) {
+        u32 start[1024] = {};
+        for (const u64 k : keyed) ++start[(k >> shift) & 1023];
         u32 sum = 0;
         for (u32& s : start) sum += std::exchange(s, sum);
-        for (const u64 k : keyed) scratch[start[(k >> shift) & 2047]++] = k;
+        for (const u64 k : keyed) scratch[start[(k >> shift) & 1023]++] = k;
         keyed.swap(scratch);
     }
     translucent_.resize(n);
@@ -1059,6 +1073,7 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
             if (r.end > now) return false;
             Slot& s = slots_[r.slot];
             s.retiring = false;
+            trackTranslucent(r.slot);
             if (s.freeLater) freeSlot(r.slot);
             return true;
         });
@@ -1077,7 +1092,7 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
         std::memcpy(fc.shade, shade, sizeof(shade));
     }
     fc.misc[0] = activeCount;
-    sortTranslucent(cam, activeCount);
+    sortTranslucent(cam);
     fc.misc[3] = u32(translucent_.size());
     fc.misc[2] = textureFiltering_;
     {  // texture LOD bias for the upscaler's render scale (common.hlsli sampleBlock)
