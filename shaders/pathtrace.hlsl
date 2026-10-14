@@ -256,27 +256,33 @@ float3 sunLight(float3 p, float3 n, float dist, bool foliage, inout Rng rng) {
 }
 
 
-// Radiance leaving a surface hit by a bounce ray (towards the ray), with `bounces` more bounces after it.
+// Radiance leaving a surface hit by a bounce ray (towards the ray), with `bounces` more bounces after it: at each
+// surface the sun / moon (a shadow ray) and one cosine-weighted continuation; past the last bounce the game's light
+// levels stand in for the rest. Emission counts at the surfaces after the first (the first: when `emissive`).
 float3 bounceRadiance(RtSurface s, float dist, uint bounces, bool emissive, inout Rng rng) {
-    float3 albedo = rtAlbedo(s);
-    uint mat = matClass(s.mat);
-    bool foliage = mat == kMatLeaves || mat == kMatPlant;
-    float3 light = sunLight(s.pos, s.n, dist, foliage, rng);
-    if (bounces > 0) {
+    float3 total = 0, weight = 1;
+    [loop] for (uint depth = 0;; ++depth) {
+        float3 albedo = rtAlbedo(s);
+        uint mat = matClass(s.mat);
+        bool foliage = depth == 0 && (mat == kMatLeaves || mat == kMatPlant);
+        float3 light = sunLight(s.pos, s.n, dist, foliage, rng);
+        if (depth > 0 || emissive) total += weight * emission(albedo, mat);
+        if (depth >= bounces) {
+            total += weight * albedo * (light + cachedLight(s.sky, s.block, s.n));
+            break;
+        }
+        total += weight * albedo * light;
         float3 d = cosineDir(s.n, float2(rng.next(), rng.next()));
         RtSurface h;
         float3 trans;
-        if (rtClosestThrough(s.pos + s.n * rayEps(dist), d, gPtParams.x * 1.5, h, trans)) {
-            float3 a2 = rtAlbedo(h);
-            light += trans * (a2 * (sunLight(h.pos, h.n, dist, false, rng) + cachedLight(h.sky, h.block, h.n)) +
-                              emission(a2, matClass(h.mat)));
-        } else {
-            light += trans * skyColor(d);
+        if (!rtClosestThrough(s.pos + s.n * rayEps(dist), d, gPtParams.x * 1.5, h, trans)) {
+            total += weight * albedo * trans * skyColor(d);
+            break;
         }
-    } else {
-        light += cachedLight(s.sky, s.block, s.n);
+        weight *= albedo * trans;
+        s = h;
     }
-    return albedo * light + (emissive ? emission(albedo, mat) : 0);
+    return total;
 }
 
 // The sky / fog colour behind a pixel (DeferredCS).
@@ -505,7 +511,7 @@ void PathTraceCS(uint2 px : SV_DispatchThreadID) {
         float3 origin = p.rel + p.n * rayEps(p.dist);
         // (Emissive surfaces this path hits first are left out: the light sampling above counts them.)
         if (rtClosestThrough(origin, d, gPtParams.x * 1.5, s, trans))
-            l += trans * bounceRadiance(s, p.dist, gPtOpts.y > 1 ? 1 : 0, false, rng);
+            l += trans * bounceRadiance(s, p.dist, gPtOpts.y - 1, false, rng);  // the bounces after this first one
         else
             l += trans * skyColor(d);
         light += l;

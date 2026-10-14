@@ -167,7 +167,7 @@ ShaderSettings ShaderSettings::preset(ShaderPreset p) {
 }
 
 void ShaderSettings::setPathTraceQuality(PathTraceQuality q) {
-    static const struct { u32 bounces, samples; float radius; } kQ[] = {{1, 1, 128}, {1, 1, 192}, {2, 1, 256}, {2, 2, 384}};
+    static const struct { u32 bounces, samples; float radius; } kQ[] = {{1, 1, 128}, {1, 1, 192}, {2, 1, 256}, {3, 2, 384}};
     const auto& v = kQ[std::min(int(q), 3)];
     ptBounces = v.bounces, ptSamples = v.samples, ptRadius = v.radius;
 }
