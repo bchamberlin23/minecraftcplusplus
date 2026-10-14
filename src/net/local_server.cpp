@@ -719,7 +719,9 @@ bool LocalServer::start(const Config& config) {
     if (creating_ && config.create->bonusChest) cmd += L" --bonusChest";
     if (config.forceUpgrade) cmd += config.eraseCache ? L" --forceUpgrade --eraseCache" : L" --forceUpgrade";
     if (config.safeMode) cmd += L" --safeMode";
-    const BOOL ok = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | CREATE_SUSPENDED,
+    // Above normal priority while it starts (it competes with the game's own loading), normal once it is up.
+    const BOOL ok = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE,
+                                   CREATE_NO_WINDOW | CREATE_SUSPENDED | ABOVE_NORMAL_PRIORITY_CLASS,
                                    nullptr, work.c_str(), &si, &pi);
     CloseHandle(stdinRead);
     CloseHandle(stdoutWrite);
@@ -766,6 +768,7 @@ void LocalServer::readOutput() {
                 if (creating_)  // Create World's game rules, before anyone joins (the console runs them next tick)
                     for (const auto& [rule, value] : config_.create->gameRules) command("gamerule " + rule + " " + value);
                 ready_ = true;
+                SetPriorityClass(process_, NORMAL_PRIORITY_CLASS);
                 LOG("server: %s", line.c_str());
                 if (aotTrain_.exchange(false)) trainer_ = std::thread([this] { trainAot(); });
             } else if (config_.forceUpgrade && upgradePercent_ < 100 &&
