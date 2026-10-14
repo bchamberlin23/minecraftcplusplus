@@ -18,6 +18,9 @@
 #include <unordered_map>
 
 #include "CullCS.h"
+#include "TranslucentCountCS.h"
+#include "TranslucentEmitCS.h"
+#include "TranslucentScanCS.h"
 #include "DetailPS.h"
 #include "DetailVS.h"
 #include "LinePS.h"
@@ -535,6 +538,14 @@ bool Renderer::createPipelines() {
     cd.CS = {g_CullCS, sizeof(g_CullCS)};
     if (!check(device_->CreateComputePipelineState(&cd, IID_PPV_ARGS(&psoCull_)), "CreateComputePipelineState"))
         return false;
+    const D3D12_SHADER_BYTECODE translucent[3] = {{g_TranslucentCountCS, sizeof(g_TranslucentCountCS)},
+                                                  {g_TranslucentScanCS, sizeof(g_TranslucentScanCS)},
+                                                  {g_TranslucentEmitCS, sizeof(g_TranslucentEmitCS)}};
+    for (int k = 0; k < 3; ++k) {
+        cd.CS = translucent[k];
+        if (!check(device_->CreateComputePipelineState(&cd, IID_PPV_ARGS(&psoTranslucentCull_[k])), "CreateComputePipelineState"))
+            return false;
+    }
 
     D3D12_INDIRECT_ARGUMENT_DESC args[2]{};
     args[0].Type = D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT;
@@ -684,7 +695,7 @@ bool Renderer::createWorldStorage(u64 cubeQuads, u64 modelQuads, u32 slots) {
     segCap_[3] = kMaxActive + 1024;
     segBase_[0] = 0;
     for (int s = 1; s < 4; ++s) segBase_[s] = segBase_[s - 1] + segCap_[s - 1];
-    args_ = createBuffer(u64(segBase_[3] + segCap_[3]) * kCommandBytes, D3D12_HEAP_TYPE_DEFAULT,
+    args_ = createBuffer(u64(segBase_[3] + segCap_[3]) * kCommandBytes + kMaxActive / 1024 * 4, D3D12_HEAP_TYPE_DEFAULT,
                          D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
     colors_ = createBuffer(u64(ColorTable::kCapacity) * 4, D3D12_HEAP_TYPE_DEFAULT);
     colorsUploaded_ = 0;
@@ -1104,7 +1115,7 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     recordTextureLayers(fi);
     ID3D12DescriptorHeap* heaps[] = {srvHeap_.Get()};
     list_->SetDescriptorHeaps(1, heaps);
-    if (shaded) shading_->mark(list_.Get(), "begin");
+    if (shaded || plainAa) shading_->mark(list_.Get(), "begin");
 
     if (haveWorld) {
         transition(counts_.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
@@ -1118,7 +1129,17 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
         list_->SetComputeRootUnorderedAccessView(5, counts_->GetGPUVirtualAddress());
         list_->SetComputeRootUnorderedAccessView(6, args_->GetGPUVirtualAddress());
         list_->SetComputeRootShaderResourceView(7, activeVa);
-        list_->Dispatch((std::max<u32>(activeCount, u32(translucent_.size())) + 63) / 64, 1, 1);
+        list_->Dispatch((activeCount + 63) / 64, 1, 1);
+        if (!translucent_.empty()) {  // translucent commands in sorted order: count, scan, emit (cull.hlsl)
+            const u32 groups = (u32(translucent_.size()) + 1023) / 1024;
+            D3D12_RESOURCE_BARRIER uav{};
+            uav.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+            for (int k = 0; k < 3; ++k) {
+                if (k) list_->ResourceBarrier(1, &uav);
+                list_->SetPipelineState(psoTranslucentCull_[k].Get());
+                list_->Dispatch(k == 1 ? 1 : groups, 1, 1);
+            }
+        }
         transition(counts_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
         transition(args_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
     }
@@ -1182,6 +1203,7 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     D3D12_VIEWPORT sceneVp = vpRect;
     D3D12_RECT sceneScissor = scissor;
     if (plainAa) {
+        shading_->mark(list_.Get(), "cull");
         shading_->beginPlain(list_.Get(), fogColor_, pc, sceneRtv, sceneDsv);
         sceneVp = {0, 0, float(shading_->renderW_), float(shading_->renderH_), 0, 1};
         sceneScissor = {0, 0, LONG(shading_->renderW_), LONG(shading_->renderH_)};
@@ -1221,14 +1243,19 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
             list_->ExecuteIndirect(cmdSig_.Get(), segCap_[seg], args_.Get(), u64(segBase_[seg]) * kCommandBytes,
                                    counts_.Get(), u64(seg) * 4);
         };
+        if (plainAa) shading_->mark(list_.Get(), "sky");
         pass(psoOpaque_.Get(), 0, cubeQuads_.Get());
+        if (plainAa) shading_->mark(list_.Get(), "opaque");
         pass(psoCutout_.Get(), 1, cubeQuads_.Get());
+        if (plainAa) shading_->mark(list_.Get(), "cutout");
         pass(psoModel_.Get(), 3, modelQuads_.Get());
+        if (plainAa) shading_->mark(list_.Get(), "models");
         if (!passes_[1].empty()) {
             runPasses(PassStage::World, pc);
             bindWorld();
         }
         pass(psoTranslucent_.Get(), 2, cubeQuads_.Get());
+        if (plainAa) shading_->mark(list_.Get(), "translucent");
         if (!passes_[3].empty()) {
             runPasses(PassStage::AfterTranslucent, pc);
             bindWorld();
@@ -1236,6 +1263,7 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     }
     if (plainAa) {  // the anti-aliased / upscaled image to the swap chain; the overlays then draw unjittered
         shading_->resolvePlain(list_.Get(), shadeIn, cb, pc, rtv);
+        shading_->mark(list_.Get(), "taa/upscale");
         list_->SetDescriptorHeaps(1, heaps);
         list_->SetGraphicsRootSignature(rootSig_.Get());
         list_->SetGraphicsRootConstantBufferView(1, overlayCb);
@@ -1329,6 +1357,7 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
         transition(bb, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
     }
 
+    if (plainAa) shading_->mark(list_.Get(), "overlays+hud");
     list_->EndQuery(timestamps_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, fi * 2 + 1);
     list_->ResolveQueryData(timestamps_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, fi * 2, 2, timestampReadback_.Get(), u64(fi) * 16);
     if (shading_ && shading_->markCount_[fi])

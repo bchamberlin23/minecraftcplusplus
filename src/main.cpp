@@ -1127,6 +1127,9 @@ int wmain(int argc, wchar_t** argv) {
     };
     bool escWas = false;
     const double loopStart = nowSeconds();
+    size_t profilePending = 0;  // --profile: detail sections pending last frame
+    size_t profileMark = 0;     // --profile: the first frame of the current 5 s interval
+    double profileMarkTime = loopStart;
     const bool smoothReveal = !opt.bench && !opt.selftest && !menu;
     if (smoothReveal) renderer.beginWorldReveal(cam.x, cam.z);
     double previousStreamX = cam.x, previousStreamZ = cam.z;
@@ -1518,6 +1521,19 @@ int wmain(int argc, wchar_t** argv) {
             draws.push_back(float(commands));
             nodes.push_back(float(terrain.stats().active));
         }
+        if (opt.profile && now - profileMarkTime >= 5.0 && profileMark < phaseMs.size() && profileMark < cpuMs.size()) {
+            const size_t n = std::min(phaseMs.size(), cpuMs.size()) - profileMark;
+            float cpu = 0, gpu = 0, gen = 0, ter = 0, ren = 0, worst = 0;
+            for (size_t i = profileMark; i < profileMark + n; ++i) {
+                cpu += cpuMs[i], gpu += gpuMs[i], gen += phaseMs[i][4], ter += phaseMs[i][5], ren += phaseMs[i][6];
+                worst = std::max(worst, cpuMs[i]);
+            }
+            LOG("profile: %4.0f s | %.0f fps | frame %.2f ms (worst %.1f), gpu %.2f | gen apply %.2f, terrain %.2f, render %.2f | far "
+                "%zu pending",
+                now - loopStart, 1000.0f * float(n) / cpu, cpu / float(n), worst, gpu / float(n), gen / float(n), ter / float(n),
+                ren / float(n), terrain.stats().farPending);
+            profileMark += n, profileMarkTime = now;
+        }
         if (now - titleTime > 0.25) {
             titleTime = now;
             char title[256];
@@ -1538,6 +1554,12 @@ int wmain(int argc, wchar_t** argv) {
         if (frame >= 2 && (!menu || (opt.farBlocks > 0 ? terrain.stats().farRegions >= 24 : terrain.stats().detailPending == 0) ||
                            now - loopStart > 2.0))
             launch::ready(window);
+        if (opt.profile && !menu) {  // the terrain around the player complete (the last of these lines counts)
+            const size_t pending = terrain.stats().detailPending;
+            if (pending == 0 && profilePending > 0)
+                LOG("terrain: %zu sections resident, none pending at %.2f s", terrain.stats().detailResident, now - loopStart);
+            profilePending = pending;
+        }
         if (menu && ui.switching()) {  // the next instance is loading: give it the machine
             if (genService) genService->setWanted({});
             Sleep(15);

@@ -409,6 +409,7 @@ private:
 
     ComPtr<ID3D12RootSignature> rootSig_;
     ComPtr<ID3D12PipelineState> psoOpaque_, psoCutout_, psoTranslucent_, psoModel_, psoCull_;
+    ComPtr<ID3D12PipelineState> psoTranslucentCull_[3];  // count, scan, emit (cull.hlsl)
     ComPtr<ID3D12PipelineState> psoWorldLines_, psoScreenLines_, psoSprites_;  // world lines: wide (6 vertices a line)
     static constexpr u64 kOverlayBytes = u64(1) << 20;  // per frame
     ComPtr<ID3D12Resource> overlay_;

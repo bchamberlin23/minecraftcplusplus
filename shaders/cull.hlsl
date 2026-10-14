@@ -44,22 +44,6 @@ bool sectionVisible(uint id, out float3 mn, out float3 mx) {
 
 [numthreads(64, 1, 1)]
 void CullCS(uint tid : SV_DispatchThreadID) {
-    // Translucent: gMisc.w sections after the active list, sorted far to near by the CPU. Blending needs that
-    // order kept, so each section owns six fixed command slots (empty when culled) instead of appending.
-    if (tid < gMisc.w) {
-        if (tid == 0) gCounts.Store(2 * 4, gMisc.w * 6);
-        uint id = gActive[gMisc.x + tid];
-        float3 mn, mx;
-        bool shown = sectionVisible(id, mn, mx);
-        // A face direction can only be visible if the camera is on its front side of some plane (drawn unculled).
-        bool vis[6] = {mx.y > 0, mn.y < 0, mx.z > 0, mn.z < 0, mx.x > 0, mn.x < 0};
-        for (uint f = 0; f < 6; ++f) {
-            uint2 r = gSections[id].ranges[12 + f];
-            uint addr = (gSegBase[2] + tid * 6 + f) * kCommandBytes;
-            gArgs.Store4(addr, uint4(r.x, id, shown && vis[f] ? r.y * 6 : 0, 1));
-            gArgs.Store3(addr + 16, uint3(0, 0, 0));
-        }
-    }
     if (tid >= gMisc.x) return;
     uint id = gActive[tid];
     float3 mn, mx;
@@ -76,6 +60,73 @@ void CullCS(uint tid : SV_DispatchThreadID) {
     }
     uint2 m = gSections[id].ranges[18];
     if (m.y != 0) emit(3, m.x, m.y, id);
+}
+
+// Translucent: gMisc.w sections after the active list, sorted far to near by the CPU. Blending needs that order
+// kept, so their commands are not appended but placed by an ordered prefix sum (count, scan, emit: one group per 1024
+// sections). Fixed slots per section left empty draws, which cost the command processor as much as small ones:
+// distant oceans made tens of thousands per frame (2.6 ms). The group totals and offsets live after the last segment.
+uint scratchAddr(uint group) { return (gSegBase[3] + gSegCap[3]) * kCommandBytes + group * 4; }
+
+// The face directions of translucent section s that have quads and can be visible, as a bit mask.
+uint translucentFaces(uint s, out uint id) {
+    id = 0;
+    if (s >= gMisc.w) return 0;
+    id = gActive[gMisc.x + s];
+    float3 mn, mx;
+    if (!sectionVisible(id, mn, mx)) return 0;
+    // A face direction can only be visible if the camera is on its front side of some plane (drawn unculled).
+    bool vis[6] = {mx.y > 0, mn.y < 0, mx.z > 0, mn.z < 0, mx.x > 0, mn.x < 0};
+    uint mask = 0;
+    [unroll] for (uint f = 0; f < 6; ++f)
+        if (vis[f] && gSections[id].ranges[12 + f].y != 0) mask |= 1u << f;
+    return mask;
+}
+
+groupshared uint gsWaveSums[256];
+
+// Exclusive prefix sum of v over the 1024-thread group, and the group's total.
+uint groupPrefix(uint i, uint v, out uint total) {
+    const uint lanes = WaveGetLaneCount(), wave = i / lanes, waves = (1024 + lanes - 1) / lanes;
+    uint before = WavePrefixSum(v), sum = WaveActiveSum(v);
+    if (WaveIsFirstLane()) gsWaveSums[wave] = sum;
+    GroupMemoryBarrierWithGroupSync();
+    total = 0;
+    for (uint w = 0; w < waves; ++w) {
+        if (w < wave) before += gsWaveSums[w];
+        total += gsWaveSums[w];
+    }
+    return before;
+}
+
+[numthreads(1024, 1, 1)]
+void TranslucentCountCS(uint i : SV_GroupIndex, uint g : SV_GroupID) {
+    uint id, total;
+    groupPrefix(i, countbits(translucentFaces(g * 1024 + i, id)), total);
+    if (i == 0) gArgs.Store(scratchAddr(g), total);
+}
+
+[numthreads(1024, 1, 1)]
+void TranslucentScanCS(uint i : SV_GroupIndex) {  // one group: at most 1024 groups of sections (kMaxActive)
+    const uint groups = (gMisc.w + 1023) / 1024;
+    uint v = i < groups ? gArgs.Load(scratchAddr(i)) : 0, total;
+    uint before = groupPrefix(i, v, total);
+    if (i < groups) gArgs.Store(scratchAddr(i), before);
+    if (i == 0) gCounts.Store(2 * 4, total);
+}
+
+[numthreads(1024, 1, 1)]
+void TranslucentEmitCS(uint i : SV_GroupIndex, uint g : SV_GroupID) {
+    uint id, total;
+    uint mask = translucentFaces(g * 1024 + i, id);
+    uint slot = gArgs.Load(scratchAddr(g)) + groupPrefix(i, countbits(mask), total);
+    for (uint f = 0; f < 6; ++f) {
+        if ((mask & (1u << f)) == 0) continue;
+        uint2 r = gSections[id].ranges[12 + f];
+        uint addr = (gSegBase[2] + slot++) * kCommandBytes;
+        gArgs.Store4(addr, uint4(r.x, id, r.y * 6, 1));
+        gArgs.Store3(addr + 16, uint3(0, 0, 0));
+    }
 }
 
 // ---- shadow cascades ---------------------------------------------------------------------------------------
