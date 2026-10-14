@@ -570,6 +570,26 @@ void Riding::boatTick(ent::Entity& e) {
     lastYd_ = e.vel[1];  // checkFallDamage: the velocity before the move's collisions
     collideMove(e, width, height, 0.0, d, vehicleOnGround_, vehicleHCollision_, gravity, false);
     e.bodyYaw = e.headYaw = e.yaw;
+    // BubbleColumnBlock.entityInside -> AbstractBoat.onAboveBubbleColumn (the client's part): over each column cell with
+    // nothing above, while not under water, a splash one time in a hundred.
+    if (status_ != Status::UnderWater && status_ != Status::UnderFlowingWater) {
+        const AABB bb = box();
+        for (int x = int(std::floor(bb.min[0] + 1e-5)); x <= int(std::floor(bb.max[0] - 1e-5)); ++x)
+            for (int y = int(std::floor(bb.min[1] + 1e-5)); y <= int(std::floor(bb.max[1] - 1e-5)); ++y)
+                for (int z = int(std::floor(bb.min[2] + 1e-5)); z <= int(std::floor(bb.max[2] - 1e-5)); ++z) {
+                    if (!reg.name(world.block(x, y, z)).starts_with("minecraft:bubble_column")) continue;
+                    const BlockInfo& above = reg.infos()[world.block(x, y + 1, z)];
+                    if (above.collisionCount || above.fluid || above.waterlogged || std::rand() % 100) continue;
+                    if (audio::AudioSystem* a = audio::instance())
+                        a->play("entity.generic.splash", audio::Category::Neutral, e.pos[0], e.pos[1], e.pos[2], 1.0f,
+                                0.8f + 0.4f * float(std::rand()) / RAND_MAX);
+                    if (game_.onParticle) {
+                        const double pos[3] = {e.pos[0] + double(std::rand()) / RAND_MAX, e.pos[1] + 0.7, e.pos[2] + double(std::rand()) / RAND_MAX};
+                        const double vel[3] = {};
+                        game_.onParticle("minecraft:splash", pos, vel);
+                    }
+                }
+    }
     // positionRider: the rider turns with the boat, its look kept within 105 degrees of the boat's heading.
     Player& p = game_.player();
     float riderYaw = p.yaw / kDegf + deltaRotation_;
