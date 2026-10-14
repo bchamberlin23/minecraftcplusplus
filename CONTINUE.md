@@ -152,7 +152,10 @@ warnings (NoticeWithLinkScreen; allowed_symlinks.txt; untested end to end: creat
 Screens still missing (by a sweep of client/gui/screens): TelemetryInfoScreen (the Telemetry button stays a disabled
 stub: no telemetry here), FileFixerProgressScreen / FileFixerAbortedScreen (the server process does the file fixing;
 the loading screen shows it), OutOfMemoryScreen, UnsupportedGraphicsWarningScreen (no GPU blocklist), the ban notices
-and player reporting screens (Microsoft account). Not ported: filtered sign text (needs the account's profanity filter flag). The bell's raider particles (showBellParticles) are
+and player reporting screens (Microsoft account). Coverage sweeps: every particle provider, entity renderer, block
+entity renderer and special item model has a counterpart (0 of 161 entity types fall back to a box); thrown items /
+fireballs / the ender eye / fireworks now draw their item models (potion tints, custom item models). Not ported:
+filtered sign text (needs the account's profanity filter flag). The bell's raider particles (showBellParticles) are
 invisible in 26.3 (ColorParticleOption.create(ENTITY_EFFECT, 0xFED839 + 5i) has alpha 0, which SpellParticle keeps),
 so they are not drawn here either. Toasts follow ToastInstance now (the
 server pack download toast shows its progress). Toast residuals: no toasts
