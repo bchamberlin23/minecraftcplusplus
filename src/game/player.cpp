@@ -315,22 +315,35 @@ bool Physics::isSuffocating(int x, int y, int z) const {
     return s.min[0] <= 0 && s.min[1] <= 0 && s.min[2] <= 0 && s.max[0] >= 1 && s.max[1] >= 1 && s.max[2] >= 1;
 }
 
-bool Physics::stuckMultiplier(const AABB& b, double out[3], bool weaving) const {
-    // Each block's entityInside calls makeStuckInBlock in BlockPos.betweenClosed order (x fastest, then y, then z):
-    // the last one wins. Powder snow holds a living entity only while its own block (getInBlockState) is powder snow.
+void sweptCells(const AABB& b, const double delta[3], std::vector<std::array<int, 3>>& out) {
+    out.clear();
+    const double len = std::sqrt(delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]);
+    const int steps = std::min(int(std::ceil(len / 0.25)), 64);  // a quarter block apart: no cell of the sweep is skipped
+    for (int k = 0; k <= steps; ++k) {
+        const double back = steps ? 1.0 - double(k) / steps : 0.0;
+        double lo[3], hi[3];
+        for (int a = 0; a < 3; ++a) lo[a] = b.min[a] - delta[a] * back, hi[a] = b.max[a] - delta[a] * back;
+        for (int z = int(std::floor(lo[2])); z <= int(std::floor(hi[2])); ++z)
+            for (int y = int(std::floor(lo[1])); y <= int(std::floor(hi[1])); ++y)
+                for (int x = int(std::floor(lo[0])); x <= int(std::floor(hi[0])); ++x)
+                    if (std::find(out.begin(), out.end(), std::array<int, 3>{x, y, z}) == out.end()) out.push_back({x, y, z});
+    }
+}
+
+bool Physics::stuckMultiplier(const std::vector<std::array<int, 3>>& cells, const AABB& b, double out[3], bool weaving) const {
+    // Each block's entityInside calls makeStuckInBlock in the order the sweep meets them: the last one wins. Powder
+    // snow holds a living entity only while its own block (getInBlockState) is powder snow.
     bool any = false;
     const double cx = (b.min[0] + b.max[0]) / 2, cz = (b.min[2] + b.max[2]) / 2;
     const bool feetInSnow = shortBlock(registry_.name(world_.block(int(std::floor(cx)), int(std::floor(b.min[1])),
                                                                    int(std::floor(cz))))) == "powder_snow";
-    for (int z = int(std::floor(b.min[2] + 1e-5)); z <= int(std::floor(b.max[2] - 1e-5)); ++z)
-        for (int y = int(std::floor(b.min[1] + 1e-5)); y <= int(std::floor(b.max[1] - 1e-5)); ++y)
-            for (int x = int(std::floor(b.min[0] + 1e-5)); x <= int(std::floor(b.max[0] - 1e-5)); ++x) {
-                const std::string_view n = shortBlock(registry_.name(world_.block(x, y, z)));
-                if (n == "cobweb")  // WebBlock.entityInside
-                    out[0] = weaving ? 0.5 : 0.25, out[1] = weaving ? 0.25 : 0.05, out[2] = out[0], any = true;
-                else if (n == "sweet_berry_bush") out[0] = 0.8, out[1] = 0.75, out[2] = 0.8, any = true;
-                else if (n == "powder_snow" && feetInSnow) out[0] = 0.9, out[1] = 1.5, out[2] = 0.9, any = true;
-            }
+    for (const auto& [x, y, z] : cells) {
+        const std::string_view n = shortBlock(registry_.name(world_.block(x, y, z)));
+        if (n == "cobweb")  // WebBlock.entityInside
+            out[0] = weaving ? 0.5 : 0.25, out[1] = weaving ? 0.25 : 0.05, out[2] = out[0], any = true;
+        else if (n == "sweet_berry_bush") out[0] = 0.8, out[1] = 0.75, out[2] = 0.8, any = true;
+        else if (n == "powder_snow" && feetInSnow) out[0] = 0.9, out[1] = 1.5, out[2] = 0.9, any = true;
+    }
     return any;
 }
 
@@ -860,8 +873,9 @@ void Player::moveTowardsClosestSpace(const Physics& physics, double x, double z)
 }
 
 // Entity.applyEffectsFromBlocks after the travel: Block.stepOn of the block under the feet (slime blocks slow a
-// walk), then the blocks the (slightly shrunk) box is inside (cobwebs, berry bushes and powder snow hold the player,
-// bubble columns lift or drag it, honey block walls slow a fall to a slide).
+// walk), then the blocks the (slightly shrunk) box swept through this tick (checkInsideBlocks over the movement:
+// cobwebs, berry bushes and powder snow hold the player, bubble columns lift or drag it, honey block walls slow a fall
+// to a slide).
 void Player::applyEffectsFromBlocks(const Physics& physics) {
     if (onGround) {
         int at[3];
@@ -876,45 +890,46 @@ void Player::applyEffectsFromBlocks(const Physics& physics) {
     }
     AABB b = box();
     for (int a = 0; a < 3; ++a) b.min[a] += 1e-5, b.max[a] -= 1e-5;
+    thread_local std::vector<std::array<int, 3>> cells;
+    const double delta[3] = {pos[0] - prev[0], pos[1] - prev[1], pos[2] - prev[2]};
+    sweptCells(b, delta, cells);
     double stuck[3];
-    if (physics.stuckMultiplier(b, stuck, attr.weaving)) {  // Entity.makeStuckInBlock
+    if (physics.stuckMultiplier(cells, b, stuck, attr.weaving)) {  // Entity.makeStuckInBlock
         std::copy(stuck, stuck + 3, stuck_);
         fallDistance = 0;
     }
     isInPowderSnow_ = false;
     bool honeyed = false;
     slidingOnHoney = false;
-    for (int y = int(std::floor(b.min[1])); y <= int(std::floor(b.max[1])); ++y)
-        for (int z = int(std::floor(b.min[2])); z <= int(std::floor(b.max[2])); ++z)
-            for (int x = int(std::floor(b.min[0])); x <= int(std::floor(b.max[0])); ++x) {
-                const u16 id = physics.world().block(x, y, z);
-                const std::string_view n = shortBlock(physics.registry().name(id));
-                if (n == "powder_snow") isInPowderSnow_ = true;
-                if (n == "bubble_column" && !flying) {  // BubbleColumnBlock.entityInside, every cell (Player: not flying)
-                    const bool down = physics.registry().property(id, "drag") == "true";
-                    const BlockInfo& a = physics.registry().infos()[physics.world().block(x, y + 1, z)];
-                    if (!a.collisionCount && !a.fluid && !a.waterlogged) {  // Entity.onAboveBubbleColumn
-                        vel[1] = down ? std::max(-0.9, vel[1] - 0.03) : std::min(1.8, vel[1] + 0.1);
-                    } else {  // onInsideBubbleColumn (resets the fall)
-                        vel[1] = down ? std::max(-0.3, vel[1] - 0.03) : std::min(0.7, vel[1] + 0.06);
-                        fallDistance = 0;
-                    }
-                }
-                if (n == "honey_block" && !honeyed) {  // HoneyBlock.isSlidingDown / doSlideMovement
-                    const double old = vel[1] / double(0.98f) + 0.08;  // getOldDeltaY
-                    const double dx = std::abs(x + 0.5 - pos[0]), dz = std::abs(z + 0.5 - pos[2]);
-                    const double overlap = 0.4375 + width() / 2.0;
-                    if (!onGround && pos[1] <= y + 0.9375 - 1e-7 && old < -0.08 && (dx + 1e-7 > overlap || dz + 1e-7 > overlap)) {
-                        honeyed = true, slidingOnHoney = true;
-                        if (old < -0.13) {
-                            const double reduce = -0.05 / old;
-                            vel[0] *= reduce, vel[2] *= reduce;
-                        }
-                        vel[1] = (-0.05 - 0.08) * double(0.98f);  // getNewDeltaY(-0.05)
-                        fallDistance = 0;
-                    }
-                }
+    for (const auto& [x, y, z] : cells) {
+        const u16 id = physics.world().block(x, y, z);
+        const std::string_view n = shortBlock(physics.registry().name(id));
+        if (n == "powder_snow") isInPowderSnow_ = true;
+        if (n == "bubble_column" && !flying) {  // BubbleColumnBlock.entityInside, every cell (Player: not flying)
+            const bool down = physics.registry().property(id, "drag") == "true";
+            const BlockInfo& a = physics.registry().infos()[physics.world().block(x, y + 1, z)];
+            if (!a.collisionCount && !a.fluid && !a.waterlogged) {  // Entity.onAboveBubbleColumn
+                vel[1] = down ? std::max(-0.9, vel[1] - 0.03) : std::min(1.8, vel[1] + 0.1);
+            } else {  // onInsideBubbleColumn (resets the fall)
+                vel[1] = down ? std::max(-0.3, vel[1] - 0.03) : std::min(0.7, vel[1] + 0.06);
+                fallDistance = 0;
             }
+        }
+        if (n == "honey_block" && !honeyed) {  // HoneyBlock.isSlidingDown / doSlideMovement
+            const double old = vel[1] / double(0.98f) + 0.08;  // getOldDeltaY
+            const double dx = std::abs(x + 0.5 - pos[0]), dz = std::abs(z + 0.5 - pos[2]);
+            const double overlap = 0.4375 + width() / 2.0;
+            if (!onGround && pos[1] <= y + 0.9375 - 1e-7 && old < -0.08 && (dx + 1e-7 > overlap || dz + 1e-7 > overlap)) {
+                honeyed = true, slidingOnHoney = true;
+                if (old < -0.13) {
+                    const double reduce = -0.05 / old;
+                    vel[0] *= reduce, vel[2] *= reduce;
+                }
+                vel[1] = (-0.05 - 0.08) * double(0.98f);  // getNewDeltaY(-0.05)
+                fallDistance = 0;
+            }
+        }
+    }
 }
 
 // LivingEntity.travel and its parts (Player.travel: swimming steers with the look; flying keeps 0.6 of the

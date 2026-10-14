@@ -53,7 +53,8 @@ public:
     // Level.findSupportingBlock: the colliding cell in the area closest to pos (by its centre).
     bool supportingBlock(const AABB& area, const double pos[3], int out[3]) const;
     // Block.entityInside slowdowns (cobweb, sweet berry bush): the stuck multiplier of a box, 0 when none.
-    bool stuckMultiplier(const AABB& box, double out[3], bool weaving = false) const;  // weaving: the Weaving effect
+    // cells: the swept ones (sweptCells); box: where the move ended. weaving: the Weaving effect.
+    bool stuckMultiplier(const std::vector<std::array<int, 3>>& cells, const AABB& box, double out[3], bool weaving = false) const;
 
     // FluidState of a cell (Level.getFluidState): water or lava, amount 1..8 (8: sources and falling fluid).
     struct Fluid {

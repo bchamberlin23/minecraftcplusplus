@@ -138,8 +138,8 @@ portal background is approximated (closing another screen while dead reopens the
 Minecraft.setScreen(null)), no draft-report icon on the death screen's title button. Books / lectern and the operator block
 editors audited and fixed; residuals: writable pages ignore text filtering (getPages(isTextFilteringEnabled)), the
 test instance's error message is the one it had when opened. Merchant / enchanting and special-block movement
-(bubble columns per cell, stuck order, straw beds) audited and fixed; residual: the player's block effects are
-sampled at the box after the move, not along the swept path (Entity.checkInsideBlocks over the movement segments).
+(bubble columns per cell, stuck order, straw beds) audited and fixed; the player's block effects follow the cells
+the box swept through this tick (Entity.checkInsideBlocks over the movement: a fast fall through a cobweb layer).
 Fluid rendering audited: residuals are BlockState.isSolid and #blocks_fluid_flow approximated by the collision shape
 (+ signs) in the mesher, heights in 1/240 steps and the flow angle in 255 steps, no 0.001 inset on the sides' edges.
 FluidRenderer's backward faces are emitted (the surface's when shouldRenderBackwardUpFace, the sides' unless against
