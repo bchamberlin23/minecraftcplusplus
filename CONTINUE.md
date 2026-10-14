@@ -164,7 +164,9 @@ block families) and fixed; the client's redstone view (placement.cpp hasNeighbor
 (jukebox songs, trapped chest viewers, comparator levels) as 0 and treats opaque cubes as the conductors. Block use
 and item-on-block prediction audited and ported (doors, levers, repeaters, cake, candles, pots, anchors; axe / hoe /
 shovel / honeycomb transforms, flint / fire charge fire, shears, campfire dousing); fire held only by flammable
-neighbours (no solid floor) is left to the server (no flammability table on the client). Not ported:
+neighbours (no solid floor) is left to the server (no flammability table on the client). Mob keyframe animations
+(warden, sniffer, camel, armadillo, breeze) audited: the definitions come from the jar (animations_v1.json, cached by
+version only), triggers and procedural poses match. Not ported:
 filtered sign text (needs the account's profanity filter flag). The bell's raider particles (showBellParticles) are
 invisible in 26.3 (ColorParticleOption.create(ENTITY_EFFECT, 0xFED839 + 5i) has alpha 0, which SpellParticle keeps),
 so they are not drawn here either. Toasts follow ToastInstance now (the
