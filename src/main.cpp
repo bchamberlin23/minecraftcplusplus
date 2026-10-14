@@ -385,6 +385,7 @@ int wmain(int argc, wchar_t** argv) {
     // --- singleplayer (--play): the official server runs the game's rules on this world in the background
     // while the save is shown right away; the game switches to it once it is up ---
     std::unique_ptr<LocalServer> localServer;
+    LocalServer::Config serverConfig;  // kept for a restart (DatapackLoadFailureScreen's Safe Mode)
     net::LanHost lanHost;  // Open to LAN (pause menu) / --lan: announcements (and a forwarded port)
     if (opt.play && opt.connect.empty()) {
         if (opt.name == "Player") opt.name = ownership.playerName;
@@ -396,6 +397,7 @@ int wmain(int argc, wchar_t** argv) {
             ui::Settings saved;
             if (saved.load()) sc.simulationDistance = saved.simulationDistance;
         }
+        serverConfig = sc;
         if (!localServer->start(sc)) return 1;
         if (opt.lan) {  // already listening on all interfaces: announce it on the LAN like the game
             std::string error;
@@ -568,6 +570,7 @@ int wmain(int argc, wchar_t** argv) {
     net::Dimension joinDim;
     Timer joinTimer;
     bool joinFailed = false;
+    bool serverFailureShown = false, restartSafeMode = false;
     auto beginLocalJoin = [&] {
         joinTimer = Timer();
         netClient = std::make_unique<net::Client>(reports, registry);
@@ -1145,6 +1148,21 @@ int wmain(int argc, wchar_t** argv) {
         // block ids, then the server's login: ~1 s that used to freeze the already visible world), then attach here.
         if (localServer && !session && !joining.valid() && !joinFailed && localServer->ready()) {
             beginLocalJoin();
+        }
+        // The local server stopped before it was up: its datapacks failed (WorldOpenFlows: DatapackLoadFailureScreen,
+        // Safe Mode restarts it with the vanilla datapack only) or it failed otherwise.
+        if (localServer && !session && !joining.valid() && !joinFailed && !serverFailureShown && !localServer->ready() &&
+            !localServer->running()) {
+            serverFailureShown = true;
+            LOG("error: the local server stopped while starting%s", localServer->datapackFailed() ? " (datapacks)" : "");
+            ui.showServerFailure(localServer->datapackFailed(), localServer->safeMode(), [&] { restartSafeMode = true; });
+        }
+        if (restartSafeMode) {
+            restartSafeMode = false, serverFailureShown = false;
+            localServer->stop();
+            localServer = std::make_unique<LocalServer>();
+            serverConfig.safeMode = true;
+            if (!localServer->start(serverConfig)) LOG("error: could not restart the local server in safe mode");
         }
         if (connectDeferred && !joining.valid()) {  // --connect after the prompts: no timeout while configuring
             connectDeferred = false;

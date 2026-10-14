@@ -578,6 +578,7 @@ bool LocalServer::start(const Config& config) {
                        config.world.filename().wstring() + L"\" --port " + std::to_wstring(port_);
     if (creating_ && config.create->bonusChest) cmd += L" --bonusChest";
     if (config.forceUpgrade) cmd += config.eraseCache ? L" --forceUpgrade --eraseCache" : L" --forceUpgrade";
+    if (config.safeMode) cmd += L" --safeMode";
     const BOOL ok = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | CREATE_SUSPENDED,
                                    nullptr, work.c_str(), &si, &pi);
     CloseHandle(stdinRead);
@@ -616,6 +617,11 @@ void LocalServer::readOutput() {
                 saving_ = true;
             else if (line.find("]: Autosave finished") != std::string::npos || line.find("]: Saved the game") != std::string::npos)
                 saving_ = false;
+            if (line.find("Failed to load datapacks") != std::string::npos ||  // Main: the server gives up
+                line.find("Failed to load level data or datapacks") != std::string::npos) {
+                datapackFailed_ = true;
+                LOG("server: %s", line.c_str());
+            }
             if (line.find("Done (") != std::string::npos) {
                 if (creating_)  // Create World's game rules, before anyone joins (the console runs them next tick)
                     for (const auto& [rule, value] : config_.create->gameRules) command("gamerule " + rule + " " + value);

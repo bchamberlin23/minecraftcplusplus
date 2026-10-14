@@ -136,6 +136,7 @@ enum class Screen {
     CommandBlockEdit, MinecartCommandEdit, JigsawEdit, StructureEdit, TestBlockEdit, TestInstanceEdit,  // block_editors.cpp
     SocialInteractions,  // social_screen.cpp
     LevelLoading,        // level_loading.cpp
+    DatapackFailure,     // datapack_failure.cpp
     DebugOptions,        // debug_screen.cpp
     MultiplayerWarning,  // servers.cpp: SafetyScreen
     // Front end (frontend.h)

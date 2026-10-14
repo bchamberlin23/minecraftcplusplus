@@ -245,6 +245,9 @@ public:
     void showSaving();
     void startTitle();
     void setServerSaving(bool saving);  // the local server is saving (the autosave indicator)
+    // The local server stopped while starting: DatapackLoadFailureScreen (its Safe Mode calls safeModeFn), the safe
+    // mode's failure alert, or an error message; each leaves for the world list.
+    void showServerFailure(bool datapacks, bool safeMode, std::function<void()> safeModeFn);
     bool menuOpen() const;  // a full-screen menu / inventory is open (frame generation pauses, vendor guidance)
     const fs::path* screenshotRequest();  // scripted screenshots: pass to Renderer::render
     bool loadScript(const fs::path& file);

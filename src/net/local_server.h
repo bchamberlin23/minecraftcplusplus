@@ -47,6 +47,7 @@ public:
         std::string ownerUuid;  // the Java profile id: whose singleplayer player data the save keeps (new worlds)
         // Optimize World (EditWorldScreen): the server upgrades every chunk first (--forceUpgrade [--eraseCache]).
         bool forceUpgrade = false, eraseCache = false;
+        bool safeMode = false;  // --safeMode: only the vanilla datapack (DatapackLoadFailureScreen's Safe Mode)
     };
 
     ~LocalServer();
@@ -54,6 +55,8 @@ public:
     bool ready() const { return ready_; }      // accepting connections
     bool upgrading() const { return upgrading_; }  // the world is being converted to this version first
     bool creating() const { return creating_; }    // the server is creating the world (Config::create)
+    bool datapackFailed() const { return datapackFailed_; }  // it stopped: the world's datapacks did not load
+    bool safeMode() const { return config_.safeMode; }
     // --forceUpgrade: the upgrader's last status line and percentage (-1 until it reports one).
     std::string upgradeStatus() const;
     int upgradePercent() const { return upgradePercent_; }
@@ -93,7 +96,7 @@ private:
     std::string offlineUuid_, hostUuid_;
     HANDLE process_ = nullptr, job_ = nullptr, stdinWrite_ = nullptr, stdoutRead_ = nullptr;
     std::thread reader_;
-    std::atomic<bool> ready_{false}, failed_{false}, opJoiners_{false}, saving_{false};
+    std::atomic<bool> ready_{false}, failed_{false}, opJoiners_{false}, saving_{false}, datapackFailed_{false};
     std::atomic<int> upgradePercent_{-1};
     std::atomic<int> upgradeDone_{-1}, upgradeTotal_{-1};
     mutable std::mutex statusMutex_;

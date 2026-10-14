@@ -520,6 +520,9 @@ Ui::~Ui() = default;
 Settings& Ui::settings() { return s_->settings; }
 bool Ui::quitRequested() const { return s_->quit; }
 void Ui::setServerSaving(bool saving) { s_->serverSaving = saving; }
+void Ui::showServerFailure(bool datapacks, bool safeMode, std::function<void()> safeModeFn) {
+    serverFailure(*s_, datapacks, safeMode, std::move(safeModeFn));
+}
 
 bool Ui::menuOpen() const { return s_->screen != Screen::None && s_->screen != Screen::Chat; }
 
