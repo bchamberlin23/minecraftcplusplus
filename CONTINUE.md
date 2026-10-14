@@ -161,7 +161,10 @@ Video settings audit: Improved Transparency is stored but the renderer has no Fa
 targets (its own sorting stays); the Entity Distance option reaches the local server only at launch (the integrated
 server reads it live); no graphics backend choice (D3D12 only). Placement prediction audited (two passes over ~40
 block families) and fixed; the client's redstone view (placement.cpp hasNeighborSignal) reads block-entity outputs
-(jukebox songs, trapped chest viewers, comparator levels) as 0 and treats opaque cubes as the conductors. Not ported:
+(jukebox songs, trapped chest viewers, comparator levels) as 0 and treats opaque cubes as the conductors. Block use
+and item-on-block prediction audited and ported (doors, levers, repeaters, cake, candles, pots, anchors; axe / hoe /
+shovel / honeycomb transforms, flint / fire charge fire, shears, campfire dousing); fire held only by flammable
+neighbours (no solid floor) is left to the server (no flammability table on the client). Not ported:
 filtered sign text (needs the account's profanity filter flag). The bell's raider particles (showBellParticles) are
 invisible in 26.3 (ColorParticleOption.create(ENTITY_EFFECT, 0xFED839 + 5i) has alpha 0, which SpellParticle keeps),
 so they are not drawn here either. Toasts follow ToastInstance now (the
