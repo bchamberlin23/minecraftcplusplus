@@ -504,8 +504,8 @@ void Riding::boatTick(ent::Entity& e) {
         }
     }
     // floatBoat
-    const double gravity = 0.04;
-    double vspeed = -gravity, buoyancy = 0;
+    const double gravity = 0.04;  // getDefaultGravity (the buoyancy's); the fall: getGravity, 0 with NoGravity
+    double vspeed = e.noGravity ? 0.0 : -gravity, buoyancy = 0;
     float invFriction = 0.05f;
     if (oldStatus_ == Status::InAir && status_ != Status::InAir && status_ != Status::OnLand) {
         waterLevel_ = e.pos[1] + height;

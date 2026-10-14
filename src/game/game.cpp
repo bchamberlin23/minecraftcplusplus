@@ -592,7 +592,8 @@ bool Game::startDestroyBlock(int x, int y, int z, int face) {
         if (dig_.active) sendDig(kAbortDestroy, dig_.x, dig_.y, dig_.z, face, false);
         const u16 state = world_.block(x, y, z);
         const bool notAir = state != 0;
-        if (notAir && (!dig_.active || dig_.progress == 0.0f)) redstoneOreInteract(x, y, z, true);  // BlockState.attack
+        // BlockState.attack when destroyProgress is 0 (a dig left on air keeps its progress, as in Java)
+        if (notAir && dig_.progress == 0.0f) redstoneOreInteract(x, y, z, true);
         if (notAir && progressAt(x, y, z, state) >= 1.0f) {
             sendDig(kStartDestroy, x, y, z, face, true);
             destroyBlock(x, y, z);

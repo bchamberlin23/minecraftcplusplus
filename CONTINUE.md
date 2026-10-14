@@ -189,7 +189,9 @@ spectated entity gets no hurt tilt / bob and FOV 1 (Java uses its own state; the
 Audited and matching: maps, name tags, tab list, sidebar, boss bars, toasts, chat, advancements. Residuals: command
 suggestions ask the server for every argument (Java lists entity / registry / position suggestions locally), no
 suggestion narration; friend toasts have no face; no resource pack load-failure toast; the advancements screen
-ignores the horizontal wheel; name tag / below-name distance attributes are not read. The allay's give / take / duplicate is predicted
+ignores the horizontal wheel; name tag / below-name distance attributes are not read. Boats: no client splash above a
+bubble column (onAboveBubbleColumn's local sound and particle), the rider's head / body yaw do not follow the boat's
+turn, no client outOfControlTicks (the server ejects). The allay's give / take / duplicate is predicted
 (its hand and the player's stack). Residual: wolf armour repair. Not ported:
 filtered sign text (needs the account's profanity filter flag). The bell's raider particles (showBellParticles) are
 invisible in 26.3 (ColorParticleOption.create(ENTITY_EFFECT, 0xFED839 + 5i) has alpha 0, which SpellParticle keeps),
