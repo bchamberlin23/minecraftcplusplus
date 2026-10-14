@@ -196,9 +196,8 @@ bool input(UiState& s, int what, int value) {
             speed = std::clamp(speed + float(value) * 0.005f, 0.0f, 0.2f);
             return true;
         }
-        int slot = g.selected - value;  // onMouseScrolled(-wheel)
-        const int step = -value > 0 ? 1 : -1;
-        while (slot >= 0 && slot <= 8 && !enabled(itemAt(slot))) slot += step;
+        int slot = g.selected - value;  // onMouseScrolled(-wheel): disabled slots skipped by the whole wheel
+        while (slot >= 0 && slot <= 8 && !enabled(itemAt(slot))) slot -= value;
         if (slot >= 0 && slot <= 8) {
             selectSlot(s, slot);
             g.lastSelection = s.clock;

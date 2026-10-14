@@ -112,6 +112,7 @@ private:
     float dx_ = 0, dy_ = 0;
     u64 lastInputMs_ = GetTickCount64();
     MouseEvents events_;
+    int wheelRest_ = 0, hwheelRest_ = 0;  // wheel deltas below a notch, kept for the next message
     std::vector<InputEvent> input_;
     std::vector<std::wstring> dropped_;
     bool clickCaptures_ = true;

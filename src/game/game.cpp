@@ -183,7 +183,9 @@ void Game::frame(Window& w, double dt) {
     if (!inputSuspended) {  // MouseHandler.turnPlayer
         double dx, dy;
         if (smoothCamera) {
-            dx = smoothTurnX_.next(mdx * sensitivity, dt), dy = smoothTurnY_.next(mdy * sensitivity, dt);
+            // getNewDeltaValue(accumulated * sens, mousea * sens): the time scaled by sens too (sensitivity / 0.15 degrees)
+            const double sens = sensitivity / (0.15 * kPi / 180.0);
+            dx = smoothTurnX_.next(mdx * sensitivity, dt * sens), dy = smoothTurnY_.next(mdy * sensitivity, dt * sens);
         } else {
             smoothTurnX_ = {}, smoothTurnY_ = {};
             const float k = cameraMode == 0 && scoping() ? sensitivity / 8 : sensitivity;  // the spyglass: no x8
@@ -312,7 +314,8 @@ void Game::handleClicks(Window& w, double dt, int rightPresses, int middlePresse
         scrollAccum_ += scroll;
         const int steps = int(scrollAccum_);
         scrollAccum_ -= steps;
-        if (steps && !(spectatorInput && spectatorInput(1, steps))) selected_ = ((selected_ - steps) % 9 + 9) % 9;
+        // ScrollWheelHandler.getNextScrollWheelSelection: one slot by the step's sign
+        if (steps && !(spectatorInput && spectatorInput(1, steps))) selected_ = ((selected_ - (steps > 0 ? 1 : -1)) % 9 + 9) % 9;
     }
     const bool rightHeld = toggleUse ? useToggled_ : held(w, keys.use);
     repeatTimer_ -= dt;

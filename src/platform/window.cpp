@@ -394,23 +394,15 @@ LRESULT Window::handle(UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         case WM_LBUTTONDOWN:
-            push(InputEvent::Button, 0, true);
-            press(VK_LBUTTON);
-            if (captured_)
-                ++events_.left;
-            else if (clickCaptures_)
-                setMouseCaptured(true);
-            return 0;
         case WM_RBUTTONDOWN:
-            push(InputEvent::Button, 1, true);
-            press(VK_RBUTTON);
-            if (captured_) ++events_.right;
+        case WM_MBUTTONDOWN: {  // MouseHandler.onButton: no screen: any press grabs the mouse, then clicks its key
+            const int button = msg == WM_LBUTTONDOWN ? 0 : msg == WM_RBUTTONDOWN ? 1 : 2;
+            push(InputEvent::Button, button, true);
+            press(button == 0 ? VK_LBUTTON : button == 1 ? VK_RBUTTON : VK_MBUTTON);
+            if (!captured_ && clickCaptures_) setMouseCaptured(true);
+            if (captured_) ++(button == 0 ? events_.left : button == 1 ? events_.right : events_.middle);
             return 0;
-        case WM_MBUTTONDOWN:
-            push(InputEvent::Button, 2, true);
-            press(VK_MBUTTON);
-            if (captured_) ++events_.middle;
-            return 0;
+        }
         case WM_LBUTTONUP: push(InputEvent::Button, 0, false); return 0;
         case WM_RBUTTONUP: push(InputEvent::Button, 1, false); return 0;
         case WM_MBUTTONUP: push(InputEvent::Button, 2, false); return 0;
@@ -421,10 +413,22 @@ LRESULT Window::handle(UINT msg, WPARAM wp, LPARAM lp) {
             if (msg == WM_XBUTTONDOWN) press(second ? VK_XBUTTON2 : VK_XBUTTON1);
             return TRUE;
         }
-        case WM_MOUSEWHEEL:
-            events_.wheel += GET_WHEEL_DELTA_WPARAM(wp) / WHEEL_DELTA;
-            push(InputEvent::Wheel, GET_WHEEL_DELTA_WPARAM(wp) / WHEEL_DELTA, false);
+        case WM_MOUSEWHEEL: {
+            wheelRest_ += GET_WHEEL_DELTA_WPARAM(wp);
+            const int notches = wheelRest_ / WHEEL_DELTA;
+            wheelRest_ -= notches * WHEEL_DELTA;
+            if (!notches) return 0;
+            events_.wheel += notches;
+            push(InputEvent::Wheel, notches, false);
             return 0;
+        }
+        case WM_MOUSEHWHEEL: {  // MouseHandler.onScroll: wheel = y == 0 ? -x : y (the game's hotbar only)
+            hwheelRest_ += GET_WHEEL_DELTA_WPARAM(wp);
+            const int notches = hwheelRest_ / WHEEL_DELTA;
+            hwheelRest_ -= notches * WHEEL_DELTA;
+            if (notches) events_.wheel -= notches;
+            return 0;
+        }
         case WM_KEYDOWN:
         case WM_SYSKEYDOWN: {
             const int vk = sidedKey(wp, lp);

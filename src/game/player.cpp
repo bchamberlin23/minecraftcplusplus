@@ -1165,7 +1165,8 @@ void Player::tick(const Physics& physics, const PlayerInput& rawInput) {
             float scale = 0.98f * useSpeed * (movingSlowly ? float(attr.sneakSpeed) : 1.0f);
             const float ax = std::abs(s), ay = std::abs(f);
             const float tan = ay > ax ? ax / ay : ay / ax;
-            scale = std::min(len * scale * std::sqrt(1.0f + tan * tan), 1.0f);
+            // KeyboardInput normalizes the move vector first: its length is 1 here, whatever the keys
+            scale = std::min(scale * std::sqrt(1.0f + tan * tan), 1.0f);
             input.forward = f * scale, input.strafe = s * scale;
         }
         xxa_ = input.strafe, zza_ = input.forward;
