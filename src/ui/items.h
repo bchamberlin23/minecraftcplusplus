@@ -199,6 +199,7 @@ private:
     void addDetails(const ItemStack& s, bool advanced, bool creative, bool player, std::vector<Text>& out) const;
     const std::string& registryName(const char* registry, int id) const;  // static registries from the reports
     bool readPatch(net::Reader& r, ItemStack& out, int depth) const;
+    bool templateHash(net::Reader& r, u32& out) const;  // an ItemStackTemplate off the wire, hashed (HashOps)
     bool skipValue(net::Reader& r, int type, int depth) const;
     bool readTemplate(net::Reader& r, int depth) const;  // ItemStackTemplate
 

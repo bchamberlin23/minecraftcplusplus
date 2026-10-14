@@ -751,6 +751,69 @@ bool Items::componentHash(const ItemStack::Component& c, u32& out) const {
             lines.push_back(hNbt(v, ""));
         }
         out = hList(lines);
+    } else if (n == "potion_contents") {  // PotionContents.FULL_CODEC: {potion, custom_color, custom_effects, custom_name}
+        std::vector<std::pair<u32, u32>> kv;
+        if (r.boolean()) {
+            const std::string& potion = potionName(r.varInt());
+            if (potion.empty()) return false;
+            kv.emplace_back(hString("potion"), hString(potion));
+        }
+        if (r.boolean()) kv.emplace_back(hString("custom_color"), hInt(r.i32v()));
+        if (r.varInt() != 0) return false;  // custom effects (MobEffectInstance): not reproduced
+        if (r.boolean()) kv.emplace_back(hString("custom_name"), hString(std::string(r.str())));
+        out = hMap(std::move(kv));
+    } else if (n == "writable_book_content") {  // {pages: [{raw, filtered?}...]}, no pages: {}
+        std::vector<u32> pages;
+        const i32 cnt = r.varInt();
+        for (i32 i = 0; i < cnt && r.ok; ++i) {  // Filterable.codec: the full form
+            std::vector<std::pair<u32, u32>> page{{hString("raw"), hString(std::string(r.str()))}};
+            if (r.boolean()) page.emplace_back(hString("filtered"), hString(std::string(r.str())));
+            pages.push_back(hMap(std::move(page)));
+        }
+        std::vector<std::pair<u32, u32>> kv;
+        if (!pages.empty()) kv.emplace_back(hString("pages"), hList(pages));
+        out = hMap(std::move(kv));
+    } else if (n == "written_book_content") {  // {title: {raw}, author, generation?, pages?, resolved?}
+        std::vector<std::pair<u32, u32>> title{{hString("raw"), hString(std::string(r.str()))}};
+        if (r.boolean()) title.emplace_back(hString("filtered"), hString(std::string(r.str())));
+        std::vector<std::pair<u32, u32>> kv{{hString("title"), hMap(std::move(title))}};
+        kv.emplace_back(hString("author"), hString(std::string(r.str())));
+        if (const i32 generation = r.varInt(); generation != 0) kv.emplace_back(hString("generation"), hInt(generation));
+        std::vector<u32> pages;
+        const i32 cnt = r.varInt();
+        for (i32 i = 0; i < cnt && r.ok; ++i) {
+            NbtValue raw;
+            if (!textNbt(raw)) return false;
+            std::vector<std::pair<u32, u32>> page{{hString("raw"), hNbt(raw, "")}};
+            if (r.boolean()) {
+                NbtValue filtered;
+                if (!textNbt(filtered)) return false;
+                page.emplace_back(hString("filtered"), hNbt(filtered, ""));
+            }
+            pages.push_back(hMap(std::move(page)));
+        }
+        if (!pages.empty()) kv.emplace_back(hString("pages"), hList(pages));
+        if (r.boolean()) kv.emplace_back(hString("resolved"), hBool(true));
+        out = hMap(std::move(kv));
+    } else if (n == "bundle_contents" || n == "charged_projectiles") {  // a list of ItemStackTemplates
+        std::vector<u32> items;
+        const i32 cnt = r.varInt();
+        for (i32 i = 0; i < cnt && r.ok; ++i) {
+            u32 h;
+            if (!templateHash(r, h)) return false;
+            items.push_back(h);
+        }
+        out = hList(items);
+    } else if (n == "container") {  // ItemContainerContents.CODEC: [{slot, item}...] of the filled slots in order
+        std::vector<u32> slots;
+        const i32 cnt = r.varInt();
+        for (i32 i = 0; i < cnt && r.ok; ++i) {
+            if (!r.boolean()) continue;
+            u32 h;
+            if (!templateHash(r, h)) return false;
+            slots.push_back(hMap({{hString("slot"), hInt(i)}, {hString("item"), h}}));
+        }
+        out = hList(slots);
     } else if (n == "enchantments" || n == "stored_enchantments") {  // {"minecraft:sharpness": 3, ...}
         std::vector<std::pair<u32, u32>> kv;
         const i32 cnt = r.varInt();
@@ -764,6 +827,29 @@ bool Items::componentHash(const ItemStack::Component& c, u32& out) const {
         return false;
     }
     return r.ok && r.p == r.end;
+}
+
+// ItemStackTemplate.CODEC (its map form): {id, count unless 1, components unless empty}; the patch as
+// DataComponentPatch.CODEC: "minecraft:<type>" -> the value, "!minecraft:<type>" -> {} for a removed one.
+bool Items::templateHash(net::Reader& r, u32& out) const {
+    ItemStack t;
+    t.item = r.varInt();
+    t.count = r.varInt();
+    if (!r.ok || !readPatch(r, t, 1)) return false;
+    const std::string& id = name(t.item);
+    if (id.empty()) return false;
+    std::vector<std::pair<u32, u32>> kv{{hString("id"), hString(id)}};
+    if (t.count != 1) kv.emplace_back(hString("count"), hInt(t.count));
+    std::vector<std::pair<u32, u32>> patch;
+    for (const ItemStack::Component& comp : t.added) {
+        u32 h;
+        if (!componentHash(comp, h)) return false;
+        patch.emplace_back(hString("minecraft:" + componentName(comp.type)), h);
+    }
+    for (int type : t.removed) patch.emplace_back(hString("!minecraft:" + componentName(type)), crc32c({2, 3}));
+    if (!patch.empty()) kv.emplace_back(hString("components"), hMap(std::move(patch)));
+    out = hMap(std::move(kv));
+    return true;
 }
 
 void Items::writeHashed(net::Writer& w, const ItemStack& s) const {
