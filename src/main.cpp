@@ -1114,6 +1114,8 @@ int wmain(int argc, wchar_t** argv) {
     const float startYaw = cam.yaw;
     constexpr int kBenchFrames = 720;
     std::vector<float> cpuMs, gpuMs, draws, nodes;
+    // --profile: each frame's main-thread phases (pump, latency sleep, net, game / input, gen apply, terrain, render)
+    std::vector<std::array<float, 7>> phaseMs;
     double last = nowSeconds(), titleTime = last, saveTime = last;
     auto saveNow = [&](const char* why) {
         if (!canSave || world.dirtyChunks().empty()) return;
@@ -1499,6 +1501,9 @@ int wmain(int argc, wchar_t** argv) {
         renderer.render(cam, opt.fog, shot ? &opt.screenshot : uiShot);
         if (uiShot && !shot) LOG("screenshot written to %s", uiShot->string().c_str());
 
+        if (opt.profile && frame >= 5)
+            phaseMs.push_back({float(pumpMs), float(beginMs), float(netMs), float(preMs - beginMs - netMs), float(genMs),
+                               float(terrainMs), float(phase.ms())});
         if (const double frameMs = pumpMs + frameTop.ms(); opt.profile && frameMs > 20.0 && frame > 5)
             LOG("slow frame %d: %.1f ms | pump %.1f, begin (latency sleep) %.1f, net %.1f, other input/game %.1f, "
                 "gen apply %.1f, terrain %.1f, render %.1f", frame, frameMs, pumpMs, beginMs, netMs,
@@ -1575,6 +1580,20 @@ int wmain(int argc, wchar_t** argv) {
     if (session) session->report();
     audio.report();
 
+    if (!phaseMs.empty()) {  // --profile: where the main thread's frame goes (average and p99 per phase)
+        static const char* names[7] = {"pump", "latency sleep", "net", "game/input", "gen apply", "terrain", "render"};
+        std::string line = "profile: main thread ms avg / p99 over " + std::to_string(phaseMs.size()) + " frames |";
+        for (int k = 0; k < 7; ++k) {
+            std::vector<float> v;
+            v.reserve(phaseMs.size());
+            for (const auto& f : phaseMs) v.push_back(f[size_t(k)]);
+            const float a = std::accumulate(v.begin(), v.end(), 0.0f) / float(v.size());
+            char b[96];
+            std::snprintf(b, sizeof(b), " %s %.3f / %.2f |", names[k], a, percentile(v, 0.99f));
+            line += b;
+        }
+        LOG("%s", line.c_str());
+    }
     if (!cpuMs.empty()) {
         auto avg = [](const std::vector<float>& v) { return std::accumulate(v.begin(), v.end(), 0.0f) / float(v.size()); };
         LOG("frames  %zu | avg %.0f fps (%.2f ms) | p99 frame %.2f ms | gpu avg %.2f ms, p99 %.2f ms | %.0f draws, %.0f "

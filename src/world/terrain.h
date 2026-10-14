@@ -207,6 +207,7 @@ private:
     std::vector<Request> refresh_;              // resident sections to re-mesh (neighbours of new chunks)
     std::unordered_set<u64> refreshQueued_;     // coalesce repeated light/edge updates before dispatch
     std::vector<Result> pendingUpload_;         // finished meshes waiting for upload budget
+    double lastUpdateS_ = 0, frameS_ = 1.0 / 60.0;  // smoothed time between updates (the upload budget)
     double scanX_ = 0, scanY_ = 0, scanZ_ = 0;
     bool scanned_ = false;
     int chunkUpdates_ = 0;

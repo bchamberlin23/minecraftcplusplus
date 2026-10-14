@@ -503,7 +503,10 @@ void Terrain::collectResults(double x, double y, double z, bool unlimited) {
     const float evict = detailRadius_ + kEvictMargin;
     // Completion order is not presentation order: reprioritize at the current camera, also
     // after a teleport. Nearby geometry takes precedence over distant light/edge corrections.
-    std::sort(pendingUpload_.begin(), pendingUpload_.end(), [&](const Result& a, const Result& b) {
+    // Only this frame's uploads need ordering (the rest are reordered next frame): the nearest first.
+    const auto take = pendingUpload_.begin() + std::ptrdiff_t(unlimited ? pendingUpload_.size()
+                                                                       : std::min(pendingUpload_.size(), kUploadsPerFrame));
+    std::partial_sort(pendingUpload_.begin(), take, pendingUpload_.end(), [&](const Result& a, const Result& b) {
         const float da = distance(0, a.req.cx * 16.0, a.req.sy * 16.0, a.req.cz * 16.0, x, y, z);
         const float db = distance(0, b.req.cx * 16.0, b.req.sy * 16.0, b.req.cz * 16.0, x, y, z);
         if (da != db) return da < db;
@@ -512,12 +515,18 @@ void Terrain::collectResults(double x, double y, double z, bool unlimited) {
         if (a.req.cx != b.req.cx) return a.req.cx < b.req.cx;
         return a.req.sy < b.req.sy;
     });
+    // The upload time budget follows the frame rate (about a third of a frame, 0.25 .. 1.5 ms): at high frame rates
+    // the same throughput per second without frame-time spikes.
+    const double nowS = nowSeconds();
+    if (lastUpdateS_ > 0) frameS_ += (std::clamp(nowS - lastUpdateS_, 0.0, 0.1) - frameS_) * 0.05;
+    lastUpdateS_ = nowS;
+    const double budgetMs = std::clamp(frameS_ * 1000.0 * 0.35, 0.25, kUploadBudgetMs);
     const Timer uploadTimer;
     u64 uploaded = 0;
     float nearest = 1e30f, furthest = 0;
     size_t n = 0;
     for (; n < pendingUpload_.size() && (unlimited ||
-           (n < kUploadsPerFrame && uploaded < kUploadBudget && (n == 0 || uploadTimer.ms() < kUploadBudgetMs))); ++n) {
+           (n < kUploadsPerFrame && uploaded < kUploadBudget && (n == 0 || uploadTimer.ms() < budgetMs))); ++n) {
         Result& r = pendingUpload_[n];
         --inFlight_;
         if (r.req.epoch != epoch_) continue;
