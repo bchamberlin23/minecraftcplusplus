@@ -387,6 +387,12 @@ LRESULT Window::handle(UINT msg, WPARAM wp, LPARAM lp) {
                 return TRUE;
             }
             break;
+        case WM_GETMINMAXINFO: {  // Window: SDL_SetWindowMinimumSize(320, 240) for the client area
+            RECT r{0, 0, 320, 240};
+            AdjustWindowRectEx(&r, DWORD(GetWindowLongPtrW(hwnd_, GWL_STYLE)), FALSE, DWORD(GetWindowLongPtrW(hwnd_, GWL_EXSTYLE)));
+            reinterpret_cast<MINMAXINFO*>(lp)->ptMinTrackSize = {r.right - r.left, r.bottom - r.top};
+            return 0;
+        }
         case WM_SIZE:
             if (LOWORD(lp) && HIWORD(lp)) {
                 width_ = LOWORD(lp), height_ = HIWORD(lp);

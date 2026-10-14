@@ -1470,7 +1470,8 @@ int wmain(int argc, wchar_t** argv) {
             const u64 afkMs = GetTickCount64() - window.lastInputMs();
             const u32 limit = renderer.upscalers().settings().fpsLimit;
             u32 throttle = 0;
-            if (window.iconified()) throttle = 10;
+            // WINDOW_ICONIFIED: minimized, or an unfocused exclusive fullscreen
+            if (window.iconified() || (!window.focused() && window.exclusiveFullscreen())) throttle = 10;
             else if (ui.settings().inactivityFpsLimit == 1 && afkMs > 600000) throttle = 10;
             else if (ui.settings().inactivityFpsLimit == 1 && afkMs > 60000) throttle = limit ? std::min(limit, 30u) : 30;
             else if (menu && !session) throttle = 60;

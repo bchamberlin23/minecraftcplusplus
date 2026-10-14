@@ -31,6 +31,7 @@ public:
     // while the window is in front, and back to the desktop's when it loses the focus (the window minimizes).
     void setFullscreen(bool on);
     bool fullscreen() const { return fullscreen_; }
+    bool exclusiveFullscreen() const { return fullscreen_ && modeChanged_; }  // Window.isExclusiveFullscreen
     struct VideoMode {  // com.mojang.blaze3d.platform.VideoMode
         int width = 0, height = 0, redBits = 8, greenBits = 8, blueBits = 8;
         float refreshRate = 0;

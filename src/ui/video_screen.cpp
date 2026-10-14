@@ -205,6 +205,7 @@ void videoBuild(UiState& s) {
             int maxScale = 1;
             const u32 w = p->window->width(), h = p->window->height();
             while (w / u32(maxScale + 1) >= 320 && h / u32(maxScale + 1) >= 240) ++maxScale;
+            if (p->settings.forceUnicodeFont && maxScale % 2 != 0) ++maxScale;  // Window.calculateScale(0, unicode): even
             p->settings.guiScale = p->settings.guiScale >= maxScale ? 0 : p->settings.guiScale + 1;
             p->settings.save();
         }));
