@@ -63,6 +63,7 @@ struct PassContext {
     float lightmap[3][4] = {};  // Lightmap::pack: for passes that light with the game's lightmap (lightmap.hlsli)
     PassStage stage{};  // the stage being drawn (a pass may be registered for several)
     bool uiLayer = false;  // Hud passes draw into a separate UI layer (composited later), not onto the scene
+    bool handInScene = false;  // Shaders Off with frame generation: the first-person hand in the World stage, as shaded
     // The UI may split at its menu blur: its batches before the mark go onto the final image (here with no UI layer,
     // else in BeforeUi, colorRtv then being the final image's), which is blurred (PostEffects.blur), the rest after.
     bool uiBlur = false;
@@ -459,6 +460,11 @@ private:
     double revealX_ = 0, revealZ_ = 0;
     float entranceTime(const Slot& slot, float now) const;
     std::vector<u32> translucent_;
+    struct TranslucentSlot {
+        double center[3];
+        u32 slot;
+    };
+    std::vector<TranslucentSlot> translucentSlots_;  // those of the cut (rebuilt when it changes), unsorted
     u64 activeVersion_ = 0, sortedVersion_ = ~u64(0);
     double sortedCam_[3] = {};
     u32 segBase_[4] = {}, segCap_[4] = {};

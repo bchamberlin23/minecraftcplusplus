@@ -107,11 +107,17 @@ float PackDepthFlipPS(MergeOut i) : SV_Depth {
 // ---- temporal upscaling with a pack (Pipe::scaled, pack_frame.cpp upscaleToBackbuffer) ----
 // Camera motion vectors from the upright scene depth (uSrc, reversed Z): uShadowMat = this frame's unjittered NDC +
 // depth -> previous clip, uCamFrac.xy = this frame's jitter (NDC, +y up), uDepth.yz = size. Previous UV - current
-// UV (UV units, +y down), like the built-in pipeline's MotionCS.
+// UV (UV units, +y down), like the built-in pipeline's MotionCS. The first-person hand moves with the camera: its pixels
+// (GL depth squeezed by MC_HAND_DEPTH below Iris's 0.56; uDepth.x = F / (F - n) turns ours into GL depth) get none,
+// else upscalers and frame generation smear it over the world.
 [numthreads(8, 8, 1)]
 void PackMotionCS(uint2 id : SV_DispatchThreadID) {
     if (id.x >= uint(uDepth.y) || id.y >= uint(uDepth.z)) return;
     float d = uSrc[id].r;
+    if ((1.0 - d) * uDepth.x < 0.56) {
+        uDst[id] = float4(0, 0, 0, 0);
+        return;
+    }
     float2 uv = (float2(id) + 0.5) / uDepth.yz;
     float2 ndc = float2(uv.x * 2 - 1, 1 - uv.y * 2) - uCamFrac.xy;  // where this sample is without the jitter
     float4 prev = mul(uShadowMat, float4(ndc, d, 1));

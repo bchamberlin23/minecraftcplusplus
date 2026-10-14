@@ -1074,7 +1074,7 @@ void Visuals::Impl::prepareWorld(const PassContext& ctx) {
     glowLists.clear();
     buildWorld(ctx);
     buildCracks(ctx);
-    const bool handInWorld = ctx.shading && ctx.prevViewProj;
+    const bool handInWorld = (ctx.shading || ctx.handInScene) && ctx.prevViewProj;
     float handVp[16], handPlain[16];
     if (handInWorld) {
         hudLists.clear();
@@ -1090,7 +1090,7 @@ void Visuals::Impl::prepareWorld(const PassContext& ctx) {
     crackDraw = flush(cracks);
     shadowDraw[0] = flush(shadowLists.cut), shadowDraw[1] = flush(shadowLists.tr);
     if (handInWorld && !(hudLists.cut.v.empty() && hudLists.tr.v.empty())) {
-        writeCb(2, ctx, handVp, true, true, prevHandValid ? prevHandVp : handPlain);
+        writeCb(2, ctx, handVp, ctx.shading, true, prevHandValid ? prevHandVp : handPlain);
         handDraw[0] = flush(hudLists.cut, true), handDraw[1] = flush(hudLists.tr, true), handDraw[2] = flush(hudLists.glint, true);
         handWorldFrame = frameCounter;
         std::memcpy(prevHandVp, handPlain, sizeof(prevHandVp));

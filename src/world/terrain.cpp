@@ -127,8 +127,8 @@ float Terrain::distance(int level, double x0, double y0, double z0, double px, d
 }
 
 // Downsamples one region into LOD grids and meshes every non-empty node of levels 1..kMaxLevel, one 16-block
-// layer at a time (plus a row above and below for the mesher's border). Level-1 cells take a cube from their
-// 2x2 column footprint at every block height; each coarser level merges 2x2 cells of the previous one. Chunk
+// layer at a time (plus a row above and below for the mesher's border). Level-1 cells take the majority cube of
+// their 2x2 column footprint at every block height; each coarser level merges 2x2 cells of the previous one. Chunk
 // columns the world lacks take the far columns from their level up. Pure with respect to Terrain state, so it
 // runs on worker threads.
 void Terrain::buildRegion(const CoarseJob& job, CoarseBuild& out, bool lockWorld, int layerFrom, int layerTo) const {
@@ -136,6 +136,22 @@ void Terrain::buildRegion(const CoarseJob& job, CoarseBuild& out, bool lockWorld
     auto cubeOf = [&](u16 id) -> u16 {
         const BlockInfo& b = infos[id];
         return b.kind == KindCube ? id : b.waterlogged ? water_ : 0;
+    };
+    // A coarse cell from its 2x2 footprint: solid where at least two of the four are (the most common of those), so
+    // thin features (a lone trunk, a seabed's highest blocks) do not swell into whole cells. "Any of the four" made
+    // distant birch forests white with fat trunks and the sea shallow and pale, which then changed visibly as full
+    // detail took over.
+    auto merge = [](const u16 (&c)[4]) -> u16 {
+        u16 best = 0;
+        int solid = 0, bestCount = 0;
+        for (int i = 0; i < 4; ++i) {
+            if (!c[i]) continue;
+            ++solid;
+            int k = 0;
+            for (int j = 0; j < 4; ++j) k += c[j] == c[i];
+            if (k > bestCount) best = c[i], bestCount = k;
+        }
+        return solid >= 2 ? best : u16(0);
     };
     thread_local Grid grids[kMaxLevel + 1];  // per level: (512 >> level)^2 columns x 18 rows
     thread_local std::vector<u8> occludes;  // per block id (states may be added at any time: refresh per build)
@@ -251,12 +267,12 @@ void Terrain::buildRegion(const CoarseJob& job, CoarseBuild& out, bool lockWorld
                         for (int y = yFrom; y <= yTo; ++y)
                             for (int z = 0; z < 8; ++z)
                                 for (int x = 0; x < 8; ++x) {
-                                    u16 best = 0;
-                                    for (int q = 0; q < 4 && !best; ++q) {
+                                    u16 c[4];
+                                    for (int q = 0; q < 4; ++q) {
                                         const u32 i = u32(y * 256 + (z * 2 + (q >> 1)) * 16 + x * 2 + (q & 1));
-                                        best = cubeOf(sy == ly ? ids[i] : World::blockAt(region, sec, i));
+                                        c[q] = cubeOf(sy == ly ? ids[i] : World::blockAt(region, sec, i));
                                     }
-                                    dst.at(bx + x, sy * 16 + y - row0, bz + z) = best;
+                                    dst.at(bx + x, sy * 16 + y - row0, bz + z) = merge(c);
                                 }
                     }
                 }
@@ -265,9 +281,9 @@ void Terrain::buildRegion(const CoarseJob& job, CoarseBuild& out, bool lockWorld
                 for (int y = 0; y < 18; ++y)
                     for (int z = 0; z < dst.sz; ++z)
                         for (int x = 0; x < dst.sx; ++x) {
-                            u16 best = 0;
-                            for (int q = 0; q < 4 && !best; ++q) best = src.at(x * 2 + (q & 1), y, z * 2 + (q >> 1));
-                            dst.at(x, y, z) = best;
+                            u16 c[4];
+                            for (int q = 0; q < 4; ++q) c[q] = src.at(x * 2 + (q & 1), y, z * 2 + (q >> 1));
+                            dst.at(x, y, z) = merge(c);
                         }
             }
             if (level != farLevel) continue;

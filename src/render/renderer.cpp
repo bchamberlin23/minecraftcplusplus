@@ -908,21 +908,42 @@ void Renderer::sortTranslucent(const CameraState& cam, u32 activeCount) {
     // Re-sorted when the cut changes or the camera has moved a block; in between the order is close enough.
     const double dx = cam.x - sortedCam_[0], dy = cam.y - sortedCam_[1], dz = cam.z - sortedCam_[2];
     if (sortedVersion_ == activeVersion_ && dx * dx + dy * dy + dz * dz < 1.0) return;
-    sortedVersion_ = activeVersion_;
-    sortedCam_[0] = cam.x, sortedCam_[1] = cam.y, sortedCam_[2] = cam.z;
-    thread_local std::vector<std::pair<double, u32>> keyed;
-    keyed.clear();
-    for (u32 i = 0; i < activeCount; ++i) {
-        const u32 id = drawList_[i];
-        if (id >= slotCapacity_ || !slots_[id].translucent) continue;
-        const i32* o = slots_[id].origin;
-        const double half = double(8 << o[3]);
-        const double cx = o[0] + half - cam.x, cy = o[1] + 8.0 - cam.y, cz = o[2] + half - cam.z;
-        keyed.push_back({cx * cx + cy * cy + cz * cz, id});
+    if (sortedVersion_ != activeVersion_) {  // the translucent sections of the cut and their centres
+        sortedVersion_ = activeVersion_;
+        translucentSlots_.clear();
+        for (u32 i = 0; i < activeCount; ++i) {
+            const u32 id = drawList_[i];
+            if (id >= slotCapacity_ || !slots_[id].translucent) continue;
+            const i32* o = slots_[id].origin;
+            const double half = double(8 << o[3]);
+            translucentSlots_.push_back({{o[0] + half, o[1] + 8.0, o[2] + half}, id});
+        }
     }
-    std::sort(keyed.begin(), keyed.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
-    translucent_.resize(keyed.size());
-    for (size_t i = 0; i < keyed.size(); ++i) translucent_[i] = keyed[i].second;
+    sortedCam_[0] = cam.x, sortedCam_[1] = cam.y, sortedCam_[2] = cam.z;
+    // Far to near: an LSD radix sort on the float bits of the squared distance (positive floats order as their bits,
+    // inverted for far first) over (key << 32 | slot). std::sort took 2.8 ms for the 45k sections of the far terrain.
+    const size_t n = translucentSlots_.size();
+    thread_local std::vector<u64> keyed, scratch;
+    keyed.resize(n), scratch.resize(n);
+    for (size_t i = 0; i < n; ++i) {
+        const TranslucentSlot& t = translucentSlots_[i];
+        const double x = t.center[0] - cam.x, y = t.center[1] - cam.y, z = t.center[2] - cam.z;
+        const float d = float(x * x + y * y + z * z);
+        u32 bits;
+        std::memcpy(&bits, &d, 4);
+        const u32 key = ~bits;
+        keyed[i] = u64(key) << 32 | t.slot;
+    }
+    for (int shift = 32; shift < 64; shift += 11) {
+        u32 start[2048] = {};
+        for (const u64 k : keyed) ++start[(k >> shift) & 2047];
+        u32 sum = 0;
+        for (u32& s : start) sum += std::exchange(s, sum);
+        for (const u64 k : keyed) scratch[start[(k >> shift) & 2047]++] = k;
+        keyed.swap(scratch);
+    }
+    translucent_.resize(n);
+    for (size_t i = 0; i < n; ++i) translucent_[i] = u32(keyed[i]);
 }
 
 void Renderer::render(const CameraState& cam, float viewDistance, const fs::path* screenshot) {
@@ -951,7 +972,9 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     const bool shaded = !packActive && shading_ && shaderPreset_ != ShaderPreset::Off;
     const bool plainAa = !packActive && plainTemporal();  // Shaders Off, anti-aliased / upscaled
     const bool temporal = shaded || plainAa;
-    bool packUi = false;  // a pack with frame generation: UI layer like the built-in pipeline (Packs::frameGenUi)
+    // Frame generation outside the built-in pipeline (a shader pack: Packs::frameGenUi, or Shaders Off): the overlays and
+    // the Hud stage into the pipeline's UI layer, like the built-in pipeline.
+    bool fgUi = false;
     if (!shaded) stats_.passCount = 0;
 
     // Camera-relative matrices: the world is translated by -camera on the GPU in integer
@@ -1160,6 +1183,9 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     std::memcpy(pc.lightmap, fc.lightmap, sizeof(pc.lightmap));
     if (temporal) shading_->fillPassContext(pc, shadeIn);
     if (plainAa) pc.shadowCascades = 0, pc.shadowMask = 0, pc.width = width_, pc.height = height_;
+    // Shaders Off with frame generation: the hand goes into the scene (World stage, own motion vectors), so generated
+    // frames move it with the camera instead of smearing it over the world.
+    pc.handInScene = plainAa && upscalers_->frameGenActive();
     if (!packActive) preparePasses(pc);  // shadow casters: this frame's entity geometry before the shadow maps
     if (shaded) {
         shading_->mark(list_.Get(), "cull");
@@ -1185,8 +1211,8 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
         list_->SetGraphicsRootDescriptorTable(4, srvHeap_->GetGPUDescriptorHandleForHeapStart());
         list_->RSSetViewports(1, &vpRect);
         list_->RSSetScissorRects(1, &scissor);
-        packUi = packs_->frameGenUi();  // frame generation: the overlays and the Hud stage into the pipeline's UI layer
-        if (packUi) {
+        fgUi = packs_->frameGenUi();
+        if (fgUi) {
             transition(shading_->ui_.Get(), D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
             const D3D12_CPU_DESCRIPTOR_HANDLE ui{shading_->rtvHeap_->GetCPUDescriptorHandleForHeapStart().ptr +
                                                  size_t(5) * shading_->rtvStride_};
@@ -1270,7 +1296,17 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
         list_->SetGraphicsRootDescriptorTable(4, srvHeap_->GetGPUDescriptorHandleForHeapStart());
         list_->RSSetViewports(1, &vpRect);
         list_->RSSetScissorRects(1, &scissor);
-        list_->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
+        fgUi = upscalers_->frameGenActive();
+        if (fgUi) {  // frame generation: the overlays and the Hud stage into the UI layer
+            transition(shading_->ui_.Get(), D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+            const D3D12_CPU_DESCRIPTOR_HANDLE ui{shading_->rtvHeap_->GetCPUDescriptorHandleForHeapStart().ptr +
+                                                 size_t(5) * shading_->rtvStride_};
+            const float clear[4] = {0, 0, 0, 0};
+            list_->ClearRenderTargetView(ui, clear, 0, nullptr);
+            list_->OMSetRenderTargets(1, &ui, FALSE, &dsv);
+        } else {
+            list_->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
+        }
     }
     }  // vanilla
 
@@ -1303,13 +1339,13 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
         draw(psoScreenLines_.Get(), D3D_PRIMITIVE_TOPOLOGY_LINELIST,
              put(screenLines_.data(), screenLines_.size() * sizeof(LineVertex)), u32(screenLines_.size()), 1);
     }
-    pc.uiLayer = (shaded || packUi) && !upscalers_->uiComposedBySwapChain();  // we composite it, then AfterUi on top
-    if (!shaded && !packUi) pc.colorRtv = rtv, pc.dsv = dsv;  // Hud passes that draw elsewhere rebind these
+    pc.uiLayer = (shaded || fgUi) && !upscalers_->uiComposedBySwapChain();  // we composite it, then AfterUi on top
+    if (!shaded && !fgUi) pc.colorRtv = rtv, pc.dsv = dsv;  // Hud passes that draw elsewhere rebind these
     pc.sceneColor = bb;
-    pc.uiBlur = (!shaded && !packUi) || pc.uiLayer;  // not when the swap chain composites the layer (FSR FG)
+    pc.uiBlur = (!shaded && !fgUi) || pc.uiLayer;  // not when the swap chain composites the layer (FSR FG)
     runPasses(PassStage::Hud, pc);
-    if (!shaded && !packUi) runPasses(PassStage::AfterUi, pc);
-    if (pc.uiLayer || ((shaded || packUi) && upscalers_->uiComposedBySwapChain())) {
+    if (!shaded && !fgUi) runPasses(PassStage::AfterUi, pc);
+    if (pc.uiLayer || ((shaded || fgUi) && upscalers_->uiComposedBySwapChain())) {
         // BeforeUi: the scene-reading Hud batches onto the final image, under the UI layer
         const D3D12_VIEWPORT v{0, 0, float(bb->GetDesc().Width), float(bb->GetDesc().Height), 0, 1};
         const D3D12_RECT sr{0, 0, LONG(bb->GetDesc().Width), LONG(bb->GetDesc().Height)};
@@ -1321,7 +1357,7 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
         before.colorRtv = rtv, before.uiBlur = pc.uiLayer;
         runPasses(PassStage::BeforeUi, before);
     }
-    if (shaded || packUi) {
+    if (shaded || fgUi) {
         upscalers_->beforeUiComposite(list_.Get(), bb);  // frame generation: keep the hudless image
         if (upscalers_->uiComposedBySwapChain()) {       // FSR FG blends the UI layer itself (real + generated frames)
             D3D12_RESOURCE_BARRIER b{};
@@ -1369,7 +1405,7 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     } else {
         std::memset(stats_.commands, 0, sizeof(stats_.commands));
     }
-    if (shaded || packUi) upscalers_->endFrame(list_.Get(), bb);  // frame generation inputs (tags / prepare pass)
+    if (shaded || fgUi) upscalers_->endFrame(list_.Get(), bb);  // frame generation inputs (tags / prepare pass)
     list_->Close();
     ID3D12CommandList* lists[] = {list_.Get()};
     queue_->ExecuteCommandLists(1, lists);

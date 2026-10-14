@@ -257,8 +257,10 @@ void Upscalers::shutdown() {
 }
 
 FrameGenKind Upscalers::effectiveFrameGen() const {
-    // Frame generation needs the shader pipeline's motion vectors, depth, hudless image and UI layer.
-    if (settings_.shaders == 0 || !caps_.frameGen[int(settings_.frameGen)]) return FrameGenKind::Off;
+    // Frame generation needs the temporal path's motion vectors, depth, hudless image and UI layer: the shader pipeline,
+    // or Shaders Off with anti-aliasing.
+    if ((settings_.shaders == 0 && !settings_.plainAntialiasing) || !caps_.frameGen[int(settings_.frameGen)])
+        return FrameGenKind::Off;
     return settings_.frameGen;
 }
 
