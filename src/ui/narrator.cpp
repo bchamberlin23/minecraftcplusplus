@@ -105,7 +105,7 @@ int volume() {  // Options.getFinalSoundSourceVolume(VOICE)
 bool chatOn(int s) { return s == 1 || s == 2; }    // NarratorStatus.shouldNarrateChat
 bool systemOn(int s) { return s == 1 || s == 3; }  // shouldNarrateSystem
 
-int lastButton = -1;
+int lastButton = -1, lastFocus = -1;
 Screen lastScreen = Screen::None;
 
 }  // namespace
@@ -144,13 +144,40 @@ void system(UiState& s, const Text& message) {
 }
 
 void frame(UiState& s) {
-    // Screen.updateNarratedWidget, simplified: the widget under the mouse when it changes ("Button: label",
-    // its position and how to use it), only with Narrates All / System.
+    // ScreenNarrationCollector, simplified: a screen opening narrates its title and how to use it
+    // (triggerImmediateNarration), then the focused widget (keyboard) or the one under the mouse when it changes
+    // ("Button: label", its position and its usage), only with Narrates All / System.
     if (!systemOn(s.settings.narrator) || !available() || s.screen == Screen::None) {
-        lastButton = -1, lastScreen = s.screen;
+        lastButton = lastFocus = -1, lastScreen = s.screen;
         return;
     }
-    if (s.screen != lastScreen) lastButton = -1, lastScreen = s.screen;
+    if (s.screen != lastScreen) {
+        lastButton = lastFocus = -1, lastScreen = s.screen;
+        std::string title = s.narrationTitle.plain();
+        if (title.empty()) {  // the screens that do not set one: their Screen title
+            if (s.screen == Screen::Options) title = s.res.translate("options.title");
+            else if (s.screen == Screen::Death) title = s.res.translate(s.hardcore ? "deathScreen.title.hardcore" : "deathScreen.title");
+            else if (s.screen == Screen::Inventory) title = s.res.translate("container.crafting");
+            else if (s.screen == Screen::Container) title = s.activeMenu().title.plain();
+        }
+        say((title.empty() ? std::string() : title + ". ") + s.res.translate("narrator.screen.usage"), true);
+        return;
+    }
+    auto narrate = [&](int index, bool focused) {
+        const Button& b = s.buttons[size_t(index)];
+        const std::string label = (b.labelFn ? b.labelFn() : b.label).plain();
+        std::string text = b.slider ? label : formatJava(s.res.translate("narration.button"), {label});
+        if (s.buttons.size() > 1)
+            text += ". " + formatJava(s.res.translate("narrator.position.screen"), {std::to_string(index + 1), std::to_string(s.buttons.size())});
+        const char* usage = b.slider ? (focused ? "narration.slider.usage.focused" : "narration.slider.usage.hovered")
+                                     : (focused ? "narration.button.usage.focused" : "narration.button.usage.hovered");
+        say(text + ". " + s.res.translate(usage), true);
+    };
+    const int focus = s.focusedButton >= 0 && size_t(s.focusedButton) < s.buttons.size() ? s.focusedButton : -1;
+    if (focus != lastFocus) {
+        lastFocus = focus;
+        if (focus >= 0) return narrate(focus, true);
+    }
     int hovered = -1;
     for (size_t i = 0; i < s.buttons.size(); ++i) {
         const Button& b = s.buttons[i];
@@ -158,14 +185,7 @@ void frame(UiState& s) {
     }
     if (hovered == lastButton) return;
     lastButton = hovered;
-    if (hovered < 0) return;
-    const Button& b = s.buttons[size_t(hovered)];
-    const std::string label = (b.labelFn ? b.labelFn() : b.label).plain();
-    std::string text = b.slider ? label : formatJava(s.res.translate("narration.button"), {label});
-    if (s.buttons.size() > 1)
-        text += ". " + formatJava(s.res.translate("narrator.position.screen"), {std::to_string(hovered + 1), std::to_string(s.buttons.size())});
-    text += ". " + s.res.translate(b.slider ? "narration.slider.usage.hovered" : "narration.button.usage.hovered");
-    say(text, true);
+    if (hovered >= 0 && hovered != focus) narrate(hovered, false);
 }
 
 bool hotkey(UiState& s, const Window::InputEvent& e) {

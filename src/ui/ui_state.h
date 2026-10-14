@@ -332,6 +332,7 @@ struct Ui::State {
     // with the arrow keys while sliderEditing (AbstractSliderButton.canChangeValue). -1: none (reset per screen).
     int focusedButton = -1;
     bool sliderEditing = false;
+    Text narrationTitle;  // Screen.getNarrationMessage of the open screen (set by its build; empty: none)
     float mouseX = 0, mouseY = 0;  // GUI coordinates
     bool leftDown = false, rightDown = false;
     // Container interaction (AbstractContainerScreen).

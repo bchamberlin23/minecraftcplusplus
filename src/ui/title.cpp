@@ -534,7 +534,7 @@ void Ui::State::buildFrontEndButtons() {
     f.focus = -1;
     f.onBack = nullptr, f.onEnter = nullptr;
     switch (screen) {
-        case Screen::Title: buildTitle(*this); break;
+        case Screen::Title: buildTitle(*this), narrationTitle = Text(res.translate("narrator.screen.title")); break;
         case Screen::Worlds: buildWorlds(*this); break;
         case Screen::CreateWorld: buildCreateWorld(*this); break;
         case Screen::EditWorld: buildEditWorld(*this); break;

@@ -551,6 +551,7 @@ void Ui::State::creativeSetSlot(int menuSlot, const ItemStack& st) {
 
 void Ui::State::buildButtons() {
     buttons.clear();
+    narrationTitle = Text();
     const int W = canvas ? guiW() : int(window->width()) / std::max(1, guiScale());
     const int H = canvas ? guiH() : int(window->height()) / std::max(1, guiScale());
     auto tr = [&](const char* key) { return Text(res.translate(key)); };
@@ -560,6 +561,7 @@ void Ui::State::buildButtons() {
     if (const ScreenDef* d = screenDef(screen); d && d->build) return d->build(*this);  // modules.h
     if (screen == Screen::Pause && !pauseMenuShown) return;  // F3 + Esc: no buttons
     if (screen == Screen::Pause) {
+        narrationTitle = tr("menu.game");
         Text dialogLabel;  // dialogs.h: custom options / server links
         std::function<void()> openDialog;
         const bool dialogButton = pauseMenuDialogButton(*this, dialogLabel, openDialog);

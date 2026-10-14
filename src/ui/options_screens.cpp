@@ -164,6 +164,7 @@ OptionsList::OptionsList(UiState& s, Text title, Screen back) : s_(s) {
     g = ListState{};
     g.screen = s.screen, g.back = back, g.title = std::move(title), g.scroll = scroll;
     s.buttons.clear();
+    s.narrationTitle = g.title;
 }
 
 void OptionsList::subtitle(Text text, u32 color) { g.subtitle = std::move(text), g.subtitleColor = color; }
