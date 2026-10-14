@@ -327,3 +327,19 @@ CPU (~0.55 ms) and GPU (~0.68 ms) roughly balanced (`--profile` prints the main 
   distant lighting still differs a little where full detail takes over.
 - Frame generation with Shaders Off is untested in headless runs (DLSS-G presents no generated frames for a background
   window, with or without shaders): test it in a focused window.
+- October 14 performance pass (Hills world, `--cam 0,110,0,180,10`, 1080p, DLSS native; `prof.sh`-style runs with a
+  script so the viewer does not pause): Shaders Off 799 fps, High 356 -> 493, Ultra 306 -> 413, path traced 115 -> 140.
+  - Section occlusion graph (Java's SectionOcclusionGraph / VisGraph): meshes record their face-to-face visibility, a
+    background search from the camera's section (Terrain::updateOcclusion) culls unreachable full-detail sections
+    (caves); g-buffer 1.02 -> 0.53 ms. MCPP_GRAPH_PROFILE=1 logs each search. Shadows do not use it (hidden sections
+    still cast shadows).
+  - Shadow cascades 1..3 at most 120 / 60 / 30 Hz; with path tracing the stalest one only, 60 / 30 Hz (they only light
+    translucent surfaces and the volumetrics inside the traced radius). Traced water skips the reflection ray below 4 %
+    Fresnel.
+  - The translucent sort keeps its member list as slots enter / leave the cut (it scanned the 100k-slot cut every time
+    the cut changed: 0.47 ms a frame while the far terrain streams in).
+  - Tried and reverted: instanced chunk draws of the terrain (one draw per pass, per-direction ranges): slower (g-buffer
+    1.0 -> 1.46..1.7 ms); per-direction shadow caster ranges: no gain. --profile's per-pass GPU times are now means by
+    pass name (passes that skip frames used to shift the columns).
+  - Left: DLSS / Ray Reconstruction at native (0.53 / 3.0 ms) is the user's quality choice; the path tracer itself is
+    ~2 ms for ~6 rays a pixel.
