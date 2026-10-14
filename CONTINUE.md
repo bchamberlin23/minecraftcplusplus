@@ -213,7 +213,8 @@ game profile); the Online screen's Friends section has only In-Game Notification
   lore, (stored) enchantments, custom data, potion contents with custom effects, writable / written book contents
   and bundle / charged projectile / container item lists, fireworks, banner patterns, base colours, trims, stew
   effects, pot decorations, block states, instruments, lodestone trackers, custom model data, tooltip display, note
-  block sounds, bucket / entity / block entity data, attribute modifiers, profiles, food, use cooldowns and weapons
+  block sounds, bucket / entity / block entity data, bees, attribute modifiers, profiles, food, use cooldowns, weapons, painting
+  variants, item models, tooltip styles, enchantability, dyes, waxing, minimum attack charge and potion duration scale
   (verified: no resync after clicks); the other gameplay components set by commands (tool, consumable, equippable...)
   still send 0 and the server resyncs that slot.
 

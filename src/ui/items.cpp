@@ -822,7 +822,7 @@ bool Items::componentHash(const ItemStack::Component& c, u32& out) const {
         out = hInt(r.i32v());
     else if (n == "enchantment_glint_override")
         out = hBool(r.boolean());
-    else if (n == "unbreakable" || n == "creative_slot_lock" || n == "glider" || n == "intangible_projectile")
+    else if (n == "unbreakable" || n == "creative_slot_lock" || n == "glider" || n == "intangible_projectile" || n == "waxed")
         out = crc32c({2, 3});  // Unit: an empty map
     else if (n == "rarity") {
         static const char* kRarity[] = {"common", "uncommon", "rare", "epic"};
@@ -880,6 +880,42 @@ bool Items::componentHash(const ItemStack::Component& c, u32& out) const {
         if (!effects.empty()) kv.emplace_back(hString("custom_effects"), hList(effects));
         if (r.boolean()) kv.emplace_back(hString("custom_name"), hString(std::string(r.str())));
         out = hMap(std::move(kv));
+    } else if (n == "item_model" || n == "tooltip_style") {  // Identifier
+        out = hString(std::string(r.str()));
+    } else if (n == "minimum_attack_charge" || n == "potion_duration_scale") {  // a float
+        const float f = r.f32();
+        u32 bits;
+        std::memcpy(&bits, &f, 4);
+        out = hTagged(10, bits, 4);
+    } else if (n == "enchantable") {  // {value}
+        out = hMap({{hString("value"), hInt(r.varInt())}});
+    } else if (n == "dye") {  // DyeColor by name
+        const i32 id = r.varInt();
+        if (id < 0 || id > 15) return false;
+        out = hString(kDyeNames[id]);
+    } else if (n == "painting/variant") {  // a registry reference (inline variants: not reproduced)
+        const i32 holder = r.varInt();
+        if (holder <= 0 || size_t(holder - 1) >= paintings_.size()) return false;
+        out = hString(paintings_[size_t(holder - 1)].id);
+    } else if (n == "bees") {  // [{entity_data (TypedEntityData), ticks_in_hive, min_ticks_in_hive}]
+        std::vector<u32> bees;
+        const i32 cnt = r.varInt();
+        for (i32 i = 0; i < cnt && r.ok; ++i) {
+            const std::string& type = registryName("minecraft:entity_type", r.varInt());
+            NbtValue v;
+            if (type.empty() || !textNbt(v) || v.type != TagCompound) return false;
+            NbtValue id = NbtValue::make(TagString);
+            id.s = type;
+            bool put = false;
+            for (size_t k = 0; k < v.names.size(); ++k)
+                if (v.names[k] == "id") v.items[k] = id, put = true;
+            if (!put) v.names.push_back("id"), v.items.push_back(id);
+            const i32 ticks = r.varInt(), minTicks = r.varInt();
+            bees.push_back(hMap({{hString("entity_data"), hNbt(v, "", false)},
+                                 {hString("ticks_in_hive"), hInt(ticks)},
+                                 {hString("min_ticks_in_hive"), hInt(minTicks)}}));
+        }
+        out = hList(bees);
     } else if (n == "food" || n == "use_cooldown" || n == "weapon") {
         auto hFloat = [](float f) {
             u32 bits;
