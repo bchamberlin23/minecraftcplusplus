@@ -17,6 +17,7 @@
 #include "ui/gameplay_hud.h"
 #include "ui/narrator.h"
 #include "ui/options_list.h"
+#include "ui/toasts.h"
 #include "ui/mp_hud.h"
 #include "ui/ui_state.h"
 #include "world/terrain.h"
@@ -756,6 +757,16 @@ Ui::~Ui() = default;
 Settings& Ui::settings() { return s_->settings; }
 bool Ui::quitRequested() const { return s_->quit; }
 void Ui::setServerSaving(bool saving) { s_->serverSaving = saving; }
+void Ui::chunkStorageToast(int kind, int x, int z) {  // SystemToast.onChunkLoadFailure / onChunkSaveFailure / onLowDiskSpace
+    const Resources& res = s_->res;
+    if (kind == 2) {
+        showToast(Text(res.translate("chunk.toast.lowDiskSpace")), Text(res.translate("chunk.toast.lowDiskSpace.description")), {}, 10.0);
+        return;
+    }
+    const std::string pos = "[" + std::to_string(x) + ", " + std::to_string(z) + "]";  // ChunkPos.toString
+    showToast(translatable(kind == 0 ? "chunk.toast.loadFailure" : "chunk.toast.saveFailure", {Text(pos)}, s_->lang(), colorStyle(0xFF5555)),
+              Text(res.translate("chunk.toast.checkLog")));
+}
 void Ui::showServerFailure(bool datapacks, bool safeMode, std::function<void()> safeModeFn) {
     serverFailure(*s_, datapacks, safeMode, std::move(safeModeFn));
 }

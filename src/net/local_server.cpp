@@ -743,6 +743,11 @@ bool LocalServer::start(const Config& config) {
     return true;
 }
 
+std::vector<LocalServer::StorageEvent> LocalServer::takeStorageEvents() {
+    std::lock_guard lock(storageMutex_);
+    return std::exchange(storageEvents_, {});
+}
+
 void LocalServer::readOutput() {
     std::string pending;
     char buf[4096];
@@ -759,6 +764,19 @@ void LocalServer::readOutput() {
                 saving_ = true;
             else if (line.find("]: Autosave finished") != std::string::npos || line.find("]: Saved the game") != std::string::npos)
                 saving_ = false;
+            for (const auto& [text, kind] : {std::pair{"]: Failed to load chunk ", StorageEvent::LoadFailure},
+                                             std::pair{"]: Failed to save chunk ", StorageEvent::SaveFailure}}) {
+                const size_t at = line.find(text);
+                int x = 0, z = 0;
+                if (at != std::string::npos && std::sscanf(line.c_str() + at + std::strlen(text), "%d,%d", &x, &z) == 2) {
+                    std::lock_guard lock(storageMutex_);
+                    storageEvents_.push_back({kind, x, z});
+                }
+            }
+            if (line.find("]: Low disk space! Might not be able to save the world.") != std::string::npos) {
+                std::lock_guard lock(storageMutex_);
+                storageEvents_.push_back({StorageEvent::LowDiskSpace});
+            }
             if (line.find("Failed to load datapacks") != std::string::npos ||  // Main: the server gives up
                 line.find("Failed to load level data or datapacks") != std::string::npos) {
                 datapackFailed_ = true;

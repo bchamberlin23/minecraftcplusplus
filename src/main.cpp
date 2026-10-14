@@ -1474,6 +1474,8 @@ int wmain(int argc, wchar_t** argv) {
         if (haveReports) packs::updatePlayer(renderer, ui, game.selectedSlot(), reports, registry);  // held light
         renderer.upscalers().setMenuActive(ui.menuOpen());  // frame generation pauses in menus
         ui.setServerSaving(localServer && localServer->saving());
+        if (localServer)
+            for (const LocalServer::StorageEvent& ev : localServer->takeStorageEvents()) ui.chunkStorageToast(int(ev.kind), ev.x, ev.z);
         {  // FramerateLimitTracker.getThrottleReason: minimized 10, AFK (the Inactivity FPS Limit option) 30 after a
            // minute and 10 after ten, menus without a level 60
             const u64 afkMs = GetTickCount64() - window.lastInputMs();

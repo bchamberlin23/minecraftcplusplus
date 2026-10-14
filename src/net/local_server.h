@@ -59,6 +59,13 @@ public:
     bool upgrading() const { return upgrading_; }  // the world is being converted to this version first
     bool creating() const { return creating_; }    // the server is creating the world (Config::create)
     bool datapackFailed() const { return datapackFailed_; }  // it stopped: the world's datapacks did not load
+    // Chunk storage problems the server logged (MinecraftServer.reportChunkLoadFailure / reportChunkSaveFailure,
+    // sendLowDiskSpaceWarning): the integrated server's SystemToasts.
+    struct StorageEvent {
+        enum Kind { LoadFailure, SaveFailure, LowDiskSpace } kind;
+        int x = 0, z = 0;
+    };
+    std::vector<StorageEvent> takeStorageEvents();
     bool safeMode() const { return config_.safeMode; }
     // --forceUpgrade: the upgrader's last status line and percentage (-1 until it reports one).
     std::string upgradeStatus() const;
@@ -101,6 +108,8 @@ private:
     HANDLE process_ = nullptr, job_ = nullptr, stdinWrite_ = nullptr, stdoutRead_ = nullptr;
     std::thread reader_;
     std::atomic<bool> ready_{false}, failed_{false}, opJoiners_{false}, saving_{false}, datapackFailed_{false};
+    std::mutex storageMutex_;
+    std::vector<StorageEvent> storageEvents_;
     std::atomic<int> upgradePercent_{-1};
     std::atomic<int> upgradeDone_{-1}, upgradeTotal_{-1};
     mutable std::mutex statusMutex_;

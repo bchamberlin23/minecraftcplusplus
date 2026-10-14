@@ -245,6 +245,9 @@ public:
     void showSaving();
     void startTitle(void* gate = nullptr);  // gate: launch::Child::start
     void setServerSaving(bool saving);  // the local server is saving (the autosave indicator)
+    // IntegratedServer.reportChunkLoadFailure / reportChunkSaveFailure / sendLowDiskSpaceWarning: kind 0 load, 1 save
+    // (the chunk at x, z), 2 low disk space.
+    void chunkStorageToast(int kind, int x, int z);
     // The local server stopped while starting: DatapackLoadFailureScreen (its Safe Mode calls safeModeFn), the safe
     // mode's failure alert, or an error message; each leaves for the world list.
     void showServerFailure(bool datapacks, bool safeMode, std::function<void()> safeModeFn);
