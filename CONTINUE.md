@@ -225,6 +225,10 @@ game profile); the Online screen's Friends section has only In-Game Notification
 
 - **Block rendering, approximations**: face occlusion shapes come from collision boxes (fluid faces against partial
   blocks; model faces against partial neighbours still cull only on full cubes, not Block.shouldRenderFace's shapes).
+- **Keyboard focus**: Tab / arrows / Enter / Space navigate the buttons of the option lists (and their drop-downs),
+  the pause, death and button-only front-end screens, with the focus highlight and slider editing; the other screens
+  (containers, books, editors, the world / server lists' own keys) keep only their own keys, and a focused widget's
+  tooltip does not show without the mouse (BelowOrAboveWidgetTooltipPositioner).
 - **Audit leftovers (2026-10-13)**: remote entities are not pushed by client-side pistons (Entity.move(PISTON) and its applyPredictedMovement), passengers are placed at render time; keyboard-focused widget tooltips (BelowOrAboveWidgetTooltipPositioner) and the widget tooltips of the other screens' own widgets (recipe book buttons, server / world list buttons) still use the mouse positioner; the chat's MODIFIED tag and RestrictionsScreen. (Minecarts under minecart_improvements: NO_OP interpolation, untested without an experimental world.)
 - **VIS-06 residual**: glowing outlines under a shader pack (entities go through the pack's gbuffers there).
 - Test instance blocks: optional tests' failure beam is red, not orange (the test registry is not sent to clients);

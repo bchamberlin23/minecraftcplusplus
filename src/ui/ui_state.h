@@ -328,6 +328,10 @@ struct Ui::State {
     Screen screen = Screen::None;
     std::vector<Button> buttons;
     int draggingSlider = -1;
+    // Widget focus (ContainerEventHandler): a clicked or navigated-to button stays highlighted; a focused slider moves
+    // with the arrow keys while sliderEditing (AbstractSliderButton.canChangeValue). -1: none (reset per screen).
+    int focusedButton = -1;
+    bool sliderEditing = false;
     float mouseX = 0, mouseY = 0;  // GUI coordinates
     bool leftDown = false, rightDown = false;
     // Container interaction (AbstractContainerScreen).
@@ -436,6 +440,9 @@ struct Ui::State {
     void drawButton(Canvas& c, size_t i, bool hoverable = true);
     // Clicks on buttons [first, last) (an options list takes the clicks inside it, the rest outside).
     bool buttonsInput(const Window::InputEvent& e, size_t first = 0, size_t last = SIZE_MAX);
+    // Screen.keyPressed's focus navigation over buttons [first, last): Tab / Shift+Tab (wrapping), the arrow keys
+    // (the nearest button that way), Enter / Space pressing the focused one (a slider: editing on / off).
+    bool buttonsNavigate(const Window::InputEvent& e, size_t first = 0, size_t last = SIZE_MAX);
     Menu& activeMenu() { return container ? *container : inventory; }
     void containerClick(int slot, int button, int input);  // simulates locally and sends container_click
     void creativeSetSlot(int menuSlot, const ItemStack& s);

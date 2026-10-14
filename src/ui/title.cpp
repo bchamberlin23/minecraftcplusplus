@@ -572,6 +572,10 @@ void Ui::State::frontEndInput(const Window::InputEvent& e) {
         if (auto fn = f.onBack) fn();
         return;
     }
+    // Focus navigation on the screens of buttons only (the lists and the screens with text fields keep their keys);
+    // Enter presses a focused button before the screen's default action.
+    const bool lists = screen == Screen::Worlds || screen == Screen::Servers || screen == Screen::CreateWorld || screen == Screen::EditWorld;
+    if (!lists && f.fields.empty() && buttonsNavigate(e)) return;
     if (e.type == E::Key && e.down && e.code == VK_RETURN) {
         if (auto fn = f.onEnter) fn();
         return;

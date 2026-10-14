@@ -523,7 +523,7 @@ int Ui::State::guiScale() const {
 
 void Ui::State::openScreen(Screen s) {
     const bool wasNone = screen == Screen::None;
-    if (screen != s) ++screenOpens, lastClickSlot = -2, lastClickTime = -1;  // a double click is per screen (MouseHandler)
+    if (screen != s) ++screenOpens, lastClickSlot = -2, lastClickTime = -1, focusedButton = -1, sliderEditing = false;  // per screen
     dragField = nullptr;
     if (screen == Screen::Video && s != Screen::Video) window->changeFullscreenVideoMode();  // VideoSettingsScreen.onClose
     if (screen == Screen::Chat && s != Screen::Chat) leaveChat();

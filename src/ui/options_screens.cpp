@@ -39,7 +39,8 @@ struct ListState {
         std::vector<Choice> choices;
         int selected = -1;
         std::function<void(int)> pick;
-        int first = 0;  // the first visible choice (a long list scrolls)
+        int first = 0;   // the first visible choice (a long list scrolls)
+        int cursor = -1;  // the choice the arrow keys are on
     } drop;
 };
 ListState g;
@@ -90,7 +91,7 @@ void drawDropdown(UiState& s, Canvas& c) {
         const int i = g.drop.first + k;
         const Choice& ch = g.drop.choices[size_t(i)];
         const float y = r.y + 1 + float(k) * kDropRowH;
-        if (s.mouseX >= r.x && s.mouseX < r.x + r.w && s.mouseY >= y && s.mouseY < y + kDropRowH) {
+        if ((s.mouseX >= r.x && s.mouseX < r.x + r.w && s.mouseY >= y && s.mouseY < y + kDropRowH) || i == g.drop.cursor) {
             hovered = i;
             if (ch.active) c.fill(r.x, y, r.x + r.w, y + kDropRowH, 0xFF505050);
             s.requestCursor(ch.active ? UiState::CursorPointingHand : UiState::CursorNotAllowed);
@@ -115,6 +116,21 @@ void dropdownInput(UiState& s, const Window::InputEvent& e) {
     const int n = int(g.drop.choices.size());
     if (e.type == E::Key && e.down && e.code == VK_ESCAPE) {
         g.drop = {};
+    } else if (e.type == E::Key && e.down && (e.code == VK_UP || e.code == VK_DOWN)) {
+        int i = g.drop.cursor < 0 ? g.drop.selected : g.drop.cursor;
+        for (int k = 0; k < n; ++k) {  // the next available choice
+            i = std::clamp(i + (e.code == VK_UP ? -1 : 1), 0, n - 1);
+            if (g.drop.choices[size_t(i)].active) break;
+        }
+        g.drop.cursor = i;
+        g.drop.first = std::clamp(g.drop.first, i - r.rows + 1, i);
+    } else if (e.type == E::Key && e.down && (e.code == VK_RETURN || e.code == VK_SPACE) && g.drop.cursor >= 0) {
+        const int i = g.drop.cursor;
+        if (!g.drop.choices[size_t(i)].active) return;
+        const auto pick = std::move(g.drop.pick);
+        g.drop = {};
+        audio::playUiClick();
+        pick(i);
     } else if (e.type == E::Wheel) {
         g.drop.first = std::clamp(g.drop.first - (e.code > 0 ? 1 : e.code < 0 ? -1 : 0), 0, std::max(0, n - r.rows));
     } else if (e.type == E::Button && e.down) {
@@ -315,6 +331,15 @@ void optionsListInput(UiState& s, const Window::InputEvent& e) {
     layout(s);
     if (dropOpen(s)) return dropdownInput(s, e);
     if (e.type == E::Key && e.down && e.code == VK_ESCAPE) return optionsListBack(s);
+    if (s.buttonsNavigate(e)) {  // the focused list row scrolled into view (AbstractSelectionList.ensureVisible)
+        if (s.focusedButton >= 0 && size_t(s.focusedButton) < g.rowY.size()) {
+            const float y = origin() + g.rowY[size_t(s.focusedButton)], top = listTop(), bottom = listBottom(s);
+            if (y < top) g.scroll -= top - y + 2;
+            else if (y + 20 > bottom) g.scroll += y + 20 - bottom + 2;
+            layout(s);
+        }
+        return;
+    }
     const float top = listTop(), bottom = listBottom(s);
     if (e.type == E::Wheel && s.screen == Screen::Video && s.window->keyDown(VK_CONTROL)) {
         // VideoSettingsScreen.mouseScrolled with Control: the GUI scale steps (Auto counting as the largest + 1), not
@@ -368,9 +393,10 @@ Button choiceButton(UiState& s, std::function<Text()> label, std::function<std::
                     std::function<int()> selected, std::function<void(int)> pick, std::function<Text()> tooltip) {
     Button b = cycleButton(std::move(label), {}, std::move(tooltip));
     b.onPress = [p = &s, choices = std::move(choices), selected = std::move(selected), pick = std::move(pick)] {
-        for (size_t i = 0; i < g.rowY.size() && i < p->buttons.size(); ++i) {  // the list widget clicked
+        for (size_t i = 0; i < g.rowY.size() && i < p->buttons.size(); ++i) {  // the list widget clicked (or focused)
             const Button& w = p->buttons[i];
-            if (p->mouseX < w.x || p->mouseY < w.y || p->mouseX >= w.x + w.w || p->mouseY >= w.y + w.h) continue;
+            const bool under = p->mouseX >= w.x && p->mouseY >= w.y && p->mouseX < w.x + w.w && p->mouseY < w.y + w.h;
+            if (!under && int(i) != p->focusedButton) continue;
             g.drop = {};
             g.drop.button = i, g.drop.choices = choices(), g.drop.selected = selected(), g.drop.pick = pick;
             const int rows = dropRect(*p).rows;  // the current choice in view

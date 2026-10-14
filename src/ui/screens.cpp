@@ -689,13 +689,15 @@ void Ui::State::drawButton(Canvas& c, size_t i, bool hoverable) {
     const bool hover = hoverable && mouseX >= b.x && mouseY >= b.y && mouseX < b.x + b.w && mouseY < b.y + b.h;
     if (hover)  // AbstractWidget / AbstractSliderButton.handleCursor
         requestCursor(!b.active ? CursorNotAllowed : b.slider && draggingSlider == int(i) ? CursorResizeEW : CursorPointingHand);
-    if (b.slider) {  // AbstractSliderButton: the handle lights up under the mouse (an inactive one never)
-        blitSprite(c, sprites.sprite("widget/slider"), b.x, b.y, b.w, b.h);
+    const bool focused = int(i) == focusedButton && b.active;  // AbstractWidget.isHoveredOrFocused
+    if (b.slider) {  // AbstractSliderButton: the handle lights up under the mouse or while editing (an inactive one never)
+        const bool editing = focused && sliderEditing;
+        blitSprite(c, sprites.sprite(focused && !editing ? "widget/slider_highlighted" : "widget/slider"), b.x, b.y, b.w, b.h);
         const float hx = b.x + float(int(b.value * (b.w - 8)));
-        const bool lit = b.active && (hover || draggingSlider == int(i));
+        const bool lit = b.active && (hover || draggingSlider == int(i) || editing);
         blitSprite(c, sprites.sprite(lit ? "widget/slider_handle_highlighted" : "widget/slider_handle"), hx, b.y, 8, 20);
     } else {
-        const char* sp = !b.active ? "widget/button_disabled" : hover ? "widget/button_highlighted" : "widget/button";
+        const char* sp = !b.active ? "widget/button_disabled" : hover || focused ? "widget/button_highlighted" : "widget/button";
         blitSprite(c, sprites.sprite(sp), b.x, b.y, b.w, b.h);
     }
     const Text label = b.labelFn ? b.labelFn() : b.label;
@@ -727,6 +729,7 @@ bool Ui::State::buttonsInput(const Window::InputEvent& e, size_t first, size_t l
     for (size_t i = first; i < buttons.size() && i < last; ++i) {
         Button& b = buttons[i];
         if (!b.active || mouseX < b.x || mouseY < b.y || mouseX >= b.x + b.w || mouseY >= b.y + b.h) continue;
+        focusedButton = int(i), sliderEditing = b.slider;  // the clicked widget takes the focus (a slider: editing)
         if (b.slider) {
             draggingSlider = int(i);
             b.value = std::clamp((mouseX - (b.x + 4)) / (b.w - 8), 0.f, 1.f);
@@ -739,6 +742,70 @@ bool Ui::State::buttonsInput(const Window::InputEvent& e, size_t first, size_t l
         return true;
     }
     return false;
+}
+
+bool Ui::State::buttonsNavigate(const Window::InputEvent& e, size_t first, size_t last) {
+    using E = Window::InputEvent;
+    if (e.type != E::Key || !e.down) return false;
+    last = std::min(last, buttons.size());
+    if (first >= last) return false;
+    auto usable = [&](int i) {
+        return i >= int(first) && i < int(last) && buttons[size_t(i)].active && (buttons[size_t(i)].onPress || buttons[size_t(i)].slider);
+    };
+    const bool focused = usable(focusedButton);
+    if (focused && (e.code == VK_RETURN || e.code == VK_SPACE)) {  // KeyEvent.isSelection
+        Button& b = buttons[size_t(focusedButton)];
+        if (b.slider) {
+            sliderEditing = !sliderEditing;
+            if (!sliderEditing) settings.save();
+            return true;
+        }
+        audio::playUiClick();
+        auto fn = b.onPress;  // may rebuild the button list
+        fn();
+        return true;
+    }
+    if (focused && sliderEditing && buttons[size_t(focusedButton)].slider && (e.code == VK_LEFT || e.code == VK_RIGHT)) {
+        Button& b = buttons[size_t(focusedButton)];
+        b.value = std::clamp(b.value + (e.code == VK_LEFT ? -1.0f : 1.0f) / (b.w - 8), 0.0f, 1.0f);
+        if (b.onSlide) b.onSlide(b.value);
+        return true;
+    }
+    int next = -1;
+    const int n = int(last - first);
+    if (e.code == VK_TAB) {  // TabNavigation: the next in order, wrapping
+        const bool back = window->keyDown(VK_SHIFT);
+        const int start = focused ? focusedButton : back ? int(last) : int(first) - 1;
+        for (int k = 1; k <= n && next < 0; ++k) {
+            const int i = int(first) + (((start + (back ? -k : k)) - int(first)) % n + n) % n;
+            if (usable(i)) next = i;
+        }
+    } else if (e.code == VK_LEFT || e.code == VK_RIGHT || e.code == VK_UP || e.code == VK_DOWN) {
+        if (!focused) {
+            for (int i = int(first); i < int(last) && next < 0; ++i)
+                if (usable(i)) next = i;
+        } else {  // ArrowNavigation: the nearest button that way, those overlapping it across first
+            const Button& c = buttons[size_t(focusedButton)];
+            const bool horizontal = e.code == VK_LEFT || e.code == VK_RIGHT, positive = e.code == VK_RIGHT || e.code == VK_DOWN;
+            float best[3] = {2, 1e9f, 1e9f};
+            for (int i = int(first); i < int(last); ++i) {
+                if (i == focusedButton || !usable(i)) continue;
+                const Button& b = buttons[size_t(i)];
+                const float gap = horizontal ? (positive ? b.x - (c.x + c.w) : c.x - (b.x + b.w)) : (positive ? b.y - (c.y + c.h) : c.y - (b.y + b.h));
+                if (gap < -0.5f) continue;  // not that way
+                const float lo = horizontal ? std::max(b.y, c.y) : std::max(b.x, c.x), hi = horizontal ? std::min(b.y + b.h, c.y + c.h) : std::min(b.x + b.w, c.x + c.w);
+                const float across = horizontal ? std::abs((b.y + b.h / 2) - (c.y + c.h / 2)) : std::abs((b.x + b.w / 2) - (c.x + c.w / 2));
+                const float score[3] = {hi > lo ? 0.0f : 1.0f, gap, across};
+                if (std::lexicographical_compare(score, score + 3, best, best + 3)) std::copy(score, score + 3, best), next = i;
+            }
+        }
+    } else {
+        return false;
+    }
+    if (next < 0) return false;
+    focusedButton = next;
+    sliderEditing = buttons[size_t(next)].slider && e.code == VK_TAB;  // AbstractSliderButton.setFocused
+    return true;
 }
 
 // --- screen drawing ------------------------------------------------------------------------------------------
@@ -1010,6 +1077,7 @@ void Ui::State::screenInput(const Window::InputEvent& e) {
             openConfirmLink(*this, st.events->clickValue, Screen::Death, false);
             return;
         }
+        if (buttonsNavigate(e)) return;
         buttonsInput(e);
         return;
     }
@@ -1018,6 +1086,7 @@ void Ui::State::screenInput(const Window::InputEvent& e) {
     if (frontEndScreen()) return frontEndInput(e);     // title.cpp
     if (screen == Screen::Pause) {
         if (e.type == E::Key && e.down && e.code == VK_ESCAPE) return closeScreen();
+        if (buttonsNavigate(e)) return;
         buttonsInput(e);
         return;
     }
