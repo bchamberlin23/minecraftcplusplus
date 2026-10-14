@@ -123,13 +123,18 @@ void Ui::State::drawEffectsInInventory(Canvas& c, Screen self, int leftPos, int 
 // --- per tick -----------------------------------------------------------------------------------------------
 
 void Ui::State::tickHud() {
-    ++guiTicks;
-    for (int& p : popTime)  // ItemStack.inventoryTick
-        if (p > 0) --p;
-    lastAutosaveIndicator = autosaveIndicator;
+    lastAutosaveIndicator = autosaveIndicator;  // Hud.tick(pause): the autosave indicator always, the rest unpaused
     autosaveIndicator += 0.2f * ((serverSaving ? 1.0f : 0.0f) - autosaveIndicator);
     if (screen == Screen::Pause && rendersNowPlayingToast()) tickNowPlayingNotes(*this);  // PauseScreen.tick
     tickChat();
+    if (paused) {
+        for (const UiModule& m : uiModules())
+            if (m.tick) m.tick(*this);
+        return;
+    }
+    ++guiTicks;
+    for (int& p : popTime)  // ItemStack.inventoryTick
+        if (p > 0) --p;
     for (auto& [id, e] : effects)
         if (e.duration > 0) --e.duration;
     if (actionbarTime > 0) --actionbarTime;

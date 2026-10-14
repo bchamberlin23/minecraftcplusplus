@@ -184,7 +184,8 @@ berry bushes, cave vines, vaults, shelves and lecterns; not modelled: the shelf'
 signs' waxed / applicator swing, the shovel's durability on a campfire. Client projectiles: arrows, throwables,
 fireworks, TNT, eyes of ender, shulker bullets, llama spit and fishing hooks (flying / hooked / bobbing, the bite
 dip) follow their own client tick. Container clicks audited (PICKUP / QUICK_CRAFT / PICKUP_ALL / SWAP / CLONE / THROW
-match); not modelled: dropping a crafting result or remainder that does not fit a full inventory. The allay's give / take / duplicate is predicted
+match); not modelled: dropping a crafting result or remainder that does not fit a full inventory. Camera: a
+spectated entity gets no hurt tilt / bob and FOV 1 (Java uses its own state; the entity view does not carry it). The allay's give / take / duplicate is predicted
 (its hand and the player's stack). Residual: wolf armour repair. Not ported:
 filtered sign text (needs the account's profanity filter flag). The bell's raider particles (showBellParticles) are
 invisible in 26.3 (ColorParticleOption.create(ENTITY_EFFECT, 0xFED839 + 5i) has alpha 0, which SpellParticle keeps),

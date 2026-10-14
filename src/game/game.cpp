@@ -528,7 +528,7 @@ void Game::tickCameraFeedback() {
     if (riding()) {
         bob = 0;
     } else {
-        const float tBob = player_.onGround && !dead && !player_.swimming && !player_.flying
+        const float tBob = player_.onGround && !dead && !player_.swimming  // (flying on the ground bobs too)
                                ? std::min(0.1f, float(std::sqrt(player_.vel[0] * player_.vel[0] + player_.vel[2] * player_.vel[2])))
                                : 0.0f;
         bob += (tBob - bob) * 0.4f;

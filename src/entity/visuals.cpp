@@ -1683,8 +1683,8 @@ void Visuals::Impl::tickLocal() {
     walkDistO = walkDist;
     walkDist += float(dist) * 0.6f;  // LocalPlayer.move: addWalkedDistance, on the ground or not
     bobO = bob;
-    // AbstractClientPlayer.updateBob: on the ground and not swimming, the horizontal velocity
-    const float tBob = p.onGround && !p.swimming ? std::min(0.1f, float(std::sqrt(p.vel[0] * p.vel[0] + p.vel[2] * p.vel[2]))) : 0.0f;
+    // AbstractClientPlayer.updateBob: on the ground, alive and not swimming, the horizontal velocity
+    const float tBob = p.onGround && !p.swimming && !game->dead ? std::min(0.1f, float(std::sqrt(p.vel[0] * p.vel[0] + p.vel[2] * p.vel[2]))) : 0.0f;
     bob += (tBob - bob) * 0.4f;
     // FirstPersonHandsAndItems.tick.
     int selected = game->selectedSlot();

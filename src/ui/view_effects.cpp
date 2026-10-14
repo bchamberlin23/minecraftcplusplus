@@ -253,6 +253,7 @@ void drawEffectOverlays(Ui::State& s, Canvas& c, bool scoping) {
     // item's equippable component belongs in that slot and has a camera overlay (the carved pumpkin's misc/pumpkinblur).
     if (s.game->cameraMode == 0 && !scoping && s.inventory.slots.size() > 45) {
         static const std::pair<int, int> kSlots[6] = {{0, -1}, {5, 45}, {1, 8}, {2, 7}, {3, 6}, {4, 5}};  // slot id, menu slot
+        // (BODY and SADDLE: the player wears nothing there)
         for (const auto& [slotId, menu] : kSlots) {
             const ItemStack& st = s.inventory.slots[size_t(menu < 0 ? 36 + s.game->selectedSlot() : menu)];
             if (st.empty()) continue;

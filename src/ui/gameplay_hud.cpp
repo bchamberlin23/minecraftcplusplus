@@ -33,8 +33,11 @@ void drawCameraOverlays(Ui::State& s, Canvas& c) {
 // nears the world border (or a moving border's reach within its warning time).
 static void drawVignette(Ui::State& s, Canvas& c) {
     const WorldBorder& b = s.game->border;
+    // getCameraEntity: the player, or the spectated entity (where the camera is)
+    const CameraState cam = s.game->camera();
     const Player& p = s.game->player();
-    const float dist = float(b.distanceToBorder(p.pos[0], p.pos[2]));
+    const bool other = s.game->cameraEntity >= 0;
+    const float dist = float(b.distanceToBorder(other ? cam.x : p.pos[0], other ? cam.z : p.pos[2]));
     const double moving = std::min(b.lerpSpeed() * b.warningTime, std::abs(b.lerpTarget() - b.size()));
     const double warning = std::max(double(b.warningBlocks), moving);
     const float strength = dist < warning ? std::clamp(1.0f - float(dist / warning), 0.0f, 1.0f) : 0.0f;
