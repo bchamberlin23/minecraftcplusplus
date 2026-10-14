@@ -40,6 +40,16 @@ public:
     // gives that entity's eye position and view rotation at the partial tick (false: unknown, the player's view).
     int cameraEntity = -1;
     std::function<bool(int id, CameraState& out)> entityView;
+    // The spectated entity's side of Camera.extractRenderState / tick / tickFov (gameplay.cpp): its eye height (eased
+    // here like ours), bobHurt's state for living entities, bobView's and the FOV modifier for players.
+    struct EntityCamera {
+        float eyeHeight = 1.62f;
+        bool living = false, player = false, dead = false, scoping = false;
+        int hurtTime = 0, hurtDuration = 10, deathTime = 0;
+        float walkDist = 0, walkDistO = 0, bob = 0, bobO = 0;
+        float fovModifier = 1.0f;  // AbstractClientPlayer.getFieldOfViewModifier before the FOV Effects scale
+    };
+    std::function<bool(int id, EntityCamera& out)> entityCamera;
     // The player's arm swings (attack press, block broken / placed): drives the hand animation. hand: 0 main, 1 off;
     // type: the item's SwingAnimationType (0 none, 1 whack, 2 stab).
     std::function<void(int hand, int type)> onSwing;
@@ -344,7 +354,9 @@ private:
     Lighting lighting_;
     Player player_;
     double tickAccumulator_ = 0, alpha_ = 0;
-    double eyeHeight_ = 1.62, eyeHeightOld_ = 1.62;  // Camera.tick: the eye height eases to the pose's
+    double eyeHeight_ = 1.62, eyeHeightOld_ = 1.62;
+    double cameraEye_ = 0, cameraEyeOld_ = 0;  // the same for the spectated entity (cameraEyeFor_)
+    int cameraEyeFor_ = -1;  // Camera.tick: the eye height eases to the pose's
     RayHit target_;
     double blockDistance_ = -1;
     u16 hotbar_[9] = {};

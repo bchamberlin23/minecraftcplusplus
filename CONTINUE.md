@@ -109,9 +109,9 @@ history) audited and fixed. Not ported: the chat screen's own narration (title, 
 show in singleplayer though the local server is offline (deliberate); subtitles draw before the toasts, not after.
 Container clicks (drag on mouse moves, remainder count, highlightable slots), block breaking (redstone ore on the
 client, invisible blocks without particles), view bobbing, entity use (the hand loop) and picking, and the camera
-audited and fixed. Camera residuals while spectating an entity: its eye height is the type's constant (no pose /
-scale / easing), its hurt tilt and walk bob are not applied, and the FOV modifiers stay 1 (the game uses a spectated
-player's flying / speed / bow); the minecart camera branch is not implemented. Also audited and fixed: music (fades, underwater), tooltips, key
+audited and fixed. Spectating an entity: its eye height (pose, baby dimensions, scale) eases like ours, a living
+entity's hurt tilt (direction 0) / death roll and a player's walk bob and FOV modifier (default abilities, speed with
+its sprint flag, bow, spyglass) apply; residual: the experimental minecart camera branch (NewMinecartBehavior). Also audited and fixed: music (fades, underwater), tooltips, key
 binds, the spectator menu (residual: teams listed alphabetically, Java's hash order), the title screen (the first
 one fades in; deliberate: the live world panorama without the overlay, Mods & Packs in the Realms slot, the port in
 the version line) and command suggestions. Then: name tags, advancements, boats (push rule), camels, elytra (the
@@ -185,7 +185,7 @@ signs' waxed / applicator swing, the shovel's durability on a campfire. Client p
 fireworks, TNT, eyes of ender, shulker bullets, llama spit and fishing hooks (flying / hooked / bobbing, the bite
 dip) follow their own client tick. Container clicks audited (PICKUP / QUICK_CRAFT / PICKUP_ALL / SWAP / CLONE / THROW
 match; a crafting remainder that does not fit swings the arm like Player.drop, the server drops it). Camera: a
-spectated entity gets no hurt tilt / bob and FOV 1 (Java uses its own state; the entity view does not carry it).
+spectated entity's hurt tilt, bob, eye height and FOV follow it (Game::entityCamera).
 Audited and matching: maps, name tags, tab list, sidebar, boss bars, toasts, chat, advancements. Residuals: command
 suggestions ask the server for every argument (Java lists entity / registry / position suggestions locally), no
 suggestion narration; friend toasts have no face; no resource pack load-failure toast; the advancements screen

@@ -671,12 +671,52 @@ void Gameplay::setPlayer(Game& game, ui::Ui& ui) {
     };
     game.adventureMayBreak = [this](int x, int y, int z) { return adventureMayBreak(x, y, z); };
     game.adventureMayPlace = [this](int x, int y, int z) { return adventureMayPlace(x, y, z); };
-    game.entityView = [this](int id, CameraState& c) {  // Camera.setup on an entity: its eyes, its view rotation
+    game.entityCamera = [this](int id, Game::EntityCamera& s) {
+        const ent::Entity* e = entities_ ? entities_->entity(id) : nullptr;
+        if (!e || !e->info) return false;
+        const bool player = e->category == ent::Category::Player, living = player || e->category == ent::Category::Living;
+        const std::string_view n = shortName(e->info->name);
+        s = {};
+        s.living = living, s.player = player;
+        s.eyeHeight = e->info->eye;  // Entity.getEyeHeight: of its dimensions in its pose
+        if (living) {
+            const auto [d, k] = rules_.dimensions(e, e->info->name);
+            if (d) s.eyeHeight = float(d->eye * k);
+            if (e->pose == 2) s.eyeHeight = 0.2f;  // SLEEPING_DIMENSIONS
+            else if (player && (e->pose == 1 || e->pose == 3 || e->pose == 4)) s.eyeHeight = 0.4f * e->scale;  // Avatar.POSES
+            else if (player && e->pose == 5) s.eyeHeight = 1.27f * e->scale;
+            else if (player && e->pose == 7) s.eyeHeight = 1.62f;  // DYING: fixed
+            else if ((n == "camel" || n == "camel_husk") && e->pose == 10) s.eyeHeight = (e->baby ? 0.41f : 0.845f) * e->scale;
+            s.dead = e->dying || e->health <= 0.0f;
+            s.hurtTime = e->hurtTime, s.hurtDuration = 10, s.deathTime = e->deathTime;
+        }
+        if (player) {
+            s.walkDist = e->walkDist, s.walkDistO = e->walkDistO, s.bob = e->bob, s.bobO = e->bobO;
+            // getFieldOfViewModifier: not flying, the walking speed 0.1 (a remote player's abilities), the speed
+            // attribute (with the sprint modifier this client leaves out), a drawn bow; a spyglass scopes.
+            const bool sprinting = (ent::dataInt(*e, "DATA_SHARED_FLAGS_ID") & 8) != 0;
+            float m = (float(entityAttribute(id, "movement_speed", 0.1) * (sprinting ? 1.3 : 1.0)) / 0.1f + 1.0f) / 2.0f;
+            if (e->livingFlags & 1) {
+                const std::shared_ptr<const ui::ItemStack>& held = e->equipStack[(e->livingFlags & 2) ? 5 : 0];
+                const std::string itemFull = held ? itemName(held->item) : std::string();
+                const std::string_view item = shortName(itemFull);
+                if (item == "bow") {
+                    const float draw = std::min(float(e->useTicks) / 20.0f, 1.0f);
+                    m *= 1.0f - draw * draw * 0.15f;
+                } else if (item == "spyglass") {
+                    s.scoping = true;
+                }
+            }
+            s.fovModifier = m;
+        }
+        return true;
+    };
+    game.entityView = [this](int id, CameraState& c) {  // Camera.setup on an entity: its feet, its view rotation
         const ent::Entity* e = entities_ ? entities_->entity(id) : nullptr;
         if (!e || !e->info) return false;
         const float a = entities_->partialTick();
         c.x = e->prevPos[0] + (e->pos[0] - e->prevPos[0]) * a;
-        c.y = e->prevPos[1] + (e->pos[1] - e->prevPos[1]) * a + e->info->eye;
+        c.y = e->prevPos[1] + (e->pos[1] - e->prevPos[1]) * a;  // Game adds the eye height (eased)
         c.z = e->prevPos[2] + (e->pos[2] - e->prevPos[2]) * a;
         // LivingEntity.getViewYRot: the head's rotation; other entities their own.
         const bool living = e->category == ent::Category::Living || e->category == ent::Category::Player;

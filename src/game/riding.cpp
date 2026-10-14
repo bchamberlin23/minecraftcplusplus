@@ -193,9 +193,8 @@ void Riding::seat(const ent::Entity& e, const double vehiclePos[3], float vehicl
                   passengerCount_, out);
 }
 
-// LivingEntity.getDimensions: the type's (a baby's own, else scaled by getAgeScale) and their scale factor.
-static std::pair<const ItemRules::EntityDims*, double> dimensions(const ItemRules& rules, const ent::Entity* e, std::string_view type) {
-    const ItemRules::EntityDims* d = rules.entity(type);
+std::pair<const ItemRules::EntityDims*, double> ItemRules::dimensions(const ent::Entity* e, std::string_view type) const {
+    const EntityDims* d = entity(type);
     if (!d || !e || (e->category != ent::Category::Living && e->category != ent::Category::Player)) return {d, 1.0};
     const std::string_view n = shortName(type);
     double k = e->scale;  // getDimensions: getDefaultDimensions x getScale
@@ -213,7 +212,7 @@ void Riding::riderPosition(const ent::Entity& v, const double vehiclePos[3], flo
                            std::string_view passengerType, float passengerYaw, int index, int count, double out[3]) const {
     const std::string_view vn = shortName(v.info ? std::string_view(v.info->name) : std::string_view(typeName_));
     const std::string_view pn = shortName(passengerType);
-    const auto [vd, vk] = dimensions(rules_, &v, v.info ? std::string_view(v.info->name) : std::string_view(typeName_));
+    const auto [vd, vk] = rules_.dimensions(&v, v.info ? std::string_view(v.info->name) : std::string_view(typeName_));
     const double vHeight = vd ? vd->height * vk : v.info ? v.info->height : 1.0;
     // LivingEntity.getPassengerRidingPosition's scale: getScale() x getAgeScale()
     const bool vLiving = v.category == ent::Category::Living;
@@ -273,7 +272,7 @@ void Riding::riderPosition(const ent::Entity& v, const double vehiclePos[3], flo
     }
     const double ya = -double(vehicleYaw) * kPi / 180.0, yc = std::cos(ya), ys = std::sin(ya);
     double b[3] = {0, 0, 0};
-    const auto [pd, pk] = dimensions(rules_, p, passengerType);
+    const auto [pd, pk] = rules_.dimensions(p, passengerType);
     const double pWidth = pd ? pd->width * pk : 0.6, vWidth = vd ? vd->width * vk : v.info ? v.info->width : 1.0;
     if ((pn == "spider" || pn == "cave_spider") && vWidth <= pWidth) {  // Spider / CaveSpider: on a smaller vehicle
         b[1] = (pn == "spider" ? 0.3125 : 0.21875) * (p ? p->scale : 1.0f);

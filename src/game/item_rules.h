@@ -14,6 +14,10 @@
 #include <array>
 #include <unordered_map>
 
+namespace ent {
+struct Entity;
+}
+
 class ItemRules {
 public:
     bool load(const fs::path& minecraftDir, const std::string& version, const fs::path& cacheDir,
@@ -100,6 +104,9 @@ public:
         std::shared_ptr<const EntityDims> baby;    // a baby's own (BABY_DIMENSIONS), else the adult's x getAgeScale
     };
     const EntityDims* entity(std::string_view typeName) const;  // "minecraft:oak_boat"
+    // LivingEntity.getDimensions of an entity: the type's (a baby's own, else scaled by getAgeScale) and the factor
+    // they are scaled by (the scale attribute, a slime's size); non-living entities their type's, x 1 (riding.cpp).
+    std::pair<const EntityDims*, double> dimensions(const ent::Entity* e, std::string_view typeName) const;
 
 private:
     bool loadImpl(const fs::path& minecraftDir, const std::string& version, const fs::path& cacheDir,

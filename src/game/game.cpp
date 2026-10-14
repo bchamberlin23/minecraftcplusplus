@@ -39,7 +39,12 @@ Game::Game(World& world, BlockRegistry& registry, Terrain& terrain, Renderer& re
 
 CameraState Game::camera() const {
     CameraState c;
-    if (cameraEntity >= 0 && entityView && entityView(cameraEntity, c)) return c;
+    if (cameraEntity >= 0 && entityView && entityView(cameraEntity, c)) {  // its feet, then the eased eye height
+        EntityCamera ec;
+        if (cameraEyeFor_ == cameraEntity) c.y += cameraEyeOld_ + (cameraEye_ - cameraEyeOld_) * alpha_;
+        else if (entityCamera && entityCamera(cameraEntity, ec)) c.y += ec.eyeHeight;
+        return c;
+    }
     double eye[3];
     if (riding() && rideEye && rideEye(eye)) {  // the seat of the vehicle as it is drawn
         c.x = eye[0], c.y = eye[1], c.z = eye[2];
@@ -58,10 +63,18 @@ CameraState Game::camera() const {
 // GameRenderer.renderLevel: bobHurt then bobView multiply the projection (P * Hurt * Bob * View). As a view basis:
 // rows R * (right, up, back) and the camera moved by the view-space translation.
 static CameraState applyBob(const Game& g, CameraState c) {
-    // GameRenderer.bobHurt / bobView follow the camera entity: our own hurt, death and walk bob not while spectating
-    // another entity through its eyes
-    if (g.cameraEntity >= 0) return c;
+    // GameRenderer.bobHurt / bobView follow the camera entity: ours, or a spectated living entity's hurt tilt (its
+    // getHurtDir is 0) and death roll, and a spectated player's walk bob.
     const float pt = g.partialTick();
+    bool dead = g.dead, walkBob = g.bobView;
+    int deathTime = g.deathTime, hurtTime = g.hurtTime, hurtDuration = g.hurtDuration;
+    float hurtDir = g.hurtDir, walkDist = g.walkDist, walkDistO = g.walkDistO, bob = g.bob, bobO = g.bobO;
+    if (g.cameraEntity >= 0) {
+        Game::EntityCamera ec;
+        if (!g.entityCamera || !g.entityCamera(g.cameraEntity, ec) || !ec.living) return c;
+        dead = ec.dead, deathTime = ec.deathTime, hurtTime = ec.hurtTime, hurtDuration = std::max(ec.hurtDuration, 1), hurtDir = 0;
+        walkBob = g.bobView && ec.player, walkDist = ec.walkDist, walkDistO = ec.walkDistO, bob = ec.bob, bobO = ec.bobO;
+    }
     constexpr float kPi = 3.14159265f, kDeg = kPi / 180.0f;
     struct M3 {
         float m[3][3];
@@ -78,22 +91,22 @@ static CameraState applyBob(const Game& g, CameraState c) {
     M3 rot{{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}};
     float t[3] = {0, 0, 0};
     bool any = false;
-    if (g.dead) {  // bobHurt: the death roll
-        const float duration = std::min(float(g.deathTime) + pt, 20.0f);
+    if (dead) {  // bobHurt: the death roll
+        const float duration = std::min(float(deathTime) + pt, 20.0f);
         rot = mul(rot, rotZ((40.0f - 8000.0f / (duration + 200.0f)) * kDeg));
         any = true;
     }
-    if (g.hurtTime > 0) {
-        float hurt = (float(g.hurtTime) - pt) / float(g.hurtDuration);
+    if (hurtTime > 0) {
+        float hurt = (float(hurtTime) - pt) / float(hurtDuration);
         hurt = std::sin(hurt * hurt * hurt * hurt * kPi);
-        rot = mul(rot, rotY(-g.hurtDir * kDeg));
+        rot = mul(rot, rotY(-hurtDir * kDeg));
         rot = mul(rot, rotZ(-hurt * 14.0f * g.damageTilt * kDeg));
-        rot = mul(rot, rotY(g.hurtDir * kDeg));
+        rot = mul(rot, rotY(hurtDir * kDeg));
         any = true;
     }
-    if (g.bobView) {
-        const float wd = -(g.walkDist + (g.walkDist - g.walkDistO) * pt);
-        const float b = g.bobO + (g.bob - g.bobO) * pt;
+    if (walkBob) {
+        const float wd = -(walkDist + (walkDist - walkDistO) * pt);
+        const float b = bobO + (bob - bobO) * pt;
         if (b != 0) {
             const float tx = std::sin(wd * kPi) * b * 0.5f, ty = -std::abs(std::cos(wd * kPi) * b);
             const float tr[3] = {tx, ty, 0};
@@ -231,6 +244,13 @@ void Game::frame(Window& w, double dt) {
         player_.useBlocksSprint = use.active && !use.canSprint;
         eyeHeightOld_ = eyeHeight_;
         eyeHeight_ += ((sleeping ? 0.2 : player_.eyeHeight()) - eyeHeight_) * 0.5;  // Camera.tick (SLEEPING_DIMENSIONS: 0.2)
+        if (EntityCamera ec; cameraEntity >= 0 && entityCamera && entityCamera(cameraEntity, ec)) {
+            if (cameraEyeFor_ != cameraEntity) cameraEye_ = ec.eyeHeight, cameraEyeFor_ = cameraEntity;
+            cameraEyeOld_ = cameraEye_;
+            cameraEye_ += (ec.eyeHeight - cameraEye_) * 0.5;
+        } else {
+            cameraEyeFor_ = -1;
+        }
         player_.asleep = sleeping;
         if (riding()) {  // a passenger does not move itself (LocalPlayer.rideTick)
             player_.lastInput = input;

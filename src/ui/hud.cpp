@@ -196,7 +196,12 @@ void Ui::State::tickHud() {
     target *= game->useFovModifier();  // bow drawing (game/game.h)
     target = 1.0f + (target - 1.0f) * settings.fovEffectScale;
     if (game->scoping() && game->cameraMode == 0) target = 0.1f;  // spyglass
-    if (game->cameraEntity >= 0) target = 1.0f;
+    if (game->cameraEntity >= 0) {  // a spectated player's own modifier (its abilities: the defaults), else 1
+        Game::EntityCamera ec;
+        target = 1.0f;
+        if (game->entityCamera && game->entityCamera(game->cameraEntity, ec) && ec.player)
+            target = ec.scoping && game->cameraMode == 0 ? 0.1f : 1.0f + (ec.fovModifier - 1.0f) * settings.fovEffectScale;
+    }
     oldFovModifier = fovModifier;
     fovModifier = std::clamp(fovModifier + (target - fovModifier) * 0.5f, 0.1f, 1.5f);
     for (const UiModule& m : uiModules())  // modules.h
