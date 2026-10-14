@@ -1354,7 +1354,7 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
             for (auto& [id, other] : entities_)
                 if (other.vehicle == e.id) other.vehicle = -1;
             for (u32 i = 0; i < ev.count; ++i)
-                if (auto p = entities_.find(q.ints[ev.first + i]); p != entities_.end()) p->second.vehicle = e.id;
+                if (auto p = entities_.find(q.ints[ev.first + i]); p != entities_.end()) p->second.vehicle = e.id, p->second.seat = u8(std::min<u32>(i, 255));
             e.passengerCount = u8(std::min<u32>(ev.count, 255));
             if (verbose_) LOG("entities: %d now carries %u passenger(s)", e.id, ev.count);
             break;
@@ -1640,6 +1640,20 @@ void EntityWorld::tick() {
     else ++gameTime_;
     for (auto& [id, e] : entities_)  // TickRateManager.isEntityFrozen: all but players and what they drive
         if (tickRate.runs || e.category == Category::Player || e.id == localControl_) tickEntity(e);
+    // ClientLevel.tickPassenger: the server sends riders no positions; each is put on its vehicle (vehicles first).
+    if (positionRider) {
+        std::vector<int> placed;
+        auto place = [&](auto& self, Entity& e, int depth) -> void {
+            if (depth > 16 || std::find(placed.begin(), placed.end(), e.id) != placed.end()) return;
+            placed.push_back(e.id);
+            auto v = entities_.find(e.vehicle);
+            if (v == entities_.end() || e.id == selfId || e.id == localControl_) return;
+            if (v->second.vehicle >= 0) self(self, v->second, depth + 1);
+            positionRider(v->second, e);
+        };
+        for (auto& [id, e] : entities_)
+            if (e.vehicle >= 0) place(place, e, 0);
+    }
     for (auto it = entities_.begin(); it != entities_.end();)  // ItemPickupParticle.LIFE_TIME
         it = it->second.pickupBy != INT_MIN && it->second.pickupLife >= 3 ? entities_.erase(it) : std::next(it);
     // The server stops tracking entities in chunks the client forgets, but a respawn or dimension change

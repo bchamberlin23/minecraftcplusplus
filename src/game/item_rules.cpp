@@ -8,7 +8,7 @@
 
 namespace {
 
-constexpr int kFormat = 3;  // bump when the dump's layout changes
+constexpr int kFormat = 4;  // bump when the dump's layout changes
 
 // Run with the game's code on the class path (`java GameplayDump.java <out> <format>`). Block tags in tool rules
 // are resolved from the jar's data files (tags are not bound without a server).
@@ -24,7 +24,9 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.Bootstrap;
 import net.minecraft.world.entity.EntityAttachment;
 import net.minecraft.world.entity.EntityAttachments;
+import net.minecraft.world.entity.EntityDimensions;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.level.EmptyBlockGetter;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.level.block.Block;
@@ -33,6 +35,30 @@ import net.minecraft.world.level.block.state.properties.Property;
 import net.minecraft.world.level.material.PushReaction;
 
 public class GameplayDump {
+    static JsonObject dims(EntityDimensions d) {
+        JsonObject o = new JsonObject();
+        o.addProperty("w", d.width());
+        o.addProperty("h", d.height());
+        o.addProperty("eye", d.eyeHeight());
+        EntityAttachments a = d.attachments();
+        JsonArray seats = new JsonArray();
+        for (int i = 0; i < 4; ++i) {
+            Vec3 p = a.getNullable(EntityAttachment.PASSENGER, i, 0.0F);
+            if (p == null) break;
+            JsonArray v = new JsonArray();
+            v.add(p.x); v.add(p.y); v.add(p.z);
+            seats.add(v);
+        }
+        o.add("passengers", seats);
+        Vec3 veh = a.getNullable(EntityAttachment.VEHICLE, 0, 0.0F);
+        if (veh != null) {
+            JsonArray v = new JsonArray();
+            v.add(veh.x); v.add(veh.y); v.add(veh.z);
+            o.add("vehicle", v);
+        }
+        return o;
+    }
+
     static <T extends Comparable<T>> String value(BlockState s, Property<T> p) { return p.getName(s.getValue(p)); }
 
     static String key(String name, BlockState s) {
@@ -113,27 +139,27 @@ public class GameplayDump {
         root.add("tags", tags);
         // Entity dimensions and attachment points (passenger seats, where a passenger sits on its vehicle).
         JsonObject entities = new JsonObject();
+        // The entity class of each type (EntityTypes' field generics), for the babies' own dimensions.
+        Map<EntityType<?>, Class<?>> classes = new HashMap<>();
+        for (java.lang.reflect.Field f : EntityTypes.class.getDeclaredFields()) {
+            if (!java.lang.reflect.Modifier.isStatic(f.getModifiers()) || !(f.getGenericType() instanceof java.lang.reflect.ParameterizedType pt)) continue;
+            try {
+                if (f.get(null) instanceof EntityType<?> t && pt.getActualTypeArguments()[0] instanceof Class<?> c) classes.put(t, c);
+            } catch (Exception e) {}
+        }
         for (EntityType<?> type : BuiltInRegistries.ENTITY_TYPE) {
-            JsonObject o = new JsonObject();
-            o.addProperty("w", type.getDimensions().width());
-            o.addProperty("h", type.getDimensions().height());
-            o.addProperty("eye", type.getDimensions().eyeHeight());
-            EntityAttachments a = type.getDimensions().attachments();
-            JsonArray seats = new JsonArray();
-            for (int i = 0; i < 4; ++i) {
-                Vec3 p = a.getNullable(EntityAttachment.PASSENGER, i, 0.0F);
-                if (p == null) break;
-                JsonArray v = new JsonArray();
-                v.add(p.x); v.add(p.y); v.add(p.z);
-                seats.add(v);
-            }
-            o.add("passengers", seats);
-            Vec3 veh = a.getNullable(EntityAttachment.VEHICLE, 0, 0.0F);
-            if (veh != null) {
-                JsonArray v = new JsonArray();
-                v.add(veh.x); v.add(veh.y); v.add(veh.z);
-                o.add("vehicle", v);
-            }
+            JsonObject o = dims(type.getDimensions());
+            EntityDimensions baby = null;
+            for (Class<?> c = classes.get(type); c != null && baby == null; c = c.getSuperclass())
+                for (String name : new String[] {"BABY_DIMENSIONS", "BABY_STANDING_DIMENSIONS"}) {
+                    try {
+                        java.lang.reflect.Field f = c.getDeclaredField(name);
+                        f.setAccessible(true);
+                        baby = (EntityDimensions) f.get(null);
+                        break;
+                    } catch (Exception e) {}
+                }
+            if (baby != null) o.add("baby", dims(baby));
             entities.add(BuiltInRegistries.ENTITY_TYPE.getKey(type).toString(), o);
         }
         root.add("entities", entities);
@@ -206,11 +232,16 @@ bool ItemRules::loadImpl(const fs::path& minecraftDir, const std::string& versio
         std::sort(set.begin(), set.end());
     }
     const nlohmann::json entities = j.value("entities", nlohmann::json::object());  // (items() needs a live object)
-    for (const auto& [k, v] : entities.items()) {
+    auto dims = [](const nlohmann::json& v) {
         EntityDims d;
         d.width = v.value("w", 0.6f), d.height = v.value("h", 1.8f), d.eye = v.value("eye", 1.62f);
         for (const auto& s : v.value("passengers", nlohmann::json::array())) d.seats.push_back({s[0].get<double>(), s[1].get<double>(), s[2].get<double>()});
         if (v.contains("vehicle")) d.vehicle = {v["vehicle"][0].get<double>(), v["vehicle"][1].get<double>(), v["vehicle"][2].get<double>()};
+        return d;
+    };
+    for (const auto& [k, v] : entities.items()) {
+        EntityDims d = dims(v);
+        if (v.contains("baby")) d.baby = std::make_shared<const EntityDims>(dims(v["baby"]));
         entities_.emplace(k, std::move(d));
     }
     return !blocks_.empty();

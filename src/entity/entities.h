@@ -209,6 +209,7 @@ struct Entity {
     float bobOffset = 0;
     int vehicle = -1;
     u8 passengerCount = 0;  // ClientboundSetPassengersPacket: how many ride this entity (ourselves included)
+    u8 seat = 0;            // our index among the vehicle's passengers
     bool dying = false;
     u8 livingFlags = 0;   // LivingEntity DATA_LIVING_ENTITY_FLAGS: 1 using an item, 2 with the off hand, 4 spin attack
     int useTicks = 0;     // ticks the current item use has lasted (getTicksUsingItem)
@@ -371,6 +372,8 @@ public:
     // they are applied; 17 makes a firework rocket explode) and
     // animate actions (ClientboundAnimatePacket: 0 wake up, 1 critical hit, 2 magic critical hit).
     std::function<void(const Entity&, int event)> onEntityEvent;
+    // Entity.positionRider for each passenger we do not move ourselves, after the tick (game/riding.cpp).
+    std::function<void(const Entity& vehicle, Entity& passenger)> positionRider;
     // Entity events for ids not tracked here (the local player's own, e.g. KINETIC_HIT).
     std::function<void(int id, int event)> onUntrackedEntityEvent;
     std::function<void(const Entity&, int action)> onAnimate;

@@ -53,6 +53,9 @@ private:
     ent::Entity* entity() const;
     bool computeControlled(const ent::Entity& e) const;
     void seat(const ent::Entity& e, const double vehiclePos[3], float vehicleYaw, double out[3]) const;  // rider's feet
+    // Entity.positionRider of any passenger (p: null for ourselves) at a seat of `count`: where its feet go.
+    void riderPosition(const ent::Entity& v, const double vehiclePos[3], float vehicleYaw, const ent::Entity* p,
+                       std::string_view passengerType, float passengerYaw, int index, int count, double out[3]) const;
     // Minecart's rotationOffset / playerRotationOffset while riding an experimental minecart (Rotate with Minecarts).
     int cartVehicle_ = -1;
     float cartYaw_ = 0, cartRotation_ = 0, cartPlayerRotation_ = 0;

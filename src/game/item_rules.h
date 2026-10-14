@@ -97,6 +97,7 @@ public:
         float width = 0.6f, height = 1.8f, eye = 1.62f;
         std::vector<std::array<double, 3>> seats;  // PASSENGER points by passenger index
         std::array<double, 3> vehicle{};           // VEHICLE point: where this entity sits on what it rides
+        std::shared_ptr<const EntityDims> baby;    // a baby's own (BABY_DIMENSIONS), else the adult's x getAgeScale
     };
     const EntityDims* entity(std::string_view typeName) const;  // "minecraft:oak_boat"
 

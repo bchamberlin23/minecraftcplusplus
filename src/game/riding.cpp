@@ -28,6 +28,20 @@ float wrapDegrees(float d) {
 
 std::string_view shortName(std::string_view n) { return n.starts_with("minecraft:") ? n.substr(10) : n; }
 
+bool isAnimal(std::string_view n) {  // instanceof Animal
+    static constexpr std::string_view kAnimals[] = {
+        "armadillo", "axolotl", "bee", "camel", "camel_husk", "cat", "chicken", "cow", "donkey", "fox", "frog", "goat",
+        "happy_ghast", "hoglin", "horse", "llama", "mooshroom", "mule", "nautilus", "ocelot", "panda", "parrot", "pig",
+        "polar_bear", "rabbit", "sheep", "skeleton_horse", "sniffer", "strider", "trader_llama", "turtle", "wolf",
+        "zombie_horse", "zombie_nautilus"};
+    return std::find(std::begin(kAnimals), std::end(kAnimals), n) != std::end(kAnimals);
+}
+
+float babyAgeScale(std::string_view n) {  // LivingEntity.getAgeScale of a baby and its overrides
+    return n == "armadillo" || n == "camel" || n == "camel_husk" ? 0.6f : n == "dolphin" ? 0.65f : n == "goat" ? 0.55f
+           : n == "happy_ghast" ? 0.2375f : n == "turtle" ? 0.3f : 0.5f;
+}
+
 bool isHorseLike(std::string_view n) {
     return n == "horse" || n == "donkey" || n == "mule" || n == "skeleton_horse" || n == "zombie_horse" || n == "camel" ||
            n == "camel_husk";
@@ -41,6 +55,25 @@ bool isNautilus(std::string_view n) { return n == "nautilus" || n == "zombie_nau
 Riding::Riding(Gameplay& gameplay, Game& game, ent::EntityWorld* entities, const ItemRules& rules)
     : gameplay_(gameplay), game_(game), entities_(entities), rules_(rules) {
     game.rideTick = [this](const PlayerInput& in) { rideTick(in); };
+    if (entities_)
+        entities_->positionRider = [this](const ent::Entity& v, ent::Entity& p) {
+            if (!v.info || !p.info) return;
+            double out[3];
+            riderPosition(v, v.pos, v.yaw, &p, p.info->name, p.yaw, p.seat, std::max<int>(v.passengerCount, p.seat + 1), out);
+            std::copy(out, out + 3, p.pos);
+            const std::string_view vn = shortName(v.info->name);
+            // Chicken / AbstractHorse.positionRider: a living rider's body follows the vehicle's
+            if ((vn == "chicken" || isHorseLike(vn) || vn == "llama" || vn == "trader_llama") &&
+                (p.category == ent::Category::Living || p.category == ent::Category::Player))
+                p.bodyYaw = v.bodyYaw;
+            // AbstractBoat.positionRider -> clampRotation (not entity tag can_turn_in_boats: breezes)
+            if (isBoat(vn) && shortName(p.info->name) != "breeze") {
+                p.bodyYaw = v.yaw;
+                const float diff = wrapDegrees(p.yaw - v.yaw), clamped = std::clamp(diff, -105.0f, 105.0f);
+                p.prevYaw += clamped - diff, p.yaw += clamped - diff;
+                p.headYaw = p.yaw;
+            }
+        };
     game.passengerTurned = [this] {  // AbstractBoat.onPassengerTurned -> clampRotation
         const ent::Entity* e = entity();
         if (!e || !e->info || !isBoat(e->info->name)) return;
@@ -154,30 +187,105 @@ void Riding::frame() {
     }
 }
 
-// Entity.positionRider: the vehicle's passenger attachment point minus the player's vehicle attachment (0.6 up).
+// Entity.positionRider of ourselves.
 void Riding::seat(const ent::Entity& e, const double vehiclePos[3], float vehicleYaw, double out[3]) const {
-    double p[3] = {0, 0, 0};
-    const std::string_view n = shortName(typeName_);
-    const ItemRules::EntityDims* dims = rules_.entity(typeName_);
-    if (kind_ == Kind::Boat) {
-        // AbstractBoat.getPassengerAttachmentPoint: rideHeight, front / back seats.
-        const double height = dims ? dims->height : 0.5625;
-        p[1] = n.ends_with("_raft") ? height * 0.8888889 : height / 3.0;
-        double z = n.find("chest") != std::string_view::npos ? 0.15 : 0.0;
-        if (passengerCount_ > 1) z = seatIndex_ == 0 ? 0.2 : -0.6;
-        p[2] = z;
-    } else if (dims && !dims->seats.empty()) {
-        const auto& s = dims->seats[size_t(std::clamp(seatIndex_, 0, int(dims->seats.size()) - 1))];
-        p[0] = s[0], p[1] = s[1], p[2] = s[2];
-    } else {
-        p[1] = dims ? dims->height : e.info ? e.info->height : 1.0;
+    riderPosition(e, vehiclePos, vehicleYaw, nullptr, "minecraft:player", game_.player().yaw / kDegf, seatIndex_,
+                  passengerCount_, out);
+}
+
+// LivingEntity.getDimensions: the type's (a baby's own, else scaled by getAgeScale) and their scale factor.
+static std::pair<const ItemRules::EntityDims*, double> dimensions(const ItemRules& rules, const ent::Entity* e, std::string_view type) {
+    const ItemRules::EntityDims* d = rules.entity(type);
+    if (!d || !e || (e->category != ent::Category::Living && e->category != ent::Category::Player)) return {d, 1.0};
+    const std::string_view n = shortName(type);
+    double k = e->scale;  // getDimensions: getDefaultDimensions x getScale
+    if (e->baby) {
+        if (d->baby) d = d->baby.get();
+        else k *= babyAgeScale(n);
     }
-    // Vec3.yRot(-yRot): rotate around Y by the vehicle's yaw.
-    const double a = -double(vehicleYaw) * kPi / 180.0, c = std::cos(a), s = std::sin(a);
-    const double x = p[0] * c + p[2] * s, z = p[2] * c - p[0] * s;
-    out[0] = vehiclePos[0] + x;
-    out[1] = vehiclePos[1] + p[1] - 0.6;  // Avatar.DEFAULT_VEHICLE_ATTACHMENT
-    out[2] = vehiclePos[2] + z;
+    if (n == "slime" || n == "magma_cube") k *= std::max(e->size, 1);  // AbstractCubeMob: the type's x size
+    return {d, k};
+}
+
+// Entity.positionRider: the vehicle's PASSENGER attachment point (getPassengerRidingPosition and its overrides) less
+// the passenger's VEHICLE attachment point (getVehicleAttachmentPoint), each turned by its entity's yaw.
+void Riding::riderPosition(const ent::Entity& v, const double vehiclePos[3], float vehicleYaw, const ent::Entity* p,
+                           std::string_view passengerType, float passengerYaw, int index, int count, double out[3]) const {
+    const std::string_view vn = shortName(v.info ? std::string_view(v.info->name) : std::string_view(typeName_));
+    const std::string_view pn = shortName(passengerType);
+    const auto [vd, vk] = dimensions(rules_, &v, v.info ? std::string_view(v.info->name) : std::string_view(typeName_));
+    const double vHeight = vd ? vd->height * vk : v.info ? v.info->height : 1.0;
+    // LivingEntity.getPassengerRidingPosition's scale: getScale() x getAgeScale()
+    const bool vLiving = v.category == ent::Category::Living;
+    const double vScale = vLiving ? double(v.scale) * (v.baby ? babyAgeScale(vn) : 1.0f) : 1.0;
+    double a[3] = {0, 0, 0};
+    if (isBoat(vn)) {  // AbstractBoat: rideHeight, the front / back seats
+        a[1] = vn.ends_with("_raft") ? vHeight * 0.8888889 : vHeight / 3.0;
+        double z = vn.find("chest") != std::string_view::npos ? 0.15 : 0.0;  // getSinglePassengerXOffset
+        if (count > 1) z = (index == 0 ? 0.2 : -0.6) + (isAnimal(pn) ? 0.2 : 0.0);
+        a[2] = z;
+    } else if (isCamel(vn)) {  // Camel: getBodyAnchorAnimationYOffset, the driver ahead
+        const bool driver = index <= 0;
+        const i64 last = ent::dataInt(v, "LAST_POSE_CHANGE_TICK"), poseTime = (entities_ ? entities_->gameTime() : 0) - std::abs(last);
+        const bool sitting = last < 0, transition = poseTime < (sitting ? 40 : 52);
+        const float scale = float(vScale);
+        // getDimensions(SITTING): the sitting dimensions (adult: 1.43 lower), x getScale
+        const double height = v.pose == 10 ? (v.baby ? 0.425 : (vd && !v.baby ? vd->height : 2.375) - 1.43f) * v.scale : vHeight;
+        double y = height - (v.baby ? 0.09375 : 0.375);
+        const float sittingDiff = scale * 1.43f, drop = sittingDiff - scale * 0.2f, bottom = sittingDiff - drop;
+        if (transition) {
+            const int duration = sitting ? 40 : 52;
+            const int half = sitting ? 28 : driver ? 24 : 32;
+            const float flexOffset = sitting ? (driver ? 0.5f : 0.1f) : (driver ? 0.6f : 0.35f);
+            const float t = std::clamp(float(poseTime), 0.0f, float(duration));
+            const bool first = t < float(half);
+            const float part = first ? t / float(half) : (t - float(half)) / float(duration - half);
+            const float flex = sittingDiff - flexOffset * drop;
+            auto lerp = [](float f, float x0, float x1) { return x0 + f * (x1 - x0); };
+            y += sitting ? lerp(part, first ? sittingDiff : flex, first ? flex : bottom)
+                         : lerp(part, first ? bottom - sittingDiff : bottom - flex, first ? bottom - flex : 0.0f);
+        }
+        if (sitting && !transition) y += bottom;
+        float offset = 0.5f;
+        if (count > 1) {
+            if (!driver) offset = -0.7f;
+            if (isAnimal(pn)) offset += 0.2f;
+        }
+        a[1] = y, a[2] = offset * vScale;
+    } else if (vn.ends_with("minecart") && (pn == "villager" || pn == "wandering_trader")) {
+        // AbstractMinecart: LOWERED_PASSENGER_ATTACHMENT
+    } else if (vn == "slime" || vn == "magma_cube") {  // AbstractCubeMob
+        a[1] = vHeight - 0.015625 * std::max(v.size, 1) * vScale;
+    } else {  // EntityAttachments.getClamped(PASSENGER, index)
+        if (vd && !vd->seats.empty()) {
+            const auto& s = vd->seats[size_t(std::clamp(index, 0, int(vd->seats.size()) - 1))];
+            a[0] = s[0] * vk, a[1] = s[1] * vk, a[2] = s[2] * vk;
+        } else {
+            a[1] = vHeight;
+        }
+        if (vn == "horse" || vn == "donkey" || vn == "mule" || vn == "skeleton_horse" || vn == "zombie_horse") {
+            const float stand = v.sp.ao[ent::kStand];  // AbstractHorse: standAnimO lifts and draws the seat back
+            a[1] += 0.15 * stand * vScale, a[2] += -0.7 * stand * vScale;
+        } else if (vn == "strider") {  // Strider (client): the seat bobs with the walk
+            const float speed = std::min(0.25f, v.walkSpeed);
+            a[1] += double(0.12f * std::cos(v.walkPos * 1.5f) * 2.0f * speed) * vScale;
+        }
+    }
+    const double ya = -double(vehicleYaw) * kPi / 180.0, yc = std::cos(ya), ys = std::sin(ya);
+    double b[3] = {0, 0, 0};
+    const auto [pd, pk] = dimensions(rules_, p, passengerType);
+    const double pWidth = pd ? pd->width * pk : 0.6, vWidth = vd ? vd->width * vk : v.info ? v.info->width : 1.0;
+    if ((pn == "spider" || pn == "cave_spider") && vWidth <= pWidth) {  // Spider / CaveSpider: on a smaller vehicle
+        b[1] = (pn == "spider" ? 0.3125 : 0.21875) * (p ? p->scale : 1.0f);
+    } else if (pd) {
+        b[0] = pd->vehicle[0] * pk, b[1] = pd->vehicle[1] * pk, b[2] = pd->vehicle[2] * pk;
+    } else if (pn == "player") {
+        b[1] = 0.6;  // Avatar.DEFAULT_VEHICLE_ATTACHMENT
+    }
+    const double pa = -double(passengerYaw) * kPi / 180.0, pc = std::cos(pa), ps = std::sin(pa);
+    out[0] = vehiclePos[0] + (a[0] * yc + a[2] * ys) - (b[0] * pc + b[2] * ps);
+    out[1] = vehiclePos[1] + a[1] - b[1];
+    out[2] = vehiclePos[2] + (a[2] * yc - a[0] * ys) - (b[2] * pc - b[0] * ps);
 }
 
 static bool camelRefusesToMove(const ent::Entity& e, i64 gameTime);
