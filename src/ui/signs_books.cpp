@@ -251,6 +251,7 @@ void signInput(UiState& s, const InputEvent& e) {
         // TextFieldHelper with the sign's line width as the filter: an edit that does not fit is rejected.
         const UiState::TextField before = sign.field;
         s.textFieldKey(sign.field, e);
+        sign.field.blinkStart = before.blinkStart;  // TextFieldHelper: the blink only restarts with init()
         if (s.font.width(sign.field.value) > sign.maxWidth) sign.field = before;
         if (sign.lines[sign.line] != sign.field.value) {  // setMessage: the sign in the world shows it at once
             sign.lines[sign.line] = sign.field.value;
