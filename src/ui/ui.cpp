@@ -1547,7 +1547,9 @@ void Ui::State::runScript(double) {
             game->retarget();
             game->useTarget(arg(0) != "break");
         } else if (st.verb == "useentity") {  // right click on the entity under the crosshair
-            if (game->onEntityClick) game->onEntityClick(false, true, -1.0);
+            if (game->onEntityClick && game->onEntityClick(false, true, -1.0) && game->entityInteract)
+                for (int hand = 0; hand < 2 && game->entityInteract(hand) == 0; ++hand) {  // each hand until one takes it
+                }
         } else if (st.verb == "useitem") {  // right click into the air: use the held item
             game->startUseItem(false);
         } else if (st.verb == "attack") {  // left click on the entity under the crosshair

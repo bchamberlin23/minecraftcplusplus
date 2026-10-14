@@ -915,6 +915,41 @@ int Gameplay::entityInteraction(const ent::Entity& e, int hand) {
     // ArmorStand.interactAt: a name tag passes on (NameTagItem), anything else is SUCCESS_SERVER on the client
     if (n == "armor_stand") return item == "name_tag" ? (held->hasCustomName ? 1 : pass()) : 2;
     if (e.category != ent::Category::Living) return pass();
+    // Entity.interact before the mob's own: shears cut every leash of it (shearOffAllLeashConnections), then shear off
+    // its equipment (Mob.attemptToShearEquipment: the first worn item whose equippable can_be_sheared, without Curse of
+    // Binding outside creative, on a mob nobody rides, not sneaking); a mob leashed to us is untied whatever is held.
+    ent::Entity* self = entities_ ? entities_->entity(e.id) : nullptr;
+    int riders = 0;
+    bool leashesOthers = false;
+    if (entities_)
+        for (const auto& [id, other] : entities_->entities()) riders += other.vehicle == e.id, leashesOthers |= other.leashHolder == e.id;
+    if (item == "shears" && (e.leashHolder != 0 || leashesOthers)) {
+        if (self) self->leashHolder = 0;
+        std::vector<int> leashed;
+        if (entities_)
+            for (const auto& [id, other] : entities_->entities())
+                if (other.leashHolder == e.id) leashed.push_back(id);
+        for (int id : leashed)
+            if (ent::Entity* other = entities_->entity(id)) other->leashHolder = 0;
+        return 1;
+    }
+    if (item == "shears" && riders == 0 && !sneaking && ui_) {
+        static const int kSlotOrder[] = {0, 5, 1, 2, 3, 4, 6, 7};  // EquipmentSlot.VALUES by our slot ids
+        for (int slot : kSlotOrder) {
+            const std::shared_ptr<const ui::ItemStack> worn = e.equipStack[slot];
+            if (!worn || worn->empty()) continue;
+            const ui::Items::ComponentValue eq = ui_->items().component(*worn, "equippable");
+            const bool shearable = eq.fallback && eq.fallback->is_object() && eq.fallback->value("can_be_sheared", false);
+            if (!shearable || (ui_->items().hasEnchantmentEffect(*worn, "minecraft:prevent_armor_change") && game_->gameMode != 1)) continue;
+            if (self) self->equipment[slot] = -1, self->equipStack[slot] = nullptr;  // setItemSlot(EMPTY)
+            if (audio::AudioSystem* a = audio::instance()) {  // Entity.playSound: the equippable's shearing sound
+                const std::string sound = eq.fallback->value("shearing_sound", std::string("minecraft:item.shears.snip"));
+                a->play(sound.substr(sound.find(':') + 1), audio::Category::Neutral, e.pos[0], e.pos[1], e.pos[2], 1.0f, 1.0f);
+            }
+            return 1;
+        }
+    }
+    if (entities_ && e.leashHolder != 0 && e.leashHolder == entities_->selfId) return 1;  // untied by the server
     // Entity.interact (Leashable): a lead attaches (CONSUME on the client); Mob.checkAndHandleImportantInteractions:
     // a spawn egg is SUCCESS_SERVER; a named name tag SUCCESS.
     if (item == "lead") return 2;
@@ -971,6 +1006,20 @@ int Gameplay::entityInteraction(const ent::Entity& e, int hand) {
             if (inTag("minecraft:wolf_collar_dyes") && e.ownedByMe) return dyeOf() >= 0 && dyeOf() != e.collar ? 1 : pass();
             if (item == "wolf_armor" && e.equipment[6] < 0 && e.ownedByMe && !e.baby) {  // equipped, itemStack.consume
                 if (ui_) ui_->predictConsumeHeld(hand);
+                return 1;
+            }
+            // Repaired by its repair material while sitting: one taken, an eighth of its durability back
+            const std::shared_ptr<const ui::ItemStack> armor = e.equipStack[6];
+            if ((ent::dataInt(e, "DATA_FLAGS_ID") & 1) && armor && e.ownedByMe && armor->damage > 0 && ui_ &&
+                ui_->items().repairableWith(*armor, held->item)) {
+                ui_->predictConsumeHeld(hand);
+                ui::ItemStack repaired = *armor;
+                const int repairUnit = int(float(ui_->items().maxDamage(repaired)) * 0.125f);
+                net::Writer w;
+                w.varInt(std::max(0, repaired.damage - repairUnit));
+                const std::string data(w.buf.begin(), w.buf.end());
+                ui_->items().setComponent(repaired, "damage", &data);
+                if (self) self->equipStack[6] = std::make_shared<const ui::ItemStack>(std::move(repaired));
                 return 1;
             }
             if (food) return animalFood();

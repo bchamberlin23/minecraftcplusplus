@@ -176,9 +176,9 @@ Entity interaction and attack audited; the client now predicts held-stack change
 milking, stew, feeding) and tells SUCCESS from CONSUME / SUCCESS_SERVER. Tame animals know their owner (DATA_OWNERUUID_ID);
 max health is the synced attribute or the type's default (Gameplay::maxHealthOf, a table from createAttributes).
 Item use predicts thrown items, bottle filling and armour swaps; horses / llamas / camels, fish buckets, iron golem
-repair, furnace minecart fuel, tadpoles, ocelots and golden dandelions follow their mobInteract. Not predicted: bee
-flowers, saddle / harness shearing (Mob.attemptToShearEquipment), armadillo brush durability, villager trading or
-sleeping state. Block use covers composters, beehives, campfires, cauldrons (CauldronInteractions results), jukeboxes,
+repair, furnace minecart fuel, tadpoles, ocelots and golden dandelions follow their mobInteract. Shears cut leashes and shear off saddles / harnesses / carpets
+(Mob.attemptToShearEquipment), a tamed wolf's armour is repaired while sitting; durability changes are the
+server's (ItemStack.hurtAndBreak does nothing on the client). Not predicted: villager trading or sleeping state. Block use covers composters, beehives, campfires, cauldrons (CauldronInteractions results), jukeboxes,
 berry bushes, cave vines, vaults, shelves and lecterns; not modelled: the shelf's hit slot, chiseled bookshelf slots,
 signs' waxed / applicator swing, the shovel's durability on a campfire. Client projectiles: arrows, throwables,
 fireworks, TNT, eyes of ender, shulker bullets, llama spit and fishing hooks (flying / hooked / bobbing, the bite
@@ -193,7 +193,7 @@ bubble column (onAboveBubbleColumn's local sound and particle), the rider's head
 turn, no client outOfControlTicks (the server ejects). Server list: a favicon that is not 64x64 is kept in
 servers.dat (Java drops it), the MOTD is not sanitised (depth 16, player sprites rejected). Create World: a blank
 name is stored as "New World" (Java stores it empty), no narration. The allay's give / take / duplicate is predicted
-(its hand and the player's stack). Residual: wolf armour repair. Not ported:
+(its hand and the player's stack). Not ported:
 filtered sign text (needs the account's profanity filter flag). The bell's raider particles (showBellParticles) are
 invisible in 26.3 (ColorParticleOption.create(ENTITY_EFFECT, 0xFED839 + 5i) has alpha 0, which SpellParticle keeps),
 so they are not drawn here either. Toasts follow ToastInstance now (the
