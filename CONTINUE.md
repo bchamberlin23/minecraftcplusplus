@@ -132,7 +132,7 @@ is read in the configuration phase only. Pickups (a flying copy for orbs and par
 effects (upside-down xRot, creeper flash steps / ignited swelling, invisible hurt tint, skeleton shake) audited and
 fixed; residual: remote players' eye height for the pickup target is the type's constant (no pose). Anvil /
 grindstone / cartography, brewing / crafter / beacon / bundles and the death / win screens audited and fixed;
-residuals: screens are not narrated on opening (Screen.getNarrationMessage, e.g. the credits), the win screen's End
+residuals: screens without a known title narrate only the usage hint on opening, the win screen's End
 portal background is approximated, the death screen is not reopened (nor the player respawned) when another screen
 closes while dead, no draft-report icon on the death screen's title button. Books / lectern and the operator block
 editors audited and fixed; residuals: writable pages ignore text filtering (getPages(isTextFilteringEnabled)), the
@@ -197,9 +197,8 @@ name is stored as "New World" (Java stores it empty), no narration. The allay's 
 filtered sign text (needs the account's profanity filter flag). The bell's raider particles (showBellParticles) are
 invisible in 26.3 (ColorParticleOption.create(ENTITY_EFFECT, 0xFED839 + 5i) has alpha 0, which SpellParticle keeps),
 so they are not drawn here either. Toasts follow ToastInstance now (the
-server pack download toast shows its progress). Toast residuals: no toasts
-for world access / chunk load or save /
-file drop / pack load failures or periodic notifications; friend toasts have no face (this port's friends have no
+server pack download toast shows its progress). Toast residuals: no world access failure toast
+(world errors show screens) or regional periodic notifications; friend toasts have no face (this port's friends have no
 game profile); the Online screen's Friends section has only In-Game Notification (the rest is Microsoft's). Tested against local mock status servers
 (a Python script: modern, no-version, legacy-only, silent and closing servers).
 
@@ -260,8 +259,9 @@ game profile); the Online screen's Friends section has only In-Game Notification
   stand shows no item model on its head for head items without an equippable asset.
 - Pack screens: Options' Resource Packs and Create World's Data Packs are this port's Mods & Packs manager (one list
   of switches) rather than PackSelectionScreen's Available / Selected lists.
-- SystemToasts without a trigger here: PACK_LOAD_FAILURE, FILE_DROP_FAILURE, CHUNK_LOAD/SAVE_FAILURE (the server
-  runs out of process), the demo overlay and the regional PeriodicNotificationManager.
+- SystemToasts: chunk load / save failures and low disk space come from the local server's log, pack load failures
+  from start-up; FILE_DROP_FAILURE has no trigger in the game either; no demo overlay or regional
+  PeriodicNotificationManager.
 
 
 ## Debug
