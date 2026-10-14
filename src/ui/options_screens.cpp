@@ -34,6 +34,13 @@ struct ListState {
     float scroll = 0;
     bool draggingBar = false;
     float dragStartY = 0, dragStartScroll = 0;
+    struct Dropdown {  // an open choiceButton list
+        size_t button = SIZE_MAX;  // the list widget it belongs to; SIZE_MAX: none open
+        std::vector<Choice> choices;
+        int selected = -1;
+        std::function<void(int)> pick;
+        int first = 0;  // the first visible choice (a long list scrolls)
+    } drop;
 };
 ListState g;
 
@@ -51,6 +58,77 @@ float scrollerHeight(const UiState& s) {
 void layout(UiState& s) {
     g.scroll = std::clamp(g.scroll, 0.0f, maxScroll(s));
     for (size_t i = 0; i < g.rowY.size() && i < s.buttons.size(); ++i) s.buttons[i].y = origin() + g.rowY[i];
+}
+
+// The open drop-down: under its widget (above it when there is more room there), at least as wide, 12 per row.
+constexpr float kDropRowH = 12;
+struct DropRect {
+    float x, y, w, h;
+    int rows;
+};
+bool dropOpen(const UiState& s) { return g.drop.button < s.buttons.size(); }
+DropRect dropRect(UiState& s) {
+    const Button& b = s.buttons[g.drop.button];
+    float w = b.w;
+    for (const Choice& ch : g.drop.choices) w = std::max(w, float(s.font.width(ch.label) + 14));
+    w = std::min(w, float(s.guiW() - 4));
+    const int n = int(g.drop.choices.size());
+    const float below = float(s.guiH()) - 2 - (b.y + b.h), above = b.y - 2;
+    const bool down = below >= float(n) * kDropRowH + 2 || below >= above;
+    const int rows = std::clamp(int(((down ? below : above) - 2) / kDropRowH), 1, std::max(n, 1));
+    const float h = float(rows) * kDropRowH + 2;
+    return {std::clamp(b.x, 2.0f, float(s.guiW()) - 2 - w), down ? b.y + b.h : b.y - h, w, h, rows};
+}
+
+void drawDropdown(UiState& s, Canvas& c) {
+    const DropRect r = dropRect(s);
+    const int n = int(g.drop.choices.size());
+    c.fill(r.x - 1, r.y - 1, r.x + r.w + 1, r.y + r.h + 1, 0xFFA0A0A0);
+    c.fill(r.x, r.y, r.x + r.w, r.y + r.h, 0xF0000000);
+    int hovered = -1;
+    for (int k = 0; k < r.rows && g.drop.first + k < n; ++k) {
+        const int i = g.drop.first + k;
+        const Choice& ch = g.drop.choices[size_t(i)];
+        const float y = r.y + 1 + float(k) * kDropRowH;
+        if (s.mouseX >= r.x && s.mouseX < r.x + r.w && s.mouseY >= y && s.mouseY < y + kDropRowH) {
+            hovered = i;
+            if (ch.active) c.fill(r.x, y, r.x + r.w, y + kDropRowH, 0xFF505050);
+            s.requestCursor(ch.active ? UiState::CursorPointingHand : UiState::CursorNotAllowed);
+        }
+        const u32 color = !ch.active ? 0xFF707070 : i == g.drop.selected ? 0xFFFFFF55 : 0xFFFFFFFF;
+        s.drawText(c, ch.label, r.x + 6, y + 2, color, true);
+    }
+    if (n > r.rows) {  // where the visible rows are in a longer list
+        const float th = std::max(6.0f, r.h * float(r.rows) / float(n));
+        const float ty = r.y + (r.h - th) * float(g.drop.first) / float(n - r.rows);
+        c.fill(r.x + r.w - 2, ty, r.x + r.w, ty + th, 0xFFC0C0C0);
+    }
+    if (hovered >= 0 && g.drop.choices[size_t(hovered)].tooltip) {
+        const std::vector<Text> lines = tooltipLines(s, g.drop.choices[size_t(hovered)].tooltip());
+        if (!lines.empty()) s.drawTooltip(c, lines, s.mouseX, s.mouseY);
+    }
+}
+
+void dropdownInput(UiState& s, const Window::InputEvent& e) {
+    using E = Window::InputEvent;
+    const DropRect r = dropRect(s);
+    const int n = int(g.drop.choices.size());
+    if (e.type == E::Key && e.down && e.code == VK_ESCAPE) {
+        g.drop = {};
+    } else if (e.type == E::Wheel) {
+        g.drop.first = std::clamp(g.drop.first - (e.code > 0 ? 1 : e.code < 0 ? -1 : 0), 0, std::max(0, n - r.rows));
+    } else if (e.type == E::Button && e.down) {
+        if (s.mouseX >= r.x && s.mouseX < r.x + r.w && s.mouseY >= r.y && s.mouseY < r.y + r.h) {
+            const int i = g.drop.first + int((s.mouseY - r.y - 1) / kDropRowH);
+            if (i < 0 || i >= n || !g.drop.choices[size_t(i)].active) return;  // stays open
+            const auto pick = std::move(g.drop.pick);
+            g.drop = {};
+            audio::playUiClick();
+            pick(i);  // may rebuild the screen
+        } else {
+            g.drop = {};  // a click outside only closes it
+        }
+    }
 }
 
 Text boldUnderlined(Text t) {
@@ -199,7 +277,7 @@ void drawOptionsList(UiState& s, Canvas& c, const std::function<void(Canvas&, fl
     for (size_t i = 0; i < g.rowY.size() && i < s.buttons.size(); ++i) {
         const Button& b = s.buttons[i];
         if (b.y > bottom || b.y + b.h < top) continue;
-        s.drawButton(c, i, inList);
+        s.drawButton(c, i, inList && !dropOpen(s));
     }
     c.popScissor();
     if (maxScroll(s) > 0) {  // AbstractScrollArea.extractScrollbar
@@ -213,7 +291,8 @@ void drawOptionsList(UiState& s, Canvas& c, const std::function<void(Canvas&, fl
     const float titleY = g.subtitle.empty() ? float((kHeaderH - 9) / 2) : float((kHeaderH - 20) / 2);
     s.drawCentered(c, g.title, float(W / 2), titleY, 0xFFFFFFFF);
     if (!g.subtitle.empty()) s.drawCentered(c, g.subtitle, float(W / 2), titleY + 11, g.subtitleColor);
-    for (size_t i = g.rowY.size(); i < s.buttons.size(); ++i) s.drawButton(c, i);
+    for (size_t i = g.rowY.size(); i < s.buttons.size(); ++i) s.drawButton(c, i, !dropOpen(s));
+    if (dropOpen(s)) return drawDropdown(s, c);
     // Tooltip of the hovered widget.
     for (size_t i = 0; i < s.buttons.size(); ++i) {
         const Button& b = s.buttons[i];
@@ -234,6 +313,7 @@ void optionsListBack(UiState& s) {
 void optionsListInput(UiState& s, const Window::InputEvent& e) {
     using E = Window::InputEvent;
     layout(s);
+    if (dropOpen(s)) return dropdownInput(s, e);
     if (e.type == E::Key && e.down && e.code == VK_ESCAPE) return optionsListBack(s);
     const float top = listTop(), bottom = listBottom(s);
     if (e.type == E::Wheel && s.screen == Screen::Video && s.window->keyDown(VK_CONTROL)) {
@@ -284,6 +364,23 @@ Button cycleButton(std::function<Text()> label, std::function<void()> next, std:
     return b;
 }
 
+Button choiceButton(UiState& s, std::function<Text()> label, std::function<std::vector<Choice>()> choices,
+                    std::function<int()> selected, std::function<void(int)> pick, std::function<Text()> tooltip) {
+    Button b = cycleButton(std::move(label), {}, std::move(tooltip));
+    b.onPress = [p = &s, choices = std::move(choices), selected = std::move(selected), pick = std::move(pick)] {
+        for (size_t i = 0; i < g.rowY.size() && i < p->buttons.size(); ++i) {  // the list widget clicked
+            const Button& w = p->buttons[i];
+            if (p->mouseX < w.x || p->mouseY < w.y || p->mouseX >= w.x + w.w || p->mouseY >= w.y + w.h) continue;
+            g.drop = {};
+            g.drop.button = i, g.drop.choices = choices(), g.drop.selected = selected(), g.drop.pick = pick;
+            const int rows = dropRect(*p).rows;  // the current choice in view
+            g.drop.first = std::clamp(g.drop.selected - rows / 2, 0, std::max(0, int(g.drop.choices.size()) - rows));
+            return;
+        }
+    };
+    return b;
+}
+
 Button onOffButton(UiState& s, const char* captionKey, bool* value, std::function<void()> changed, const char* tooltipKey) {
     UiState* p = &s;
     return cycleButton(
@@ -327,6 +424,24 @@ Button enumButton(UiState& s, const char* captionKey, int* value, std::vector<co
                   std::function<Text()> tooltip) {
     UiState* p = &s;
     const int n = int(valueKeys.size());
+    if (n > 2)
+        return choiceButton(
+            s,
+            [p, captionKey, value, valueKeys] {
+                return optionLabel(*p, captionKey, Text(p->res.translate(valueKeys[size_t(std::clamp(*value, 0, int(valueKeys.size()) - 1))])));
+            },
+            [p, valueKeys] {
+                std::vector<Choice> v;
+                for (const char* k : valueKeys) v.push_back({Text(p->res.translate(k))});
+                return v;
+            },
+            [value] { return *value; },
+            [p, value, changed](int i) {
+                *value = i;
+                p->settings.save();
+                if (changed) changed();
+            },
+            std::move(tooltip));
     return cycleButton(
         [p, captionKey, value, valueKeys] {
             return optionLabel(*p, captionKey, Text(p->res.translate(valueKeys[size_t(std::clamp(*value, 0, int(valueKeys.size()) - 1))])));

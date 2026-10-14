@@ -37,6 +37,15 @@ void optionsListBack(UiState& s);  // Done / Esc: saves options.txt, back to the
 // Widgets (CycleButton / OptionInstance slider): labels and tooltips follow the current values.
 Text optionLabel(UiState& s, const char* captionKey, const Text& value);  // "Caption: value" (options.generic_value)
 Button cycleButton(std::function<Text()> label, std::function<void()> next, std::function<Text()> tooltip = {});
+// A drop-down (this client's, for options with more than two values; the game cycles): "Caption: value", a click opens
+// the list of choices under the widget and a click on one picks it (a click outside or Esc closes it unchanged).
+struct Choice {
+    Text label;
+    bool active = true;             // unavailable choices are listed greyed out
+    std::function<Text()> tooltip;  // while hovered (an unavailable one: why)
+};
+Button choiceButton(UiState& s, std::function<Text()> label, std::function<std::vector<Choice>()> choices,
+                    std::function<int()> selected, std::function<void(int)> pick, std::function<Text()> tooltip = {});
 Button onOffButton(UiState& s, const char* captionKey, bool* value, std::function<void()> changed = {},
                    const char* tooltipKey = nullptr);
 Button sliderButton(float value, std::function<Text()> label, std::function<void(float)> slide);
@@ -50,7 +59,7 @@ std::vector<Text> tooltipLines(UiState& s, const Text& text);  // split at new l
 std::function<Text()> tooltipKey(UiState& s, const char* key);  // a constant translated tooltip
 Text percentLabel(UiState& s, const char* captionKey, double v);       // Options.percentValueLabel
 Text percentOrOffLabel(UiState& s, const char* captionKey, double v);  // Options.percentValueOrOffLabel
-// OptionInstance.Enum: "Caption: value", cycling through the values (their translation keys) in order.
+// OptionInstance.Enum: "Caption: value"; two values toggle, more open a drop-down of the values (their translation keys).
 Button enumButton(UiState& s, const char* captionKey, int* value, std::vector<const char*> valueKeys,
                   std::function<void()> changed = {}, std::function<Text()> tooltip = {});
 // OptionInstance.IntRange slider (lo..hi inclusive, the game's slider mapping) over get / set.

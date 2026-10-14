@@ -901,8 +901,10 @@ int wmain(int argc, wchar_t** argv) {
     ui.setMenuBlur([&postEffects](const PassContext& ctx, float radius) { postEffects.blur(ctx, radius); });
     if (session) ui.attachSession(netClient.get(), session.get());
     if (!opt.script.empty()) ui.loadScript(opt.script);
-    // The saved shader pack (render/packs), unless this run's command line picks a pack or a shader mode.
-    if (!packs::commandLinePack() && !opt.shadersGiven && !ui.settings().shaderPack.empty())
+    // The saved shader pack (render/packs), unless this run's command line picks a pack or a shader mode, or Shaders is
+    // Off (which turns a pack off too).
+    if (!packs::commandLinePack() && !opt.shadersGiven && !ui.settings().shaderPack.empty() &&
+        (!ui.settings().videoSaved || ui.settings().video.shaders != u8(ShaderPreset::Off)))
         packs::selectPack(renderer, ui.settings().shaderPack);
     {  // Video settings: options.txt, then this run's command line (not saved). Applies shaders, upscaler, frame gen.
         VideoSettings v = ui.settings().video;

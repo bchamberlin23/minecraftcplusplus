@@ -196,17 +196,24 @@ void videoBuild(UiState& s) {
                                                                                                       : "options.inactivityFpsLimit.afk.tooltip"));
                                  }));
     // GUI Scale (Auto, then 1 .. the largest this window allows) and Fullscreen (borderless, this monitor)
-    display.push_back(cycleButton(
+    display.push_back(choiceButton(
+        s,
         [p] {
             return optionLabel(*p, "options.guiScale",
                                Text(p->settings.guiScale == 0 ? p->res.translate("options.guiScale.auto") : std::to_string(p->settings.guiScale)));
         },
-        [p] {
+        [p] {  // Auto, then 1 .. the largest this window allows
             int maxScale = 1;
             const u32 w = p->window->width(), h = p->window->height();
             while (w / u32(maxScale + 1) >= 320 && h / u32(maxScale + 1) >= 240) ++maxScale;
             if (p->settings.forceUnicodeFont && maxScale % 2 != 0) ++maxScale;  // Window.calculateScale(0, unicode): even
-            p->settings.guiScale = p->settings.guiScale >= maxScale ? 0 : p->settings.guiScale + 1;
+            std::vector<Choice> v{{Text(p->res.translate("options.guiScale.auto"))}};
+            for (int i = 1; i <= maxScale; ++i) v.push_back({Text(std::to_string(i))});
+            return v;
+        },
+        [p] { return p->settings.guiScale; },
+        [p](int i) {
+            p->settings.guiScale = i;
             p->settings.save();
         }));
     display.push_back(cycleButton(
@@ -399,196 +406,224 @@ void extraBuild(UiState& s) {
         else if (!st.error.empty()) l.subtitle(Text("Shader pack error (built-in pipeline in use): " + st.error), 0xFFFF6060);
         else if (!s.packMessage.empty()) l.subtitle(Text(s.packMessage), 0xFFFF6060);
     }
-    const std::function<Text()> needsShaders = [] { return Text("Needs the shader pipeline (Shaders: Low or higher)"); };
 
+    // Shaders: one list of the built-in presets and the installed OptiFine / Iris packs. Off turns any pack off too.
     l.header(Text("Shaders"));
-    const bool ptOk = s.init.renderer->pathTracingSupported();
-    Button preset = cycleButton([p, cur] { return value(*p, "Shaders", presetName(cur.shaders)); },
-                                [p, cur, ptOk]() mutable {
-                                    cur.shaders = u8((cur.shaders + 1) % (ptOk ? 6 : 5));
-                                    p->applyVideo(cur);
-                                    p->settings.save();
-                                },
-                                [p] {
-                                    std::string why, t = "The built-in renderer's lighting and effects. Off is the plain look (anti-aliasing "
-                                                         "and upscaling still apply); frame generation needs Low or higher.";
-                                    if (p->init.renderer->pathTracingSupported(&why))
-                                        t += "\nPath Traced: ray traced light, shadows and reflections near you (DirectX Raytracing).";
-                                    else
-                                        t += "\nPath Traced " + why + ".";
-                                    return Text(t);
-                                });
     const auto packList = packs::listPacks();
-    Button pack = cycleButton(
-        [p] {
-            std::string shown = p->settings.shaderPack.empty() ? "Built-in" : p->settings.shaderPack;
-            if (shown.size() > 18) shown = shown.substr(0, 16) + "..";
-            return value(*p, "Shader Pack", shown);
-        },
+    const bool packOn = shaders && !s.settings.shaderPack.empty();
+    Button shaderList = choiceButton(
+        s,
+        [p, cur, packOn] { return value(*p, "Shaders", packOn ? p->settings.shaderPack : presetName(cur.shaders)); },
         [p, packList] {
-            size_t i = 0;  // 0 = built-in, i = packList[i - 1]
-            for (size_t k = 0; k < packList.size(); ++k)
-                if (packList[k].name == p->settings.shaderPack) i = k + 1;
-            i = (i + 1) % (packList.size() + 1);
-            p->settings.shaderPack = i ? packList[i - 1].name : std::string();
-            packs::selectPack(*p->init.renderer, p->settings.shaderPack);
+            std::vector<Choice> v;
+            for (u8 i = 0; i < 6; ++i) v.push_back({Text(i ? std::string("Built-in: ") + presetName(i) : "Off")});
+            std::string why;
+            if (!p->init.renderer->pathTracingSupported(&why)) {
+                v[5].active = false;
+                v[5].tooltip = [why] { return Text("Path Traced " + why + "."); };
+            } else {
+                v[5].tooltip = [] { return Text("Ray traced light, shadows and reflections near you (DirectX Raytracing)"); };
+            }
+            for (const auto& pk : packList) v.push_back({Text("Pack: " + pk.name)});
+            return v;
+        },
+        [cur, packOn, packList, p] {
+            if (packOn)
+                for (size_t k = 0; k < packList.size(); ++k)
+                    if (packList[k].name == p->settings.shaderPack) return int(6 + k);
+            return int(cur.shaders);
+        },
+        [p, cur, packList](int i) mutable {
+            const bool hadPack = !p->settings.shaderPack.empty();
+            if (i < 6) {
+                p->settings.shaderPack.clear();
+                cur.shaders = u8(i);
+                if (hadPack) packs::selectPack(*p->init.renderer, {});
+            } else {
+                p->settings.shaderPack = packList[size_t(i - 6)].name;
+                if (cur.shaders == 0) cur.shaders = u8(ShaderPreset::High);  // a pack needs the shader pipeline on
+                packs::selectPack(*p->init.renderer, p->settings.shaderPack);
+            }
+            p->applyVideo(cur);
             p->settings.save();
-            p->buildButtons();
         },
         [p] {
+            std::string t = "Off: the plain look. Built-in: this renderer's lighting, shadows and effects. Pack: an OptiFine / "
+                            "Iris shader pack from the shaderpacks folder.";
             const auto st = packs::packStatus(*p->init.renderer);
-            std::string t = "OptiFine / Iris shader packs from the shaderpacks folder, switched without a restart.";
             if (!st.active.empty()) t += "\nIn use: " + st.active + ". With DLSS / FSR / XeSS, turn the pack's own TAA off.";
             return Text(t);
         });
-    l.half(std::move(preset), std::move(pack));
-    {
-        Button options = screenButton(s, "", Screen::None, !s.settings.shaderPack.empty());
+    l.big(std::move(shaderList));
+    if (packOn) {
+        Button options = screenButton(s, "", Screen::None);
         options.label = Text("Shader Pack Options...");
         options.onPress = [p] { p->openPackOptions(); };
-        l.half(std::move(options));
+        l.big(std::move(options));
     }
-
-    if (cur.shaders == u8(ShaderPreset::PathTraced)) {  // path tracing quality and its denoiser
+    if (cur.shaders == u8(ShaderPreset::PathTraced) && !packOn) {  // path tracing quality (the denoiser follows the upscaler)
         static const char* kQuality[] = {"Low", "Medium", "High", "Ultra"};
-        Button quality = cycleButton(
-            [p, cur] { return value(*p, "Path Tracing", kQuality[std::min<int>(cur.pathTracing, 3)]); },
-            [p, cur]() mutable {
-                cur.pathTracing = u8((cur.pathTracing + 1) % 4);
+        Button quality = choiceButton(
+            s, [p, cur] { return value(*p, "Path Tracing", kQuality[std::min<int>(cur.pathTracing, 3)]); },
+            [] {
+                std::vector<Choice> v;
+                for (const char* q : kQuality) v.push_back({Text(q)});
+                return v;
+            },
+            [cur] { return int(std::min<u8>(cur.pathTracing, 3)); },
+            [p, cur](int i) mutable {
+                cur.pathTracing = u8(i);
                 p->applyVideo(cur);
                 p->settings.save();
             },
-            [p, cur] {
+            [p, cur, &up] {
                 ShaderSettings q;
                 q.setPathTraceQuality(PathTraceQuality(cur.pathTracing));
                 char b[200];
                 std::snprintf(b, sizeof(b), "%u bounce%s, %u sample%s per pixel, traced within %.0f chunks; beyond that the world "
-                              "is lit like Ultra.\n", q.ptBounces, q.ptBounces == 1 ? "" : "s", q.ptSamples,
+                              "is lit like Ultra.\\n", q.ptBounces, q.ptBounces == 1 ? "" : "s", q.ptSamples,
                               q.ptSamples == 1 ? "" : "s", q.ptRadius / 16.0f);
-                return Text(b + p->init.renderer->pathTracingStatus());
-            });
-        Upscalers& u = up;
-        const bool rr = u.rayReconstruction() != nullptr;
-        Button denoiser = cycleButton(
-            [p, rr] { return value(*p, "Denoiser", rr ? "DLSS RR" : "Built-in"); },
-            [] {},
-            [p, rr, &u] {
-                if (rr) return Text("DLSS Ray Reconstruction denoises and upscales the path traced image (Upscaler: DLSS).");
-                std::string t = "Built-in temporal denoiser. ";
-                t += u.rrWhy().empty() ? "Select the DLSS upscaler for DLSS Ray Reconstruction." : "DLSS Ray Reconstruction: " + u.rrWhy();
+                std::string t = b + p->init.renderer->pathTracingStatus();
+                if (up.rayReconstruction()) t += "\\nDenoiser: DLSS Ray Reconstruction.";
+                else t += "\\nDenoiser: built-in. " + (up.rrWhy().empty() ? std::string("Anti-Aliasing: DLSS for DLSS Ray Reconstruction.")
+                                                                           : "DLSS Ray Reconstruction: " + up.rrWhy());
                 return Text(t);
             });
-        denoiser.active = false;  // follows the upscaler
-        l.half(std::move(quality), std::move(denoiser));
+        l.half(std::move(quality));
     }
 
+    // Anti-aliasing and upscaling: one list (Off only with Shaders Off: the shader pipeline always anti-aliases).
     l.header(Text("Anti-Aliasing & Upscaling"));
-    Button aa = cycleButton([p, cur, shaders] {
-                                return value(*p, "Anti-Aliasing", shaders || cur.plainAntialiasing ? "Temporal" : "Off");
-                            },
-                            [p, cur]() mutable {
-                                cur.plainAntialiasing = !cur.plainAntialiasing;
-                                p->applyVideo(cur);
-                                p->settings.save();
-                            },
-                            [shaders] {
-                                return Text(shaders ? "The shader pipeline always anti-aliases with the upscaler below."
-                                                    : "Shaders Off: temporal anti-aliasing against shimmering edges and textures, "
-                                                      "with the upscaler below (TAA, DLSS / DLAA, FSR, XeSS). Off: no anti-aliasing.");
-                            });
-    aa.active = !shaders;
-    l.half(std::move(aa));
-    Button upscaler = cycleButton([p, cur] { return value(*p, "Upscaler", Upscalers::upscalerName(cur.upscaler)); },
-                                  [p, cur, &caps]() mutable {
-                                      int k = int(cur.upscaler);
-                                      do k = (k + 1) % int(UpscalerKind::Count);
-                                      while (!caps.upscaler[k]);
-                                      cur.upscaler = UpscalerKind(k);
-                                      p->applyVideo(cur);
-                                      p->settings.save();
-                                  },
-                                  [p, &caps] {  // availability of each vendor's upscaler and what is running
-                                      Upscalers& u = p->init.renderer->upscalers();
-                                      std::string t;
-                                      for (int k = 1; k < int(UpscalerKind::Count); ++k) {
-                                          const std::string name = Upscalers::upscalerName(UpscalerKind(k));
-                                          t += name + (caps.upscaler[k] ? ": " + std::string(caps.version[k]) : ": unavailable - " + std::string(caps.why[k])) + "\n";
-                                      }
-                                      if (u.settings().shaders == 0 && !u.settings().plainAntialiasing)
-                                          t += "Needs Anti-Aliasing (or Shaders: Low or higher)\n";
-                                      return Text(t + u.status());
-                                  });
-    upscaler.active = upscaling;
-    Button quality = cycleButton([p, cur, &up] { return value(*p, "Quality", up.qualityName(cur.upscaler, cur.quality)); },
-                                 [p, cur, &up]() mutable {
-                                     const auto modes = up.qualityModes(cur.upscaler);
-                                     auto it = std::find(modes.begin(), modes.end(), cur.quality);
-                                     cur.quality = it == modes.end() || it + 1 == modes.end() ? modes.front() : *(it + 1);
-                                     p->applyVideo(cur);
-                                     p->settings.save();
-                                 },
-                                 upscaling ? std::function<Text()>() : needsShaders);
-    quality.active = upscaling;
-    l.half(std::move(upscaler), std::move(quality));
-    Button sharpness = sliderButton(cur.sharpness,
-                                    [p] {
-                                        const int pct = int(std::lround(p->init.renderer->upscalers().settings().sharpness * 100));
-                                        return translatable("options.percent_value", {Text("Sharpness"), Text(std::to_string(pct))}, p->lang());
-                                    },
-                                    [p](float v) {
-                                        VideoSettings vs = p->init.renderer->upscalers().settings();
-                                        vs.sharpness = std::round(v * 20.0f) / 20.0f;
-                                        if (vs.sharpness != p->settings.video.sharpness) {
-                                            p->settings.video = p->init.renderer->upscalers().apply(vs);
-                                            p->settings.videoSaved = true;
-                                        }
-                                    });
-    sharpness.active = upscaling;
-    l.half(std::move(sharpness));
+    const int offset = shaders ? 0 : 1;  // Shaders Off lists Off first
+    Button aa = choiceButton(
+        s, [p, cur, upscaling] { return value(*p, "Anti-Aliasing", upscaling ? Upscalers::upscalerName(cur.upscaler) : "Off"); },
+        [shaders, &caps] {
+            std::vector<Choice> v;
+            if (!shaders) v.push_back({Text("Off")});
+            for (int k = 0; k < int(UpscalerKind::Count); ++k) {
+                Choice ch{Text(Upscalers::upscalerName(UpscalerKind(k)))};
+                const std::string version = caps.version[k], why = caps.why[k];
+                ch.active = caps.upscaler[k];
+                if (!ch.active) ch.tooltip = [why] { return Text("Unavailable: " + why); };
+                else if (!version.empty()) ch.tooltip = [version] { return Text(version); };
+                v.push_back(std::move(ch));
+            }
+            return v;
+        },
+        [cur, upscaling, offset] { return upscaling ? int(cur.upscaler) + offset : 0; },
+        [p, cur, offset](int i) mutable {
+            if (i < offset) {
+                cur.plainAntialiasing = false;
+            } else {
+                cur.plainAntialiasing = true;
+                cur.upscaler = UpscalerKind(i - offset);
+            }
+            p->applyVideo(cur);
+            p->settings.save();
+        },
+        [p] {
+            return Text("Temporal anti-aliasing against shimmering edges and textures; DLSS, FSR and XeSS also render at a lower "
+                        "resolution and upscale (Quality).\\n" + p->init.renderer->upscalers().status());
+        });
+    if (upscaling) {
+        const auto modes = up.qualityModes(cur.upscaler);
+        Button quality = choiceButton(
+            s, [p, cur, &up] { return value(*p, "Quality", up.qualityName(cur.upscaler, cur.quality)); },
+            [modes, cur, &up] {
+                std::vector<Choice> v;
+                for (const UpscaleQuality q : modes) v.push_back({Text(up.qualityName(cur.upscaler, q))});
+                return v;
+            },
+            [modes, cur] { return int(std::find(modes.begin(), modes.end(), cur.quality) - modes.begin()); },
+            [p, cur, modes](int i) mutable {
+                cur.quality = modes[size_t(i)];
+                p->applyVideo(cur);
+                p->settings.save();
+            });
+        l.half(std::move(aa), std::move(quality));
+        Button sharpness = sliderButton(cur.sharpness,
+                                        [p] {
+                                            const int pct = int(std::lround(p->init.renderer->upscalers().settings().sharpness * 100));
+                                            return translatable("options.percent_value", {Text("Sharpness"), Text(std::to_string(pct))}, p->lang());
+                                        },
+                                        [p](float v) {
+                                            VideoSettings vs = p->init.renderer->upscalers().settings();
+                                            vs.sharpness = std::round(v * 20.0f) / 20.0f;
+                                            if (vs.sharpness != p->settings.video.sharpness) {
+                                                p->settings.video = p->init.renderer->upscalers().apply(vs);
+                                                p->settings.videoSaved = true;
+                                            }
+                                        });
+        l.half(std::move(sharpness));
+    } else {
+        l.half(std::move(aa));
+    }
 
-    l.header(Text("Frame Generation & Latency"));
+    // Frame generation (needs anti-aliasing: its motion vectors and depth) and the vendor's low-latency mode.
     const auto fgChoices = frameGenChoices(caps);
-    Button fg = cycleButton([p, cur] { return value(*p, "Frame Generation", frameGenLabel(cur)); },
-                            [p, cur, fgChoices]() mutable {
-                                size_t i = 0;
-                                for (; i < fgChoices.size(); ++i)
-                                    if (fgChoices[i].first == cur.frameGen &&
-                                        (cur.frameGen != FrameGenKind::Dlss || fgChoices[i].second == cur.frameGenMultiplier))
-                                        break;
-                                const auto& next = fgChoices[(i + 1) % fgChoices.size()];
-                                cur.frameGen = next.first, cur.frameGenMultiplier = next.second;
-                                p->applyVideo(cur);
-                                p->settings.save();
-                            },
-                            [p, shaders] {
-                                Upscalers& u = p->init.renderer->upscalers();
-                                if (!shaders) return Text("Needs the shader pipeline (Shaders: Low or higher)");
-                                if (u.frameGenActive() && u.lastFramesPresented() > 1)
-                                    return Text(std::to_string(u.lastFramesPresented()) + " frames presented per rendered frame");
-                                return Text("Generated frames between rendered ones (DLSS Multi Frame Generation, FSR, XeSS-FG)");
-                            });
-    fg.active = shaders && fgChoices.size() > 1;
-    Button latency;
-    {
-        const bool any = caps.lowLatency[int(LowLatencyMode::On)];
+    const bool fgShown = upscaling && fgChoices.size() > 1;
+    const bool latencyAny = caps.lowLatency[int(LowLatencyMode::On)];
+    if (!fgShown && !latencyAny) return l.footer();
+    l.header(Text(fgShown ? "Frame Generation & Latency" : "Latency"));
+    std::vector<Button> row;
+    if (fgShown) {
+        row.push_back(choiceButton(
+            s, [p, cur] { return value(*p, "Frame Generation", frameGenLabel(cur)); },
+            [fgChoices] {
+                std::vector<Choice> v;
+                for (const auto& [kind, mult] : fgChoices) {
+                    VideoSettings vs;
+                    vs.frameGen = kind, vs.frameGenMultiplier = mult;
+                    v.push_back({Text(frameGenLabel(vs))});
+                }
+                return v;
+            },
+            [cur, fgChoices] {
+                for (size_t i = 0; i < fgChoices.size(); ++i)
+                    if (fgChoices[i].first == cur.frameGen &&
+                        (cur.frameGen != FrameGenKind::Dlss || fgChoices[i].second == cur.frameGenMultiplier))
+                        return int(i);
+                return 0;
+            },
+            [p, cur, fgChoices](int i) mutable {
+                cur.frameGen = fgChoices[size_t(i)].first, cur.frameGenMultiplier = fgChoices[size_t(i)].second;
+                p->applyVideo(cur);
+                p->settings.save();
+            },
+            [p] {
+                Upscalers& u = p->init.renderer->upscalers();
+                if (u.frameGenActive() && u.lastFramesPresented() > 1)
+                    return Text(std::to_string(u.lastFramesPresented()) + " frames presented per rendered frame");
+                return Text("Generated frames between rendered ones (DLSS Multi Frame Generation, FSR, XeSS-FG)");
+            }));
+    }
+    if (latencyAny) {
         std::string name = caps.lowLatencyName[0] ? caps.lowLatencyName : "Low Latency";
         if (name.starts_with("NVIDIA ")) name = name.substr(7);
         if (name.starts_with("AMD ")) name = name.substr(4);
-        std::string state = cur.lowLatency == LowLatencyMode::Boost ? "On+Boost" : cur.lowLatency == LowLatencyMode::On ? "On" : "Off";
-        if (!any) name = "Low Latency", state = "n/a";
-        if (cur.frameGen == FrameGenKind::Xess) name = "XeLL", state = "On (FG)";
-        latency = cycleButton([p, name, state] { return value(*p, name, state); },
-                              [p, cur, &caps]() mutable {
-                                  int m = int(cur.lowLatency);
-                                  do m = (m + 1) % int(LowLatencyMode::Count);
-                                  while (!caps.lowLatency[m]);
-                                  cur.lowLatency = LowLatencyMode(m);
-                                  p->applyVideo(cur);
-                                  p->settings.save();
-                              });
-        latency.active = any && cur.frameGen != FrameGenKind::Xess;
+        static const char* kStates[] = {"Off", "On", "On+Boost"};
+        if (cur.frameGen == FrameGenKind::Xess) {  // XeSS-FG runs XeLL itself
+            Button xell;
+            xell.label = value(s, "XeLL", "On (FG)");
+            xell.active = false;
+            row.push_back(std::move(xell));
+        } else {
+            row.push_back(choiceButton(
+                s, [p, cur, name] { return value(*p, name, kStates[std::min<int>(int(cur.lowLatency), 2)]); },
+                [&caps] {
+                    std::vector<Choice> v;
+                    for (int m = 0; m < int(LowLatencyMode::Count); ++m) v.push_back({Text(kStates[m]), m == 0 || caps.lowLatency[m]});
+                    return v;
+                },
+                [cur] { return int(cur.lowLatency); },
+                [p, cur](int i) mutable {
+                    cur.lowLatency = LowLatencyMode(i);
+                    p->applyVideo(cur);
+                    p->settings.save();
+                }));
+        }
     }
-    l.half(std::move(fg), std::move(latency));
+    l.halves(std::move(row));
     l.footer();
 }
 
