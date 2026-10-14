@@ -135,7 +135,9 @@ grindstone / cartography, brewing / crafter / beacon / bundles and the death / w
 residuals: no client-side result prediction (createResult: anvil, grindstone, cartography results wait for the
 server), screens are not narrated on opening (Screen.getNarrationMessage, e.g. the credits), the win screen's End
 portal background is approximated, the death screen is not reopened (nor the player respawned) when another screen
-closes while dead, no draft-report icon on the death screen's title button. Not ported: the bell's raider particles (showBellParticles), the
+closes while dead, no draft-report icon on the death screen's title button. Books / lectern and the operator block
+editors audited and fixed; residuals: writable pages ignore text filtering (getPages(isTextFilteringEnabled)), the
+test instance's error message is the one it had when opened. Not ported: the bell's raider particles (showBellParticles), the
 darkness pulse on the player's own tick count, filtered sign text (needs the account's profanity filter flag). Toasts follow ToastInstance now (the
 server pack download toast shows its progress). Toast residuals: no toasts
 for world access / chunk load or save /
