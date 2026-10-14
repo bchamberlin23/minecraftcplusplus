@@ -300,7 +300,7 @@ float Physics::jumpFactor(int x, int y, int z) const {
 float Physics::bounceRestitution(int x, int y, int z) const {
     const std::string_view n = shortBlock(registry_.name(world_.block(x, y, z)));
     if (n == "slime_block") return 1.0f;
-    return n.ends_with("_bed") || n == "shelf_mushroom" ? 0.75f : 0.0f;
+    return (n.ends_with("_bed") && n != "straw_bed") || n == "shelf_mushroom" ? 0.75f : 0.0f;  // the BED collection
 }
 
 bool Physics::canGlideThrough(int x, int y, int z) const { return (tagBits(world_.block(x, y, z)) & 16) != 0; }
@@ -316,17 +316,20 @@ bool Physics::isSuffocating(int x, int y, int z) const {
 }
 
 bool Physics::stuckMultiplier(const AABB& b, double out[3], bool weaving) const {
+    // Each block's entityInside calls makeStuckInBlock in BlockPos.betweenClosed order (x fastest, then y, then z):
+    // the last one wins. Powder snow holds a living entity only while its own block (getInBlockState) is powder snow.
     bool any = false;
-    for (int y = int(std::floor(b.min[1] + 1e-5)); y <= int(std::floor(b.max[1] - 1e-5)); ++y)
-        for (int z = int(std::floor(b.min[2] + 1e-5)); z <= int(std::floor(b.max[2] - 1e-5)); ++z)
+    const double cx = (b.min[0] + b.max[0]) / 2, cz = (b.min[2] + b.max[2]) / 2;
+    const bool feetInSnow = shortBlock(registry_.name(world_.block(int(std::floor(cx)), int(std::floor(b.min[1])),
+                                                                   int(std::floor(cz))))) == "powder_snow";
+    for (int z = int(std::floor(b.min[2] + 1e-5)); z <= int(std::floor(b.max[2] - 1e-5)); ++z)
+        for (int y = int(std::floor(b.min[1] + 1e-5)); y <= int(std::floor(b.max[1] - 1e-5)); ++y)
             for (int x = int(std::floor(b.min[0] + 1e-5)); x <= int(std::floor(b.max[0] - 1e-5)); ++x) {
                 const std::string_view n = shortBlock(registry_.name(world_.block(x, y, z)));
-                if (n == "cobweb") {  // WebBlock.entityInside
+                if (n == "cobweb")  // WebBlock.entityInside
                     out[0] = weaving ? 0.5 : 0.25, out[1] = weaving ? 0.25 : 0.05, out[2] = out[0], any = true;
-                }
-                else if (n == "sweet_berry_bush" && !any) out[0] = 0.8, out[1] = 0.75, out[2] = 0.8, any = true;
-                else if (n == "powder_snow" && !any && y == int(std::floor(b.min[1] + 1e-5)))  // the block at the feet
-                    out[0] = 0.9, out[1] = 1.5, out[2] = 0.9, any = true;
+                else if (n == "sweet_berry_bush") out[0] = 0.8, out[1] = 0.75, out[2] = 0.8, any = true;
+                else if (n == "powder_snow" && feetInSnow) out[0] = 0.9, out[1] = 1.5, out[2] = 0.9, any = true;
             }
     return any;
 }
@@ -878,7 +881,7 @@ void Player::applyEffectsFromBlocks(const Physics& physics) {
         fallDistance = 0;
     }
     isInPowderSnow_ = false;
-    bool bubbled = false, honeyed = false;
+    bool honeyed = false;
     slidingOnHoney = false;
     for (int y = int(std::floor(b.min[1])); y <= int(std::floor(b.max[1])); ++y)
         for (int z = int(std::floor(b.min[2])); z <= int(std::floor(b.max[2])); ++z)
@@ -886,8 +889,7 @@ void Player::applyEffectsFromBlocks(const Physics& physics) {
                 const u16 id = physics.world().block(x, y, z);
                 const std::string_view n = shortBlock(physics.registry().name(id));
                 if (n == "powder_snow") isInPowderSnow_ = true;
-                if (n == "bubble_column" && !bubbled && !flying) {  // BubbleColumnBlock.entityInside (Player: not while flying)
-                    bubbled = true;
+                if (n == "bubble_column" && !flying) {  // BubbleColumnBlock.entityInside, every cell (Player: not flying)
                     const bool down = physics.registry().property(id, "drag") == "true";
                     const BlockInfo& a = physics.registry().infos()[physics.world().block(x, y + 1, z)];
                     if (!a.collisionCount && !a.fluid && !a.waterlogged) {  // Entity.onAboveBubbleColumn
