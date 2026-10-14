@@ -671,22 +671,15 @@ void Gameplay::setPlayer(Game& game, ui::Ui& ui) {
     };
     game.adventureMayBreak = [this](int x, int y, int z) { return adventureMayBreak(x, y, z); };
     game.adventureMayPlace = [this](int x, int y, int z) { return adventureMayPlace(x, y, z); };
+    if (entities_) entities_->eyeHeight = [this](const ent::Entity& e) { return eyeHeight(e); };
     game.entityCamera = [this](int id, Game::EntityCamera& s) {
         const ent::Entity* e = entities_ ? entities_->entity(id) : nullptr;
         if (!e || !e->info) return false;
         const bool player = e->category == ent::Category::Player, living = player || e->category == ent::Category::Living;
-        const std::string_view n = shortName(e->info->name);
         s = {};
         s.living = living, s.player = player;
-        s.eyeHeight = e->info->eye;  // Entity.getEyeHeight: of its dimensions in its pose
+        s.eyeHeight = eyeHeight(*e);
         if (living) {
-            const auto [d, k] = rules_.dimensions(e, e->info->name);
-            if (d) s.eyeHeight = float(d->eye * k);
-            if (e->pose == 2) s.eyeHeight = 0.2f;  // SLEEPING_DIMENSIONS
-            else if (player && (e->pose == 1 || e->pose == 3 || e->pose == 4)) s.eyeHeight = 0.4f * e->scale;  // Avatar.POSES
-            else if (player && e->pose == 5) s.eyeHeight = 1.27f * e->scale;
-            else if (player && e->pose == 7) s.eyeHeight = 1.62f;  // DYING: fixed
-            else if ((n == "camel" || n == "camel_husk") && e->pose == 10) s.eyeHeight = (e->baby ? 0.41f : 0.845f) * e->scale;
             s.dead = e->dying || e->health <= 0.0f;
             s.hurtTime = e->hurtTime, s.hurtDuration = 10, s.deathTime = e->deathTime;
         }
@@ -842,6 +835,22 @@ void Gameplay::frame() {
     if (entities_ && game_->player().fallFlying)
         for (const auto& [id, e] : entities_->entities())
             if (e.attachedTo == entityId_ && e.info && e.info->name == "minecraft:firework_rocket") a.rocketBoost = true;
+}
+
+// Entity.getEyeHeight: of its dimensions in its pose (babies' own or scaled, the scale attribute, player poses).
+float Gameplay::eyeHeight(const ent::Entity& e) const {
+    if (!e.info) return 1.62f;
+    const bool player = e.category == ent::Category::Player;
+    if (!player && e.category != ent::Category::Living) return e.info->eye;
+    const std::string_view n = shortName(e.info->name);
+    const auto [d, k] = rules_.dimensions(&e, e.info->name);
+    float eye = d ? float(d->eye * k) : e.info->eye;
+    if (e.pose == 2) eye = 0.2f;  // SLEEPING_DIMENSIONS
+    else if (player && (e.pose == 1 || e.pose == 3 || e.pose == 4)) eye = 0.4f * e.scale;  // Avatar.POSES
+    else if (player && e.pose == 5) eye = 1.27f * e.scale;
+    else if (player && e.pose == 7) eye = 1.62f;  // DYING: fixed
+    else if ((n == "camel" || n == "camel_husk") && e.pose == 10) eye = (e.baby ? 0.41f : 0.845f) * e.scale;
+    return eye;
 }
 
 int Gameplay::effect(std::string_view name) const {

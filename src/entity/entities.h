@@ -374,6 +374,7 @@ public:
     std::function<void(const Entity&, int event)> onEntityEvent;
     // Entity.positionRider for each passenger we do not move ourselves, after the tick (game/riding.cpp).
     std::function<void(const Entity& vehicle, Entity& passenger)> positionRider;
+    std::function<float(const Entity&)> eyeHeight;  // Entity.getEyeHeight in its pose (gameplay.cpp), else the type's
     // Entity events for ids not tracked here (the local player's own, e.g. KINETIC_HIT).
     std::function<void(int id, int event)> onUntrackedEntityEvent;
     std::function<void(const Entity&, int action)> onAnimate;

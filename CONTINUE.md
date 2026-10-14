@@ -131,7 +131,7 @@ background is approximated (no END_PORTAL pipeline in the GUI). Network residual
 (the server sends every registry in full), packets after a transfer in the same stream are dropped, the brand payload
 is read in the configuration phase only. Pickups (a flying copy for orbs and partial stacks) and the living render
 effects (upside-down xRot, creeper flash steps / ignited swelling, invisible hurt tint, skeleton shake) audited and
-fixed; residual: remote players' eye height for the pickup target is the type's constant (no pose). Anvil /
+fixed (the pickup target's eye height follows the collector's pose and dimensions: Gameplay::eyeHeight). Anvil /
 grindstone / cartography, brewing / crafter / beacon / bundles and the death / win screens audited and fixed;
 residuals: screens without a known title narrate only the usage hint on opening, the win screen's End
 portal background is approximated (closing another screen while dead reopens the death screen or respawns, like

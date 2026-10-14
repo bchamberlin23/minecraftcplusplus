@@ -1631,7 +1631,7 @@ bool EntityWorld::pickupTarget(int collector, float pt, double out[3]) const {
     if (c == entities_.end() || !c->second.info) return false;
     const Entity& t = c->second;
     for (int a = 0; a < 3; ++a) out[a] = t.prevPos[a] + (t.pos[a] - t.prevPos[a]) * pt;
-    out[1] += t.info->eye / 2.0;  // (getY + getEyeY) / 2
+    out[1] += (eyeHeight ? eyeHeight(t) : t.info->eye) / 2.0;  // (getY + getEyeY) / 2
     return true;
 }
 

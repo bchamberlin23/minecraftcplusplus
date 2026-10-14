@@ -60,6 +60,7 @@ public:
     // Mob effect amplifier of the local player (0 = level I), -1 when it does not have it ("haste").
     int effect(std::string_view name) const;
     int entityEffect(int entity, std::string_view name) const;  // another entity's (our vehicle's), -1 without
+    float eyeHeight(const ent::Entity& e) const;  // Entity.getEyeHeight in its pose
     double attribute(std::string_view name, double fallback) const;  // the server's value, else fallback
     const ui::ItemStack* mainHand() const;
     const ui::ItemStack* offHand() const;
