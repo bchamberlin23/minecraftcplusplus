@@ -10,6 +10,7 @@
 class Game;
 namespace ent {
 class EntityWorld;
+struct Entity;
 }
 
 namespace audio {
@@ -39,6 +40,7 @@ private:
     void stopAll();
 
     AudioSystem& audio_;
+    bool onRails(const ent::Entity& e) const;
     ent::EntityWorld& entities_;
     Game& game_;
     double clock_ = 0;

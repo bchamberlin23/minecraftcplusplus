@@ -27,13 +27,26 @@ bool TickableSounds::start(Instance& in, const char* event, Category category, c
     // SoundInstance.canStartSilent: BeeSoundInstance, MinecartSoundInstance, RidingEntitySoundInstance
     const std::string_view e(event);
     const bool silentOk = e.starts_with("minecraft:entity.bee.loop") || e == "minecraft:entity.minecart.riding" ||
-                          e == "minecraft:entity.nautilus.riding" || e == "minecraft:entity.happy_ghast.riding";
+                          e.starts_with("minecraft:entity.minecart.inside") || e == "minecraft:entity.nautilus.riding" ||
+                          e == "minecraft:entity.happy_ghast.riding";
     in.handle = audio_.play(id, category, pos, 1.0f, 1.0f, audio_.nextSeed(), linear, relative, looping, &in.soundVolume, silentOk);
     if (!in.handle) return false;
     audio_.setVolume(in.handle, in.volume * in.soundVolume);  // the instance's starting volume (0: started silently)
     if (in.pitch != 1.0f) audio_.setPitch(in.handle, in.pitch);
     instances_.push_back(in);
     return true;
+}
+
+// AbstractMinecart.isOnRails on the client (NewMinecartBehavior.tick): a rail at getCurrentBlockPosOrRailBelow.
+bool TickableSounds::onRails(const ent::Entity& e) const {
+    std::shared_lock lock(entities_.world().mutex());
+    const int x = int(std::floor(e.pos[0])), y = int(std::floor(e.pos[1])), z = int(std::floor(e.pos[2]));
+    auto rail = [&](int by) {
+        const std::string& n = entities_.registry().name(entities_.world().block(x, by, z));
+        const std::string_view b = std::string_view(n).substr(0, n.find('['));
+        return b == "minecraft:rail" || b == "minecraft:powered_rail" || b == "minecraft:detector_rail" || b == "minecraft:activator_rail";
+    };
+    return rail(y - 1) || rail(y);
 }
 
 void TickableSounds::stopAll() {
@@ -189,7 +202,8 @@ void TickableSounds::tick(int gameMode) {
                 double v[3];
                 motion(*e, v);
                 const float speed = float(std::sqrt(v[0] * v[0] + v[2] * v[2]));
-                in.volume = speed >= 0.01f && entities_.tickRate.runs ? std::clamp(speed, 0.0f, 0.5f) * 0.7f : 0.0f;
+                const bool offRail = e->newMinecart && !onRails(*e);  // the experimental behaviour off its rails: quiet
+                in.volume = speed >= 0.01f && entities_.tickRate.runs && !offRail ? std::clamp(speed, 0.0f, 0.5f) * 0.7f : 0.0f;
                 break;
             }
             case Kind::RidingMinecart:
@@ -207,7 +221,9 @@ void TickableSounds::tick(int gameMode) {
                 motion(*e, v);
                 const float speed = float(in.kind == Kind::RidingMinecart ? std::sqrt(v[0] * v[0] + v[2] * v[2])
                                                                            : std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]));
-                in.volume = speed >= 0.01f ? in.amplifier * clampedLerp(speed, in.volumeMin, in.volumeMax) : in.volumeMin;
+                // shoudlPlaySound: a minecart on its rails (or with the old behaviour)
+                const bool plays = in.kind != Kind::RidingMinecart || !e->newMinecart || onRails(*e);
+                in.volume = speed >= 0.01f && plays ? in.amplifier * clampedLerp(speed, in.volumeMin, in.volumeMax) : in.volumeMin;
                 break;
             }
             case Kind::Elytra: {  // ElytraOnPlayerSoundInstance
@@ -238,8 +254,8 @@ void TickableSounds::tick(int gameMode) {
                 motion(*e, v);
                 const float speed = float(std::sqrt(v[0] * v[0] + v[2] * v[2]));
                 const float minPitch = e->baby ? 1.1f : 0.7f, maxPitch = e->baby ? 1.5f : 1.1f;
-                if (speed >= 0.01f) {
-                    in.pitch = std::clamp(speed, minPitch, maxPitch);
+                if (speed >= 0.01f) {  // lerp(clamp(speed, min, max), min, max)
+                    in.pitch = minPitch + std::clamp(speed, minPitch, maxPitch) * (maxPitch - minPitch);
                     in.volume = std::clamp(speed, 0.0f, 0.5f) * 1.2f;
                 } else {
                     in.pitch = 0.0f, in.volume = 0.0f;
