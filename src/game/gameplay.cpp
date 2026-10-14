@@ -1253,7 +1253,8 @@ int Gameplay::predictBucket(int hand, const std::string& name) {
     };
     const int fx = block.x + (block.face == 4 ? -1 : block.face == 5 ? 1 : 0), fy = block.y + (block.face == 0 ? -1 : block.face == 1 ? 1 : 0),
               fz = block.z + (block.face == 2 ? -1 : block.face == 3 ? 1 : 0);
-    const bool container = water && registry_.property(world_.block(block.x, block.y, block.z), "waterlogged") == "false";
+    const bool container = water && registry_.property(world_.block(block.x, block.y, block.z), "waterlogged") == "false" &&
+                           !p.lastInput.sneak;  // BucketItem.emptyContents: not while sneaking
     const bool ok = container ? tryPlace(block.x, block.y, block.z) : (tryPlace(fx, fy, fz));
     (void)p;
     return ok ? Game::kUseConsume : Game::kUseFail;
@@ -1267,30 +1268,76 @@ int Gameplay::predictUseOn(int hand, const RayHit& hit) {
     const std::string name(shortName(itemName(s->item)));
     const std::string& state = registry_.name(world_.block(hit.x, hit.y, hit.z));
     const std::string block(shortName(state.substr(0, state.find('['))));
-    const bool airAbove = world_.block(hit.x, hit.y + 1, hit.z) == 0;
-    // Uses that take one of the stack (the others damage the tool).
-    game_->useOnTakesItem = name == "fire_charge" || name.ends_with("_spawn_egg") || name == "armor_stand" || name == "item_frame" ||
-                            name == "glow_item_frame" || name == "painting" || name == "end_crystal" ||
-                            name.ends_with("minecart") || name == "honeycomb" || name == "ender_eye";
-    if (name == "flint_and_steel") {  // FlintAndSteelItem.useOn: only the user plays the strike (the server skips them)
-        const bool lightable = (block == "campfire" || block == "soul_campfire" || block.ends_with("candle") || block.ends_with("candle_cake")) &&
-                               state.find("lit=false") != std::string::npos;
+    const u16 clicked = world_.block(hit.x, hit.y, hit.z);
+    auto isAir = [&](int x, int y, int z) {  // #air
+        const std::string& n = registry_.name(world_.block(x, y, z));
+        return world_.block(x, y, z) == 0 || n.starts_with("minecraft:cave_air") || n.starts_with("minecraft:void_air");
+    };
+    const bool airAbove = isAir(hit.x, hit.y + 1, hit.z);
+    const bool sneaking = game_->player().lastInput.sneak;  // isSecondaryUseActive
+    auto sound = [&](const char* id, double x, double y, double z, float pitch) {
+        if (audio::AudioSystem* a = audio::instance()) a->play(id, audio::Category::Block, x, y, z, 1.0f, pitch);
+    };
+    // CopyPropertiesProvider: another block with the clicked state's properties (0 when there is no such block)
+    auto copyProperties = [&](u16 from, const std::string& to) -> u16 {
+        u16 out = registry_.defaultState("minecraft:" + to);
+        if (!out) return 0;
+        const std::string& n = registry_.name(from);
+        const size_t open = n.find('[');
+        if (open == std::string::npos) return out;
+        for (size_t i = open + 1; i < n.size();) {
+            const size_t eq = n.find('=', i), end = std::min(n.find(',', i), n.size() - 1);
+            if (eq == std::string::npos || eq > end) break;
+            out = registry_.withProperty(out, n.substr(i, eq - i), n.substr(eq + 1, end - eq - 1));
+            i = end + 1;
+        }
+        return out;
+    };
+    // Uses that take one of the stack on the client (the others damage the tool, or the server takes it).
+    game_->useOnTakesItem = name == "fire_charge" || name == "armor_stand" || name == "item_frame" || name == "glow_item_frame" ||
+                            name == "painting" || name == "end_crystal" || name.ends_with("minecart") || name == "honeycomb";
+    if (name == "flint_and_steel" || name == "fire_charge") {  // FlintAndSteelItem / FireChargeItem.useOn
+        const std::string_view lit = registry_.property(clicked, "lit"), logged = registry_.property(clicked, "waterlogged");
+        const bool lightable = lit == "false" && (((block == "campfire" || block == "soul_campfire" || block.ends_with("candle")) &&
+                                                   logged == "false") || block.ends_with("candle_cake"));  // canLight
+        const bool flint = name == "flint_and_steel";
+        if (lightable) {  // the user hears the strike; the fire charge's sound comes from the server
+            if (flint) sound("minecraft:item.flintandsteel.use", hit.x + 0.5, hit.y + 0.5, hit.z + 0.5, randf() * 0.4f + 0.8f);
+            game_->predictBlock(hit.x, hit.y, hit.z, registry_.withProperty(clicked, "lit", "true"));
+            return Game::kUseConsume;
+        }
         static constexpr int kDir[6][3] = {{0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}};
-        const int fx = hit.x + (lightable ? 0 : kDir[hit.face][0]), fy = hit.y + (lightable ? 0 : kDir[hit.face][1]),
-                  fz = hit.z + (lightable ? 0 : kDir[hit.face][2]);
-        if (lightable || world_.block(fx, fy, fz) == 0)  // BaseFireBlock.canBePlacedAt: an empty cell
-            if (audio::AudioSystem* a = audio::instance())
-                a->play("minecraft:item.flintandsteel.use", audio::Category::Block, fx + 0.5, fy + 0.5, fz + 0.5, 1.0f, randf() * 0.4f + 0.8f);
+        const int fx = hit.x + kDir[hit.face][0], fy = hit.y + kDir[hit.face][1], fz = hit.z + kDir[hit.face][2];
+        if (!isAir(fx, fy, fz)) return Game::kUseFail;  // BaseFireBlock.canBePlacedAt: an empty cell
+        if (flint) sound("minecraft:item.flintandsteel.use", fx + 0.5, fy + 0.5, fz + 0.5, randf() * 0.4f + 0.8f);
+        // BaseFireBlock.getState: soul fire over #soul_fire_base_blocks, plain fire on a solid top (a fire held by the
+        // flammable blocks around it, or a portal, is the server's to place)
+        const u16 below = world_.block(fx, fy - 1, fz);
+        const std::string bn(shortName(registry_.name(below).substr(0, registry_.name(below).find('['))));
+        const BlockInfo& bi = registry_.infos()[below];
+        bool solidTop = false;
+        if (bi.collisionCount == 1) {
+            const Box& b = registry_.box(bi.collisionFirst);
+            solidTop = b.min[0] <= 0 && b.min[2] <= 0 && b.max[0] >= 1 && b.max[2] >= 1 && b.max[1] >= 1;
+        }
+        if (bn == "soul_sand" || bn == "soul_soil") game_->predictBlock(fx, fy, fz, registry_.defaultState("minecraft:soul_fire"));
+        else if (solidTop) game_->predictBlock(fx, fy, fz, registry_.defaultState("minecraft:fire"));
         return Game::kUseConsume;
     }
     if (name == "shears" && (block == "kelp" || block == "weeping_vines" || block == "twisting_vines" || block == "cave_vines") &&
-        registry_.property(world_.block(hit.x, hit.y, hit.z), "age") != "25") {  // ShearsItem.useOn: a growing plant's head
-        if (audio::AudioSystem* a = audio::instance())
-            a->play("minecraft:block.growing_plant.crop", audio::Category::Block, hit.x + 0.5, hit.y + 0.5, hit.z + 0.5, 1.0f, 1.0f);
+        registry_.property(clicked, "age") != "25") {  // ShearsItem.useOn: a growing plant's head goes to its max age
+        sound("minecraft:block.growing_plant.crop", hit.x + 0.5, hit.y + 0.5, hit.z + 0.5, 1.0f);
+        game_->predictBlock(hit.x, hit.y, hit.z, registry_.withProperty(clicked, "age", "25"));
         return Game::kUseConsume;
     }
-    if (name == "fire_charge" || name.ends_with("_spawn_egg") || name == "armor_stand" ||
-        name == "item_frame" || name == "glow_item_frame" || name == "painting")
+    // CampfireBlock.useItemOn: a shovel (#douses_campfires) puts a lit campfire out (the block's use: not sneaking)
+    if (name.ends_with("_shovel") && !sneaking && (block == "campfire" || block == "soul_campfire") &&
+        registry_.property(clicked, "lit") == "true") {
+        game_->predictBlock(hit.x, hit.y, hit.z, registry_.withProperty(clicked, "lit", "false"));
+        return Game::kUseConsume;
+    }
+    if (name.ends_with("_spawn_egg")) return Game::kUseConsume;  // SpawnEggItem.useOn: SUCCESS, the server spawns
+    if (name == "fire_charge" || name == "armor_stand" || name == "item_frame" || name == "glow_item_frame" || name == "painting")
         return Game::kUseConsume;
     if (name == "brush") {  // BrushItem.useOn: starts brushing whatever it hits
         startUsing(hand);
@@ -1298,34 +1345,52 @@ int Gameplay::predictUseOn(int hand, const RayHit& hit) {
     }
     if (name == "end_crystal") return block == "obsidian" || block == "bedrock" ? Game::kUseConsume : Game::kUseFail;
     if (name.ends_with("minecart")) return block.find("rail") != std::string::npos ? Game::kUseConsume : Game::kUseFail;
-    // BlockTransformer.transformBlock: the user hears the transform's sound and sees its particle level event (both
-    // played with the player as the exception, so only here).
-    auto transformed = [&](const char* sound, int levelEvent) {
+    // BlockTransformer.transformBlock: the new state (setBlock), the user's sound and particle level event (both played
+    // with the player as the exception, so only here). A door changes its other half too (its updateShape copies it).
+    auto transformed = [&](u16 to, const char* sound, int levelEvent) {
+        if (!to) return Game::kUsePass;
+        game_->predictBlock(hit.x, hit.y, hit.z, to);
+        const std::string_view half = registry_.property(clicked, "half");
+        if (!registry_.property(clicked, "hinge").empty() && (half == "lower" || half == "upper")) {
+            const int oy = hit.y + (half == "lower" ? 1 : -1);
+            if (world_.block(hit.x, oy, hit.z) == registry_.withProperty(clicked, "half", half == "lower" ? "upper" : "lower"))
+                game_->predictBlock(hit.x, oy, hit.z, registry_.withProperty(to, "half", half == "lower" ? "upper" : "lower"));
+        }
         if (audio::AudioSystem* a = audio::instance())
             a->play(sound, audio::Category::Block, hit.x + 0.5, hit.y + 0.5, hit.z + 0.5, 1.0f, 1.0f);
         if (levelEvent && game_->onLevelEvent) game_->onLevelEvent(levelEvent, hit.x, hit.y, hit.z, 0);
         return Game::kUseConsume;
     };
-    if (name.ends_with("_hoe") && hit.face != 0 && airAbove &&  // block_transformer/hoe: tilling
-        (block == "grass_block" || block == "dirt_path" || block == "dirt" || block == "coarse_dirt" || block == "rooted_dirt"))
-        return transformed("minecraft:item.hoe.till", 0);
-    if (name.ends_with("_shovel") && hit.face != 0 && airAbove &&  // block_transformer/shovel: paths
-        (block == "grass_block" || block == "dirt" || block == "podzol" || block == "coarse_dirt" || block == "mycelium" ||
-         block == "rooted_dirt"))
-        return transformed("minecraft:item.shovel.flatten", 0);
-    if (name.ends_with("_axe") && !block.starts_with("stripped_") &&  // block_transformer/axe: stripping, scraping, unwaxing
-        (block.ends_with("_log") || block.ends_with("_wood") || block.ends_with("_stem") || block.ends_with("_hyphae") ||
-         block == "bamboo_block" || block.find("copper") != std::string::npos)) {
-        if (block.find("copper") == std::string::npos) return transformed("minecraft:item.axe.strip", 0);
-        if (block.starts_with("waxed_")) return transformed("minecraft:item.axe.wax_off", 3004);
-        if (block.starts_with("exposed_") || block.starts_with("weathered_") || block.starts_with("oxidized_"))
-            return transformed("minecraft:item.axe.scrape", 3005);
-        return Game::kUseConsume;
+    // playerHasBlockingItemUseIntent: the main hand passes while the off hand holds a shield (not sneaking)
+    const bool blockingIntent = hand == 0 && offHand() && !offHand()->empty() && stackUse(*offHand()).anim == ItemRules::Anim::Block && !sneaking;
+    if (name.ends_with("_hoe") && !blockingIntent) {  // block_transformer/hoe
+        if (hit.face != 0 && airAbove && (block == "grass_block" || block == "dirt_path" || block == "dirt"))  // #turns_into_farmland
+            return transformed(registry_.defaultState("minecraft:farmland"), "minecraft:item.hoe.till", 0);
+        if (hit.face != 0 && airAbove && block == "coarse_dirt")
+            return transformed(registry_.defaultState("minecraft:dirt"), "minecraft:item.hoe.till", 0);
+        if (block == "rooted_dirt")  // any face, no air needed (the hanging roots drop from the server)
+            return transformed(registry_.defaultState("minecraft:dirt"), "minecraft:item.hoe.till", 0);
     }
-    if (name == "honeycomb" && block.find("copper") != std::string::npos && !block.starts_with("waxed_"))  // HoneycombItem
-        return transformed("minecraft:item.honeycomb.wax_on", 3003);
-    if (name == "ender_eye" && block == "end_portal_frame" && registry_.property(world_.block(hit.x, hit.y, hit.z), "eye") == "false")
-        return Game::kUseConsume;
+    if (name.ends_with("_shovel") && !blockingIntent && hit.face != 0 && airAbove &&  // block_transformer/shovel
+        (block == "grass_block" || block == "dirt" || block == "podzol" || block == "coarse_dirt" || block == "mycelium" ||
+         block == "rooted_dirt"))  // #turns_into_dirt_path
+        return transformed(registry_.defaultState("minecraft:dirt_path"), "minecraft:item.shovel.flatten", 0);
+    if (name.ends_with("_axe") && !blockingIntent) {  // block_transformer/axe: stripping, then scraping, then unwaxing
+        if (block.ends_with("_log") || block.ends_with("_wood") || block.ends_with("_stem") || block.ends_with("_hyphae") || block == "bamboo_block")
+            if (const u16 to = copyProperties(clicked, "stripped_" + block)) return transformed(to, "minecraft:item.axe.strip", 0);
+        std::string previous;  // WeatheringCopper.PREVIOUS_BY_BLOCK
+        if (block.starts_with("exposed_")) previous = block.substr(8) == "copper" ? "copper_block" : block.substr(8);
+        else if (block.starts_with("weathered_")) previous = "exposed_" + block.substr(10);
+        else if (block.starts_with("oxidized_")) previous = "weathered_" + block.substr(9);
+        if (!previous.empty())
+            if (const u16 to = copyProperties(clicked, previous)) return transformed(to, "minecraft:item.axe.scrape", 3005);
+        if (block.starts_with("waxed_"))  // HoneycombItem.WAX_OFF_BY_BLOCK
+            if (const u16 to = copyProperties(clicked, block.substr(6))) return transformed(to, "minecraft:item.axe.wax_off", 3004);
+    }
+    if (name == "honeycomb" && !block.starts_with("waxed_"))  // HoneycombItem.useOn: the waxed form, if there is one
+        if (const u16 to = copyProperties(clicked, "waxed_" + block)) return transformed(to, "minecraft:item.honeycomb.wax_on", 3003);
+    if (name == "ender_eye" && block == "end_portal_frame" && registry_.property(clicked, "eye") == "false")
+        return Game::kUseConsume;  // EnderEyeItem.useOn: SUCCESS on the client, the server places the eye
     return Game::kUsePass;
 }
 
