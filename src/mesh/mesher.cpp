@@ -537,8 +537,10 @@ static void fluidFaces(const u16* ids, const u8* light, const BlockRegistry& reg
                 const int kind = t == 1 ? BiomeColors::Water : -1;
                 const u32 color = t == 1 ? (colors ? colors->index[kind][(z + 1) * 18 + (x + 1)] : 5u) : 0u;
                 const u8 layer = t == 1 ? u8(LayerTranslucent) : infos[ids[p]].fluid ? infos[ids[p]].layer : u8(LayerOpaque);
-                auto emit = [&](int face, u32 tex, u32 angle, u32 heights, u32 lit) {
-                    const CubeQuad q{u32(x) | (u32(y) << 4) | (u32(z) << 8) | (u32(face) << 20) | ((color & 15) << 25) | (1u << 30),
+                // backward: FluidRenderer's reverse quad of face ^ 1, facing `face` (bit 31; the shaders place it)
+                auto emit = [&](int face, u32 tex, u32 angle, u32 heights, u32 lit, bool backward = false) {
+                    const CubeQuad q{u32(x) | (u32(y) << 4) | (u32(z) << 8) | (u32(face) << 20) | ((color & 15) << 25) | (1u << 30) |
+                                         (backward ? 1u << 31 : 0u),
                                      tex | (angle << 12) | (((color & 0xFFFF) >> 4) << 20), heights, lit};
                     buckets[layer * 6 + face].push_back(q);
                 };
@@ -573,6 +575,15 @@ static void fluidFaces(const u16* ids, const u8* light, const BlockRegistry& reg
                         angle = u32(std::lround(a / (2 * 3.14159265358979) * 255.0)) % 255, tex = flowTex;
                     }
                     emit(1, tex, angle, hb(hNW) | hb(hNE) << 8 | hb(hSW) << 16 | hb(hSE) << 24, lit);
+                    // FluidState.shouldRenderBackwardUpFace: some cell of the 3 x 3 above is neither this fluid nor
+                    // solid-rendering; the surface is then also drawn facing down
+                    bool backwardUp = false;
+                    for (int ox = -1; ox <= 1 && !backwardUp; ++ox)
+                        for (int oz = -1; oz <= 1 && !backwardUp; ++oz) {
+                            const int q = up + ox * kStrideX + oz * kStrideZ;
+                            backwardUp = type(q) != t && !infos[ids[q]].occludes;
+                        }
+                    if (backwardUp) emit(0, tex, angle, hb(hNW) | hb(hNE) << 8 | hb(hSW) << 16 | hb(hSE) << 24, lit, true);
                 }
                 if (renderDown) emit(0, still, 255, 0, lightOf(down, p));
                 // Sides: N, S, W, E with their two top heights by the face's A axis (+x for N / S, +z for W / E)
@@ -591,6 +602,8 @@ static void fluidFaces(const u16* ids, const u8* light, const BlockRegistry& reg
                         if (half && waterOverlay) tex = waterOverlay;
                     }
                     emit(sideFace[k], tex, 255, hb(top[k][0]) | hb(top[k][1]) << 8, lit);
+                    if (tex != waterOverlay)  // the side's back (not against glass / leaves)
+                        emit(sideFace[k] ^ 1, tex, 255, hb(top[k][0]) | hb(top[k][1]) << 8, lit, true);
                 }
             }
 }

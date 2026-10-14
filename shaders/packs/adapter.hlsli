@@ -103,6 +103,7 @@ static const float3 kMcppNormal[6] = {
 
 // Fluid quads (geo bit 30; see common.hlsli fluidCorner, duplicated here for the pack compiler).
 bool mcppFluidQuad(uint4 q) { return ((q.x >> 30) & 1u) != 0; }
+uint mcppFluidGeoFace(uint4 q, uint face) { return mcppFluidQuad(q) && (q.x >> 31) != 0 ? face ^ 1u : face; }  // backward
 float mcppFluidHeight(uint4 q, uint i) { return float((q.z >> (i * 8)) & 0xFF) / 240.0; }
 void mcppFluidCorner(uint4 q, uint face, float a, float b, inout float3 p, out float2 st) {
     float cellY = float((q.x >> 4) & 15);
@@ -136,7 +137,7 @@ void mcppCubeCorner(uint4 q, uint corner, int level, out float3 p, out float2 st
     float3 axisA = face < 4 ? float3(1, 0, 0) : float3(0, 0, 1);
     float3 axisB = face < 2 ? float3(0, 0, 1) : float3(0, 1, 0);
     p = float3(q.x & 15, (q.x >> 4) & 15, (q.x >> 8) & 15);
-    p += max(kMcppNormal[face], 0) + axisA * (a * w) + axisB * (b * h);
+    p += max(kMcppNormal[mcppFluidGeoFace(q, face)], 0) + axisA * (a * w) + axisB * (b * h);
     if ((q.x >> 29) & 1u) {
         if (face == 1 || (face >= 2 && (corner >> 1) == 1)) p.y -= 0.125;
     }
@@ -152,7 +153,7 @@ void mcppCubeCorner(uint4 q, uint corner, int level, out float3 p, out float2 st
     }
     uint rot = (q.x >> 23) & 3;
     st = rot == 0 ? uv : rot == 1 ? float2(uv.y, -uv.x) : rot == 2 ? -uv : float2(-uv.y, uv.x);
-    if (mcppFluidQuad(q)) mcppFluidCorner(q, face, a, b, p, st);
+    if (mcppFluidQuad(q)) mcppFluidCorner(q, mcppFluidGeoFace(q, face), a, b, p, st);
 }
 
 McppVertex mcppPull(uint vid) {

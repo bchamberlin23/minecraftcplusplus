@@ -522,7 +522,7 @@ bool Renderer::createPipelines() {
               graphics(g_TerrainVS, sizeof(g_TerrainVS), g_TerrainPSCutout, sizeof(g_TerrainPSCutout), false, true,
                        D3D12_CULL_MODE_BACK, psoCutout_) &&
               graphics(g_TerrainVS, sizeof(g_TerrainVS), g_TerrainPSTranslucent, sizeof(g_TerrainPSTranslucent), true,
-                       false, D3D12_CULL_MODE_NONE, psoTranslucent_) &&
+                       false, D3D12_CULL_MODE_BACK, psoTranslucent_) &&
               graphics(g_DetailVS, sizeof(g_DetailVS), g_DetailPS, sizeof(g_DetailPS), false, true,
                        D3D12_CULL_MODE_BACK, psoModel_) &&
               graphics(g_WideLineVS, sizeof(g_WideLineVS), g_LinePS, sizeof(g_LinePS), true, false, D3D12_CULL_MODE_NONE,

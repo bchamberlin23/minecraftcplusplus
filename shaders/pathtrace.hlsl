@@ -67,17 +67,22 @@ void BlasGenCS(uint id : SV_DispatchThreadID) {
     uint k = id - j.firstQuad;
     float3 v[4];
     uint cubes = j.counts.x + j.counts.y + j.counts.z;
+    bool backward = false;
     if (k < cubes) {
         uint kind = k < j.counts.x ? 0u : k < j.counts.x + j.counts.y ? 1u : 2u;
         uint local = kind == 0 ? k : kind == 1 ? k - j.counts.x : k - j.counts.x - j.counts.y;
         uint4 q = gRtCube[rtCubeIndex(j.slot, kind, local)];
         [unroll] for (uint c = 0; c < 4; ++c) v[c] = rtCubeCorner(q, c);
+        // a fluid's backward face: rays already hit its front quad from both sides (degenerate here, no light)
+        backward = fluidGeoFace(q, 0) != 0;
+        if (backward) v[1] = v[2] = v[3] = v[0];
     } else {
         uint base = rtModelBase(j.slot, k - cubes);
         [unroll] for (uint c = 0; c < 4; ++c) v[c] = rtModelCorner(base, c);
     }
     uint addr = gPtJobs.w + (j.vertexBase + k * 4) * 12;
     [unroll] for (uint c = 0; c < 4; ++c) gVertices.Store3(addr + c * 12, asuint(v[c]));
+    if (backward) return;
 
     // Emissive quads become lights.
     uint kind = k < j.counts.x ? 0u : k < j.counts.x + j.counts.y ? 1u : k < cubes ? 2u : 3u;

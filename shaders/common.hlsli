@@ -156,6 +156,8 @@ float4 shadePixel(VSOut i) {
 // One block face: the top's corner heights (sky word bytes by a + 2b, 1/240 block) or a side's two top heights (bytes
 // 0 / 1 by a), the block's light (block word: sky << 4 | block), the top's flow angle (tex bits 12..19, 255: still).
 bool isFluidQuad(uint4 q) { return ((q.x >> 30) & 1u) != 0; }
+// FluidRenderer's backward faces (fluid quads with bit 31): facing `face`, placed and textured as face ^ 1.
+uint fluidGeoFace(uint4 q, uint face) { return isFluidQuad(q) && (q.x >> 31) != 0 ? face ^ 1u : face; }
 float fluidHeightByte(uint4 q, uint i) { return float((q.z >> (i * 8)) & 0xFF) / 240.0; }
 // Corner (a, b) of a fluid face (geometric, after the front-facing swap): its height and texture coordinates.
 void fluidCorner(uint4 q, uint face, float a, float b, inout float3 p, out float2 st) {

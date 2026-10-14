@@ -389,7 +389,7 @@ bool Renderer::Shading::create() {
            graphics(SH(TerrainShadowVS), SH(TerrainShadowPSCutout), 0, nullptr, true, true, le, front, false, true,
                     psoShadowCutout_) &&
            graphics(SH(DetailShadowVS), SH(DetailShadowPS), 0, nullptr, true, true, le, none, false, true, psoShadowModel_) &&
-           graphics(SH(TerrainFwdVS), SH(TerrainFwdPS), 1, hdr, true, true, ge, none, true, false, psoFwd_) &&
+           graphics(SH(TerrainFwdVS), SH(TerrainFwdPS), 1, hdr, true, true, ge, back, true, false, psoFwd_) &&
            graphics(SH(TonemapVS), SH(TonemapPS), 1, ldr, false, false, ge, none, false, false, psoTonemap_) &&
            graphics(SH(TonemapVS), SH(PlainPresentPS), 1, ldr, false, false, ge, none, false, false, psoPlainPresent_) &&
            compute(SH(PlainPrepCS), psoPlainPrep_) &&

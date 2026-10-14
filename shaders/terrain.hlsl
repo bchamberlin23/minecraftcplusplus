@@ -43,14 +43,15 @@ CubeVertex pullCube(uint vid) {
     float3 axisB = face < 2 ? float3(0, 0, 1) : float3(0, 1, 0);
     int4 origin = gSections[gDraw.sectionIndex].origin;
     float3 p = float3(q.x & 15, (q.x >> 4) & 15, (q.x >> 8) & 15);
-    p += max(kNormal[face], 0) + axisA * (a * w) + axisB * (b * h);
+    const uint geo = fluidGeoFace(q, face);
+    p += max(kNormal[geo], 0) + axisA * (a * w) + axisB * (b * h);
     // Top fluid block (geo bit 29): the surface sits 2/16 below the block top (up faces, top corners of sides).
     if ((q.x >> 29) & 1u) {
         if (face == 1 || (face >= 2 && (corner >> 1) == 1)) p.y -= 0.125;
     }
     float2 fluidSt = 0;
     const bool fluid = isFluidQuad(q);
-    if (fluid) fluidCorner(q, face, a, b, p, fluidSt);
+    if (fluid) fluidCorner(q, geo, a, b, p, fluidSt);
     p.xz *= float(1u << origin.w);  // LOD columns span 2^level blocks (heights stay exact); UVs stay in block units
 
     // Canonical face UVs (same convention as the game's automatic UVs), then rotation.

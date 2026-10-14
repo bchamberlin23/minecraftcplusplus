@@ -79,13 +79,13 @@ float3 rtCubeCorner(uint4 q, uint corner) {
     float3 axisA = face < 4 ? float3(1, 0, 0) : float3(0, 0, 1);
     float3 axisB = face < 2 ? float3(0, 0, 1) : float3(0, 1, 0);
     float3 p = float3(q.x & 15, (q.x >> 4) & 15, (q.x >> 8) & 15);
-    p += max(kRtNormal[face], 0) + axisA * (a * w) + axisB * (b * h);
+    p += max(kRtNormal[fluidGeoFace(q, face)], 0) + axisA * (a * w) + axisB * (b * h);
     if ((q.x >> 29) & 1u) {
         if (face == 1 || (face >= 2 && (corner >> 1) == 1)) p.y -= 0.125;
     }
     if (isFluidQuad(q)) {
         float2 st;
-        fluidCorner(q, face, a, b, p, st);
+        fluidCorner(q, fluidGeoFace(q, face), a, b, p, st);
     }
     return p;
 }
@@ -96,7 +96,7 @@ float2 rtFluidUv(uint4 q, uint corner) {
     if (((0x19u >> face) & 1u) != 0 && (corner == 1 || corner == 2)) corner ^= 3;
     float3 p = 0;
     float2 st;
-    fluidCorner(q, face, float(corner & 1), float(corner >> 1), p, st);
+    fluidCorner(q, fluidGeoFace(q, face), float(corner & 1), float(corner >> 1), p, st);
     return st;
 }
 
