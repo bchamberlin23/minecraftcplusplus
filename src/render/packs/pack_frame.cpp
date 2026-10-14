@@ -1596,7 +1596,8 @@ struct Renderer::Packs::Frame {
         // ---- translucent ----
         p.phase = 1;
         setPassMatrices(0);
-        terrain(Gb::Water, Adapter::Cube, 2, RenderStage::TerrainTranslucent, none, u8(PackBlend::Translucent), 2, false);
+        // culled like the game's translucent terrain (fluids bring their backward faces)
+        terrain(Gb::Water, Adapter::Cube, 2, RenderStage::TerrainTranslucent, none, u8(PackBlend::Translucent), 2, true);
         mark("gbuffers water");
         runStage(PassStage::AfterTranslucent, pc, true);
         k.drawHand(true);
