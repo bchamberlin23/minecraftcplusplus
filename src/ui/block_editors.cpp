@@ -211,12 +211,13 @@ void commandDraw(UiState& s, Canvas& c) {
 
 void commandInput(UiState& s, const Window::InputEvent& e) {
     using E = Window::InputEvent;
+    // AbstractCommandBlockEditScreen.keyPressed: the suggestions first (Escape hides an open list), then the screen
+    if (commandSuggestionsInput(s, g.command.text, g.command.x, g.command.y, g.command.w, g.command.h, e)) return;
     if (e.type == E::Key && e.down && e.code == VK_ESCAPE) return s.closeScreen();
     if (e.type == E::Key && e.down && e.code == VK_RETURN && g.ready) {  // isConfirmation: Done
         if (s.buttons.size() >= 2 && s.buttons[s.buttons.size() - 2].onPress) s.buttons[s.buttons.size() - 2].onPress();
         return;
     }
-    if (commandSuggestionsInput(s, g.command.text, g.command.x, g.command.y, g.command.w, g.command.h, e)) return;
     if (fieldsInput(s, e)) return;
     s.buttonsInput(e);
 }

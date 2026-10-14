@@ -59,6 +59,7 @@ struct Target {
     int originX = 4, innerW = 0;  // EditBox.getScreenX(0), getInnerWidth
     int textY = 0;                // the EditBox's text line (the suggestion after the text)
     bool bordered = false, anchorBottom = true, commandsOnly = false, pastError = false;
+    bool allowHiding = false;  // CommandSuggestions.allowHiding (ChatScreen: false; a hidden list then opens on Tab)
     int lineStart = 1, limit = 10;
     u32 fill = 0xD0000000;  // ChatScreen: fillColor
     Screen screen = Screen::Chat;
@@ -497,7 +498,7 @@ bool suggestionsInput(UiState& s, const InputEvent& e) {
                 hide();
                 return true;
             }
-        } else if (e.code == VK_TAB) {  // CommandSuggestions.keyPressed: Tab shows the list
+        } else if (e.code == VK_TAB && !tg.allowHiding) {  // CommandSuggestions.keyPressed: Tab shows the list
             showSuggestions(s);
             return true;
         }
@@ -653,6 +654,7 @@ Target editorTarget(UiState& s, UiState::TextField& field, float x, float y, flo
     t.textY = int(y + (h - 8) / 2);
     t.bordered = true, t.anchorBottom = false, t.commandsOnly = true, t.pastError = true;
     t.lineStart = 0, t.limit = 7, t.fill = 0x80000000u;
+    t.allowHiding = true;  // (Tab over a hidden list moves the focus)
     t.screen = s.screen;
     return t;
 }

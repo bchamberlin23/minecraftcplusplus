@@ -47,6 +47,7 @@ struct Tab {
     double scrollX = 0, scrollY = 0;
     int minX = INT32_MAX, minY = INT32_MAX, maxX = INT32_MIN, maxY = INT32_MIN;
     bool centered = false;
+    float fade = 0;  // AdvancementTab.fade: each tab its own
 };
 
 struct Model {
@@ -56,7 +57,6 @@ struct Model {
     std::string selected;  // the selected tab's root
     bool dirty = true;
     std::vector<Tab> tabs;
-    float fade = 0;
     int hovered = -1;  // widget of the selected tab
     bool scrolling = false, dragging = false;
     float lastMouse[2] = {};
@@ -371,8 +371,8 @@ void tick(UiState& s) {  // AdvancementTab.tick: hover and the fade
             }
         }
     }
-    if (hovering) g.fade = std::clamp(g.fade + 0.06f, 0.0f, 0.3f);
-    else g.fade = std::clamp(g.fade - 0.12f, 0.0f, 1.0f), g.hovered = -1;
+    if (hovering) t->fade = std::clamp(t->fade + 0.06f, 0.0f, 0.3f);
+    else t->fade = std::clamp(t->fade - 0.12f, 0.0f, 1.0f), g.hovered = -1;
 }
 
 bool worldKey(UiState& s, const InputEvent& e) {
@@ -403,7 +403,8 @@ void build(UiState& s) {
     // AdvancementsScreen.init: new tabs (centred again), the first one selected (onAdvancementsUpdated tells the
     // server, then init once more)
     for (Tab& t : g.tabs) t.centered = false, t.scrollX = t.scrollY = 0;
-    g.hovered = -1, g.fade = 0;
+    g.hovered = -1;
+    for (Tab& tab : g.tabs) tab.fade = 0;  // the screen's tabs are new
     if (!g.tabs.empty()) {
         g.selected = g.tabs[0].root;
         sendSeen(s, &g.selected);
@@ -589,7 +590,7 @@ void draw(UiState& s, Canvas& c) {
     s.drawButtons(c);
     // Tooltips: the fade over the inside, the hovered widget's box, tab titles.
     if (t) {
-        c.fill(float(inX), float(inY), float(inX + kInW), float(inY + kInH), u32(std::floor(g.fade * 255.0f)) << 24);
+        c.fill(float(inX), float(inY), float(inX + kInW), float(inY + kInH), u32(std::floor(t->fade * 255.0f)) << 24);
         if (g.hovered >= 0 && size_t(g.hovered) < t->widgets.size())
             drawHover(s, c, t->widgets[size_t(g.hovered)], inX + int(std::floor(t->scrollX)), inY + int(std::floor(t->scrollY)), -9, inY);
     }
