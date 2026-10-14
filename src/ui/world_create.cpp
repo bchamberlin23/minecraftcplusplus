@@ -1221,8 +1221,9 @@ void createWorldNow(State& s) {
     std::string name = f.createName.text.value;
     while (!name.empty() && name.back() == ' ') name.pop_back();
     while (!name.empty() && name.front() == ' ') name.erase(name.begin());
-    if (name.empty()) name = s.res.translate("selectWorld.newWorld");
-    const std::string folder = worldFolderFor(f.cfg.savesDir, name);
+    // The level name is the trimmed name, blank included (the world list then shows the folder); the folder falls
+    // back to "New World" (WorldCreationUiState.findResultFolder)
+    const std::string folder = worldFolderFor(f.cfg.savesDir, name.empty() ? s.res.translate("selectWorld.newWorld") : name);
     const fs::path dir = f.cfg.savesDir / widen(folder);
     const bool debug = isDebug(), hc = f.createMode == 1;
     const char* mode = debug ? "spectator" : kModes[f.createMode];

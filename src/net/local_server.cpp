@@ -509,7 +509,7 @@ void LocalServer::finishNewWorld() {
     NbtValue* data = root.find("Data");
     if (!data) return;
     NbtValue name = NbtValue::make(TagString);
-    name.s = config_.create->levelName.empty() ? config_.world.filename().string() : config_.create->levelName;
+    name.s = config_.create->named ? config_.create->levelName : config_.world.filename().string();
     const std::string levelName = name.s;
     data->set("LevelName", std::move(name));
     NbtValue cheats = NbtValue::make(TagByte);

@@ -266,7 +266,7 @@ int wmain(int argc, wchar_t** argv) {
             const std::wstring v = next();
             const std::u8string u = fs::path(v).u8string();
             const std::string s(u.begin(), u.end());
-            if (a == L"--create-name") opt.create->levelName = s;
+            if (a == L"--create-name") opt.create->levelName = s, opt.create->named = true;
             else if (a == L"--create-seed") opt.create->seed = s;
             else if (a == L"--create-mode") opt.create->gameMode = s;
             else if (a == L"--create-difficulty") opt.create->difficulty = s;

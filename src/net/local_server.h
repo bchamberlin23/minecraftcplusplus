@@ -33,6 +33,7 @@ public:
         // gets the singleplayer setup the game expects (LevelName, cheats, the owner's player data).
         struct Create {
             std::string levelName;           // shown in the world list
+            bool named = false;              // --create-name given (a blank name stays blank, like CreateWorldScreen)
             std::string seed;                // empty: random; text seeds are hashed like the game does
             std::string gameMode = "survival";  // survival / creative / adventure / spectator
             std::string difficulty = "normal";  // peaceful / easy / normal / hard
