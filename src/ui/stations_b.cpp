@@ -565,7 +565,6 @@ int crafterSlotAt(State& s, const Layout& l, float left, float top) {
 }
 bool crafterInput(State& s, const InputEvent& e, Menu& m, const Layout& l, float left, float top) {
     const int slot = crafterSlotAt(s, l, left, top);
-    if (slot == 45) return e.type == InputEvent::Button;  // the result cannot be taken
     if (slot < 0 || slot >= 9 || s.spectator() || !m.slots[size_t(slot)].empty()) return false;
     // slotClicked: PICKUP toggles an empty crafter slot, SWAP (number keys) enables it with an item to put in.
     if (anyPress(e) && !s.window->keyDown(VK_SHIFT)) {
@@ -581,7 +580,9 @@ bool crafterInput(State& s, const InputEvent& e, Menu& m, const Layout& l, float
     }
     return false;  // the click goes on (AbstractContainerScreen.slotClicked)
 }
-bool crafterMayPlace(State&, const Menu& m, int slot, const ItemStack&) { return !crafterDisabled(m, slot); }
+bool crafterMayPlace(State&, const Menu& m, int slot, const ItemStack&) {  // the result: NonInteractiveResultSlot
+    return slot != 45 && !crafterDisabled(m, slot);
+}
 int crafterQuickMove(State&, const Menu&, int index, const ItemStack&, const std::function<bool(int, int, bool)>& moveTo) {
     if (index < 9) return moveTo(9, 45, true) ? 1 : 0;
     if (index == 45) return 0;

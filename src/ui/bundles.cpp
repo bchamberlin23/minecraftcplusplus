@@ -264,8 +264,7 @@ bool bundleScroll(UiState& s, Menu& m, int slot, int wheel) {
 void bundleHovered(UiState& s, Menu& m, int slot) {
     if (sel.lastHovered != slot && sel.lastHovered >= 0 && size_t(sel.lastHovered) < m.slots.size()) {
         ItemStack& last = m.slots[size_t(sel.lastHovered)];  // onStopHovering: unselect
-        if (!last.empty() && s.items.itemHasTag(last.item, "minecraft:bundles") && last.bundleSelected >= 0)
-            sendSelected(s, m, sel.lastHovered, -1);
+        if (!last.empty() && s.items.itemHasTag(last.item, "minecraft:bundles")) sendSelected(s, m, sel.lastHovered, -1);
     }
     sel.lastHovered = slot;
 }
@@ -274,7 +273,7 @@ void bundleSlotClicked(UiState& s, Menu& m, int slot, int input) {
     if (input != 1 && input != 2) return;  // QUICK_MOVE, SWAP
     if (slot < 0 || size_t(slot) >= m.slots.size()) return;
     const ItemStack& st = m.slots[size_t(slot)];
-    if (!st.empty() && s.items.itemHasTag(st.item, "minecraft:bundles") && st.bundleSelected >= 0) sendSelected(s, m, slot, -1);
+    if (!st.empty() && s.items.itemHasTag(st.item, "minecraft:bundles")) sendSelected(s, m, slot, -1);  // even unselected
 }
 
 bool bundleBar(const Items& items, const ItemStack& st, int& width, u32& color) {
