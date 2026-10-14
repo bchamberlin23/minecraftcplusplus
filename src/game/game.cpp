@@ -191,6 +191,7 @@ void Game::frame(Window& w, double dt) {
         }
         player_.yaw += float(dx);
         player_.pitch = std::clamp(player_.pitch + float(dy), -1.5707964f, 1.5707964f);  // Entity.setXRot: +-90 degrees
+        if ((dx != 0 || dy != 0) && riding() && passengerTurned) passengerTurned();
     }
 
     for (int n = presses(keys.perspective); n > 0; --n) cameraMode = (cameraMode + 1) % 3;  // CameraType.cycle per click

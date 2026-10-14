@@ -40,6 +40,13 @@ bool isNautilus(std::string_view n) { return n == "nautilus" || n == "zombie_nau
 Riding::Riding(Gameplay& gameplay, Game& game, ent::EntityWorld* entities, const ItemRules& rules)
     : gameplay_(gameplay), game_(game), entities_(entities), rules_(rules) {
     game.rideTick = [this](const PlayerInput& in) { rideTick(in); };
+    game.passengerTurned = [this] {  // AbstractBoat.onPassengerTurned -> clampRotation
+        const ent::Entity* e = entity();
+        if (!e || !e->info || !isBoat(e->info->name)) return;
+        Player& p = game_.player();
+        const float delta = wrapDegrees(p.yaw / kDegf - e->yaw);
+        p.yaw += (std::clamp(delta, -105.0f, 105.0f) - delta) * kDegf;
+    };
     game.rideEye = [this](double eye[3]) {
         const ent::Entity* e = entity();
         if (!e) return false;

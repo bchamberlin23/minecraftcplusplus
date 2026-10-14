@@ -237,6 +237,9 @@ public:
     bool handsBusy = false;  // LocalPlayer.isHandsBusy (paddling): no attacks or uses, the hands go down
     std::function<void(const PlayerInput& input)> rideTick;
     std::function<bool(double eye[3])> rideEye;
+    // Entity.turn -> the vehicle's onPassengerTurned after each mouse turn while riding (a boat keeps the look within
+    // 105 degrees of its heading).
+    std::function<void()> passengerTurned;
     bool riding() const { return vehicleId >= 0 && rideTick != nullptr; }
     // Sleeping (UI bed module: our SLEEPING_POS_ID): the bed block; drawn lying in it in third person.
     bool sleeping = false;
