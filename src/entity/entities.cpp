@@ -1120,8 +1120,8 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
     }
     auto it = entities_.find(ev.id);
     if (ev.type == EventType::TakeItem) {
-        // ClientPacketListener.handleTakeItemEntity: the pickup sound (experience orbs their own), then a fully collected
-        // item flies to the collector (ItemPickupParticle) and goes after 3 ticks; a partly collected stack shrinks.
+        // ClientPacketListener.handleTakeItemEntity: the pickup sound (experience orbs their own), then a copy of the item
+        // or orb flies to a collector in the level (ItemPickupParticle, 3 ticks); the item shrinks by the amount.
         if (it != entities_.end() && !it->second.silent)
             if (audio::AudioSystem* a = audio::instance()) {
                 static std::mt19937 rng(0x7A4E);
@@ -1131,10 +1131,22 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
                 a->play(orb ? "minecraft:entity.experience_orb.pickup" : "minecraft:entity.item.pickup", audio::Category::Player,
                         it->second.pos[0], it->second.pos[1], it->second.pos[2], orb ? 0.1f : 0.2f, pitch);
             }
-        if (it != entities_.end() && it->second.category == Category::Item && it->second.pickupBy == INT_MIN) {
-            Entity& item = it->second;
-            if (ev.b > 0 && item.itemCount > ev.b) item.itemCount -= ev.b;
-            else item.pickupBy = ev.a, item.pickupLife = 0, item.stepCount = 0, item.linearRemaining = 0;
+        const bool orb = it != entities_.end() && it->second.info && it->second.info->name == "minecraft:experience_orb";
+        if (it != entities_.end() && (it->second.category == Category::Item || orb) && it->second.pickupBy == INT_MIN) {
+            // a copy of the item / orb as it looks now flies to the collector (when it is in the level), whatever
+            // is left of the original stays: an item shrinks (gone when emptied), an orb waits for its removal
+            if (entities_.count(ev.a) || ev.a == selfId) {
+                Entity copy = it->second;
+                copy.id = nextPickupId_--;
+                copy.pickupBy = ev.a, copy.pickupLife = 0, copy.stepCount = 0, copy.linearRemaining = 0;
+                entities_.emplace(copy.id, std::move(copy));
+                it = entities_.find(ev.id);  // the map may have moved
+            }
+            if (!orb) {
+                Entity& item = it->second;
+                if (ev.b > 0 && item.itemCount > ev.b) item.itemCount -= ev.b;
+                else entities_.erase(it);
+            }
         }
         return;
     }
@@ -1570,6 +1582,15 @@ u32 displayLight(const Entity& e, u32 worldLight) {
     const int b = e.display.brightness;
     if (b == -1) return worldLight;
     return u32(((b >> 20) & 15) << 4 | ((b >> 4) & 15));
+}
+
+bool EntityWorld::pickupTarget(int collector, float pt, double out[3]) const {
+    auto c = entities_.find(collector);
+    if (c == entities_.end() || !c->second.info) return false;
+    const Entity& t = c->second;
+    for (int a = 0; a < 3; ++a) out[a] = t.prevPos[a] + (t.pos[a] - t.prevPos[a]) * pt;
+    out[1] += t.info->eye / 2.0;  // (getY + getEyeY) / 2
+    return true;
 }
 
 void EntityWorld::tick() {

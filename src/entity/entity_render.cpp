@@ -3134,6 +3134,18 @@ void EntityRenderer::build(const PassContext& ctx) {
         const TypeDef& d = defs_[size_t(e.type)];
         double c[3];
         for (int a = 0; a < 3; ++a) c[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt - cam[a];
+        if (e.pickupBy != INT_MIN) {  // ItemPickupParticleGroup: a collected orb flies to its collector's middle, (t / 3)^2
+            double to[3];
+            bool found = world_.pickupTarget(e.pickupBy, pt, to);
+            if (!found && localPlayer_ && localPlayer_->info) {
+                for (int a = 0; a < 3; ++a) to[a] = localPlayer_->prevPos[a] + (localPlayer_->pos[a] - localPlayer_->prevPos[a]) * pt;
+                to[1] += localPlayer_->info->eye / 2.0, found = true;
+            }
+            if (found) {
+                const float t = std::min(((float(e.pickupLife) + pt) / 3.0f) * ((float(e.pickupLife) + pt) / 3.0f), 1.0f);
+                for (int a = 0; a < 3; ++a) c[a] += (to[a] - cam[a] - c[a]) * t;
+            }
+        }
         float w = e.info->width, h = e.info->height;
         if (d.special == SpSlime || d.special == SpSulfurCube) w *= float(e.size), h *= float(e.size);
         const float cx = float(c[0]), cz = float(c[2]);

@@ -437,6 +437,9 @@ public:
     // Our own player (not a tracked entity): its synched data as the server sends it (selfId: the session's entity id,
     // set by the owner); the avatar reads the stuck arrows / stingers and shoulder parrots from it.
     int selfId = INT_MIN;
+    int nextPickupId_ = -1000000;  // ids of the flying pickup copies (ItemPickupParticle), below every server id
+    // ItemPickupParticle's target: a tracked collector's middle (y + eye / 2) at the partial tick; false otherwise
+    bool pickupTarget(int collector, float pt, double out[3]) const;
     Entity self;
     // Particles of entities (set before attach): reading an encoded ParticleOptions (network thread) and spawning one.
     std::function<bool(net::Reader& r, std::string& raw)> readParticle;

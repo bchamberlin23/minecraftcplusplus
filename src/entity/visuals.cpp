@@ -2303,10 +2303,7 @@ void Visuals::Impl::buildWorld(const PassContext& ctx) {
         for (int a = 0; a < 3; ++a) p[a] = e.prevPos[a] + (e.pos[a] - e.prevPos[a]) * pt;
         if (e.pickupBy != INT_MIN) {  // ItemPickupParticleGroup: towards the collector's middle, (time / 3)^2
             double to[3];
-            if (auto c = entities.find(e.pickupBy); c != entities.end() && c->second.info) {
-                const Entity& t = c->second;
-                for (int a = 0; a < 3; ++a) to[a] = t.prevPos[a] + (t.pos[a] - t.prevPos[a]) * pt;
-                to[1] += t.info->eye / 2.0;
+            if (world.pickupTarget(e.pickupBy, pt, to)) {
             } else if (game) {  // the local player
                 const Player& pl = game->player();
                 for (int a = 0; a < 3; ++a) to[a] = pl.prev[a] + (pl.pos[a] - pl.prev[a]) * pt;
