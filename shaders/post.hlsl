@@ -55,7 +55,7 @@ void TaaCS(uint2 px : SV_DispatchThreadID) {
             int2 q = clamp(base + int2(x, y), 0, maxp);
             float3 s = rgbToYcocg(tmWeight(gTex[kTexScene].Load(int3(q, 0)).rgb));
             float2 d = float2(q) + 0.5 + jit - target;
-            float w = exp(-2.9 * dot(d, d));
+            float w = exp(-6.0 * dot(d, d));  // narrow: the nearest jittered sample dominates (crisp pixel art)
             sum += s * w;
             wsum += w;
             wmax = max(wmax, w);
@@ -263,7 +263,7 @@ float3 sharpenHistory(uint tex, int2 px, float3 c, float sharp) {
     float3 tc = tmWeight(c), tn = tmWeight(n), ts = tmWeight(s), tw = tmWeight(w), te = tmWeight(e);
     float3 mn = min(tc, min(min(tn, ts), min(tw, te))), mx = max(tc, max(max(tn, ts), max(tw, te)));
     float3 amp = sqrt(saturate(min(mn, 1 - mx) / max(mx, 1e-4)));
-    float3 wgt = -amp * sharp * 0.2;
+    float3 wgt = -amp * sharp * 0.3;
     float3 r = (tc + (tn + ts + tw + te) * wgt) / (1 + 4 * wgt);
     return tmUnweight(saturate(r));
 }
