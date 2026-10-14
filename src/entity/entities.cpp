@@ -122,6 +122,24 @@ double decodeDelta(double base, i16 delta) {
 
 void EntityWorld::setItemDecoder(const ui::Items* items) { gItems = items; }
 
+// LivingEntity.isBlocking: the item in use has blocks_attacks and its block delay (block_delay_seconds in ticks) passed.
+bool isBlocking(const Entity& e) {
+    if (!(e.livingFlags & 1) || !gItems) return false;
+    const std::shared_ptr<const ui::ItemStack>& held = e.equipStack[(e.livingFlags & 2) ? 5 : 0];
+    if (!held || held->empty()) return false;
+    const ui::Items::ComponentValue v = gItems->component(*held, "blocks_attacks");
+    float delay = 0;
+    if (v.patched) {
+        net::Reader r(reinterpret_cast<const u8*>(v.patched->data()), v.patched->size());
+        delay = r.f32();  // BlocksAttacks.STREAM_CODEC: block_delay_seconds first
+    } else if (v.fallback && v.fallback->is_object()) {
+        delay = v.fallback->value("block_delay_seconds", 0.0f);
+    } else {
+        return false;
+    }
+    return e.useTicks >= int(std::lround(delay * 20.0f));
+}
+
 void tickPoseAnimation(Entity& e, const double move[3], bool fallFlying, bool crouching) {
     // LivingEntity.updateSwimAmount: isVisuallySwimming = pose SWIMMING, or FALL_FLYING without the flag.
     e.swimAmountO = e.swimAmount;
@@ -2017,9 +2035,10 @@ void EntityWorld::tickEntity(Entity& e) {
     if (e.swingTime >= 0) bodyTarget = e.yaw;
     const float d = wrapDegrees(bodyTarget - e.bodyYaw);
     e.bodyYaw += d * 0.3f;
-    // tickHeadTurn: the body stays within 50 degrees of the entity's yRot.
+    // tickHeadTurn: the body stays within 50 degrees of the entity's yRot (a blocking player's within 15:
+    // Player.getMaxHeadRotationRelativeToBody).
     const float headDiff = wrapDegrees(e.yaw - e.bodyYaw);
-    constexpr float kMaxHead = 50.0f;
+    const float kMaxHead = e.category == Category::Player && isBlocking(e) ? 15.0f : 50.0f;
     if (std::abs(headDiff) > kMaxHead) e.bodyYaw += headDiff - (headDiff > 0 ? kMaxHead : -kMaxHead);
     // Keep the previous values within 180 degrees for interpolation.
     while (e.bodyYaw - e.prevBodyYaw < -180.0f) e.prevBodyYaw -= 360.0f;

@@ -67,6 +67,7 @@ enum SpeciesAnim : int {
 
 // The synched value of a field ("DATA_FLAGS_ID", any class of the type's hierarchy) or `def` when not received.
 i64 dataInt(const Entity& e, const char* field, i64 def = 0);
+bool isBlocking(const Entity& e);  // LivingEntity.isBlocking (entities.cpp): blocks_attacks in use past its block delay
 float dataFloat(const Entity& e, const char* field, float def = 0);
 bool dataSeen(const Entity& e, const char* field);
 // EnderDragon.aiStep's tickPart: the eight parts (head, neck, body, tail x 3, wing x 2) as boxes relative to the

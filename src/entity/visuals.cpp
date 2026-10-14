@@ -1741,7 +1741,8 @@ void Visuals::Impl::tickLocal() {
     if (swinging) bodyTarget = yawDeg;
     e.bodyYaw += wrapDegrees(bodyTarget - e.bodyYaw) * 0.3f;
     const float headDiff = wrapDegrees(yawDeg - e.bodyYaw);
-    if (std::abs(headDiff) > 50.0f) e.bodyYaw += headDiff - (headDiff > 0 ? 50.0f : -50.0f);
+    const float maxHead = isBlocking(e) ? 15.0f : 50.0f;  // Player.getMaxHeadRotationRelativeToBody
+    if (std::abs(headDiff) > maxHead) e.bodyYaw += headDiff - (headDiff > 0 ? maxHead : -maxHead);
     while (e.bodyYaw - e.prevBodyYaw < -180.0f) e.prevBodyYaw -= 360.0f;
     while (e.bodyYaw - e.prevBodyYaw >= 180.0f) e.prevBodyYaw += 360.0f;
     ++e.age;
