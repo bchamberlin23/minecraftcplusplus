@@ -224,8 +224,9 @@ game profile); the Online screen's Friends section has only In-Game Notification
 - **Improved Transparency** (video option) is stored but not read; this engine's translucency path (OIT under the
   shader pipeline) is its own.
 
-- **Block rendering, approximations**: face occlusion shapes come from collision boxes (fluid faces against partial
-  blocks; model faces against partial neighbours still cull only on full cubes, not Block.shouldRenderFace's shapes).
+- **Block rendering, approximations**: face occlusion shapes come from outline / collision boxes; model faces follow
+  Block.shouldRenderFace with the face shapes of slabs, stairs, carpets, farmland and dirt paths (other partial
+  blocks are treated as not occluding) and the pane / bars, slime / honey and mangrove roots skipRendering rules.
 - **Keyboard focus**: Tab / arrows / Enter / Space navigate the buttons of the option lists (and their drop-downs),
   the pause, death, options, notice / confirmation and button-only front-end screens (the world / server lists: Tab
   to their buttons), with the focus highlight, slider editing and the focused widget's tooltip below it; containers,

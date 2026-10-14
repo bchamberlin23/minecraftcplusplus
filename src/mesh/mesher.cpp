@@ -5,7 +5,9 @@
 #include "world/world.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
+#include <bitset>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
@@ -222,6 +224,85 @@ u8 fluidCode(const BlockRegistry& registry, u16 id) {
 // ---- BlockModelLighter: smooth lighting of model quads ----------------------------------------------------
 namespace {
 constexpr int kStep[6][3] = {{0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}};
+
+// Block.shouldRenderFace beyond full cubes: the face occlusion shapes of the partial blocks that can occlude (slabs,
+// stairs, carpets, farmland, dirt paths; the other non-full blocks occlude nothing here, like those with noOcclusion)
+// as 16 x 16 masks of their outline boxes on each face, and the skipRendering rules of panes / bars, slime / honey
+// blocks and mangrove roots. Cached per block state on each meshing thread.
+class FaceShapes {
+public:
+    using Mask = std::bitset<256>;
+    enum Kind : i8 { None, Occluder, Bars, SameSkips, MangroveRoots };
+    FaceShapes(const BlockRegistry& registry) : registry_(registry) {}
+    Kind kind(u16 id) {
+        if (id >= kind_.size()) kind_.resize(size_t(id) + 1024, -1), base_.resize(size_t(id) + 1024);  // states are added at runtime
+        i8& k = kind_[id];
+        if (k >= 0) return Kind(k);
+        const std::string& n = registry_.name(id);
+        std::string b = n.substr(0, n.find('['));
+        if (b.starts_with("minecraft:")) b.erase(0, 10);
+        base_[id] = b;
+        k = b.ends_with("_slab") || b.ends_with("_stairs") || b.ends_with("_carpet") || b == "farmland" || b == "dirt_path" ? Occluder
+            : b == "iron_bars" || b == "glass_pane" || b.ends_with("_stained_glass_pane") || b.ends_with("copper_bars") ? Bars
+            : b == "slime_block" || b == "honey_block"                                                                ? SameSkips
+            : b == "mangrove_roots"                                                                                   ? MangroveRoots
+                                                                                                                     : None;
+        return Kind(k);
+    }
+    const Mask& mask(u16 id, int d) {  // Shapes.getFaceShape of the outline on face d
+        auto [it, fresh] = masks_.try_emplace(id);
+        if (fresh) {
+            const BlockInfo& b = registry_.infos()[id];
+            for (int dir = 0; dir < 6; ++dir) {
+                const int a = dir < 2 ? 1 : dir < 4 ? 2 : 0, u = a == 0 ? 2 : 0, v = a == 1 ? 2 : 1;
+                for (int k = 0; k < b.selectionCount; ++k) {
+                    const Box& box = registry_.box(b.selectionFirst + k);
+                    if (dir & 1 ? box.max[a] < 1.0f : box.min[a] > 0.0f) continue;  // not touching that face
+                    for (int j = 0; j < 16; ++j)
+                        for (int i = 0; i < 16; ++i) {
+                            const float cu = (float(i) + 0.5f) / 16.0f, cv = (float(j) + 0.5f) / 16.0f;
+                            if (cu > box.min[u] && cu < box.max[u] && cv > box.min[v] && cv < box.max[v]) it->second[dir].set(size_t(j * 16 + i));
+                        }
+                }
+            }
+        }
+        return it->second[d];
+    }
+    // A full-block face occluder other than an opaque cube (a slab's bottom, a carpet's underside).
+    bool fullFace(u16 id, int d) { return kind(id) == Occluder && mask(id, d).all(); }
+    // Block.shouldRenderFace(self, neighbour, d) for a face of a non-cube block.
+    bool shouldRenderFace(u16 self, u16 neighbour, int d, const BlockInfo* infos) {
+        if (infos[neighbour].occludes || fullFace(neighbour, d ^ 1)) return false;
+        if (skipRendering(self, neighbour, d)) return false;
+        if (kind(neighbour) != Occluder || kind(self) != Occluder) return true;  // an empty face shape on either side
+        const Mask& own = mask(self, d);
+        return own.none() || (own & ~mask(neighbour, d ^ 1)).any();
+    }
+
+private:
+    bool skipRendering(u16 self, u16 neighbour, int d) {
+        const Kind k = kind(self);
+        if (k == None || k == Occluder) return false;
+        kind(neighbour);
+        const bool same = base_[self] == base_[neighbour];
+        if (k == SameSkips) return same;  // HalfTransparentBlock
+        if (k == MangroveRoots) return d < 2 && base_[neighbour] == "mangrove_roots";
+        if (!same) return false;  // IronBarsBlock: vertically always, sideways when both connect
+        if (d < 2) return true;
+        static const char* const kSide[6] = {"", "", "north", "south", "west", "east"};
+        return registry_.property(self, kSide[d]) == "true" && registry_.property(neighbour, kSide[d ^ 1]) == "true";
+    }
+    const BlockRegistry& registry_;
+    std::vector<i8> kind_;
+    std::vector<std::string> base_;
+    std::unordered_map<u16, std::array<Mask, 6>> masks_;
+};
+FaceShapes& faceShapes(const BlockRegistry& registry) {
+    thread_local std::unique_ptr<FaceShapes> shapes;
+    thread_local const BlockRegistry* owner = nullptr;
+    if (!shapes || owner != &registry) shapes = std::make_unique<FaceShapes>(registry), owner = &registry;
+    return *shapes;
+}
 // SizeInfo: the quad's min / max along a direction's axis (DOWN = minY ... EAST = maxX), then the flipped (1 - v) ones.
 enum { SD, SU, SN, SS, SW, SE, FD, FU, FN, FS, FW, FE };
 struct Adjacency {
@@ -606,6 +687,7 @@ void meshGrid(const u16* ids, const u8* light, const BlockRegistry& registry, bo
                         // Leaves: the faces between them show with See-Through Leaves (full detail; LOD keeps culling them).
                         if (bc.leaves && light) hidden = bn.occludes || (!cutoutLeaves && bn.leaves);
                         else if (bc.leaves && !cutoutLeaves) hidden = hidden || bn.leaves;
+                        if (!hidden && models && faceShapes(registry).fullFace(ids[p + off], d ^ 1)) hidden = true;
                         const u8 layer = bc.leaves && !cutoutLeaves ? u8(LayerOpaque) : bc.layer;
                         if (hidden && skirts && d >= 2 && bc.layer != LayerTranslucent && onBorder(d, x, y, z) &&
                             (!infos[sc.cube[p + kStrideY]].occludes || !infos[sc.cube[p + off + kStrideY]].occludes))
@@ -724,9 +806,10 @@ void meshGrid(const u16* ids, const u8* light, const BlockRegistry& registry, bo
                                         cb.max[2] >= 1;
                     }
                     const LightGrid grid{ids, light, infos, sc.solid, ring};
+                    FaceShapes& shapes = faceShapes(registry);
                     for (u32 qi = quadFirst; qi < quadFirst + quadCount; ++qi) {
                         const ModelQuad& m = registry.modelQuad(qi);
-                        if (m.cull >= 0 && infos[ids[p + kDirOffset[m.cull]]].occludes) continue;
+                        if (m.cull >= 0 && !shapes.shouldRenderFace(ids[p], ids[p + kDirOffset[m.cull]], m.cull, infos)) continue;
                         u32 cornerLight[4], cornerAo[4] = {255, 255, 255, 255};  // smooth coords per our vertex
                         if (ao) {
                             float vertAo[4];
