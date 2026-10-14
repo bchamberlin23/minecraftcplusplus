@@ -59,6 +59,7 @@ public:
     int entityId() const { return entityId_; }
     // Mob effect amplifier of the local player (0 = level I), -1 when it does not have it ("haste").
     int effect(std::string_view name) const;
+    int entityEffect(int entity, std::string_view name) const;  // another entity's (our vehicle's), -1 without
     double attribute(std::string_view name, double fallback) const;  // the server's value, else fallback
     const ui::ItemStack* mainHand() const;
     const ui::ItemStack* offHand() const;
@@ -134,6 +135,7 @@ private:
     std::unordered_map<std::string, ItemRules::Tool> toolCache_;  // decoded tool components by their bytes
     std::mt19937 rng_{0x5EEDu};
     std::map<std::string, int, std::less<>> effects_;        // name -> amplifier
+    std::unordered_map<int, std::map<std::string, int, std::less<>>> entityEffects_;  // other entities
     std::map<std::string, double, std::less<>> attributes_;  // name -> value
     std::unordered_map<int, std::map<std::string, double, std::less<>>> entityAttributes_;  // other entities
     ent::EntityWorld* entities_ = nullptr;

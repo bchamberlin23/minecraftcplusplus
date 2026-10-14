@@ -125,6 +125,12 @@ int fieldId(const Entity& e, const char* field) {
 }
 }  // namespace
 
+void setDataInt(Entity& e, const char* field, i64 value) {
+    const int id = fieldId(e, field);
+    if (id < 0 || id >= SpeciesState::kData) return;
+    e.sp.data[id] = value, e.sp.seen |= decltype(e.sp.seen)(1) << id;
+}
+
 bool dataSeen(const Entity& e, const char* field) {
     const int id = fieldId(e, field);
     return id >= 0 && id < SpeciesState::kData && ((e.sp.seen >> id) & 1);

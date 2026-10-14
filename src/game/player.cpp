@@ -1072,7 +1072,7 @@ void Player::tick(const Physics& physics, const PlayerInput& rawInput) {
     if (flying || noClip) swimming = false;  // Entity.updateSwimming (Player: never while flying)
     else if (swimming) swimming = sprinting && inWater;
     else swimming = sprinting && underWater() && physics.fluid(bx, by, bz).type == 1;
-    if (inLava) fallDistance *= 0.5;
+    if (inLava && tickCount > 1) fallDistance *= 0.5;  // isInLava is false during the first tick's baseTick (firstTick)
 
     // --- LocalPlayer.aiStep ---
     if (sprintTriggerTime_ > 0) --sprintTriggerTime_;

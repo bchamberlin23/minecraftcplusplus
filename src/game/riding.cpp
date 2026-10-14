@@ -1,6 +1,7 @@
 #include "game/riding.h"
 
 #include "assets/assets.h"
+#include "audio/audio.h"
 #include "entity/entities.h"
 #include "game/game.h"
 #include "game/gameplay.h"
@@ -592,6 +593,22 @@ void Riding::livingTick(ent::Entity& e) {
         e.pitch = p.pitch / kDegf * 0.5f;
     }
     e.bodyYaw = e.headYaw = e.yaw;
+    // Camel.tickRidden: forward input stands a sitting camel up (standUp; not during a pose transition)
+    if (isCamel(n) && entities_ && input_.forward > 0) {
+        const i64 last = ent::dataInt(e, "LAST_POSE_CHANGE_TICK"), now = entities_->gameTime();
+        if (last < 0 && now + last >= 40) {
+            ent::setDataInt(e, "LAST_POSE_CHANGE_TICK", now);
+            e.pose = 0;  // Pose.STANDING
+            if (audio::AudioSystem* a = audio::instance()) {  // makeSound(getStandUpSound), Camel.getVoicePitch
+                const float pitch = (float(std::rand()) / RAND_MAX - float(std::rand()) / RAND_MAX) * 0.2f + (e.baby ? 1.5f : 1.0f);
+                a->play(n == "camel_husk" ? "entity.camel_husk.stand" : "entity.camel.stand", audio::Category::Neutral, e.pos[0],
+                        e.pos[1], e.pos[2], 1.0f, pitch);
+            }
+        }
+    }
+    // LivingEntity.getJumpBoostPower of the vehicle (its effects reach its passengers)
+    const int jumpBoost = gameplay_.entityEffect(vehicle_, "jump_boost");
+    const double jumpBoostPower = jumpBoost >= 0 ? double(0.1f * (float(jumpBoost) + 1.0f)) : 0.0;
     // getRiddenInput: the rider's input (LocalPlayer.modifyInput: x 0.98); horses strafe at half, back off at a quarter;
     // pigs and striders always walk forward.
     double strafe, forward;
@@ -635,7 +652,7 @@ void Riding::livingTick(ent::Entity& e) {
             const double efficiency = gameplay_.entityAttribute(vehicle_, "movement_efficiency", 0.0);
             const double speedFactor = blockSpeed + (1.0 - blockSpeed) * efficiency;
             // getJumpPower: jump_strength x the block jump factor
-            const double jumpStrength = gameplay_.entityAttribute(vehicle_, "jump_strength", 0.42) * jumpFactor;
+            const double jumpStrength = gameplay_.entityAttribute(vehicle_, "jump_strength", 0.42) * jumpFactor + jumpBoostPower;
             // the movement_speed attribute (not the sprinting ridden speed) x the block speed factor
             const double h = 22.2222 * pendingJump_ * gameplay_.entityAttribute(vehicle_, "movement_speed", 0.09) * speedFactor;
             e.vel[0] += -std::sin(e.yaw * kDegf) * h;
@@ -649,7 +666,7 @@ void Riding::livingTick(ent::Entity& e) {
             const Physics ph(gameplay_.world(), gameplay_.registry());
             const float here = ph.jumpFactor(bx, int(std::floor(e.pos[1])), bz);
             const float factor = here == 1.0f ? ph.jumpFactor(bx, int(std::floor(e.pos[1] - 0.500001)), bz) : here;
-            e.vel[1] = jumpStrength * pendingJump_ * factor;
+            e.vel[1] = jumpStrength * pendingJump_ * factor + jumpBoostPower;
             if (forward > 0) {
                 e.vel[0] += -0.4 * std::sin(e.yaw * kDegf) * pendingJump_;
                 e.vel[2] += 0.4 * std::cos(e.yaw * kDegf) * pendingJump_;

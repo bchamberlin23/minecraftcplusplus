@@ -408,7 +408,7 @@ void Gameplay::attach(net::Client& client) {
         for (i32 i = 0; i < n && r.ok && i < 4096; ++i) ids.push_back(r.varInt());
         post([this, ids = std::move(ids)] {
             for (int id : ids) {
-                entityAttributes_.erase(id);
+                entityAttributes_.erase(id), entityEffects_.erase(id);
                 if (riding_ && id == riding_->vehicle()) riding_->dismounted();
             }
         });
@@ -418,6 +418,7 @@ void Gameplay::attach(net::Client& client) {
         if (!r.ok || id < 0 || size_t(id) >= effectNames_.size()) return;
         post([this, entity, name = std::string(shortName(effectNames_[size_t(id)])), amplifier] {
             if (entity == entityId_) effects_[name] = amplifier;
+            else entityEffects_[entity][name] = amplifier;
         });
     });
     client.onPlayPeek("remove_mob_effect", [this](net::Reader& r) {
@@ -425,6 +426,7 @@ void Gameplay::attach(net::Client& client) {
         if (!r.ok || id < 0 || size_t(id) >= effectNames_.size()) return;
         post([this, entity, name = std::string(shortName(effectNames_[size_t(id)]))] {
             if (entity == entityId_) effects_.erase(name);
+            else if (auto it = entityEffects_.find(entity); it != entityEffects_.end()) it->second.erase(name);
         });
     });
     client.onPlayPeek("update_attributes", [this](net::Reader& r) {
@@ -805,6 +807,13 @@ void Gameplay::frame() {
 int Gameplay::effect(std::string_view name) const {
     auto it = effects_.find(name);
     return it == effects_.end() ? -1 : it->second;
+}
+
+int Gameplay::entityEffect(int entity, std::string_view name) const {
+    auto it = entityEffects_.find(entity);
+    if (it == entityEffects_.end()) return -1;
+    auto e = it->second.find(name);
+    return e == it->second.end() ? -1 : e->second;
 }
 
 double Gameplay::attribute(std::string_view name, double fallback) const {

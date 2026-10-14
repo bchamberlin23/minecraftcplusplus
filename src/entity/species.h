@@ -70,6 +70,7 @@ i64 dataInt(const Entity& e, const char* field, i64 def = 0);
 bool isBlocking(const Entity& e);  // LivingEntity.isBlocking (entities.cpp): blocks_attacks in use past its block delay
 float dataFloat(const Entity& e, const char* field, float def = 0);
 bool dataSeen(const Entity& e, const char* field);
+void setDataInt(Entity& e, const char* field, i64 value);  // a predicted change (the server's value follows)
 // EnderDragon.aiStep's tickPart: the eight parts (head, neck, body, tail x 3, wing x 2) as boxes relative to the
 // dragon's position (min x y z, max x y z), from its flight history (the client's yRotA stays 0).
 void dragonPartBoxes(const Entity& e, double boxes[8][6]);
