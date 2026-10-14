@@ -200,6 +200,7 @@ private:
     const std::string& registryName(const char* registry, int id) const;  // static registries from the reports
     bool readPatch(net::Reader& r, ItemStack& out, int depth) const;
     bool templateHash(net::Reader& r, u32& out) const;  // an ItemStackTemplate off the wire, hashed (HashOps)
+    bool explosionHash(net::Reader& r, u32& out) const;  // a FireworkExplosion off the wire, hashed
     bool skipValue(net::Reader& r, int type, int depth) const;
     bool readTemplate(net::Reader& r, int depth) const;  // ItemStackTemplate
 

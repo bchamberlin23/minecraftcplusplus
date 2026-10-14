@@ -626,6 +626,8 @@ u32 hTagged(u8 tag, u64 v, int bytes) {
     return crc32c(b);
 }
 u32 hInt(i32 v) { return hTagged(8, u32(v), 4); }
+constexpr const char* kDyeNames[16] = {"white", "orange", "magenta", "light_blue", "yellow", "lime", "pink", "gray",
+                                       "light_gray", "cyan", "purple", "blue", "brown", "green", "red", "black"};
 u32 hBool(bool v) { return crc32c({13, u8(v ? 1 : 0)}); }
 u32 hString(const std::string& utf8) {  // [12] + the UTF-16 length + the UTF-16 units (putUnencodedChars)
     std::u16string u;
@@ -795,6 +797,69 @@ bool Items::componentHash(const ItemStack::Component& c, u32& out) const {
         if (!pages.empty()) kv.emplace_back(hString("pages"), hList(pages));
         if (r.boolean()) kv.emplace_back(hString("resolved"), hBool(true));
         out = hMap(std::move(kv));
+    } else if (n == "firework_explosion") {
+        if (!explosionHash(r, out)) return false;
+    } else if (n == "fireworks") {  // {flight_duration (an unsigned byte) unless 0, explosions unless empty}
+        std::vector<std::pair<u32, u32>> kv;
+        if (const i32 flight = r.varInt(); flight != 0) kv.emplace_back(hString("flight_duration"), crc32c({6, u8(flight)}));
+        std::vector<u32> explosions;
+        const i32 cnt = r.varInt();
+        for (i32 i = 0; i < cnt && r.ok; ++i) {
+            u32 h;
+            if (!explosionHash(r, h)) return false;
+            explosions.push_back(h);
+        }
+        if (!explosions.empty()) kv.emplace_back(hString("explosions"), hList(explosions));
+        out = hMap(std::move(kv));
+    } else if (n == "base_color") {
+        const i32 dye = r.varInt();
+        if (dye < 0 || dye > 15) return false;
+        out = hString(kDyeNames[dye]);
+    } else if (n == "banner_patterns") {  // [{pattern, color}...]
+        std::vector<u32> layers;
+        const i32 cnt = r.varInt();
+        for (i32 i = 0; i < cnt && r.ok; ++i) {
+            const i32 holder = r.varInt(), dye = r.varInt();  // a registry pattern (id + 1; 0: inline, not reproduced)
+            if (holder <= 0 || size_t(holder - 1) >= bannerPatterns_.size() || dye < 0 || dye > 15) return false;
+            layers.push_back(hMap({{hString("pattern"), hString(bannerPatterns_[size_t(holder - 1)])}, {hString("color"), hString(kDyeNames[dye])}}));
+        }
+        out = hList(layers);
+    } else if (n == "trim") {  // {material, pattern}: registry holders (id + 1)
+        const i32 material = r.varInt();
+        if (material <= 0 || size_t(material - 1) >= trimMaterials_.size()) return false;
+        const i32 pattern = r.varInt();
+        if (pattern <= 0 || size_t(pattern - 1) >= trimPatterns_.size()) return false;
+        out = hMap({{hString("material"), hString(trimMaterials_[size_t(material - 1)])},
+                    {hString("pattern"), hString(trimPatterns_[size_t(pattern - 1)])}});
+    } else if (n == "suspicious_stew_effects") {  // [{id, duration unless 160}...]
+        std::vector<u32> effects;
+        const i32 cnt = r.varInt();
+        for (i32 i = 0; i < cnt && r.ok; ++i) {
+            const std::string& effect = mobEffectName(r.varInt());
+            const i32 duration = r.varInt();
+            if (effect.empty()) return false;
+            std::vector<std::pair<u32, u32>> kv{{hString("id"), hString(effect)}};
+            if (duration != 160) kv.emplace_back(hString("duration"), hInt(duration));
+            effects.push_back(hMap(std::move(kv)));
+        }
+        out = hList(effects);
+    } else if (n == "pot_decorations") {  // {back?, left?, right?, front?}
+        std::vector<std::pair<u32, u32>> kv;
+        for (const char* side : {"back", "left", "right", "front"}) {
+            if (!r.boolean()) continue;
+            u32 h;
+            if (!templateHash(r, h)) return false;
+            kv.emplace_back(hString(side), h);
+        }
+        out = hMap(std::move(kv));
+    } else if (n == "block_state") {  // {"property": "value"...}
+        std::vector<std::pair<u32, u32>> kv;
+        const i32 cnt = r.varInt();
+        for (i32 i = 0; i < cnt && r.ok; ++i) {
+            const std::string key(r.str());
+            kv.emplace_back(hString(key), hString(std::string(r.str())));
+        }
+        out = hMap(std::move(kv));
     } else if (n == "bundle_contents" || n == "charged_projectiles") {  // a list of ItemStackTemplates
         std::vector<u32> items;
         const i32 cnt = r.varInt();
@@ -827,6 +892,24 @@ bool Items::componentHash(const ItemStack::Component& c, u32& out) const {
         return false;
     }
     return r.ok && r.p == r.end;
+}
+
+// FireworkExplosion.CODEC: {shape, colors unless empty, fade_colors unless empty, has_trail / has_twinkle if set}.
+bool Items::explosionHash(net::Reader& r, u32& out) const {
+    static const char* const kShapes[5] = {"small_ball", "large_ball", "star", "creeper", "burst"};
+    const i32 shape = r.varInt();
+    if (shape < 0 || shape > 4) return false;
+    std::vector<std::pair<u32, u32>> kv{{hString("shape"), hString(kShapes[shape])}};
+    for (const char* key : {"colors", "fade_colors"}) {
+        std::vector<u32> colors;
+        const i32 cnt = r.varInt();
+        for (i32 i = 0; i < cnt && r.ok; ++i) colors.push_back(hInt(r.i32v()));
+        if (!colors.empty()) kv.emplace_back(hString(key), hList(colors));
+    }
+    if (r.boolean()) kv.emplace_back(hString("has_trail"), hBool(true));
+    if (r.boolean()) kv.emplace_back(hString("has_twinkle"), hBool(true));
+    out = hMap(std::move(kv));
+    return r.ok;
 }
 
 // ItemStackTemplate.CODEC (its map form): {id, count unless 1, components unless empty}; the patch as
