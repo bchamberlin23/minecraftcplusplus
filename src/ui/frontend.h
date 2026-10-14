@@ -173,7 +173,7 @@ void showConfirm(State& s, Text title, Text text, std::string yes, std::function
 void dropIntoModsFolder(State& s, const std::vector<fs::path>& files, Screen back, std::function<void()> after);
 void requestTitle(State& s, const std::string& menu);
 void serverFailure(State& s, bool datapacks, bool safeMode, std::function<void()> safeModeFn);  // datapack_failure.cpp
-void openWorldSymlinkWarning(State& s, std::function<void()> onClose);  // notice_link.cpp (NoticeWithLinkScreen)
+void openSymlinkWarning(State& s, bool pack, std::function<void()> onClose);  // notice_link.cpp (NoticeWithLinkScreen)
 // DirectoryValidator with <game dir>/allowed_symlinks.txt (LevelStorageSource.parseValidator): whether a symlink's
 // target may be followed, and whether a save holds a symlink that may not (validateDirectory(dir, true)).
 bool symlinkTargetAllowed(const fs::path& minecraftDir, const fs::path& target);

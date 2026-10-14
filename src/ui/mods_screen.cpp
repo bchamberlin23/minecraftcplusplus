@@ -100,6 +100,15 @@ void dropIntoModsFolder(UiState& s, const std::vector<fs::path>& files, Screen b
     showConfirm(s, tr(s, "pack.dropConfirm"), Text(names), s.res.translate("gui.yes"), [p, files, back, after] {
         UiState& st = *p;
         const fs::path dir = mods::Manager::get().modsDir();
+        // PackDetector.detectPackResources: a symlink (or a pack folder holding one) outside allowed_symlinks.txt
+        // stops the whole drop with the pack symlink warning
+        const fs::path gameDir = st.fe ? st.fe->cfg.minecraftDir : fs::path();
+        for (const fs::path& f : files) {
+            std::error_code ec;
+            const bool forbidden = fs::is_symlink(f, ec) ? !symlinkTargetAllowed(gameDir, fs::read_symlink(f, ec))
+                                   : fs::is_directory(f, ec) && forbiddenSymlinks(gameDir, f);
+            if (forbidden) return openSymlinkWarning(st, true, [p, back] { p->openScreen(back); });
+        }
         std::string rejected;
         bool failed = false, copied = false;
         for (const fs::path& f : files) {

@@ -1,5 +1,6 @@
 // NoticeWithLinkScreen: a bold title, a message and Open in Browser / Copy Link to Clipboard / Back, centred as one
-// column (rows 10 apart). The world symlink warning (WorldOpenFlows.createWorldAccess, a symlink world in the list).
+// column (rows 10 apart). The symlink warnings: a world (WorldOpenFlows.createWorldAccess, a symlink world in the
+// list) or dropped packs (PackSelectionScreen.onFilesDrop).
 #include "ui/frontend.h"
 #include "ui/modules.h"
 #include "ui/ui_state.h"
@@ -61,12 +62,14 @@ const ScreenRegistrar kScreen({Screen::NoticeWithLink, build, draw, input, nullp
 
 }  // namespace
 
-void openWorldSymlinkWarning(UiState& s, std::function<void()> onClose) {  // createWorldSymlinkWarningScreen
+// createWorldSymlinkWarningScreen / createPackSymlinkWarningScreen
+void openSymlinkWarning(UiState& s, bool pack, std::function<void()> onClose) {
     static const std::string kHelp = "https://aka.ms/MinecraftSymLinks";  // CommonLinks.SYMLINK_HELP
     Style bold;
     bold.bold = 1;
-    g_notice = {Text(s.res.translate("symlink_warning.title.world"), bold),
-                translatable("symlink_warning.message.world", {Text(kHelp)}, s.lang()), kHelp, std::move(onClose)};
+    const std::string kind = pack ? "pack" : "world";
+    g_notice = {Text(s.res.translate("symlink_warning.title." + kind), bold),
+                translatable("symlink_warning.message." + kind, {Text(kHelp)}, s.lang()), kHelp, std::move(onClose)};
     s.openScreen(Screen::NoticeWithLink);
 }
 

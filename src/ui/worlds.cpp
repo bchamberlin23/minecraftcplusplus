@@ -147,7 +147,7 @@ void playWorld(State& s, bool play) {
     if (!w) return;
     if (w->symlink) {  // SymlinkLevelSummary: More Info
         State* p = &s;
-        return openWorldSymlinkWarning(s, [p] { openWorlds(*p); });
+        return openSymlinkWarning(s, false, [p] { openWorlds(*p); });
     }
     if (w->broken) return openRecover(s);  // CorruptedLevelSummary: the primary action recovers
     if (disabled(*w)) return;
@@ -716,7 +716,7 @@ void continuePlay(State& s, int step) {
     if (step <= 0) {
         if (forbiddenSymlinks(s.fe->cfg.minecraftDir, w->dir)) {
             LOG("ui: %s holds a symbolic link outside allowed_symlinks.txt", w->folder.c_str());
-            return openWorldSymlinkWarning(s, [p] { p->openScreen(Screen::Title); });
+            return openSymlinkWarning(s, false, [p] { p->openScreen(Screen::Title); });
         }
         if (!compatible(*w)) {
             return showMessage(s, Text(s.res.translate("selectWorld.incompatible.title"), colorStyle(0xFF0000)),
