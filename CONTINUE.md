@@ -210,12 +210,12 @@ game profile); the Online screen's Friends section has only In-Game Notification
 
 - **HashedStack component hashes** (items.cpp Items::componentHash): computed like the game for damage, max damage,
   repair cost, max stack size, map id / colour, dyed colour, glint override, rarity, the unit components, names and
-  lore, (stored) enchantments, custom data, potion contents (without custom effects), writable / written book contents
+  lore, (stored) enchantments, custom data, potion contents with custom effects, writable / written book contents
   and bundle / charged projectile / container item lists, fireworks, banner patterns, base colours, trims, stew
   effects, pot decorations, block states, instruments, lodestone trackers, custom model data, tooltip display, note
-  block sounds and bucket entity data (verified: no resync after clicks); every other component (profiles, attribute
-  modifiers, entity / block entity data, the gameplay components set by commands...) still sends 0 and the server
-  resyncs that slot.
+  block sounds, bucket / entity / block entity data, attribute modifiers, profiles, food, use cooldowns and weapons
+  (verified: no resync after clicks); the other gameplay components set by commands (tool, consumable, equippable...)
+  still send 0 and the server resyncs that slot.
 
 
 ## Visuals / effects
