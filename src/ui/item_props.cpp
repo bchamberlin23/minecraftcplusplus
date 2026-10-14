@@ -703,7 +703,8 @@ const std::string* findComponent(const Items& items, const ItemStack& s, std::st
 bool hasComponent(const Items& items, const ItemStack& s, std::string_view rawName, bool ignoreDefault) {
     const std::string name = stripNs(rawName);
     if (findComponent(items, s, name)) return true;
-    if (ignoreDefault || removed(items, s, name)) return false;
+    if (ignoreDefault) return removed(items, s, name);  // hasNonDefault: the patch names it (a removal too)
+    if (removed(items, s, name)) return false;
     return defaults(items, s.item).contains("minecraft:" + name);
 }
 
