@@ -313,3 +313,11 @@ CPU (~0.55 ms) and GPU (~0.68 ms) roughly balanced (`--profile` prints the main 
 - Entering a world: in the world at ~4.3 s (the server's own bootstrap is the critical path).
 - Save and Quit to Title: the title instance starts while the world saves (handoff gate) and shows in ~3 s.
 - JVM flags (ParallelGC, -UsePerfData, CICompilerCount, C1 only) measured no faster.
+- Real terrain with the default far terrain (16384 blocks, ~170k nodes in the cut), 720p DLSS: Shaders Off ~880 fps,
+  Shaders High ~400 fps. The translucent pass had been 2.6 ms of empty indirect draws (fixed slots per section: now an
+  ordered count / scan / emit compaction); the outer shadow cascades update at capped rates; translucent sorting is a
+  radix sort. `--profile` logs every 5 s and Shaders Off per-pass GPU times at exit. Open: LOD meshes carry no light
+  (sky 15, no AO; giving them the smooth path's AO cost +38% geometry and ~7% fps for little visible change), so
+  distant lighting still differs a little where full detail takes over.
+- Frame generation with Shaders Off is untested in headless runs (DLSS-G presents no generated frames for a background
+  window, with or without shaders): test it in a focused window.
