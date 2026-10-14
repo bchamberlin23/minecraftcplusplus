@@ -375,11 +375,13 @@ int wmain(int argc, wchar_t** argv) {
     // Mods and packs (mods/mod_manager.h): resource and data packs layered over the game's files for every loader
     // below, Fabric mods for the local server, native mods.
     // A broken pack from the internet must not take the game down (one data pack's tag file did).
+    bool packLoadFailed = false;  // a toast once the UI is up (Minecraft.clearResourcePacksOnError)
     try {
         mods::Manager::get().init({mc, version, jar, opt.connect.empty() ? worldDir : fs::path(), opt.modsDir,
                                    opt.play && opt.connect.empty()});
     } catch (const std::exception& e) {
         LOG("error: mods and packs: %s (continuing without some of them)", e.what());
+        packLoadFailed = true;
     }
 
     // --- singleplayer (--play): the official server runs the game's rules on this world in the background
@@ -901,6 +903,7 @@ int wmain(int argc, wchar_t** argv) {
     ui.setMenuBlur([&postEffects](const PassContext& ctx, float radius) { postEffects.blur(ctx, radius); });
     if (session) ui.attachSession(netClient.get(), session.get());
     if (!opt.script.empty()) ui.loadScript(opt.script);
+    if (packLoadFailed) ui.packLoadFailureToast();
     // The saved shader pack (render/packs), unless this run's command line picks a pack or a shader mode, or Shaders is
     // Off (which turns a pack off too).
     if (!packs::commandLinePack() && !opt.shadersGiven && !ui.settings().shaderPack.empty() &&

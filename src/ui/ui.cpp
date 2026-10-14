@@ -757,6 +757,9 @@ Ui::~Ui() = default;
 Settings& Ui::settings() { return s_->settings; }
 bool Ui::quitRequested() const { return s_->quit; }
 void Ui::setServerSaving(bool saving) { s_->serverSaving = saving; }
+void Ui::packLoadFailureToast() {
+    showToast(Text(s_->res.translate("resourcePack.load_fail")), Text(), "pack_load_failure");
+}
 void Ui::chunkStorageToast(int kind, int x, int z) {  // SystemToast.onChunkLoadFailure / onChunkSaveFailure / onLowDiskSpace
     const Resources& res = s_->res;
     if (kind == 2) {
