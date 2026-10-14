@@ -1531,9 +1531,11 @@ int wmain(int argc, wchar_t** argv) {
             saveTime = now;
             saveNow("autosave");
         }
-        // First frames drawn: an instance started by another shows its window now (the title screen waits for some
-        // far terrain, briefly).
-        if (frame >= 2 && (!menu || terrain.stats().farRegions >= 24 || now - loopStart > 2.0)) launch::ready(window);
+        // First frames drawn: an instance started by another shows its window now (the title screen waits briefly for
+        // its panorama: some far terrain with --far, else its full detail, usually resident from the cache already).
+        if (frame >= 2 && (!menu || (opt.farBlocks > 0 ? terrain.stats().farRegions >= 24 : terrain.stats().detailPending == 0) ||
+                           now - loopStart > 2.0))
+            launch::ready(window);
         if (menu && ui.switching()) {  // the next instance is loading: give it the machine
             if (genService) genService->setWanted({});
             Sleep(15);
