@@ -171,7 +171,8 @@ and no fallback draws nothing (Java: the missing model), local_time ignores "loc
 cached per second, select on "component" matches the named fields only (undecoded components never match a value).
 F3 and world border audited; residuals: memory lines are the process's (no JVM heap), local difficulty / chunk
 generation / spawn counts show nothing (integrated-server data), the border wall is rebuilt every frame (Java: per
-camera section). Not ported:
+camera section). Sound engine and level events audited; residuals: the voice pools are fixed at 247 + 8 (Java:
+from the device's source count) and a full pool replaces its quietest voice (deliberate), streams buffer 0.5 s. Not ported:
 filtered sign text (needs the account's profanity filter flag). The bell's raider particles (showBellParticles) are
 invisible in 26.3 (ColorParticleOption.create(ENTITY_EFFECT, 0xFED839 + 5i) has alpha 0, which SpellParticle keeps),
 so they are not drawn here either. Toasts follow ToastInstance now (the
