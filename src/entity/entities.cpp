@@ -1286,10 +1286,19 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
             e.swingTime = 0, e.swingHand = ev.a == 1 ? 1 : 0, e.swingType = int(ev.b);
             e.swingDuration = std::max<int>(int(ev.count), 1);
             break;
-        case EventType::Hurt:
+        case EventType::Hurt: {
             e.hurtTime = 10;
+            // animateHurt of the vehicles: their own wobble from the synced hurt data, nudged here at once
+            // (AbstractBoat: the direction flipped, damage x 11; AbstractMinecart: flipped, + damage x 10)
+            const std::string& n = e.info ? e.info->name : std::string();
+            const bool boat = n.ends_with("_boat") || n.ends_with("_raft"), cart = n.ends_with("minecart");
+            if (boat || cart) {
+                e.vehicleHurtDir = -e.vehicleHurtDir, e.vehicleHurt = 10;
+                e.vehicleDamage = boat ? e.vehicleDamage * 11.0f : e.vehicleDamage + e.vehicleDamage * 10.0f;
+            }
             if (verbose_) LOG("entities: %d hurt animation", e.id);
             break;
+        }
         case EventType::ProjectilePower: e.accelerationPower = ev.d[0]; break;  // handleProjectilePowerPacket
         case EventType::EntityLink: e.leashHolder = ev.a; break;               // Leashable.setDelayedLeashHolderId
         case EventType::Damage:  // ClientPacketListener.handleDamageEvent -> animateHurt
