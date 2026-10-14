@@ -215,10 +215,74 @@ void merchantDrawTop(State& s, Canvas& c, Menu&, const Layout&, float left, floa
         if (st) s.drawTooltip(c, s.items.tooltip(*st, s.settings.advancedItemTooltips), s.mouseX, s.mouseY, nullptr, true, tooltipStyle(s.items, *st));
         return;
     }
-    if (g.shopItem >= 0 && g.shopItem < n && g.offers[size_t(g.shopItem)].outOfStock && inRect(s, left + 186, top + 35, 22, 21) &&
+    if (g.shopItem >= 0 && g.shopItem < n && g.offers[size_t(g.shopItem)].outOfStock && inRect(s, left + 185, top + 34, 24, 23) &&
         g.canRestock)
         s.drawTooltip(c, {Text(s.res.translate("merchant.deprecated"))}, s.mouseX, s.mouseY);  // one line, unwrapped
 }
+// AbstractContainerMenu.moveItemStackTo over the merchant's player slots (3 .. 38: any item, the item's stack size).
+bool merchantMoveTo(State& s, Menu& m, ItemStack& st, int start, int end, bool backwards) {
+    bool changed = false;
+    const int mx = s.items.maxStack(st);
+    if (mx > 1 && !(st.damage > 0 && s.items.maxDamage(st) > 0)) {  // isStackable
+        for (int i = backwards ? end - 1 : start; !st.empty() && (backwards ? i >= start : i < end); i += backwards ? -1 : 1) {
+            ItemStack& t = m.slots[size_t(i)];
+            if (t.empty() || !t.sameItemSameComponents(st)) continue;
+            const int total = t.count + st.count;
+            if (total <= mx) st.count = 0, t.count = total, changed = true;
+            else if (t.count < mx) st.count -= mx - t.count, t.count = mx, changed = true;
+        }
+    }
+    if (st.count > 0)
+        for (int i = backwards ? end - 1 : start; backwards ? i >= start : i < end; i += backwards ? -1 : 1) {
+            if (!m.slots[size_t(i)].empty()) continue;
+            const int k = std::min(st.count, mx);
+            m.slots[size_t(i)] = st.withCount(k);
+            st.count -= k;
+            changed = true;
+            break;
+        }
+    if (st.count <= 0) st = ItemStack{};
+    return changed;
+}
+// ItemCost.test: the item, and each component the cost names equal on the stack.
+bool costMatches(const ItemStack& cost, const ItemStack& st) {
+    if (st.item != cost.item) return false;
+    for (const ItemStack::Component& c : cost.added)
+        if (std::none_of(st.added.begin(), st.added.end(), [&](const ItemStack::Component& x) { return x.type == c.type && x.data == c.data; }))
+            return false;
+    return true;
+}
+// MerchantMenu.moveFromInventoryToPaymentSlot: matching inventory stacks fill the payment slot up to a full stack.
+void merchantFill(State& s, Menu& m, int payment, const ItemStack& cost) {
+    for (int i = 3; i < 39; ++i) {
+        ItemStack& inv = m.slots[size_t(i)];
+        if (inv.empty() || !costMatches(cost, inv)) continue;
+        const ItemStack cur = m.slots[size_t(payment)];
+        if (!cur.empty() && !inv.sameItemSameComponents(cur)) continue;
+        const int mx = s.items.maxStack(inv), move = std::min(mx - cur.count, inv.count);
+        const ItemStack pay = inv.withCount(cur.count + move);
+        inv = inv.withCount(inv.count - move);
+        m.slots[size_t(payment)] = pay;
+        if (pay.count >= mx) break;
+    }
+}
+// MerchantMenu.tryMoveItems: the payment back into the inventory, then the trade's costs from it.
+void merchantTryMoveItems(State& s, Menu& m, int index) {
+    const MerchantState& g = g_merchant;
+    if (index < 0 || size_t(index) >= g.offers.size() || m.slots.size() < 39) return;
+    for (int p : {0, 1}) {
+        ItemStack old = m.slots[size_t(p)];
+        if (old.empty()) continue;
+        if (!merchantMoveTo(s, m, old, 3, 39, true)) return;
+        m.slots[size_t(p)] = old;
+    }
+    if (m.slots[0].empty() && m.slots[1].empty()) {
+        const Offer& o = g.offers[size_t(index)];
+        merchantFill(s, m, 0, o.baseCostA);
+        if (!o.costB.empty()) merchantFill(s, m, 1, o.costB);
+    }
+}
+
 bool merchantInput(State& s, const InputEvent& e, Menu& m, const Layout&, float left, float top) {
     MerchantState& g = g_merchant;
     const int n = int(g.offers.size());
@@ -227,23 +291,23 @@ bool merchantInput(State& s, const InputEvent& e, Menu& m, const Layout&, float 
         return true;
     }
     if (e.type == InputEvent::Button && !e.down && e.code == 0) g.dragging = false;
-    if (!leftPress(e)) return false;
-    if (merchantCanScroll() && s.mouseX > left + 94 && s.mouseX < left + 94 + 6 && s.mouseY > top + 18 && s.mouseY <= top + 18 + 139 + 1) {
+    if (merchantCanScroll() && e.type == InputEvent::Button && e.down && s.mouseX > left + 94 && s.mouseX < left + 94 + 6 && s.mouseY > top + 18 && s.mouseY <= top + 18 + 139 + 1) {
         g.dragging = true;
         return true;
     }
+    if (!leftPress(e)) return false;
     for (int i = 0; i < 7 && i < n; ++i) {
         if (!inRect(s, left + 5, top + 18 + float(i * 20), 88, 20)) continue;
         audio::playUiClick();
         g.shopItem = i + g.scrollOff;
-        // postButtonClick: the server moves the payment back and fills in the trade's cost (tryMoveItems) and
-        // syncs the slots.
+        // postButtonClick: the payment goes back and the trade's cost is filled in here as on the server
+        merchantTryMoveItems(s, m, g.shopItem);
+        s.mirrorPlayerSlots();
         if (s.online()) {
             net::Writer w;
             w.varInt(g.shopItem);
             s.client->sendPlay("select_trade", w);
         }
-        (void)m;
         return true;
     }
     return false;

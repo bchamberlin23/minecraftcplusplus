@@ -411,7 +411,7 @@ void enchantOpened(UiState& s, Menu& m) {
     const bool regLoaded = ench.registryLoaded;
     auto reg = std::move(ench.registry);
     ench.flip = ench.oFlip = ench.flipT = ench.flipA = ench.open = ench.oOpen = 0;
-    ench.seen = false, ench.last = ItemStack{}, ench.lastTick = s.guiTicks;
+    ench.seen = true, ench.last = ItemStack{}, ench.lastTick = s.guiTicks;
     ench.random.setSeed(i64(std::llround(s.clock * 1000.0)) ^ 0x1234567);
     ench.registryLoaded = regLoaded, ench.registry = std::move(reg);
     for (int i = 4; i < 10; ++i) m.data[size_t(i)] = -1;  // enchantClue / levelClue default -1 until the server sends them
@@ -568,6 +568,7 @@ std::string randomName(UiState& s, int maxWidth) {  // EnchantmentNames.getRando
 int lapisCount(const Menu& m) { return m.slots.size() > 1 && !m.slots[1].empty() ? m.slots[1].count : 0; }
 
 void enchantDrawBg(UiState& s, Canvas& c, Menu& m, const Layout&, float left, float top) {
+    s.xpDisplayStart = s.guiTicks;  // EnchantmentScreen.containerTick: the experience bar stays up
     for (int guard = 0; ench.lastTick < s.guiTicks && guard < 40; ++guard) ++ench.lastTick, tickBook(m);
     ench.lastTick = s.guiTicks;
     drawBook(s, c, left, top);
@@ -611,7 +612,7 @@ void enchantDrawTop(UiState& s, Canvas& c, Menu& m, const Layout&, float left, f
     for (int i = 0; i < 3; ++i) {
         const int minLevel = m.data[size_t(i)], enchId = m.data[size_t(4 + i)], level = m.data[size_t(7 + i)];
         if (enchId < 0) continue;
-        if (!inRect(s.mouseX, s.mouseY, left + 60, top + 14 + float(19 * i), 108, 17) || minLevel <= 0 || level < 0) continue;
+        if (!inRect(s.mouseX, s.mouseY, left + 59, top + 13 + float(19 * i), 110, 19) || minLevel <= 0 || level < 0) continue;  // isHovering
         const int cost = i + 1;
         std::vector<Text> lines;
         lines.push_back(translatable("container.enchant.clue", {enchantFullName(s, enchId, level)}, s.lang(), colorStyle(0xFFFFFF)));
