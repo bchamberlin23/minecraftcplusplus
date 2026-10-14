@@ -42,6 +42,7 @@ Gameplay::Gameplay(World& world, BlockRegistry& registry, const GameReports& rep
     attributeNames_ = registryNames(reports, "minecraft:attribute");
     for (size_t i = 0; i < attributeNames_.size(); ++i)
         if (attributeNames_[i] == "minecraft:scale") scaleAttribute_ = int(i);
+        else if (attributeNames_[i] == "minecraft:max_health") maxHealthAttribute_ = int(i);
     effectNames_ = registryNames(reports, "minecraft:mob_effect");
     const char* v = std::getenv("MCPP_GAMEPLAY_VERBOSE");
     verbose_ = v && *v == '1';
@@ -170,7 +171,7 @@ Gameplay::~Gameplay() = default;
 
 void Gameplay::setEntities(ent::EntityWorld* entities) {
     entities_ = entities;
-    if (entities_) entities_->scaleAttribute = scaleAttribute_;
+    if (entities_) entities_->scaleAttribute = scaleAttribute_, entities_->maxHealthAttribute = maxHealthAttribute_;
 }
 
 double Gameplay::entityAttribute(int entity, std::string_view name, double fallback) const {
@@ -898,11 +899,60 @@ int Gameplay::entityInteraction(const ent::Entity& e, int hand) {
     if ((n == "pig" || n == "strider") && !e.baby && e.equipment[7] >= 0 && !sneaking) return 1;  // ride the saddled pig
     if (n == "happy_ghast" && !e.baby && e.equipment[6] >= 0 && !sneaking) return 1;  // ride the harnessed ghast
     if (n == "allay") return 1;
-    if ((n == "wolf" || n == "cat" || n == "parrot" || n == "nautilus") && e.tame) return 1;  // sitting, healing, dyeing
-    if (n == "parrot" && !e.tame && inTag("minecraft:parrot_food")) {  // Parrot.mobInteract: taming food, eaten here too
+    const bool hurt = e.maxHealth > 0 && e.health < e.maxHealth;
+    // Animal.mobInteract's food rule: a baby eats it and grows (SUCCESS, the food taken here), an adult breeds on the
+    // server (CONSUME on the client)
+    auto animalFood = [&]() {
+        if (!e.baby) return 2;
         if (ui_) ui_->predictConsumeHeld(hand);
         return 1;
+    };
+    auto dyeOf = [&]() -> int {
+        static const char* const kDyes[16] = {"white", "orange", "magenta", "light_blue", "yellow", "lime", "pink", "gray",
+                                              "light_gray", "cyan", "purple", "blue", "brown", "green", "red", "black"};
+        for (int i = 0; i < 16; ++i)
+            if (item == std::string(kDyes[i]) + "_dye") return i;
+        return -1;
+    };
+    if (n == "wolf") {  // Wolf.mobInteract
+        const bool food = inTag("minecraft:wolf_food");
+        if (e.tame) {
+            if (food && hurt) return 1;  // feed
+            if (inTag("minecraft:wolf_collar_dyes") && e.ownedByMe) return dyeOf() >= 0 && dyeOf() != e.collar ? 1 : pass();
+            if (item == "wolf_armor" && e.equipment[6] < 0 && e.ownedByMe && !e.baby) {  // equipped, itemStack.consume
+                if (ui_) ui_->predictConsumeHeld(hand);
+                return 1;
+            }
+            if (food) return animalFood();
+            return e.ownedByMe ? 1 : pass();  // the sit order
+        }
+        return food ? animalFood() : pass();  // (a bone tames it on the server only)
     }
+    if (n == "cat") {  // Cat.mobInteract (the collar and feeding happen on the server)
+        const bool food = inTag("minecraft:cat_food");
+        if (e.tame && e.ownedByMe) {
+            if (inTag("minecraft:cat_collar_dyes")) {
+                if (dyeOf() >= 0 && dyeOf() != e.collar) return 1;
+            } else if (food && hurt) {
+                return 1;
+            }
+            return food ? animalFood() : 1;  // else the sit order
+        }
+        if (!e.tame && food) return 1;  // taming, on the server
+        return food ? animalFood() : pass();
+    }
+    if (n == "parrot") {  // Parrot.mobInteract (never Animal food: Parrot.isFood is false)
+        if (!e.tame && inTag("minecraft:parrot_food")) {  // taming food, eaten here too
+            if (ui_) ui_->predictConsumeHeld(hand);
+            return 1;
+        }
+        if (inTag("minecraft:parrot_poisonous_food")) {  // the cookie, eaten here too
+            if (ui_) ui_->predictConsumeHeld(hand);
+            return 1;
+        }
+        return e.tame && e.ownedByMe && e.onGround ? 1 : pass();  // the sit order (not while flying)
+    }
+    if (n == "nautilus" && e.tame) return 1;
     if ((n == "cow" || n == "goat" || n == "mooshroom") && item == "bucket" && !e.baby) {
         if (ui_) ui_->predictFilledResult(hand, "milk_bucket");  // AbstractCow / Goat: ItemUtils.createFilledResult
         return 1;
@@ -913,24 +963,15 @@ int Gameplay::entityInteraction(const ent::Entity& e, int hand) {
     }
     if (n == "mooshroom" && item == "shears" && !e.baby) return 2;  // Shearable: the server shears (CONSUME here)
     if (n == "sheep" && item == "shears" && !e.baby && !(e.wool & 0x10)) return 2;
-    if (n == "sheep" && item.ends_with("_dye") && !(e.wool & 0x10)) {  // DyeItem: only another colour
-        static const char* const kDyes[16] = {"white", "orange", "magenta", "light_blue", "yellow", "lime", "pink", "gray",
-                                              "light_gray", "cyan", "purple", "blue", "brown", "green", "red", "black"};
-        return item != std::string(kDyes[e.wool & 15]) + "_dye" ? 1 : pass();
-    }
+    if (n == "sheep" && dyeOf() >= 0 && !(e.wool & 0x10)) return dyeOf() != (e.wool & 15) ? 1 : pass();  // DyeItem: another colour
     if ((n == "snow_golem" || n == "bogged") && item == "shears") return 1;
     if (n == "creeper" && (item == "flint_and_steel" || item == "fire_charge")) return 1;
     if (n == "iron_golem" && item == "iron_ingot") return 1;
     if (n == "armadillo" && item == "brush") return 1;
     if (item == "water_bucket" && (n == "axolotl" || n == "tadpole" || n == "cod" || n == "salmon" || n == "pufferfish" || n == "tropical_fish"))
         return 1;
-    // Animal.mobInteract: its food (the <type>_food item tag): a baby eats it and grows (SUCCESS, the food taken here),
-    // an adult breeds on the server (CONSUME on the client)
-    if (inTag(("minecraft:" + n + "_food").c_str())) {
-        if (!e.baby) return 2;
-        if (ui_) ui_->predictConsumeHeld(hand);
-        return 1;
-    }
+    // Animal.mobInteract: its food (the <type>_food item tag)
+    if (inTag(("minecraft:" + n + "_food").c_str())) return animalFood();
     if (!empty && held && (item == "saddle" || item.ends_with("_horse_armor") || item.ends_with("_carpet") || item == "wolf_armor" ||
                            item.ends_with("_harness")))
         return 1;

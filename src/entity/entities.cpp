@@ -197,6 +197,7 @@ EntityWorld::EntityWorld(EntityAssets& assets, World& world, BlockRegistry& regi
         d.horseVariant = id({"DATA_ID_TYPE_VARIANT"});
         d.villagerData = id({"DATA_VILLAGER_DATA"});
         d.tameFlags = id({"DATA_FLAGS_ID"});
+        d.owner = id({"DATA_OWNERUUID_ID"});
         d.collar = id({"DATA_COLLAR_COLOR"});
         d.anger = id({"DATA_ANGER_END_TIME"});
         d.standFlags = id({"DATA_CLIENT_FLAGS"});
@@ -372,9 +373,12 @@ void readEntityData(net::Reader& r, EventQueue& q, int entityEffect,
             case 10: v.i = r.i64v(); break;                                         // block pos
             case 11: v.f[0] = r.boolean() ? 1.0f : 0.0f, v.i = v.f[0] > 0 ? r.i64v() : 0; break;  // optional block pos
             case 12: v.i = r.varInt(); break;                                       // direction
-            case 13:                                                                // optional entity reference
-                if (r.boolean()) r.skip(16);
-                keep = false;
+            case 13:  // optional entity reference: the UUID kept in the string pool (tame animals' owner)
+                if (r.boolean()) {
+                    u8 u[16] = {};
+                    readUuid(r, u);
+                    q.strings.push_back(uuidKey(u)), v.str = i32(q.strings.size() - 1);
+                }
                 break;
             case 14: case 15: v.i = r.varInt(); break;  // (optional) block state
             case 16:  // particle (the area effect cloud's): kept encoded when the particles can read it
@@ -767,7 +771,8 @@ void EntityWorld::attach(net::Client& client) {
         Event e;
         e.type = EventType::Attributes;
         e.id = r.varInt();
-        const int scaleId = scaleAttribute.load();
+        const int scaleId = scaleAttribute.load(), maxHealthId = maxHealthAttribute.load();
+        e.f[1] = -1;
         const i32 n = r.varInt();
         for (i32 i = 0; i < n && r.ok; ++i) {
             const int id = r.varInt();
@@ -782,12 +787,13 @@ void EntityWorld::attach(net::Client& client) {
                 else if (op == 1) mulBase += amount;
                 else mulTotal *= 1 + amount;
             }
-            if (id != scaleId || scaleId < 0) continue;
             const double v = base + add;
+            if (id == maxHealthId && maxHealthId >= 0) e.f[1] = float(std::clamp((v + v * mulBase) * mulTotal, 1.0, 1024.0));
+            if (id != scaleId || scaleId < 0) continue;
             e.flag = true;
             e.f[0] = float(std::clamp((v + v * mulBase) * mulTotal, 0.0625, 16.0));  // RangedAttribute: 0.0625 .. 16
         }
-        if (r.ok && e.flag) q.events.push_back(e);
+        if (r.ok && (e.flag || e.f[1] > 0)) q.events.push_back(e);
     });
     client.onPlayPeek("set_time", [this](net::Reader& r) {  // the game time (species animations)
         const i64 t = r.i64v();
@@ -1304,6 +1310,8 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
             if (onAnimate) onAnimate(e, ev.a);
             break;
         case EventType::Attributes: {  // LivingEntity.getScale: sanitizeScale
+            if (ev.f[1] > 0) e.maxHealth = ev.f[1];
+            if (!ev.flag) break;
             const std::string& n = e.info ? e.info->name : std::string();
             float s = ev.f[0];
             if (n == "minecraft:happy_ghast") s = std::min(s, 1.0f);
@@ -1404,9 +1412,11 @@ void EntityWorld::applyData(Entity& e, const MetaValue* values, u32 count, const
         else if (idx == d.mainHand) e.mainArm = int(v.i);
         else if (idx == d.skinParts) e.skinParts = int(v.i);
         else if (idx == d.villagerData) e.villagerType = int(v.i), e.variant2 = int(v.f[0]), e.villagerLevel = int(v.f[1]);
-        else if (idx == d.tameFlags && (name == "minecraft:wolf" || name == "minecraft:cat" || name == "minecraft:nautilus" ||
-                                        name == "minecraft:zombie_nautilus"))
+        else if (idx == d.tameFlags && (name == "minecraft:wolf" || name == "minecraft:cat" || name == "minecraft:parrot" ||
+                                        name == "minecraft:nautilus" || name == "minecraft:zombie_nautilus"))
             e.tame = (v.i & 4) != 0;  // TamableAnimal.DATA_FLAGS_ID
+        else if (idx == d.owner && v.serializer == 13)
+            e.ownedByMe = v.str >= 0 && client_ && q.strings[size_t(v.str)] == client_->playerUuid();
         else if (idx == d.collar) e.collar = int(v.i);
         else if (idx == d.anger) e.angry = v.i > 0;
         else if (idx == d.attackTarget) e.attackTarget = int(v.i), e.attackTime = 0;  // Guardian.onSyncedDataUpdated
@@ -2202,7 +2212,9 @@ int EntityWorld::interactHand(int hand) {  // MultiPlayerGameMode.interact: the 
     if (usePick.id < 0) return 0;
     this->use(usePick.id, usePick.hit, useSneaking, hand);
     const Entity* e = entity(usePick.id);
-    return e && interactionResult ? interactionResult(*e, hand) : 1;
+    const int r = e && interactionResult ? interactionResult(*e, hand) : 1;
+    if (verbose_ && e) LOG("entities: interact %d hand %d -> %d (tame %d owned %d health %.1f/%.1f)", e->id, hand, r, e->tame, e->ownedByMe, e->health, e->maxHealth);
+    return r;
 }
 
 bool EntityWorld::pickItem(const double eye[3], const double dir[3], double blockDistance, double reach, bool includeData) {
