@@ -103,9 +103,11 @@ Layout layoutFor(const Menu& m) {
 // --- click simulation (AbstractContainerMenu.doClick) -------------------------------------------------------
 
 namespace {
-// The player's Inventory.add for prediction: stack onto matching stacks, then the first empty slot (hotbar first).
-void addToPlayer(Ui::State& s, Menu& m, ItemStack st, int playerStart) {
-    if (st.empty() || playerStart < 0) return;
+// The player's Inventory.add for prediction: stack onto matching stacks, then the first empty slot (hotbar first);
+// false when some of it did not fit.
+bool addToPlayer(Ui::State& s, Menu& m, ItemStack st, int playerStart) {
+    if (st.empty()) return true;
+    if (playerStart < 0) return false;
     const int hotbar = playerStart + 27;
     std::vector<int> order;
     for (int i = 0; i < 9; ++i) order.push_back(hotbar + i);
@@ -116,13 +118,14 @@ void addToPlayer(Ui::State& s, Menu& m, ItemStack st, int playerStart) {
         if (t.empty() || !t.sameItemSameComponents(st)) continue;
         const int n = std::min(st.count, s.items.maxStack(t) - t.count);
         if (n > 0) t.count += n, st.count -= n;
-        if (st.count <= 0) return;
+        if (st.count <= 0) return true;
     }
     for (int i : order)
         if (size_t(i) < m.slots.size() && m.slots[size_t(i)].empty()) {
             m.slots[size_t(i)] = st;
-            return;
+            return true;
         }
+    return false;
 }
 
 // AbstractContainerMenu.doClick over the client's copy of a menu: each Slot's rules (mayPlace, mayPickup,
@@ -187,7 +190,8 @@ struct Sim {
             rest.item = remainder, rest.count = 1;
             if (in.empty()) in = rest;
             else if (in.sameItemSameComponents(rest)) in.count += 1;
-            else addToPlayer(s, m, rest, playerStart);
+            else if (!addToPlayer(s, m, rest, playerStart) && s.game && s.game->onSwing)
+                s.game->onSwing(0, 1);  // Player.drop (PREDICTED): the main hand swings, the server drops it
         }
     }
     // Slot.safeInsert
