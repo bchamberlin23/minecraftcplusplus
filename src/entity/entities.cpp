@@ -771,8 +771,7 @@ void EntityWorld::attach(net::Client& client) {
         Event e;
         e.type = EventType::Attributes;
         e.id = r.varInt();
-        const int scaleId = scaleAttribute.load(), maxHealthId = maxHealthAttribute.load();
-        e.f[1] = -1;
+        const int scaleId = scaleAttribute.load();
         const i32 n = r.varInt();
         for (i32 i = 0; i < n && r.ok; ++i) {
             const int id = r.varInt();
@@ -787,13 +786,12 @@ void EntityWorld::attach(net::Client& client) {
                 else if (op == 1) mulBase += amount;
                 else mulTotal *= 1 + amount;
             }
-            const double v = base + add;
-            if (id == maxHealthId && maxHealthId >= 0) e.f[1] = float(std::clamp((v + v * mulBase) * mulTotal, 1.0, 1024.0));
             if (id != scaleId || scaleId < 0) continue;
+            const double v = base + add;
             e.flag = true;
             e.f[0] = float(std::clamp((v + v * mulBase) * mulTotal, 0.0625, 16.0));  // RangedAttribute: 0.0625 .. 16
         }
-        if (r.ok && (e.flag || e.f[1] > 0)) q.events.push_back(e);
+        if (r.ok && e.flag) q.events.push_back(e);
     });
     client.onPlayPeek("set_time", [this](net::Reader& r) {  // the game time (species animations)
         const i64 t = r.i64v();
@@ -1310,8 +1308,6 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
             if (onAnimate) onAnimate(e, ev.a);
             break;
         case EventType::Attributes: {  // LivingEntity.getScale: sanitizeScale
-            if (ev.f[1] > 0) e.maxHealth = ev.f[1];
-            if (!ev.flag) break;
             const std::string& n = e.info ? e.info->name : std::string();
             float s = ev.f[0];
             if (n == "minecraft:happy_ghast") s = std::min(s, 1.0f);
@@ -2213,7 +2209,7 @@ int EntityWorld::interactHand(int hand) {  // MultiPlayerGameMode.interact: the 
     this->use(usePick.id, usePick.hit, useSneaking, hand);
     const Entity* e = entity(usePick.id);
     const int r = e && interactionResult ? interactionResult(*e, hand) : 1;
-    if (verbose_ && e) LOG("entities: interact %d hand %d -> %d (tame %d owned %d health %.1f/%.1f)", e->id, hand, r, e->tame, e->ownedByMe, e->health, e->maxHealth);
+    if (verbose_ && e) LOG("entities: interact %d hand %d -> %d (tame %d owned %d health %.1f)", e->id, hand, r, e->tame, e->ownedByMe, e->health);
     return r;
 }
 

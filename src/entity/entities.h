@@ -171,7 +171,6 @@ struct Entity {
     float peek = 0, peekO = 0;      // Shulker.currentPeekAmount (client side, 0..1)
     bool tame = false;
     bool ownedByMe = false;         // TamableAnimal.DATA_OWNERUUID_ID is the local player (isOwnedBy)
-    float maxHealth = 0;            // the max_health attribute (update_attributes; 0 unknown)
     bool angry = false;
     int itemId = -1, itemCount = 1;
     int blockState = 0;             // falling block: network block state id
@@ -467,7 +466,6 @@ public:
     bool piglinsZombify = true;
     // The minecraft:attribute network id of minecraft:scale (update_attributes; -1 unknown).
     std::atomic<int> scaleAttribute{-1};
-    std::atomic<int> maxHealthAttribute{-1};  // minecraft:max_health's
     // A painting variant's size in blocks (the renderer's registry): false when unknown.
     std::function<bool(int variant, int& w, int& h)> paintingSize;
     // Painting variants sent inline (a direct holder): variant kInlinePainting + index.

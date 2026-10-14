@@ -43,7 +43,6 @@ Gameplay::Gameplay(World& world, BlockRegistry& registry, const GameReports& rep
     attributeNames_ = registryNames(reports, "minecraft:attribute");
     for (size_t i = 0; i < attributeNames_.size(); ++i)
         if (attributeNames_[i] == "minecraft:scale") scaleAttribute_ = int(i);
-        else if (attributeNames_[i] == "minecraft:max_health") maxHealthAttribute_ = int(i);
     effectNames_ = registryNames(reports, "minecraft:mob_effect");
     const char* v = std::getenv("MCPP_GAMEPLAY_VERBOSE");
     verbose_ = v && *v == '1';
@@ -172,7 +171,27 @@ Gameplay::~Gameplay() = default;
 
 void Gameplay::setEntities(ent::EntityWorld* entities) {
     entities_ = entities;
-    if (entities_) entities_->scaleAttribute = scaleAttribute_, entities_->maxHealthAttribute = maxHealthAttribute_;
+    if (entities_) entities_->scaleAttribute = scaleAttribute_;
+}
+
+// LivingEntity.getMaxHealth on the client: the synced max_health attribute, else the type's default attributes (the
+// server sends only the instances it has created).
+float Gameplay::maxHealthOf(const ent::Entity& e) const {
+    static const std::unordered_map<std::string_view, float> kDefault = {
+        {"cow", 10}, {"mooshroom", 10}, {"cod", 3}, {"salmon", 3}, {"pufferfish", 3}, {"tropical_fish", 3}, {"horse", 53},
+        {"donkey", 53}, {"mule", 53}, {"llama", 53}, {"trader_llama", 53}, {"nautilus", 15}, {"zombie_nautilus", 15},
+        {"armadillo", 12}, {"axolotl", 14}, {"bat", 6}, {"bee", 10}, {"bogged", 16}, {"breeze", 30}, {"camel", 32},
+        {"camel_husk", 32}, {"cat", 10}, {"cave_spider", 12}, {"chicken", 4}, {"copper_golem", 12}, {"creaking", 1},
+        {"dolphin", 10}, {"elder_guardian", 80}, {"ender_dragon", 200}, {"enderman", 40}, {"endermite", 8}, {"evoker", 24},
+        {"fox", 10}, {"frog", 10}, {"ghast", 10}, {"giant", 100}, {"goat", 10}, {"guardian", 30}, {"hoglin", 40},
+        {"illusioner", 32}, {"iron_golem", 100}, {"ocelot", 10}, {"parched", 16}, {"parrot", 6}, {"pig", 10}, {"piglin", 16},
+        {"piglin_brute", 50}, {"pillager", 24}, {"polar_bear", 30}, {"rabbit", 3}, {"ravager", 100}, {"sheep", 8},
+        {"shulker", 30}, {"silverfish", 8}, {"skeleton_horse", 15}, {"sniffer", 14}, {"snow_golem", 4}, {"spider", 16},
+        {"squid", 10}, {"glow_squid", 10}, {"tadpole", 6}, {"turtle", 30}, {"vex", 14}, {"vindicator", 24}, {"warden", 500},
+        {"witch", 26}, {"wither", 300}, {"wolf", 8}, {"zoglin", 40}, {"zombie_horse", 25}};
+    const std::string_view n = e.info ? shortName(e.info->name) : std::string_view();
+    const auto it = kDefault.find(n);
+    return float(entityAttribute(e.id, "max_health", it != kDefault.end() ? it->second : 20.0f));
 }
 
 double Gameplay::entityAttribute(int entity, std::string_view name, double fallback) const {
@@ -878,12 +897,16 @@ int Gameplay::entityInteraction(const ent::Entity& e, int hand) {
     if (n.ends_with("_boat") || n.ends_with("_raft") || n == "boat") return n.find("chest") != std::string::npos || !sneaking ? 1 : pass();
     if (n.ends_with("minecart")) {
         if (n == "chest_minecart" || n == "hopper_minecart" || n == "command_block_minecart") return 1;
-        if (n == "furnace_minecart") return inTag("minecraft:furnace_minecart_fuel") ? 1 : pass();
-        if (n == "tnt_minecart") return item == "flint_and_steel" || item == "fire_charge" ? 1 : pass();
+        if (n == "furnace_minecart") {  // MinecartFurnace.interact: SUCCESS whatever is held; fuel is eaten here too
+            if (inTag("minecraft:furnace_minecart_fuel") && ui_) ui_->predictConsumeHeld(hand);
+            return 1;
+        }
+        if (n == "tnt_minecart") return pass();  // (lit by damage, not by a click)
         return !sneaking ? 1 : pass();
     }
     if (n == "item_frame" || n == "glow_item_frame") return e.itemId >= 0 || !empty ? 1 : pass();
-    if (n == "interaction" || n == "leash_knot") return 1;
+    if (n == "interaction") return ent::dataInt(e, "DATA_RESPONSE_ID") ? 1 : 2;  // Interaction.interact: SUCCESS if it responds
+    if (n == "leash_knot") return 1;
     // ArmorStand.interactAt: a name tag passes on (NameTagItem), anything else is SUCCESS_SERVER on the client
     if (n == "armor_stand") return item == "name_tag" ? (held->hasCustomName ? 1 : pass()) : 2;
     if (e.category != ent::Category::Living) return pass();
@@ -894,10 +917,9 @@ int Gameplay::entityInteraction(const ent::Entity& e, int hand) {
     if (item == "name_tag" && held->hasCustomName) return 1;
     // Mob.mobInteract by type.
     if (n == "villager" || n == "wandering_trader") return item == "villager_spawn_egg" ? pass() : 1;
-    const bool horse = n == "horse" || n == "donkey" || n == "mule" || n == "skeleton_horse" || n == "zombie_horse" || n == "camel" ||
-                       n == "camel_husk" || n == "llama" || n == "trader_llama";
-    if (horse && !e.baby) return 1;  // riding, the inventory, feeding, equipping
-    if ((n == "pig" || n == "strider") && !e.baby && e.equipment[7] >= 0 && !sneaking) return 1;  // ride the saddled pig
+    if ((n == "skeleton_horse" || n == "zombie_horse") && !e.baby) return 1;  // riding, the inventory, equipping
+    // Pig / Strider.mobInteract: a saddled one is ridden unless the click holds its food
+    if ((n == "pig" || n == "strider") && !e.baby && e.equipment[7] >= 0 && !sneaking && !inTag(("minecraft:" + n + "_food").c_str())) return 1;
     if (n == "happy_ghast" && !e.baby && e.equipment[6] >= 0 && !sneaking) return 1;  // ride the harnessed ghast
     if (n == "allay") {  // Allay.mobInteract: duplicating, giving and taking all happen on the client too
         ent::Entity* allay = entities_ ? entities_->entity(e.id) : nullptr;
@@ -921,11 +943,12 @@ int Gameplay::entityInteraction(const ent::Entity& e, int hand) {
         }
         return pass();
     }
-    const bool hurt = e.maxHealth > 0 && e.health < e.maxHealth;
+    const bool hurt = e.health < maxHealthOf(e);
     // Animal.mobInteract's food rule: a baby eats it and grows (SUCCESS, the food taken here), an adult breeds on the
     // server (CONSUME on the client)
+    const bool ageLocked = ent::dataInt(e, "AGE_LOCKED") != 0;
     auto animalFood = [&]() {
-        if (!e.baby) return 2;
+        if (!e.baby || ageLocked) return 2;  // (canAgeUp: a baby that is not age locked)
         if (ui_) ui_->predictConsumeHeld(hand);
         return 1;
     };
@@ -975,6 +998,64 @@ int Gameplay::entityInteraction(const ent::Entity& e, int hand) {
         return e.tame && e.ownedByMe && e.onGround ? 1 : pass();  // the sit order (not while flying)
     }
     if (n == "nautilus" && e.tame) return 1;
+    int passengers = 0;
+    if (entities_)
+        for (const auto& [id, other] : entities_->entities()) passengers += other.vehicle == e.id;
+    const bool tamedHorse = (ent::dataInt(e, "DATA_ID_FLAGS") & 2) != 0;
+    // AbstractHorse.fedFood: handleEating heals on the client and the food is eaten only then; SUCCESS_SERVER
+    auto fedFood = [&](bool eats) {
+        if (eats && ui_) ui_->predictConsumeHeld(hand);
+        return 2;
+    };
+    auto dandelion = [&]() {  // AgeableMob.mobInteract: a golden dandelion (un)locks a baby's age, eaten here too
+        if (ui_) ui_->predictConsumeHeld(hand);
+        return 1;
+    };
+    if (n == "horse" || n == "donkey" || n == "mule" || n == "llama" || n == "trader_llama") {
+        // Horse / AbstractChestedHorse.mobInteract, then AbstractHorse's
+        const bool llama = n == "llama" || n == "trader_llama", chested = n != "horse";
+        const bool food = inTag(llama ? "minecraft:llama_food" : "minecraft:horse_food");
+        if (!passengers && !(!e.baby && tamedHorse && sneaking) && !(e.baby && item == "golden_dandelion") && !empty) {
+            if (food) return fedFood(hurt);
+            if (!tamedHorse) return 1;  // makeMad
+            if (chested && item == "chest" && !ent::dataInt(e, "DATA_ID_CHEST")) {  // equipChest
+                if (ui_) ui_->predictConsumeHeld(hand);
+                return 1;
+            }
+        }
+        if (passengers || e.baby) {  // Animal.mobInteract
+            if (food) return animalFood();
+            return item == "golden_dandelion" && e.baby ? dandelion() : pass();
+        }
+        if (tamedHorse && sneaking) return 1;  // the inventory
+        if (!empty && e.equipment[6] < 0 && (llama ? item.ends_with("_carpet") : n == "horse" && item.ends_with("_horse_armor"))) {
+            if (ui_) ui_->predictConsumeHeld(hand);  // equipBodyArmor
+            return 1;
+        }
+        return 1;  // the saddle (equip_on_interact) or riding
+    }
+    if (n == "camel" || n == "camel_husk") {  // Camel.mobInteract
+        if (sneaking && !e.baby) return 1;
+        if (item == "saddle" && !e.baby && e.equipment[7] < 0) return 1;  // Equippable.equipOnTarget
+        if (inTag(("minecraft:" + n + "_food").c_str())) return fedFood(hurt || (e.baby && !ageLocked) || (tamedHorse && !e.baby));
+        if (passengers < 2 && !e.baby) return 2;  // ridden: CONSUME
+        return e.baby && item == "golden_dandelion" ? dandelion() : pass();  // else FAIL (the item's use follows)
+    }
+    if (n == "tadpole") {  // Tadpole.mobInteract: frog food grows it, a golden dandelion, then the bucket
+        if (inTag("minecraft:frog_food") && !ageLocked) {
+            if (ui_) ui_->predictConsumeHeld(hand);
+            return 1;
+        }
+        if (item == "golden_dandelion") return dandelion();
+    }
+    if (n == "ocelot" && !ent::dataInt(e, "DATA_TRUSTING") && inTag("minecraft:ocelot_food")) {  // Ocelot.mobInteract
+        const Player& p = game_->player();
+        const double dx = p.pos[0] - e.pos[0], dy = p.pos[1] - e.pos[1], dz = p.pos[2] - e.pos[2];
+        if (dx * dx + dy * dy + dz * dz < 9.0) {
+            if (ui_) ui_->predictConsumeHeld(hand);
+            return 1;
+        }
+    }
     if ((n == "cow" || n == "goat" || n == "mooshroom") && item == "bucket" && !e.baby) {
         if (ui_) ui_->predictFilledResult(hand, "milk_bucket");  // AbstractCow / Goat: ItemUtils.createFilledResult
         return 1;
@@ -986,14 +1067,25 @@ int Gameplay::entityInteraction(const ent::Entity& e, int hand) {
     if (n == "mooshroom" && item == "shears" && !e.baby) return 2;  // Shearable: the server shears (CONSUME here)
     if (n == "sheep" && item == "shears" && !e.baby && !(e.wool & 0x10)) return 2;
     if (n == "sheep" && dyeOf() >= 0 && !(e.wool & 0x10)) return dyeOf() != (e.wool & 15) ? 1 : pass();  // DyeItem: another colour
-    if ((n == "snow_golem" || n == "bogged") && item == "shears") return 1;
+    // Shearable.readyForShearing: a snow golem with its pumpkin, a bogged with its mushrooms
+    if (n == "snow_golem" && item == "shears") return ent::dataInt(e, "DATA_PUMPKIN_ID", 16) & 16 ? 1 : pass();
+    if (n == "bogged" && item == "shears") return !ent::dataInt(e, "DATA_SHEARED") ? 1 : pass();
     if (n == "creeper" && (item == "flint_and_steel" || item == "fire_charge")) return 1;
-    if (n == "iron_golem" && item == "iron_ingot") return 1;
-    if (n == "armadillo" && item == "brush") return 1;
-    if (item == "water_bucket" && (n == "axolotl" || n == "tadpole" || n == "cod" || n == "salmon" || n == "pufferfish" || n == "tropical_fish"))
+    if (n == "iron_golem" && item == "iron_ingot") {  // IronGolem.mobInteract: heals on the client; the ingot only if it did
+        if (e.health >= maxHealthOf(e)) return pass();
+        if (ui_) ui_->predictConsumeHeld(hand);
         return 1;
-    // Animal.mobInteract: its food (the <type>_food item tag)
+    }
+    if (n == "armadillo" && item == "brush" && !e.baby) return 1;  // brushOffScute (not a baby)
+    // Bucketable.bucketMobPickup: the water bucket becomes the mob's bucket in hand
+    if (item == "water_bucket" && (n == "axolotl" || n == "tadpole" || n == "cod" || n == "salmon" || n == "pufferfish" || n == "tropical_fish")) {
+        if (ui_) ui_->predictFilledResult(hand, n + "_bucket");
+        return 1;
+    }
+    // Animal.mobInteract: its food (the <type>_food item tag), then AgeableMob's golden dandelion for a baby
     if (inTag(("minecraft:" + n + "_food").c_str())) return animalFood();
+    const bool ageable = !(n.find("zombie") != std::string::npos || n == "husk" || n == "drowned" || n == "piglin" || n == "zoglin");
+    if (item == "golden_dandelion" && e.baby && ageable) return dandelion();
     if (!empty && held && (item == "saddle" || item.ends_with("_horse_armor") || item.ends_with("_carpet") || item == "wolf_armor" ||
                            item.ends_with("_harness")))
         return 1;

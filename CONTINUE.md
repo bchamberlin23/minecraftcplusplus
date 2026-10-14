@@ -174,8 +174,12 @@ generation / spawn counts show nothing (integrated-server data), the border wall
 camera section). Sound engine and level events audited; residuals: the voice pools are fixed at 247 + 8 (Java:
 from the device's source count) and a full pool replaces its quietest voice (deliberate), streams buffer 0.5 s.
 Entity interaction and attack audited; the client now predicts held-stack changes (placement, one-item uses, buckets,
-milking, stew, feeding) and tells SUCCESS from CONSUME / SUCCESS_SERVER. Tame animals know their owner (DATA_OWNERUUID_ID)
-and max health (update_attributes). The allay's give / take / duplicate is predicted
+milking, stew, feeding) and tells SUCCESS from CONSUME / SUCCESS_SERVER. Tame animals know their owner (DATA_OWNERUUID_ID);
+max health is the synced attribute or the type's default (Gameplay::maxHealthOf, a table from createAttributes).
+Item use predicts thrown items, bottle filling and armour swaps; horses / llamas / camels, fish buckets, iron golem
+repair, furnace minecart fuel, tadpoles, ocelots and golden dandelions follow their mobInteract. Not predicted: bee
+flowers, saddle / harness shearing (Mob.attemptToShearEquipment), armadillo brush durability, villager trading or
+sleeping state. The allay's give / take / duplicate is predicted
 (its hand and the player's stack). Residual: wolf armour repair. Not ported:
 filtered sign text (needs the account's profanity filter flag). The bell's raider particles (showBellParticles) are
 invisible in 26.3 (ColorParticleOption.create(ENTITY_EFFECT, 0xFED839 + 5i) has alpha 0, which SpellParticle keeps),

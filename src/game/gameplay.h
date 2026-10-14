@@ -138,7 +138,7 @@ private:
     std::unordered_map<int, std::map<std::string, double, std::less<>>> entityAttributes_;  // other entities
     ent::EntityWorld* entities_ = nullptr;
     int scaleAttribute_ = -1;  // minecraft:scale's attribute id
-    int maxHealthAttribute_ = -1;
+    float maxHealthOf(const ent::Entity& e) const;
     net::Client* client_ = nullptr;
     std::unique_ptr<Riding> riding_;
 
