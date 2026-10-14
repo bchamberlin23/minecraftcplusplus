@@ -661,7 +661,7 @@ int EntityRenderer::resolveUncached(const Entity& e, const TypeDef& d, Layer* ou
     if (d.special == SpHorse && e.variant2 > 0 && e.variant2 <= 4 && n < 6) {
         static const char* kMarks[5] = {"", "white", "whitefield", "whitedots", "blackdots"};
         const int t = withBaby(std::string("horse/horse_markings_") + kMarks[e.variant2]);
-        if (t >= 0) out[n++] = {out[0].model, t, kWhite, 0};
+        if (t >= 0) out[n++] = {out[0].model, t, kWhite, Translucent};  // HorseMarkingLayer: entityTranslucent
     }
     return n;
 }
