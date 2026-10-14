@@ -109,6 +109,8 @@ void reset() { g = MpState{}; }
 
 }  // namespace
 
+void resetBossBars() { g.bosses.clear(); }
+
 int teamCollisionRule(const std::string& member) {
     auto it = g.playerTeam.find(member);
     if (it == g.playerTeam.end()) return 0;

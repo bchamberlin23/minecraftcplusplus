@@ -568,7 +568,7 @@ void Ui::State::drawHud(Canvas& c) {
             if (actionbarAnimated) {  // Mth.hsvToArgb(t / 50, 0.7, 0.6, alpha)
                 const float hue = t / 50.0f, sat = 0.7f, val = 0.6f;
                 const int i = int(hue * 6.0f) % 6;
-                const float f = hue * 6.0f - std::floor(hue * 6.0f), p = val * (1 - sat), q = val * (1 - f * sat), u = val * (1 - (1 - f) * sat);
+                const float f = hue * 6.0f - float(i), p = val * (1 - sat), q = val * (1 - f * sat), u = val * (1 - (1 - f) * sat);
                 float r, g, b;
                 switch ((i + 6) % 6) {
                     case 0: r = val, g = u, b = p; break;

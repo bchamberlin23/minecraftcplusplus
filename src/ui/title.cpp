@@ -1,6 +1,7 @@
 // Front end: the title screen over a live world panorama, loading / message / confirmation screens, Open to LAN, and
 // switching instances (each world and the title screen are their own process, platform/launch.h).
 #include "ui/frontend.h"
+#include "ui/mp_hud.h"
 #include "ui/toasts.h"
 
 #include "audio/audio.h"
@@ -631,7 +632,11 @@ void Ui::State::frontEndFrame() {
         if (reason.empty()) reason = res.translate("disconnect.endOfStream");
         else if (reason == "disconnect.endOfStream" || reason == "disconnect.timeout") reason = res.translate(reason);
         LOG("ui: disconnected: %s", reason.c_str());
-        clearToasts();  // Hud.onDisconnected: ToastManager.clear
+        // Hud.onDisconnected: the boss bars, the titles and their times, the toasts
+        resetBossBars();
+        hasTitle = hasSubtitle = false, titleTime = 0;
+        titleFadeIn = 10, titleStay = 70, titleFadeOut = 20;
+        clearToasts();
         showMessage(*this, Text(res.translate("disconnect.lost")), Text(reason),
                     res.translate(multiplayer ? "gui.toMenu" : "gui.toTitle"),
                     [this, multiplayer] { requestTitle(*this, multiplayer ? "servers" : ""); });
