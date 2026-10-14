@@ -740,7 +740,7 @@ bool Items::componentHash(const ItemStack::Component& c, u32& out) const {
         NbtValue v;
         if (!textNbt(v)) return false;
         out = hNbt(v, "");
-    } else if (n == "custom_data") {  // the CompoundTag itself (NBT types as they are)
+    } else if (n == "custom_data" || n == "bucket_entity_data") {  // CustomData: the CompoundTag itself (NBT types as they are)
         NbtValue v;
         if (!textNbt(v)) return false;
         out = hNbt(v, "", false);
@@ -796,6 +796,53 @@ bool Items::componentHash(const ItemStack::Component& c, u32& out) const {
         }
         if (!pages.empty()) kv.emplace_back(hString("pages"), hList(pages));
         if (r.boolean()) kv.emplace_back(hString("resolved"), hBool(true));
+        out = hMap(std::move(kv));
+    } else if (n == "note_block_sound") {  // an identifier
+        out = hString(std::string(r.str()));
+    } else if (n == "instrument") {  // a registry holder (id + 1; 0: inline, not reproduced): its key
+        const i32 holder = r.varInt();
+        if (holder <= 0 || size_t(holder - 1) >= instruments_.size()) return false;
+        out = hString(instruments_[size_t(holder - 1)].id);
+    } else if (n == "lodestone_tracker") {  // {target?: {dimension, pos: [x, y, z]}, tracked unless true}
+        std::vector<std::pair<u32, u32>> kv;
+        if (r.boolean()) {
+            const std::string dimension(r.str());
+            int x, y, z;
+            r.blockPos(x, y, z);
+            std::vector<u8> ints{16};  // BlockPos.CODEC: an int stream
+            for (int v : {x, y, z}) le(ints, u32(v), 4);
+            ints.push_back(17);
+            kv.emplace_back(hString("target"), hMap({{hString("dimension"), hString(dimension)}, {hString("pos"), crc32c(ints)}}));
+        }
+        if (!r.boolean()) kv.emplace_back(hString("tracked"), hBool(false));
+        out = hMap(std::move(kv));
+    } else if (n == "custom_model_data") {  // {floats, flags, strings, colors}: each unless empty
+        std::vector<std::pair<u32, u32>> kv;
+        std::vector<u32> floats, flags, strings, colors;
+        for (i32 i = 0, cnt = r.varInt(); i < cnt && r.ok; ++i) {
+            const float f = r.f32();
+            u32 bits;
+            std::memcpy(&bits, &f, 4);
+            floats.push_back(hTagged(10, bits, 4));
+        }
+        for (i32 i = 0, cnt = r.varInt(); i < cnt && r.ok; ++i) flags.push_back(hBool(r.boolean()));
+        for (i32 i = 0, cnt = r.varInt(); i < cnt && r.ok; ++i) strings.push_back(hString(std::string(r.str())));
+        for (i32 i = 0, cnt = r.varInt(); i < cnt && r.ok; ++i) colors.push_back(hInt(r.i32v()));
+        if (!floats.empty()) kv.emplace_back(hString("floats"), hList(floats));
+        if (!flags.empty()) kv.emplace_back(hString("flags"), hList(flags));
+        if (!strings.empty()) kv.emplace_back(hString("strings"), hList(strings));
+        if (!colors.empty()) kv.emplace_back(hString("colors"), hList(colors));
+        out = hMap(std::move(kv));
+    } else if (n == "tooltip_display") {  // {hide_tooltip if set, hidden_components unless empty}
+        std::vector<std::pair<u32, u32>> kv;
+        if (r.boolean()) kv.emplace_back(hString("hide_tooltip"), hBool(true));
+        std::vector<u32> hidden;
+        for (i32 i = 0, cnt = r.varInt(); i < cnt && r.ok; ++i) {
+            const int type = r.varInt();
+            if (type < 0 || size_t(type) >= componentNames_.size()) return false;
+            hidden.push_back(hString(componentNames_[size_t(type)]));
+        }
+        if (!hidden.empty()) kv.emplace_back(hString("hidden_components"), hList(hidden));
         out = hMap(std::move(kv));
     } else if (n == "firework_explosion") {
         if (!explosionHash(r, out)) return false;
