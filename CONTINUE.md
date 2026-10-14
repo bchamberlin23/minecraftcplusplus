@@ -185,7 +185,11 @@ signs' waxed / applicator swing, the shovel's durability on a campfire. Client p
 fireworks, TNT, eyes of ender, shulker bullets, llama spit and fishing hooks (flying / hooked / bobbing, the bite
 dip) follow their own client tick. Container clicks audited (PICKUP / QUICK_CRAFT / PICKUP_ALL / SWAP / CLONE / THROW
 match); not modelled: dropping a crafting result or remainder that does not fit a full inventory. Camera: a
-spectated entity gets no hurt tilt / bob and FOV 1 (Java uses its own state; the entity view does not carry it). The allay's give / take / duplicate is predicted
+spectated entity gets no hurt tilt / bob and FOV 1 (Java uses its own state; the entity view does not carry it).
+Audited and matching: maps, name tags, tab list, sidebar, boss bars, toasts, chat, advancements. Residuals: command
+suggestions ask the server for every argument (Java lists entity / registry / position suggestions locally), no
+suggestion narration; friend toasts have no face; no resource pack load-failure toast; the advancements screen
+ignores the horizontal wheel; name tag / below-name distance attributes are not read. The allay's give / take / duplicate is predicted
 (its hand and the player's stack). Residual: wolf armour repair. Not ported:
 filtered sign text (needs the account's profanity filter flag). The bell's raider particles (showBellParticles) are
 invisible in 26.3 (ColorParticleOption.create(ENTITY_EFFECT, 0xFED839 + 5i) has alpha 0, which SpellParticle keeps),
