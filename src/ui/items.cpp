@@ -854,8 +854,123 @@ bool Items::componentHash(const ItemStack::Component& c, u32& out) const {
             kv.emplace_back(hString("potion"), hString(potion));
         }
         if (r.boolean()) kv.emplace_back(hString("custom_color"), hInt(r.i32v()));
-        if (r.varInt() != 0) return false;  // custom effects (MobEffectInstance): not reproduced
+        // MobEffectInstance.CODEC: {id, amplifier (0), duration (0), ambient (false), show_particles (true), show_icon,
+        // hidden_effect (the same details, recursively)}; defaults left out
+        std::function<std::vector<std::pair<u32, u32>>()> details = [&] {
+            std::vector<std::pair<u32, u32>> d;
+            const i32 amplifier = r.varInt(), duration = r.varInt();
+            const bool ambient = r.boolean(), particles = r.boolean(), icon = r.boolean();
+            if (amplifier != 0) d.emplace_back(hString("amplifier"), crc32c({6, u8(amplifier)}));  // UNSIGNED_BYTE
+            if (duration != 0) d.emplace_back(hString("duration"), hInt(duration));
+            if (ambient) d.emplace_back(hString("ambient"), hBool(true));
+            if (!particles) d.emplace_back(hString("show_particles"), hBool(false));
+            d.emplace_back(hString("show_icon"), hBool(icon));
+            if (r.boolean() && r.ok) d.emplace_back(hString("hidden_effect"), hMap(details()));
+            return d;
+        };
+        std::vector<u32> effects;
+        const i32 effectCount = r.varInt();
+        for (i32 i = 0; i < effectCount && r.ok; ++i) {
+            const std::string& effect = registryName("minecraft:mob_effect", r.varInt());
+            if (effect.empty()) return false;
+            std::vector<std::pair<u32, u32>> e = details();
+            e.emplace_back(hString("id"), hString(effect));
+            effects.push_back(hMap(std::move(e)));
+        }
+        if (!effects.empty()) kv.emplace_back(hString("custom_effects"), hList(effects));
         if (r.boolean()) kv.emplace_back(hString("custom_name"), hString(std::string(r.str())));
+        out = hMap(std::move(kv));
+    } else if (n == "food" || n == "use_cooldown" || n == "weapon") {
+        auto hFloat = [](float f) {
+            u32 bits;
+            std::memcpy(&bits, &f, 4);
+            return hTagged(10, bits, 4);
+        };
+        std::vector<std::pair<u32, u32>> kv;
+        if (n == "food") {  // {nutrition, saturation, can_always_eat (false)}
+            kv.emplace_back(hString("nutrition"), hInt(r.varInt()));
+            kv.emplace_back(hString("saturation"), hFloat(r.f32()));
+            if (r.boolean()) kv.emplace_back(hString("can_always_eat"), hBool(true));
+        } else if (n == "use_cooldown") {  // {seconds, cooldown_group?}
+            kv.emplace_back(hString("seconds"), hFloat(r.f32()));
+            if (r.boolean()) kv.emplace_back(hString("cooldown_group"), hString(std::string(r.str())));
+        } else {  // weapon: {item_damage_per_attack (1), disable_blocking_for_seconds (0)}
+            const i32 damage = r.varInt();
+            const float disable = r.f32();
+            if (damage != 1) kv.emplace_back(hString("item_damage_per_attack"), hInt(damage));
+            if (disable != 0) kv.emplace_back(hString("disable_blocking_for_seconds"), hFloat(disable));
+        }
+        out = hMap(std::move(kv));
+    } else if (n == "entity_data" || n == "block_entity_data") {  // TypedEntityData.codec: the tag with the type's "id"
+        const std::string& type = registryName(n == "entity_data" ? "minecraft:entity_type" : "minecraft:block_entity_type", r.varInt());
+        NbtValue v;
+        if (type.empty() || !textNbt(v) || v.type != TagCompound) return false;
+        NbtValue id = NbtValue::make(TagString);
+        id.s = type;
+        bool put = false;
+        for (size_t k = 0; k < v.names.size(); ++k)
+            if (v.names[k] == "id") v.items[k] = id, put = true;
+        if (!put) v.names.push_back("id"), v.items.push_back(id);
+        out = hNbt(v, "", false);
+    } else if (n == "attribute_modifiers") {  // [{type, id, amount, operation, slot (not "any"), display (not default)}]
+        static const char* kOperations[] = {"add_value", "add_multiplied_base", "add_multiplied_total"};
+        static const char* kSlots[] = {"any", "mainhand", "offhand", "hand", "feet", "legs", "chest", "head", "armor", "body", "saddle"};
+        std::vector<u32> entries;
+        const i32 cnt = r.varInt();
+        for (i32 i = 0; i < cnt && r.ok; ++i) {
+            const std::string& attribute = registryName("minecraft:attribute", r.varInt());
+            const std::string id(r.str());
+            const double amount = r.f64();
+            const i32 operation = r.varInt(), slot = r.varInt(), display = r.varInt();
+            if (attribute.empty() || operation < 0 || operation > 2 || slot < 0 || slot > 10 || display < 0 || display > 2) return false;
+            u64 bits;
+            std::memcpy(&bits, &amount, 8);
+            std::vector<std::pair<u32, u32>> kv{{hString("type"), hString(attribute)},
+                                                {hString("id"), hString(id)},
+                                                {hString("amount"), hTagged(11, bits, 8)},
+                                                {hString("operation"), hString(kOperations[operation])}};
+            if (slot != 0) kv.emplace_back(hString("slot"), hString(kSlots[slot]));
+            if (display == 1) kv.emplace_back(hString("display"), hMap({{hString("type"), hString("hidden")}}));
+            if (display == 2) {
+                NbtValue text;
+                if (!textNbt(text)) return false;
+                kv.emplace_back(hString("display"), hMap({{hString("type"), hString("override")}, {hString("value"), hNbt(text, "")}}));
+            }
+            entries.push_back(hMap(std::move(kv)));
+        }
+        out = hList(entries);
+    } else if (n == "profile") {  // ResolvableProfile FULL_CODEC: the game profile's or partial profile's fields + the skin patch
+        std::vector<std::pair<u32, u32>> kv;
+        auto uuid = [&] {  // UUIDUtil.CODEC: four ints
+            const u64 msb = r.u64v(), lsb = r.u64v();
+            std::vector<u8> b{16};
+            for (u32 x : {u32(msb >> 32), u32(msb), u32(lsb >> 32), u32(lsb)}) le(b, x, 4);
+            b.push_back(17);
+            return crc32c(b);
+        };
+        auto properties = [&] {  // PROPERTY_MAP as a list of {name, value, signature?}; none: left out
+            std::vector<u32> list;
+            const i32 cnt = r.varInt();
+            for (i32 i = 0; i < cnt && r.ok; ++i) {
+                std::vector<std::pair<u32, u32>> p{{hString("name"), hString(std::string(r.str()))},
+                                                   {hString("value"), hString(std::string(r.str()))}};
+                if (r.boolean()) p.emplace_back(hString("signature"), hString(std::string(r.str())));
+                list.push_back(hMap(std::move(p)));
+            }
+            if (!list.empty()) kv.emplace_back(hString("properties"), hList(list));
+        };
+        if (r.boolean()) {  // GameProfile: id, name, properties
+            kv.emplace_back(hString("id"), uuid());
+            kv.emplace_back(hString("name"), hString(std::string(r.str())));
+            properties();
+        } else {  // Partial: name?, id?, properties
+            if (r.boolean()) kv.emplace_back(hString("name"), hString(std::string(r.str())));
+            if (r.boolean()) kv.emplace_back(hString("id"), uuid());
+            properties();
+        }
+        for (const char* k : {"texture", "cape", "elytra"})
+            if (r.boolean()) kv.emplace_back(hString(k), hString(std::string(r.str())));
+        if (r.boolean()) kv.emplace_back(hString("model"), hString(r.boolean() ? "slim" : "wide"));
         out = hMap(std::move(kv));
     } else if (n == "writable_book_content") {  // {pages: [{raw, filtered?}...]}, no pages: {}
         std::vector<u32> pages;
