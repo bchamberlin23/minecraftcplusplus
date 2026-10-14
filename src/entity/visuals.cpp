@@ -2547,7 +2547,7 @@ void Visuals::Impl::buildTags(const PassContext& ctx) {
         // ItemFrameRenderer.shouldShowName / getNameTag: only the targeted frame's item, when it has a custom name
         const bool frame = e.type >= 0 && (e.type == frameTypes[0] || e.type == frameTypes[1]);
         if (frame && !(id == targeted && e.itemStack && e.itemStack->hasCustomName && !(ui && ui->hudHidden()))) continue;
-        if (!frame && e.name.empty()) continue;
+        if (!frame && e.name.empty() && !e.nameVisible) continue;  // (CustomNameVisible alone: the type's name)
         const bool player = e.category == Category::Player;
         char uuidText[37];
         std::snprintf(uuidText, sizeof(uuidText), "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x", e.uuid[0], e.uuid[1],
@@ -2604,7 +2604,8 @@ void Visuals::Impl::buildTags(const PassContext& ctx) {
             if (!discrete) {
                 tagSee.add(m, t.first, 1, light, bgColor);
                 tagSee.add(m, t.first + 1, t.glyphs, light, textHalf);
-                const u32 bright = (light & ~15u) | std::max<u32>(light & 15, 2);  // lightCoordsWithEmission(light, 2)
+                // lightCoordsWithEmission(light, 2): block and sky light at least 2
+                const u32 bright = (light & ~0xFFu) | (std::max<u32>((light >> 4) & 15, 2) << 4) | std::max<u32>(light & 15, 2);
                 tagNormal.add(m, t.first + 1, t.glyphs, bright, 0xFFFFFFFFu);
             } else {
                 tagNormal.add(m, t.first, 1, light, bgColor);
@@ -2615,7 +2616,10 @@ void Visuals::Impl::buildTags(const PassContext& ctx) {
         float raise = 0;
         ui::Text score;
         if (d2 < 100.0f && ui::belowNameText(member, score)) submit(tag(score), 0), raise = 9.0f * 1.15f * 0.025f;
-        submit(tag(frame ? e.itemStack->customName : ui::teamFormattedName(member, ui::Text(e.name))), raise);
+        // Entity.getName: the custom name, else the type's description
+        const ui::Text name = !e.name.empty() || !res ? ui::Text(e.name)
+                                                      : ui::translatable("entity." + std::string(e.info->name).replace(e.info->name.find(':'), 1, "."), {}, &res->lang());
+        submit(tag(frame ? e.itemStack->customName : ui::teamFormattedName(member, name)), raise);
         ++self.stats_.tags;
     }
 }
