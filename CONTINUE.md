@@ -219,8 +219,7 @@ game profile); the Online screen's Friends section has only In-Game Notification
   the total from the server's log (no per-dimension bars or converted / skipped counts); a failed backup's toast has
   no reason line.
 - Station residuals: the loom's banner preview is a flat quad (Java: the 3D BannerFlagModel); the smithing armor
-  stand shows no item model on its head for head items without an equippable asset; selecting a trade does not
-  pre-fill the payment slots before the server's sync (MerchantMenu.tryMoveItems).
+  stand shows no item model on its head for head items without an equippable asset.
 - Pack screens: Options' Resource Packs and Create World's Data Packs are this port's Mods & Packs manager (one list
   of switches) rather than PackSelectionScreen's Available / Selected lists.
 - SystemToasts without a trigger here: PACK_LOAD_FAILURE, FILE_DROP_FAILURE, CHUNK_LOAD/SAVE_FAILURE (the server
