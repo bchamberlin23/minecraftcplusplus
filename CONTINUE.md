@@ -166,7 +166,9 @@ and item-on-block prediction audited and ported (doors, levers, repeaters, cake,
 shovel / honeycomb transforms, flint / fire charge fire, shears, campfire dousing); fire held only by flammable
 neighbours (no solid floor) is left to the server (no flammability table on the client). Mob keyframe animations
 (warden, sniffer, camel, armadillo, breeze) audited: the definitions come from the jar (animations_v1.json, cached by
-version only), triggers and procedural poses match. Not ported:
+version only), triggers and procedural poses match. Item model properties audited; residuals: a select with no case
+and no fallback draws nothing (Java: the missing model), local_time ignores "locale" (English names) and is not
+cached per second, select on "component" matches the named fields only (undecoded components never match a value). Not ported:
 filtered sign text (needs the account's profanity filter flag). The bell's raider particles (showBellParticles) are
 invisible in 26.3 (ColorParticleOption.create(ENTITY_EFFECT, 0xFED839 + 5i) has alpha 0, which SpellParticle keeps),
 so they are not drawn here either. Toasts follow ToastInstance now (the
