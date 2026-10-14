@@ -982,7 +982,7 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     FrameConstants fc{};
     const float cy = std::cos(cam.yaw), sy = std::sin(cam.yaw), cp = std::cos(cam.pitch), sp = std::sin(cam.pitch);
     Vec3 fwd{-sy * cp, -sp, cy * cp};
-    Vec3 right = normalize(cross(fwd, {0, 1, 0}));
+    Vec3 right{-cy, 0, -sy};  // from the yaw alone (fwd x up flips at +-90 degrees of pitch)
     Vec3 up = cross(right, fwd);
     if (cam.basisSet) {  // view bobbing / hurt tilt (game/game.cpp viewCamera)
         fwd = normalize(Vec3{cam.fwd[0], cam.fwd[1], cam.fwd[2]});

@@ -106,9 +106,7 @@ static CameraState applyBob(const Game& g, CameraState c) {
     if (!any) return c;
     const float cy = std::cos(c.yaw), sy = std::sin(c.yaw), cp = std::cos(c.pitch), sp = std::sin(c.pitch);
     const float fwd[3] = {-sy * cp, -sp, cy * cp};
-    float right[3] = {fwd[1] * 0 - fwd[2] * 1, fwd[2] * 0 - fwd[0] * 0, fwd[0] * 1 - fwd[1] * 0};  // fwd x (0, 1, 0)
-    const float rl = std::sqrt(right[0] * right[0] + right[1] * right[1] + right[2] * right[2]);
-    for (float& v : right) v /= std::max(rl, 1e-6f);
+    const float right[3] = {-cy, 0, -sy};  // from the yaw alone (fwd x (0, 1, 0) flips at +-90 degrees of pitch)
     const float up[3] = {right[1] * fwd[2] - right[2] * fwd[1], right[2] * fwd[0] - right[0] * fwd[2], right[0] * fwd[1] - right[1] * fwd[0]};
     const float back[3] = {-fwd[0], -fwd[1], -fwd[2]};
     const float* rows[3] = {right, up, back};

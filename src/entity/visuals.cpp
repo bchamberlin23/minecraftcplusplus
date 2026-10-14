@@ -3447,7 +3447,7 @@ void Visuals::Impl::buildHand(const PassContext& ctx, float viewProj[16], bool j
     // Projection like the renderer's, without jitter.
     const float cy = std::cos(cam.yaw), sy = std::sin(cam.yaw), cp = std::cos(cam.pitch), sp = std::sin(cam.pitch);
     const Vec3 fwd{-sy * cp, -sp, cy * cp};
-    const Vec3 right = normalize(cross(fwd, {0, 1, 0}));
+    const Vec3 right{-cy, 0, -sy};  // from the yaw alone (fwd x up flips at +-90 degrees of pitch)
     const Vec3 up = cross(right, fwd);
     Mat4 proj = perspectiveReverseZ(ui->handFovRadians(), float(ctx.width) / float(std::max(ctx.height, 1u)), 0.05f);
     if (noJitter) std::memcpy(noJitter, (proj * viewFromBasis(right, up, fwd)).m, sizeof(float) * 16);

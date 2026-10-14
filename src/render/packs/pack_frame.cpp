@@ -288,7 +288,7 @@ struct Renderer::Packs::Frame {
         // View: GL conventions (right, up, -forward), camera-relative world.
         const float cy = std::cos(cam.yaw), sy = std::sin(cam.yaw), cp = std::cos(cam.pitch), sp = std::sin(cam.pitch);
         const Vec3 fwd{-sy * cp, -sp, cy * cp};
-        const Vec3 right = normalize(cross(fwd, {0, 1, 0}));
+        const Vec3 right{-cy, 0, -sy};  // from the yaw alone (fwd x up flips at +-90 degrees of pitch)
         const Vec3 up = cross(right, fwd);
         M4 view = M4::identity();
         view.at(0, 0) = right.x, view.at(0, 1) = right.y, view.at(0, 2) = right.z;
@@ -1099,7 +1099,7 @@ struct Renderer::Packs::Frame {
         const CameraState& cam = *in.cam;
         const float cy = std::cos(cam.yaw), sy = std::sin(cam.yaw), cp = std::cos(cam.pitch), sp = std::sin(cam.pitch);
         const Vec3 fwd{-sy * cp, -sp, cy * cp};
-        const Vec3 right = normalize(cross(fwd, {0, 1, 0}));
+        const Vec3 right{-cy, 0, -sy};  // from the yaw alone (fwd x up flips at +-90 degrees of pitch)
         const Vec3 up = cross(right, fwd);
         const float aspect = float(p.outW) / float(std::max(p.outH, 1u));
         upscale::CameraFrame c;
