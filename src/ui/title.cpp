@@ -576,6 +576,10 @@ void Ui::State::frontEndInput(const Window::InputEvent& e) {
     // Enter presses a focused button before the screen's default action.
     const bool lists = screen == Screen::Worlds || screen == Screen::Servers || screen == Screen::CreateWorld || screen == Screen::EditWorld;
     if (!lists && f.fields.empty() && buttonsNavigate(e)) return;
+    // The world / server lists keep the arrows for their entries: Tab reaches the buttons, Enter / Space press a
+    // keyboard-focused one.
+    const bool selection = e.type == E::Key && e.down && (e.code == VK_RETURN || e.code == VK_SPACE) && keyboardFocus && focusedButton >= 0;
+    if (lists && f.fields.empty() && e.type == E::Key && (e.code == VK_TAB || selection) && buttonsNavigate(e)) return;
     if (e.type == E::Key && e.down && e.code == VK_RETURN) {
         if (auto fn = f.onEnter) fn();
         return;

@@ -1022,6 +1022,13 @@ void Ui::State::drawScreen(Canvas& c) {
 void Ui::State::screenInput(const Window::InputEvent& e) {
     using E = Window::InputEvent;
     const bool shift = window->keyDown(VK_SHIFT);
+    // Focus navigation on the registered screens of buttons only (Screen.keyPressed); the others keep their keys.
+    static const Screen kButtonScreens[] = {Screen::Options, Screen::ConfirmLink, Screen::DatapackFailure, Screen::NoticeWithLink,
+                                            Screen::AccessibilityOnboarding, Screen::ServerPackPrompt, Screen::CodeOfConduct,
+                                            Screen::MultiplayerWarning, Screen::WorldOptions, Screen::Restrictions,
+                                            Screen::CreditsAttribution};
+    if (std::find(std::begin(kButtonScreens), std::end(kButtonScreens), screen) != std::end(kButtonScreens) && buttonsNavigate(e))
+        return;
     if (const ScreenDef* d = screenDef(screen); d && d->input) return d->input(*this, e);  // modules.h
     if (screen == Screen::Chat) {
         if (chatExtInput(*this, e)) return;  // mp_hud.h: suggestions list, chat clicks
