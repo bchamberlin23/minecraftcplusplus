@@ -492,6 +492,66 @@ namespace {
 Result placementStateImpl(const Context& c, u16 held, const int pos[3], bool replaceClicked);
 
 // BlockItem.canPlace: state.canSurvive for the common families (true for the rest; the server has the last word)
+// Block.getSignal (direct: getDirectSignal) of state s toward a receiver, d the direction from the receiver to it.
+// Block entity outputs the client does not have (a jukebox's song, a trapped chest's viewers, a comparator's level)
+// read 0.
+int signalOf(const Context& c, u16 s, int d, bool direct) {
+    const BlockRegistry& reg = c.reg;
+    const std::string full = nameOf(c, s);
+    const std::string_view n = full.size() > 10 ? std::string_view(full).substr(10) : std::string_view();
+    auto prop = [&](const char* k) { return reg.property(s, k); };
+    auto powered = [&] { return prop("powered") == "true"; };
+    auto facing = [&] { return faceByName(prop("facing")); };
+    if (n == "redstone_block") return direct ? 0 : 15;
+    if (n == "lever" || n.ends_with("_button")) {  // FaceAttachedHorizontalDirectionalBlock.getConnectedDirection
+        if (!powered()) return 0;
+        const std::string_view face = prop("face");
+        const int connected = face == "floor" ? kUp : face == "ceiling" ? kDown : facing();
+        return !direct || connected == d ? 15 : 0;
+    }
+    if (n.ends_with("_pressure_plate")) {
+        const std::string_view power = prop("power");
+        const int v = !power.empty() ? std::atoi(std::string(power).c_str()) : powered() ? 15 : 0;
+        return !direct || d == kUp ? v : 0;
+    }
+    if (n == "redstone_torch" || n == "redstone_wall_torch") {
+        if (prop("lit") != "true") return 0;
+        if (direct && d != kDown) return 0;
+        return n == "redstone_torch" ? (d != kUp ? 15 : 0) : (facing() != d ? 15 : 0);
+    }
+    if (n == "repeater") return powered() && facing() == d ? 15 : 0;  // DiodeBlock (a comparator's level: 0 here)
+    if (n == "observer") return powered() && facing() == d ? 15 : 0;
+    if (n == "redstone_wire") {  // RedStoneWireBlock: not up into the block above; sideways only where it points
+        const int power = std::atoi(std::string(prop("power")).c_str());
+        if (power == 0 || d == kDown) return 0;
+        return d == kUp || prop(kName[opposite(d)]) != "none" ? power : 0;
+    }
+    if (n == "lightning_rod" || n.ends_with("_lightning_rod") || n == "tripwire_hook")
+        return powered() && (!direct || facing() == d) ? 15 : 0;
+    if (n == "lectern" || n == "detector_rail") return powered() && (!direct || d == kUp) ? 15 : 0;
+    if (n == "sculk_sensor" || n == "calibrated_sculk_sensor") {
+        const int v = std::atoi(std::string(prop("power")).c_str());
+        return !direct || d == kUp ? v : 0;
+    }
+    if (direct) return 0;
+    if (n == "target") return std::atoi(std::string(prop("power")).c_str());
+    if (n == "daylight_detector") return std::atoi(std::string(prop("power")).c_str());
+    return 0;
+}
+// SignalGetter.hasNeighborSignal: a neighbour's signal toward pos, or a redstone conductor (here: an opaque full
+// cube) strongly powered from any of its sides.
+bool hasNeighborSignal(const Context& c, const int pos[3]) {
+    for (int d = 0; d < 6; ++d) {
+        const int q[3] = {pos[0] + kStep[d][0], pos[1] + kStep[d][1], pos[2] + kStep[d][2]};
+        const u16 s = at(c, pos, d);
+        if (signalOf(c, s, d, false) > 0) return true;
+        if (!c.reg.infos()[s].occludes) continue;  // isRedstoneConductor: getDirectSignalTo
+        for (int e = 0; e < 6; ++e)
+            if (signalOf(c, at(c, q, e), e, true) > 0) return true;
+    }
+    return false;
+}
+
 bool canSurviveHere(const Context& c, u16 state, const int p[3]) {
     const std::string full = nameOf(c, state);
     const std::string_view n = std::string_view(full).substr(10);  // without "minecraft:"
@@ -723,7 +783,18 @@ Result placementStateImpl(const Context& c, u16 held, const int pos[3], bool rep
             standing = with(c, held, "rotation", std::to_string(int(std::floor(deg / 22.5f + 0.5f)) & 15));
         }
         if (n.ends_with("_hanging_sign")) {  // CeilingHangingSignBlock: under a full face it snaps to the 4 directions
-            const bool attached = !sturdy(reg, at(c, pos, kUp), kDown) || c.sneaking;
+            bool attached = !sturdy(reg, at(c, pos, kUp), kDown) || c.sneaking;
+            const u16 aboveSign = at(c, pos, kUp);
+            if (nameOf(c, aboveSign).ends_with("_hanging_sign") && !c.sneaking) {  // isBelowHangingSign
+                int dir = -1;  // the sign above's direction: its facing, or its rotation when that is a cardinal one
+                if (const std::string_view fs = reg.property(aboveSign, "facing"); !fs.empty()) dir = faceByName(fs);
+                else if (const std::string_view rs = reg.property(aboveSign, "rotation"); !rs.empty()) {
+                    const int rot = std::atoi(std::string(rs).c_str());
+                    if (rot % 4 == 0) dir = rot == 0 ? kSouth : rot == 4 ? kWest : rot == 8 ? kNorth : kEast;
+                }
+                const bool axisZ = horiz == kNorth || horiz == kSouth;  // Direction.fromYRot(rotation)
+                if (dir >= 2 && (dir == kNorth || dir == kSouth) == axisZ) attached = false;
+            }
             static constexpr int kSegment[6] = {0, 0, 8, 0, 4, 12};  // RotationSegment of a horizontal direction
             const int rotation = attached ? int(std::floor((c.yaw * 180.0f / kPi + 180.0f) / 22.5f + 0.5f)) & 15 : kSegment[opposite(horiz)];
             standing = with(c, with(c, held, "rotation", std::to_string(rotation)), "attached", attached ? "true" : "false");
@@ -758,6 +829,8 @@ Result placementStateImpl(const Context& c, u16 held, const int pos[3], bool rep
                                                                                                                               : "right";
         }
         s = with(c, with(c, with(c, held, "facing", kName[horiz]), "hinge", hinge), "half", "lower");
+        const bool signal = hasNeighborSignal(c, pos) || hasNeighborSignal(c, above);
+        s = with(c, with(c, s, "powered", signal ? "true" : "false"), "open", signal ? "true" : "false");
         r.extra.push_back({pos[0], pos[1] + 1, pos[2], int(with(c, s, "half", "upper"))});  // setPlacedBy
     } else if (n.ends_with("_bed") && !reg.property(held, "part").empty()) {  // BedBlock: the head one block ahead
         const int head[3] = {pos[0] + kStep[horiz][0], pos[1], pos[2] + kStep[horiz][2]};
@@ -823,14 +896,27 @@ Result placementStateImpl(const Context& c, u16 held, const int pos[3], bool rep
             s = with(c, with(c, held, "facing", kName[c.face]), "half", c.hit[1] - pos[1] > 0.5 ? "top" : "bottom");
         else
             s = with(c, with(c, held, "facing", kName[opposite(horiz)]), "half", c.face == kUp ? "bottom" : "top");
+        if (hasNeighborSignal(c, pos)) s = with(c, with(c, s, "open", "true"), "powered", "true");
     } else if (n == "minecraft:bell") {  // BellBlock: floor / ceiling by the clicked face, else the wall(s) beside
+        auto survives = [&](u16 b) {  // BellBlock.canSurvive
+            const std::string_view a = reg.property(b, "attachment");
+            if (a == "floor") return sturdy(reg, at(c, pos, kDown), kUp);
+            if (a == "ceiling") return supportsCenter(reg, at(c, pos, kUp), kDown);
+            const int f = faceByName(reg.property(b, "facing"));
+            return sturdy(reg, at(c, pos, f), opposite(f));
+        };
         if (!horizontal(c.face)) {
             s = with(c, with(c, held, "attachment", c.face == kDown ? "ceiling" : "floor"), "facing", kName[horiz]);
+            if (!survives(s)) return r;
         } else {
             const int f = opposite(c.face);
             const bool both = sturdy(reg, at(c, pos, clockWise(f)), counterClockWise(f)) &&
                               sturdy(reg, at(c, pos, counterClockWise(f)), clockWise(f));
             s = with(c, with(c, held, "facing", kName[f]), "attachment", both ? "double_wall" : "single_wall");
+            if (!survives(s)) {
+                s = with(c, s, "attachment", sturdy(reg, at(c, pos, kDown), kUp) ? "floor" : "ceiling");
+                if (!survives(s)) return r;
+            }
         }
     } else if (n == "minecraft:crafter") {  // CrafterBlock: front against the look, top up (or by the yaw)
         const int front = opposite(orderedByNearest(c)[0]);
@@ -931,6 +1017,29 @@ Result placementStateImpl(const Context& c, u16 held, const int pos[3], bool rep
             const std::string nb = nameOf(c, at(c, pos, d));
             s = with(c, s, kName[d], nb == n || nb == "minecraft:chorus_flower" || (d == kDown && nb == "minecraft:end_stone") ? "true" : "false");
         }
+    }
+    if (n.ends_with("_fence_gate")) {  // FenceGateBlock: opened by a signal; in a wall beside it across its axis
+        const bool signal = hasNeighborSignal(c, pos);
+        const int f = faceByName(reg.property(s, "facing"));
+        const int a = f == kNorth || f == kSouth ? kWest : kNorth;
+        const bool inWall = nameOf(c, at(c, pos, a)).ends_with("_wall") || nameOf(c, at(c, pos, opposite(a))).ends_with("_wall");
+        s = with(c, with(c, with(c, s, "open", signal ? "true" : "false"), "powered", signal ? "true" : "false"), "in_wall",
+                 inWall ? "true" : "false");
+    }
+    if (n == "minecraft:campfire" || n == "minecraft:soul_campfire")  // CampfireBlock: unlit in water, signal over hay
+        s = with(c, with(c, s, "lit", water ? "false" : "true"), "signal_fire",
+                 nameOf(c, at(c, pos, kDown)) == "minecraft:hay_block" ? "true" : "false");
+    if (n.ends_with("_leaves") && !reg.property(s, "persistent").empty()) {  // LeavesBlock: persistent, updateDistance
+        int distance = 7;
+        for (int d = 0; d < 6 && distance > 1; ++d) {
+            const u16 nb = at(c, pos, d);
+            const std::string nn = nameOf(c, nb);
+            const bool log = (nn.ends_with("_log") || nn.ends_with("_wood") || nn.ends_with("_hyphae") ||
+                              (nn.ends_with("_stem") && nn != "minecraft:mushroom_stem"));  // #prevents_nearby_leaf_decay
+            const int from = log ? 0 : nn.ends_with("_leaves") ? std::atoi(std::string(reg.property(nb, "distance")).c_str()) : 7;
+            distance = std::min(distance, from + 1);
+        }
+        s = with(c, with(c, s, "persistent", "true"), "distance", std::to_string(distance));
     }
     if (n == "minecraft:tripwire")  // TripWireBlock.shouldConnectTo
         for (int d = 2; d < 6; ++d) s = with(c, s, kName[d], tripwireConnects(c, at(c, pos, d), d) ? "true" : "false");
