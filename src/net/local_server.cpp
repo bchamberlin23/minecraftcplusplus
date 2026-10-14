@@ -137,6 +137,37 @@ u16 freePort() {
     return port ? port : 25565;
 }
 
+// The bundler's extracted classpath (META-INF/classpath-joined, relative to the bundler repo) and main class, for a
+// direct launch; empty when the bundler has not unpacked everything yet (its own first run does).
+std::wstring directClasspath(const fs::path& jar, const fs::path& repo, std::wstring& mainClass) {
+    ZipArchive zip;
+    if (!zip.open(jar)) return {};
+    std::string joined, main;
+    for (const ZipArchive::Entry& e : zip.entries()) {
+        std::vector<u8> bytes;
+        if (e.name == "META-INF/classpath-joined" && zip.read(e, bytes)) joined.assign(bytes.begin(), bytes.end());
+        if (e.name == "META-INF/main-class" && zip.read(e, bytes)) main.assign(bytes.begin(), bytes.end());
+    }
+    while (!main.empty() && std::isspace(u8(main.back()))) main.pop_back();
+    if (joined.empty() || main.empty()) return {};
+    std::wstring cp;
+    std::error_code ec;
+    for (size_t start = 0; start <= joined.size();) {
+        size_t end = joined.find(';', start);
+        if (end == std::string::npos) end = joined.size();
+        std::string rel = joined.substr(start, end - start);
+        while (!rel.empty() && std::isspace(u8(rel.back()))) rel.pop_back();
+        start = end + 1;
+        if (rel.empty()) continue;
+        const fs::path p = repo / fs::path(rel);
+        if (!fs::exists(p, ec)) return {};
+        if (!cp.empty()) cp += L';';
+        cp += p.wstring();
+    }
+    mainClass.assign(main.begin(), main.end());
+    return cp;
+}
+
 // The world format version this game version writes ("world_version" in the jar's version.json).
 int gameWorldVersion(const fs::path& jar) {
     ZipArchive zip;
@@ -251,7 +282,94 @@ std::string propertyValue(const std::string& v) {
 
 }  // namespace
 
-LocalServer::~LocalServer() { stop(); }
+LocalServer::~LocalServer() {
+    stop();
+    if (trainer_.joinable()) {  // an unfinished training run ends with the game (the next launch starts over)
+        trainCancel_ = true;
+        if (trainProcess_) TerminateProcess(trainProcess_, 1);
+        trainer_.join();
+    }
+    if (trainJob_) CloseHandle(trainJob_);
+}
+
+// A server run on a throwaway world with -XX:AOTCacheOutput: the JDK records the classes it loads and links, and on
+// exit assembles the ahead-of-time cache (JEP 483 / 514; about 40 s at below-normal priority). Later launches start
+// with it (-XX:AOTCache), loading and linking those classes from the cache. One trainer at a time across instances.
+void LocalServer::trainAot() {
+    const Timer timer;
+    std::error_code ec;
+    const fs::path dir = aotCache_.parent_path(), work = dir / "train", tmp = aotCache_.wstring() + L".tmp";
+    fs::create_directories(dir, ec);
+    HANDLE lock = CreateFileW((dir / "train.lock").c_str(), GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS,
+                              FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+    if (lock == INVALID_HANDLE_VALUE) return;  // another instance is training
+    fs::remove_all(work, ec);
+    fs::create_directories(work / "universe", ec);
+    fs::remove(tmp, ec);
+    std::ofstream(work / "eula.txt") << "eula=true\n";
+    const u16 port = freePort();
+    std::ofstream(work / "server.properties") << "online-mode=false\nserver-ip=127.0.0.1\nserver-port=" << port
+                                              << "\nlevel-name=train\nspawn-protection=0\nmax-players=1\n";
+    const fs::path java = findGameJava(config_.minecraftDir, config_.version);
+    std::wstring cmd = L"\"" + java.wstring() + L"\" -Xms1G -Xmx4G -XX:AOTCacheOutput=\"" + tmp.wstring() + L"\" -cp \"" +
+                       aotClasspath_ + L"\" " + aotMain_ + L" --nogui --universe \"" + (work / "universe").wstring() +
+                       L"\" --world train --port " + std::to_wstring(port);
+    SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
+    HANDLE inRead = nullptr, inWrite = nullptr, outRead = nullptr, outWrite = nullptr;
+    if (!CreatePipe(&inRead, &inWrite, &sa, 0) || !CreatePipe(&outRead, &outWrite, &sa, 0)) return CloseHandle(lock), void();
+    SetHandleInformation(inWrite, HANDLE_FLAG_INHERIT, 0);
+    SetHandleInformation(outRead, HANDLE_FLAG_INHERIT, 0);
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = inRead;
+    si.hStdOutput = si.hStdError = outWrite;
+    PROCESS_INFORMATION pi{};
+    const bool ok = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE,
+                                   CREATE_NO_WINDOW | CREATE_SUSPENDED | BELOW_NORMAL_PRIORITY_CLASS, nullptr, work.c_str(), &si, &pi);
+    CloseHandle(inRead);
+    CloseHandle(outWrite);
+    if (!ok) {
+        CloseHandle(inWrite), CloseHandle(outRead), CloseHandle(lock);
+        return;
+    }
+    trainJob_ = CreateJobObjectW(nullptr, nullptr);  // dies with the game (its cache assembler child too)
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    SetInformationJobObject(trainJob_, JobObjectExtendedLimitInformation, &limits, sizeof(limits));
+    AssignProcessToJobObject(trainJob_, pi.hProcess);
+    trainProcess_ = pi.hProcess;
+    ResumeThread(pi.hThread);
+    CloseHandle(pi.hThread);
+    LOG("server: training the ahead-of-time class cache in the background (one time)");
+    std::string pending;
+    char buf[4096];
+    DWORD got = 0;
+    bool stopped = false;
+    while (ReadFile(outRead, buf, sizeof(buf), &got, nullptr) && got) {
+        pending.append(buf, got);
+        if (!stopped && pending.find("Done (") != std::string::npos) {
+            const char stop[] = "stop\n";
+            DWORD put = 0;
+            WriteFile(inWrite, stop, DWORD(sizeof(stop) - 1), &put, nullptr);
+            stopped = true;
+        }
+        if (pending.size() > 8192) pending.erase(0, pending.size() - 64);
+    }
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    DWORD code = 1;
+    GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(inWrite), CloseHandle(outRead);
+    if (!trainCancel_ && code == 0 && fs::exists(tmp, ec)) {
+        fs::rename(tmp, aotCache_, ec);
+        LOG("server: ahead-of-time class cache ready in %.1f s (%.0f MB): the next local servers start faster", timer.ms() / 1000.0,
+            double(fs::file_size(aotCache_, ec)) / 1048576.0);
+    } else {
+        fs::remove(tmp, ec);
+    }
+    fs::remove_all(work, ec);
+    CloseHandle(lock);
+}
 
 bool LocalServer::running() const { return process_ && WaitForSingleObject(process_, 0) == WAIT_TIMEOUT; }
 
@@ -574,8 +692,29 @@ bool LocalServer::start(const Config& config) {
     si.hStdInput = stdinRead;
     si.hStdOutput = si.hStdError = stdoutWrite;
     PROCESS_INFORMATION pi{};
-    std::wstring cmd = L"\"" + java.wstring() + L"\" -Xms1G -Xmx4G" + jvmExtra + L" -jar \"" + jar.wstring() +
-                       L"\" --nogui --universe \"" + config.world.parent_path().wstring() + L"\" --world \"" +
+    // Direct launch: the bundler's unpacked classpath and main class instead of -jar, so the JVM can use an
+    // ahead-of-time class cache (classes behind the bundler's own class loader cannot be cached). The cache belongs to
+    // this classpath and Java runtime; without one, a background run trains it once the server is up (trainAot).
+    std::wstring launch = L" -jar \"" + jar.wstring() + L"\"";
+    if (mods::Manager::get().fabricMods().empty()) {
+        std::wstring mainClass;
+        const std::wstring cp = directClasspath(jar, runDir_, mainClass);
+        if (!cp.empty()) {
+            launch = L" -cp \"" + cp + L"\" " + mainClass;
+            std::error_code jec;
+            const auto jsize = fs::file_size(java, jec);
+            const auto jtime = fs::last_write_time(java, jec).time_since_epoch().count();
+            char key[17];
+            std::snprintf(key, sizeof(key), "%016llx",
+                          static_cast<unsigned long long>(std::hash<std::wstring>{}(cp + java.wstring() + std::to_wstring(jsize) +
+                                                                                     std::to_wstring(jtime))));
+            aotCache_ = runDir_ / "aot" / ("server-" + config.version + "-" + key + ".aot");
+            if (fs::exists(aotCache_, jec)) jvmExtra += L" -XX:AOTCache=\"" + aotCache_.wstring() + L"\"";
+            else aotTrain_ = true, aotClasspath_ = cp, aotMain_ = mainClass;
+        }
+    }
+    std::wstring cmd = L"\"" + java.wstring() + L"\" -Xms1G -Xmx4G" + jvmExtra + launch +
+                       L" --nogui --universe \"" + config.world.parent_path().wstring() + L"\" --world \"" +
                        config.world.filename().wstring() + L"\" --port " + std::to_wstring(port_);
     if (creating_ && config.create->bonusChest) cmd += L" --bonusChest";
     if (config.forceUpgrade) cmd += config.eraseCache ? L" --forceUpgrade --eraseCache" : L" --forceUpgrade";
@@ -628,6 +767,7 @@ void LocalServer::readOutput() {
                     for (const auto& [rule, value] : config_.create->gameRules) command("gamerule " + rule + " " + value);
                 ready_ = true;
                 LOG("server: %s", line.c_str());
+                if (aotTrain_.exchange(false)) trainer_ = std::thread([this] { trainAot(); });
             } else if (config_.forceUpgrade && upgradePercent_ < 100 &&
                        (line.find("Forcing world upgrade") != std::string::npos || line.find("% completed (") != std::string::npos ||
                         line.find("[main/INFO]") != std::string::npos || line.find("[Server Main/INFO]") != std::string::npos)) {

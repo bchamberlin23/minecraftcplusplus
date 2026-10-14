@@ -92,6 +92,7 @@ private:
     void importHostPlayer();   // offline player file -> host
     void finishNewWorld();     // level.dat of a created world: name, cheats (the dedicated server leaves them out)
     void readOutput();
+    void trainAot();  // a background server run that writes the ahead-of-time class cache (see start)
 
     Config config_;
     fs::path runDir_;
@@ -107,6 +108,13 @@ private:
     u16 port_ = 0;
     bool stopped_ = false, upgrading_ = false, creating_ = false;
     int allowCommands_ = -1;  // -1: unchanged
+    // Direct launch (no bundler) with the JDK's ahead-of-time class cache: its file, and the classpath / main class of
+    // a training run when there is none yet (started once the server is up, at below-normal priority).
+    fs::path aotCache_;
+    std::wstring aotClasspath_, aotMain_;
+    std::atomic<bool> aotTrain_{false}, trainCancel_{false};
+    std::thread trainer_;
+    HANDLE trainProcess_ = nullptr, trainJob_ = nullptr;
     bool lockDifficulty_ = false;
     std::atomic<bool> forceGameMode_{false};
     std::string forcedMode_;
