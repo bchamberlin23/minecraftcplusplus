@@ -215,6 +215,7 @@ private:
     // BiomeAmbientSoundsHandler
     std::vector<Loop> loops_;
     int loopEvent_ = -1;
+    int loopTicks_ = 0;  // SoundEngine.tickCount (the loops' subtitle refresh)
     float moodiness_ = 0;
     std::string biome_;
 

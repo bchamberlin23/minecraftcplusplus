@@ -831,8 +831,17 @@ void AudioSystem::tickAmbient(const AmbientSounds* ambient) {
             l.handle = 0;
         }
         l.fade += l.direction;
-        if (l.handle) engine_.setVolume(l.handle, std::clamp(l.fade / 40.0f, 0.0f, 1.0f) * l.soundVolume);
+        const float volume = std::clamp(l.fade / 40.0f, 0.0f, 1.0f) * l.soundVolume;
+        if (l.handle) engine_.setVolume(l.handle, volume);
+        // SoundEngine.tick: a playing loop notifies the listeners again every 10 ticks (keeps its subtitle up)
+        const float heard = std::clamp(volume, 0.0f, 1.0f) * volumes_[int(Category::Ambient)] * volumes_[0];
+        if (l.handle && onSound && loopTicks_ % 10 == 0 && heard > 0.0f) {
+            const std::string& subtitle = bank_.subtitle(l.event);
+            const double zero[3] = {};
+            if (!subtitle.empty()) onSound(subtitle, zero, std::numeric_limits<float>::infinity(), true);
+        }
     }
+    ++loopTicks_;
     std::erase_if(loops_, [](const Loop& l) { return l.handle == 0; });
     const int loop = ambient ? ambient->loop : -1;
     if (loop != loopEvent_) {
