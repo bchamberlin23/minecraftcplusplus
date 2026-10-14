@@ -1366,8 +1366,10 @@ int wmain(int argc, wchar_t** argv) {
                 };
                 return distance(a) < distance(b);
             });
+            // About a third of a frame (0.5 .. 3 ms; at least one chunk): high frame rates without spikes.
+            const double genBudgetMs = std::clamp(double(dt) * 1000.0 * 0.35, 0.5, 3.0);
             Timer budget;
-            while (!genBacklog.empty() && budget.ms() < 3.0) {
+            while (!genBacklog.empty() && budget.ms() < genBudgetMs) {
                 std::unique_ptr<wg::GenChunk> c = std::move(genBacklog.front());
                 genBacklog.pop_front();
                 std::unordered_set<u64> dirty;

@@ -238,12 +238,18 @@ void Lighting::initChunk(int cx, int cz, std::unordered_set<u64>& dirty) {
             }
         }
         tSeed[sky] = tPhase.ms(), tPhase = Timer(), seedN[sky] = flood.size();
-        // Light already in the neighbouring chunks flows in across the borders.
+        // Light already in the neighbouring chunks flows in across the borders: only where it raises the cell inside
+        // next to it (open sky beside open sky, the bulk of the border, adds nothing).
         for (int y = minY; y < maxY; ++y)
             for (int k = 0; k < 16; ++k) {
                 const int border[4][2] = {{-1, k}, {16, k}, {k, -1}, {k, 16}};
-                for (const auto& b : border)
-                    if (ch.get(x0 + b[0], y, z0 + b[1]) > 1) flood.push_back({x0 + b[0], y, z0 + b[1]});
+                for (const auto& b : border) {
+                    const int l = ch.get(x0 + b[0], y, z0 + b[1]);
+                    if (l <= 1) continue;
+                    const int ix = std::clamp(b[0], 0, 15), iz = std::clamp(b[1], 0, 15);
+                    const int op = opacity[size_t(y - minY) * 256 + iz * 16 + ix];
+                    if (op < 15 && l - std::max(1, op) > getL(x0 + ix, y, z0 + iz)) flood.push_back({x0 + b[0], y, z0 + b[1]});
+                }
             }
 
         tBorder[sky] = tPhase.ms(), tPhase = Timer();
