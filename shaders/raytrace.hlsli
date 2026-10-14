@@ -203,6 +203,15 @@ RtSurface rtEntitySurface(uint geometry, uint prim, float2 bary, float3 pos, flo
     return s;
 }
 
+// EntityCutoutPS: texels below alpha 0.1 are holes (the entity geometry is not flagged opaque).
+bool rtEntityOpaque(uint geometry, uint prim, float2 bary) {
+    RtSurface e = rtEntitySurface(geometry, prim, bary, 0, float3(0, 0, 1));
+    if (e.layer != 0xFFFFFFFF) return gTextures.SampleLevel(gSampler, float3(e.uv, e.layer), 0).a >= 0.1;
+    uint w, h;
+    gEntAtlas.GetDimensions(w, h);
+    return gEntAtlas.Load(int3(min(uint2(frac(e.uv) * float2(w, h)), uint2(w - 1, h - 1)), 0)).a >= 0.1;
+}
+
 RtSurface rtSurface(uint slot, uint kind, uint prim, float2 bary, float3 origin, float3 dir, float t, uint geometry) {
     RtSurface s;
     s.pos = origin + dir * t;
@@ -247,6 +256,11 @@ bool rtClosest(float3 origin, float3 dir, float tmax, out RtSurface s) {
     q.TraceRayInline(gScene, RAY_FLAG_NONE, 0xFF, ray);
     while (q.Proceed()) {
         if (q.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
+        if (q.CandidateInstanceID() == kRtEntities) {  // entity cutout texels let the ray through
+            if (rtEntityOpaque(q.CandidateGeometryIndex(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics()))
+                q.CommitNonOpaqueTriangleHit();
+            continue;
+        }
         uint kind = rtKind(q.CandidateInstanceContributionToHitGroupIndex(), q.CandidateGeometryIndex());
         if (kind == kKindTranslucent ||
             rtAlphaTest(q.CandidateInstanceID(), kind, q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics(),
@@ -289,6 +303,11 @@ float3 rtVisibility(float3 origin, float3 dir, float tmax) {
     float3 trans = 1;
     while (q.Proceed()) {
         if (q.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
+        if (q.CandidateInstanceID() == kRtEntities) {  // entity cutout texels let the ray through
+            if (rtEntityOpaque(q.CandidateGeometryIndex(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics()))
+                q.CommitNonOpaqueTriangleHit();
+            continue;
+        }
         uint kind = rtKind(q.CandidateInstanceContributionToHitGroupIndex(), q.CandidateGeometryIndex());
         float t = q.CandidateTriangleRayT();
         if (kind == kKindTranslucent)
@@ -315,6 +334,11 @@ bool rtClosestThrough(float3 origin, float3 dir, float tmax, out RtSurface s, ou
     uint n = 0;
     while (q.Proceed()) {
         if (q.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
+        if (q.CandidateInstanceID() == kRtEntities) {  // entity cutout texels let the ray through
+            if (rtEntityOpaque(q.CandidateGeometryIndex(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics()))
+                q.CommitNonOpaqueTriangleHit();
+            continue;
+        }
         uint kind = rtKind(q.CandidateInstanceContributionToHitGroupIndex(), q.CandidateGeometryIndex());
         float t = q.CandidateTriangleRayT();
         if (kind == kKindTranslucent) {

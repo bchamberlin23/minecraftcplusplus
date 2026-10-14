@@ -838,7 +838,7 @@ bool Renderer::PathTracer::buildEntities(ID3D12GraphicsCommandList4* list, u32 f
         const u32 count = std::min(quads - first, 65536u);
         D3D12_RAYTRACING_GEOMETRY_DESC& g = geo[n];
         g.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
-        g.Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
+        g.Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_NONE;  // alpha tested (rtEntityOpaque): cutout texels are holes
         g.Triangles.IndexBuffer = r.indexBuffer_->GetGPUVirtualAddress();
         g.Triangles.IndexCount = count * 6;
         g.Triangles.IndexFormat = DXGI_FORMAT_R32_UINT;
