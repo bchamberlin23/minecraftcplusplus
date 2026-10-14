@@ -106,8 +106,33 @@ void interactSound(const std::string& n, const std::string& full, int x, int y, 
     if (n == "comparator") return play("block.comparator.click", 0.3f, has("mode=compare") ? 0.55f : 0.5f);  // the new mode
 }
 
+// Inventory.add on the client: stacks with room (the selected slot, the off hand, the hotbar, then 9..35), then empty
+// slots (a full inventory: the server drops what is left).
+void inventoryAdd(Ui::State& s, const ItemStack& stack) {
+    if (!s.game || stack.empty()) return;
+    auto& slots = s.inventory.slots;
+    std::vector<int> order{36 + s.game->selectedSlot(), 45};
+    for (int i = 0; i < 9; ++i) order.push_back(36 + i);
+    for (int i = 9; i < 36; ++i) order.push_back(i);
+    const int maxStack = s.items.maxStack(stack);
+    int left = stack.count;
+    for (int slot : order) {
+        ItemStack& st = slots[size_t(slot)];
+        if (left > 0 && !st.empty() && st.sameItemSameComponents(stack) && st.count < maxStack) {
+            const int moved = std::min(left, maxStack - st.count);
+            st.count += moved, left -= moved;
+        }
+    }
+    for (int slot : order)
+        if (left > 0 && slot != 45 && slots[size_t(slot)].empty()) {
+            const int moved = std::min(left, maxStack);
+            slots[size_t(slot)] = stack.withCount(moved), left -= moved;
+        }
+}
+
 // The client side of the blocks' useItemOn / useWithoutItem: the state changes the client makes before the server's
-// answer (BlockBehaviour on a client level), and the result (1 SUCCESS: swing, 2 CONSUME); -1: not one of these.
+// answer (BlockBehaviour on a client level), and the result (1 SUCCESS: swing, 2 CONSUME, 0 PASS: the item's own use
+// follows); -1: not one of these. useWithoutItem runs for the main hand only (MultiPlayerGameMode.performUseItemOn).
 int predictBlockUse(Ui::State& st, const std::string& n, int x, int y, int z, int hand) {
     Game& g = *st.game;
     BlockRegistry& reg = *st.registry;
@@ -117,7 +142,8 @@ int predictBlockUse(Ui::State& st, const std::string& n, int x, int y, int z, in
         if (to) g.predictBlock(px, py, pz, to);
     };
     const ItemStack& held = st.inventory.slots[size_t(hand == 0 ? 36 + g.selectedSlot() : 45)];
-    const std::string heldName = held.empty() ? std::string() : st.items.name(held.item);
+    const std::string& fullName = st.items.name(held.item);
+    const std::string heldName = held.empty() ? std::string() : fullName.substr(fullName.find(':') + 1);  // "glowstone"
     const bool mayBuild = g.gameMode == 0 || g.gameMode == 1;  // Abilities.mayBuild
     const bool iron = n.starts_with("iron_");
     if (n.ends_with("_door") && !iron) {  // DoorBlock.useWithoutItem: cycle OPEN (the other half follows)
@@ -242,7 +268,55 @@ int predictBlockUse(Ui::State& st, const std::string& n, int x, int y, int z, in
         (void)content;
         return 1;
     }
-    if (n == "lectern") return prop("has_book") == "true" ? 1 : heldName.empty() ? 2 : -1;
+    auto inTag = [&](const char* tag) {
+        const std::vector<int>* t = held.empty() ? nullptr : st.items.tag("minecraft:item", tag);
+        return t && std::find(t->begin(), t->end(), held.item) != t->end();
+    };
+    if (n == "lectern") {  // LecternBlock: a book goes on; with one, useWithoutItem (the screen: the server's)
+        if (prop("has_book") == "true") return hand == 0 ? 1 : 0;
+        if (inTag("minecraft:lectern_books")) return 1;
+        return hand == 0 && !held.empty() ? 2 : 0;  // an empty main hand passes; other items: useWithoutItem CONSUME
+    }
+    if (n == "composter") {  // ComposterBlock: a compostable goes in (the layer: the server's); a full one is emptied
+        const int level = std::atoi(std::string(prop("level")).c_str());
+        if (level < 8 && !held.empty() && hasComponent(st.items, held, "compostable")) return 1;
+        if (hand == 0 && level == 8) {
+            set(x, y, z, reg.withProperty(s, "level", "0"));
+            return 1;
+        }
+        return 0;
+    }
+    if ((n == "beehive" || n == "bee_nest") && heldName == "glass_bottle" && std::atoi(std::string(prop("honey_level")).c_str()) >= 5) {
+        // BeehiveBlock.useItemOn: the bottle fills (shrink, even in creative), the honey level resets
+        ItemStack& slot = st.inventory.slots[size_t(hand == 0 ? 36 + g.selectedSlot() : 45)];
+        slot = slot.withCount(slot.count - 1);
+        const ItemStack honey{st.items.id("minecraft:honey_bottle"), 1};
+        if (slot.empty()) slot = honey;
+        else inventoryAdd(st, honey);
+        if (audio::AudioSystem* a = audio::instance())
+            a->play("minecraft:item.bottle.fill", audio::Category::Block, g.player().pos[0], g.player().pos[1], g.player().pos[2], 1.0f, 1.0f);
+        set(x, y, z, reg.withProperty(s, "honey_level", "0"));
+        return 1;
+    }
+    if ((n == "campfire" || n == "soul_campfire") && !held.empty() && inPropertySet("minecraft:campfire_input", held.item))
+        return 2;  // CampfireBlock: food goes on the fire on the server (CONSUME here; no eating)
+    if (n == "tnt" && (heldName == "flint_and_steel" || heldName == "fire_charge")) return 1;  // primed on the server only
+    if (n == "jukebox") {  // JukeboxBlock: a disc goes in; with one, useWithoutItem pops it out
+        const bool hasRecord = prop("has_record") == "true";
+        if (!hasRecord && !held.empty() && hasComponent(st.items, held, "jukebox_playable")) return 1;
+        return hand == 0 && hasRecord ? 1 : 0;
+    }
+    if (n == "sweet_berry_bush") {  // SweetBerryBushBlock: bone meal passes (to grow it) until it is grown
+        const int age = std::atoi(std::string(prop("age")).c_str());
+        if (heldName == "bone_meal" && age < 3) return 0;
+        return hand == 0 && age > 1 ? 1 : 0;  // picking (the berries: the server's)
+    }
+    if (n == "cave_vines" || n == "cave_vines_plant") return hand == 0 && prop("berries") == "true" ? 1 : 0;  // CaveVines.use
+    if (n == "dragon_egg") return hand == 0 ? 1 : 0;  // DragonEggBlock.useWithoutItem (the teleport: the server's)
+    if (n == "vault") return prop("vault_state") == "active" && !held.empty() ? 2 : 0;  // VaultBlock: SUCCESS_SERVER
+    if (n.ends_with("_shelf")) return hand == 0 && !held.empty() ? 2 : 0;  // ShelfBlock on the client (main hand only)
+    if (n == "daylight_detector") return hand == 0 && mayBuild ? 1 : 0;  // invert (mayBuild), else PASS
+    if (n == "pumpkin" && heldName == "shears") return 1;  // PumpkinBlock: carved on the server
     return -1;
 }
 
@@ -815,13 +889,13 @@ bool Ui::init(const Init& in) {
                                       "furnace", "blast_furnace", "smoker", "dispenser", "dropper", "hopper",
                                       "enchanting_table", "brewing_stand", "loom", "stonecutter", "grindstone",
                                       "smithing_table", "cartography_table", "beacon", "lectern", "lever", "repeater",
-                                      "comparator", "daylight_detector", "cake", "respawn_anchor", "jukebox", "note_block",
+                                      "comparator", "cake", "respawn_anchor", "note_block",
                                       "anvil", "chipped_anvil", "damaged_anvil", "bell", "decorated_pot", "chiseled_bookshelf"};
         for (const char* e : exact)
             if (n == e) return n == "respawn_anchor" ? 2 : 1;  // the anchor's empty hand: CONSUME / SUCCESS_SERVER
         const bool iron = n.starts_with("iron_");
-        // shelves, signs and beds: SUCCESS_SERVER / CONSUME (the server swings the hand)
-        if (n.ends_with("_shelf") || n.ends_with("_sign") || n.ends_with("_bed")) return 2;
+        // signs and beds: SUCCESS_SERVER / CONSUME (the server swings the hand)
+        if (n.ends_with("_sign") || n.ends_with("_bed")) return 2;
         // chest, trapped / ender / copper chests
         return n.ends_with("chest") || n.ends_with("shulker_box") || n.ends_with("_button") || n.ends_with("_fence_gate") ||
                        (!iron && (n.ends_with("_door") || n.ends_with("_trapdoor")))
@@ -1337,29 +1411,7 @@ void Ui::predictFilledResult(int hand, const ItemStack& filled) {
     else predictAdd(filled);
 }
 
-void Ui::predictAdd(const ItemStack& stack) {
-    State& s = *s_;
-    if (!s.game || stack.empty()) return;
-    auto& slots = s.inventory.slots;
-    // Inventory.add: stacks with room (the selected slot, the off hand, the hotbar, then 9..35), then empty slots
-    std::vector<int> order{36 + s.game->selectedSlot(), 45};
-    for (int i = 0; i < 9; ++i) order.push_back(36 + i);
-    for (int i = 9; i < 36; ++i) order.push_back(i);
-    const int maxStack = s.items.maxStack(stack);
-    int left = stack.count;
-    for (int slot : order) {
-        ItemStack& st = slots[size_t(slot)];
-        if (left > 0 && !st.empty() && st.sameItemSameComponents(stack) && st.count < maxStack) {
-            const int moved = std::min(left, maxStack - st.count);
-            st.count += moved, left -= moved;
-        }
-    }
-    for (int slot : order)
-        if (left > 0 && slot != 45 && slots[size_t(slot)].empty()) {
-            const int moved = std::min(left, maxStack);
-            slots[size_t(slot)] = stack.withCount(moved), left -= moved;
-        }
-}
+void Ui::predictAdd(const ItemStack& stack) { inventoryAdd(*s_, stack); }
 
 const ItemStack* Ui::playerSlot(int slot) const {
     const auto& slots = s_->inventory.slots;
