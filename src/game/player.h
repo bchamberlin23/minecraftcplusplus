@@ -155,6 +155,7 @@ public:
     bool swimming = false;           // Entity.isSwimming (sprint-swimming)
     bool fallFlying = false;         // gliding with an elytra (shared flag 7)
     double fallDistance = 0;
+    int tickCount = 0;  // Entity.tickCount: ticks since this player was created (a respawn makes a new one)
     // Fluids (EntityFluidInteraction): the water / lava height over the feet, the eyes in water (this tick and the
     // last one: Entity.wasEyeInWater).
     double waterHeight = 0, lavaHeight = 0;

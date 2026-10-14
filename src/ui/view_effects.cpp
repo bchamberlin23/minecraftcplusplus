@@ -122,7 +122,9 @@ ViewEffects Ui::viewEffects() const {
     v.darknessBlend = s.effectBlend("darkness");
     // LightmapRenderStateExtractor: the Darkness Pulsing option scales the brightness loss and the pulse.
     v.darknessEffectScale = float(s.settings.darknessEffectScale);
-    v.darknessScale = std::max(0.0f, std::cos((float(s.guiTicks) - pt) * kPi * 0.025f) * 0.45f * v.darknessBlend * v.darknessEffectScale) *
+    // the pulse runs on the camera entity's tickCount (here the local player's)
+    const float ticks = s.game ? float(s.game->player().tickCount) : float(s.guiTicks);
+    v.darknessScale = std::max(0.0f, std::cos((ticks - pt) * kPi * 0.025f) * 0.45f * v.darknessBlend * v.darknessEffectScale) *
                       v.darknessEffectScale;
     if (s.eyeInWater) {  // LocalPlayer.getWaterVision
         const float t = float(s.waterVisionTime);

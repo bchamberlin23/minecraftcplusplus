@@ -1058,6 +1058,7 @@ bool Player::onClimbable(const Physics& physics) const {
 double Player::fluidJumpThreshold() const { return eyeHeight() < 0.4 ? 0.0 : 0.4; }
 
 void Player::tick(const Physics& physics, const PlayerInput& rawInput) {
+    ++tickCount;
     std::copy(pos, pos + 3, prev);
     // Collision shapes that depend on the player (scaffolding, powder snow).
     physics.context = {true, pos[1], fallDistance, rawInput.sneak, attr.powderSnowWalker, pos[0], pos[2]};

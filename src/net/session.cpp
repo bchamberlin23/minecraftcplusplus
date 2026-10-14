@@ -234,6 +234,7 @@ void Session::handle(Event& e) {
         gameMode_ = j->gameMode;
         game_->previousGameMode = previousGameMode_ = j->previousGameMode, ++game_->joinSerial;
         game_->player().noClip = gameMode_ == 3;
+        game_->player().tickCount = 0;  // handleRespawn: a new LocalPlayer
         game_->player().portalCooldown = j->portalCooldown;  // handleRespawn: the new player's setPortalCooldown
         instabuild_ = gameMode_ == 1;
         loadedSent_ = false;

@@ -146,8 +146,9 @@ no lava back faces. Loom / stonecutter / smithing / mount screens audited; resid
 draws its banner preview flat (no BannerFlagModel), the smithing preview shows no head item without an equipment
 asset, mount slots use fixed type lists (not #can_equip_saddle / #can_wear_horse_armor). Boss bars / titles / action
 bar and the beam renderers audited and fixed; residual: the end crystal beam's black-to-white shading is stepped over
-its slices (one colour per quad) instead of interpolated per vertex. Not ported: the bell's raider particles (showBellParticles), the
-darkness pulse on the player's own tick count, filtered sign text (needs the account's profanity filter flag). Toasts follow ToastInstance now (the
+its slices (one colour per quad) instead of interpolated per vertex. Not ported: filtered sign text (needs the account's profanity filter flag). The bell's raider particles (showBellParticles) are
+invisible in 26.3 (ColorParticleOption.create(ENTITY_EFFECT, 0xFED839 + 5i) has alpha 0, which SpellParticle keeps),
+so they are not drawn here either. Toasts follow ToastInstance now (the
 server pack download toast shows its progress). Toast residuals: no toasts
 for world access / chunk load or save /
 file drop / pack load failures or periodic notifications; friend toasts have no face (this port's friends have no
