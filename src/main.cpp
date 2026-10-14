@@ -259,7 +259,7 @@ int wmain(int argc, wchar_t** argv) {
         else if (a == L"--child-script") opt.childScript = next();
         else if (a == L"--transfer") opt.transfer = next();
         else if (a == L"--friend-join") opt.friendJoin = fs::path(next()).string(), opt.connect = "friend", opt.generate = false;
-        else if (a == L"--handoff" || a == L"--window") next();  // platform/launch.h
+        else if (a == L"--handoff" || a == L"--handoff-gate" || a == L"--window") next();  // platform/launch.h
         else if (a == L"--shaderpack" || a == L"--pack-option") packs::commandLine(a, next());  // render/packs/pack_api.h
         else if (a.starts_with(L"--create-")) {
             if (!opt.create) opt.create.emplace();
@@ -1541,11 +1541,14 @@ int wmain(int argc, wchar_t** argv) {
         if ((opt.bench && frame + 1 >= kBenchFrames) || (shot && !opt.bench) || timeUp || ui.quitRequested()) break;
         frameEnd = Timer();
     }
-    // "Save and Quit to Title" / "Disconnect" / "Back to Title Screen": save, stop the local server, then hand the
-    // window over to a title instance (platform/launch.h), showing progress meanwhile.
+    // "Save and Quit to Title" / "Disconnect" / "Back to Title Screen": save and stop the local server while a title
+    // instance starts (platform/launch.h), showing progress meanwhile; it takes the window over once the save is done
+    // (the gate), so the world is never opened again while it is still being saved.
     if (ui.titleRequested()) {
         ui.showSaving();
         if (netClient) netClient->stop();
+        SECURITY_ATTRIBUTES inheritable{sizeof(inheritable), nullptr, TRUE};
+        const HANDLE gate = CreateEventW(&inheritable, TRUE, FALSE, nullptr);
         auto stopping = std::async(std::launch::async, [&] {
             // The saving JVM should not compete with queues of terrain work for a world we
             // are leaving. Executing jobs finish; the idle UI never dispatches new ones.
@@ -1566,12 +1569,14 @@ int wmain(int argc, wchar_t** argv) {
             ui.endFrame();
             renderer.render(cam, opt.fog, ui.screenshotRequest());
         };
+        ui.startTitle(gate);
         while ((open = window.pump()) && stopping.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) idleFrame();
         stopping.get();
-        if (open) {
-            ui.startTitle();
+        if (open) {  // (closed: the title instance never shows; it ends with this one)
+            if (gate) SetEvent(gate);
             while (window.pump() && !ui.quitRequested()) idleFrame();
         }
+        if (gate) CloseHandle(gate);
     }
     terrain.stopBackground();
     if (genService) genService->stop();

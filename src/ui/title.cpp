@@ -662,15 +662,16 @@ void Ui::showSaving() {
     s.openScreen(Screen::Loading);
 }
 
-void Ui::startTitle() {
+void Ui::startTitle(void* gate) {
     State& s = *s_;
     FrontEndState& f = *s.fe;
     std::vector<std::wstring> args = launch::stickyArguments();
     // the list to open, or the plain title screen (no fade-in: not the game's first title screen)
     args.insert(args.end(), {L"--menu", f.titleMenu.empty() ? std::wstring(L"title") : widen(f.titleMenu)});
+    if (!f.cfg.childScript.empty()) args.insert(args.end(), {L"--script", f.cfg.childScript});
     f.child = std::make_unique<launch::Child>();
     f.loadingStart = s.clock;
-    if (!f.child->start(args, *s.window)) {
+    if (!f.child->start(args, *s.window, gate)) {
         f.child.reset();
         s.quit = true;  // nothing to hand over to: close
     }

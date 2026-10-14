@@ -240,10 +240,10 @@ public:
     void setFrontEnd(const FrontEnd& fe);
     bool titleRequested() const;   // "Save and Quit to Title" / "Disconnect" / "Back to Title Screen" (quit follows)
     bool switching() const;        // the next instance is loading: background work can pause
-    // Leaving a world for the title screen: a progress screen while the world saves, then the title instance starts
-    // and quitRequested() turns true once it shows its window.
+    // Leaving a world for the title screen: a progress screen while the world saves and the title instance starts;
+    // quitRequested() turns true once it shows its window (after the gate is set).
     void showSaving();
-    void startTitle();
+    void startTitle(void* gate = nullptr);  // gate: launch::Child::start
     void setServerSaving(bool saving);  // the local server is saving (the autosave indicator)
     // The local server stopped while starting: DatapackLoadFailureScreen (its Safe Mode calls safeModeFn), the safe
     // mode's failure alert, or an error message; each leaves for the world list.

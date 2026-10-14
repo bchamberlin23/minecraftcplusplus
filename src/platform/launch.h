@@ -33,8 +33,9 @@ class Child {
 public:
     enum class State { None, Running, Ready, Failed };
     ~Child();
-    // args: after the program name. window: placement and focus are handed to the child.
-    bool start(const std::vector<std::wstring>& args, const Window& window);
+    // args: after the program name. window: placement and focus are handed to the child. gate: an inheritable event;
+    // the child keeps its window hidden (ready() waits) until it is set.
+    bool start(const std::vector<std::wstring>& args, const Window& window, void* gate = nullptr);
     State state();
     std::vector<std::string> takeLines();  // its log lines since the last call
     std::string error() const;             // the last "error:" line when it failed

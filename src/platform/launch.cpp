@@ -18,6 +18,7 @@ Window::Placement g_placement;
 bool g_havePlacement = false;
 std::mutex g_pipeMutex;
 HANDLE g_pipe = nullptr;  // handoff: log lines to the previous instance
+HANDLE g_gate = nullptr;  // handoff: set by the previous instance when this one may show itself (or none)
 std::mutex g_errorMutex;
 std::string g_lastError;
 
@@ -125,6 +126,9 @@ void initProcess(int argc, wchar_t** argv) {
             g_pipe = HANDLE(uintptr_t(_wcstoui64(argv[++i], nullptr, 10)));
             SetHandleInformation(g_pipe, HANDLE_FLAG_INHERIT, 0);  // not into the local server's Java
             g_child = true;
+        } else if (a == L"--handoff-gate" && i + 1 < argc) {
+            g_gate = HANDLE(uintptr_t(_wcstoui64(argv[++i], nullptr, 10)));
+            SetHandleInformation(g_gate, HANDLE_FLAG_INHERIT, 0);
         } else if (a == L"--window" && i + 1 < argc) {
             int max = 0;
             Window::Placement& p = g_placement;
@@ -147,6 +151,11 @@ std::vector<std::wstring> arguments() { return g_args; }
 
 void ready(Window& window) {
     if (g_started) return;
+    if (g_gate) {  // the previous instance is still saving the world: next frame
+        if (WaitForSingleObject(g_gate, 0) == WAIT_TIMEOUT) return;
+        CloseHandle(g_gate);
+        g_gate = nullptr;
+    }
     g_started = true;
     window.reveal();
     std::lock_guard lock(g_pipeMutex);
@@ -197,7 +206,7 @@ Child::~Child() {
     if (process_) CloseHandle(process_);
 }
 
-bool Child::start(const std::vector<std::wstring>& args, const Window& window) {
+bool Child::start(const std::vector<std::wstring>& args, const Window& window, void* gate) {
     wchar_t exe[MAX_PATH];
     if (!GetModuleFileNameW(nullptr, exe, MAX_PATH)) return false;
     SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
@@ -209,12 +218,14 @@ bool Child::start(const std::vector<std::wstring>& args, const Window& window) {
     std::wstring cmd = quote(exe);
     for (const std::wstring& a : args) cmd += L" " + quote(a);
     cmd += L" --handoff " + std::to_wstring(uintptr_t(write));
+    if (gate) cmd += L" --handoff-gate " + std::to_wstring(uintptr_t(gate));
     if (p.width > 0)
         cmd += L" --window " + std::to_wstring(p.x) + L"," + std::to_wstring(p.y) + L"," + std::to_wstring(p.width) + L"," +
                std::to_wstring(p.height) + L"," + (p.maximized ? L"1" : L"0");
 
     // Only the pipe (and redirected output, so a test's capture keeps the whole chain's log) is inherited.
     std::vector<HANDLE> inherit{write};
+    if (gate) inherit.push_back(HANDLE(gate));
     STARTUPINFOEXW si{};
     si.StartupInfo.cb = sizeof(si);
     HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE), outCopy = nullptr;
