@@ -191,7 +191,9 @@ suggestions ask the server for every argument (Java lists entity / registry / po
 suggestion narration; friend toasts have no face; no resource pack load-failure toast; the advancements screen
 ignores the horizontal wheel; name tag / below-name distance attributes are not read. Boats: no client splash above a
 bubble column (onAboveBubbleColumn's local sound and particle), the rider's head / body yaw do not follow the boat's
-turn, no client outOfControlTicks (the server ejects). The allay's give / take / duplicate is predicted
+turn, no client outOfControlTicks (the server ejects). Server list: a favicon that is not 64x64 is kept in
+servers.dat (Java drops it), the MOTD is not sanitised (depth 16, player sprites rejected). Create World: a blank
+name is stored as "New World" (Java stores it empty), no narration. The allay's give / take / duplicate is predicted
 (its hand and the player's stack). Residual: wolf armour repair. Not ported:
 filtered sign text (needs the account's profanity filter flag). The bell's raider particles (showBellParticles) are
 invisible in 26.3 (ColorParticleOption.create(ENTITY_EFFECT, 0xFED839 + 5i) has alpha 0, which SpellParticle keeps),
