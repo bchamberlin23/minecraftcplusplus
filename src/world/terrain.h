@@ -11,6 +11,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <future>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -86,6 +87,9 @@ public:
     // Re-meshes resident full-detail sections in the background (e.g. after light changes).
     void refresh(const std::vector<u64>& sections);
     const TerrainStats& stats() const { return stats_; }
+    // Camera.smartCull: off while a spectator's camera is inside a solid-render block (the occlusion graph then lets
+    // every section through).
+    void setSmartCull(bool on) { smartCull_ = on; }
 
 private:
     // Node states besides a renderer slot (Renderer::kNoSlot = has blocks but no geometry).
@@ -118,6 +122,13 @@ private:
             if (nodes[level].empty()) return kAbsent;
             return nodes[level][(size_t(y) * per + z) * per + x];
         }
+        // Level 0: each section's VisibilitySet (SectionMesh::visibility) for the occlusion graph.
+        std::vector<u64> vis;
+        void setVis(int x, int y, int z, u64 v) {
+            if (vis.empty()) vis.assign(size_t(32) * 32 * ny[0], kAllVisible);
+            vis[(size_t(y) * 32 + z) * 32 + x] = v;
+        }
+        u64 visAt(int x, int y, int z) const { return vis.empty() ? kAllVisible : vis[(size_t(y) * 32 + z) * 32 + x]; }
     };
     struct Request {
         int region, cx, sy, cz;
@@ -188,7 +199,12 @@ private:
                  double& slack) const;
     void markCut(int region) {
         if (size_t(region) < cutCache_.size()) cutCache_[size_t(region)].dirty = true;
+        graphDirty_ = true;
     }
+    // SectionOcclusionGraph (full detail): from the camera's section through the faces each section lets the view
+    // pass between; the slots it does not reach go to Renderer::setOccluded. Run when the camera enters another
+    // section or (at most 10 times a second) when sections changed.
+    void updateOcclusion(double x, double y, double z);
 
     const World& world_;
     const BlockRegistry& registry_;
@@ -225,6 +241,10 @@ private:
     std::vector<u32> active_;
     std::vector<std::vector<u32>> cutParts_;  // per region: its part of active_
     TerrainStats stats_;
+    bool smartCull_ = true, graphSmartCull_ = true, graphDirty_ = true;
+    int graphCam_[3] = {INT32_MIN, INT32_MIN, INT32_MIN};
+    double graphTime_ = 0;
+    std::future<std::vector<std::array<int, 4>>> graphFuture_;  // the search running in the background
 
     std::thread worker_;
     std::mutex mutex_;

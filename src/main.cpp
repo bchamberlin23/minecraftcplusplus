@@ -1411,6 +1411,12 @@ int wmain(int argc, wchar_t** argv) {
         }
         genMs = phase.ms();
         phase = Timer();
+        if (game.gameMode == 3) {  // Camera: smart culling off while a spectator's eyes are in a solid-render block
+            std::shared_lock lock(world.mutex());
+            terrain.setSmartCull(!registry.infos()[world.block(int(std::floor(cam.x)), int(std::floor(cam.y)), int(std::floor(cam.z)))].occludes);
+        } else {
+            terrain.setSmartCull(true);
+        }
         terrain.update(cam.x, cam.y, cam.z, false);
         terrainMs = phase.ms();
         phase = Timer();

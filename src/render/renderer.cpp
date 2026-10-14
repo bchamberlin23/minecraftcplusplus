@@ -234,6 +234,10 @@ bool Renderer::init(HWND hwnd, u32 width, u32 height, bool debug, bool vsync) {
     constants_->Map(0, nullptr, reinterpret_cast<void**>(&constantsMapped_));
     activeLists_ = createBuffer(u64(kMaxActive) * 2 * 4 * kFrames, D3D12_HEAP_TYPE_UPLOAD);  // active + translucent
     activeLists_->Map(0, nullptr, reinterpret_cast<void**>(&activeMapped_));
+    occluded_ = createBuffer(u64(kOccludedWords) * 4 * kFrames, D3D12_HEAP_TYPE_UPLOAD);
+    occluded_->Map(0, nullptr, reinterpret_cast<void**>(&occludedMapped_));
+    std::memset(occludedMapped_, 0, size_t(kOccludedWords) * 4 * kFrames);
+    occludedBits_.assign(kOccludedWords, 0);
     remap_ = createBuffer(u64(kRemapCapacity) * 4 * kFrames, D3D12_HEAP_TYPE_UPLOAD);
     remap_->Map(0, nullptr, reinterpret_cast<void**>(&remapMapped_));
     remapCpu_.resize(kRemapCapacity);
@@ -394,7 +398,7 @@ bool Renderer::createPipelines() {
     ptRanges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
     for (auto& pr : ptRanges) pr.NumDescriptors = PathTracer::kTableSize, pr.RegisterSpace = 4;
 
-    D3D12_ROOT_PARAMETER params[19]{};
+    D3D12_ROOT_PARAMETER params[20]{};
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;  // b1: quadOffset, sectionIndex
     params[0].Constants.ShaderRegister = 1;
     params[0].Constants.Num32BitValues = 2;
@@ -441,6 +445,8 @@ bool Renderer::createPipelines() {
     params[17].DescriptorTable.pDescriptorRanges = &ptRanges[1];
     params[18].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;  // b4: path tracer constants
     params[18].Descriptor.ShaderRegister = 4;
+    params[19].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;  // t8: slots the section occlusion graph culls (bits)
+    params[19].Descriptor.ShaderRegister = 8;
 
     D3D12_STATIC_SAMPLER_DESC samplers[7]{};
     D3D12_STATIC_SAMPLER_DESC& samp = samplers[0];
@@ -471,7 +477,7 @@ bool Renderer::createPipelines() {
     }
 
     D3D12_ROOT_SIGNATURE_DESC rd{};
-    rd.NumParameters = 19;
+    rd.NumParameters = 20;
     rd.pParameters = params;
     rd.NumStaticSamplers = 7;
     rd.pStaticSamplers = samplers;
@@ -803,7 +809,16 @@ void Renderer::removeMesh(u32 slot) {
     freeSlot(slot);
 }
 
+void Renderer::setOccluded(const std::vector<u32>& slots) {
+    std::fill(occludedBits_.begin(), occludedBits_.end(), 0u);
+    for (u32 s : slots)
+        if (s < kOccludedWords * 32) occludedBits_[s >> 5] |= 1u << (s & 31);
+    occludedDirty_ = kFrames;
+}
+
 void Renderer::freeSlot(u32 slot) {
+    if (slot < kOccludedWords * 32 && (occludedBits_[slot >> 5] >> (slot & 31) & 1))  // a reused slot starts visible
+        occludedBits_[slot >> 5] &= ~(1u << (slot & 31)), occludedDirty_ = kFrames;
     Slot& s = slots_[slot];
     if (s.cubeCount) cubeAlloc_.free(s.cubeOffset, s.cubeCount);
     if (s.modelCount) modelAlloc_.free(s.modelOffset, s.modelCount);
@@ -1116,6 +1131,10 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     if (!translucent_.empty())  // right after the active list (CullCS)
         std::memcpy(activeMapped_ + size_t(fi) * kMaxActive * 2 + activeCount, translucent_.data(), translucent_.size() * 4);
     const D3D12_GPU_VIRTUAL_ADDRESS activeVa = activeLists_->GetGPUVirtualAddress() + u64(fi) * kMaxActive * 2 * 4;
+    if (occludedDirty_) {  // each frame in flight's copy once after a change
+        std::memcpy(occludedMapped_ + size_t(fi) * kOccludedWords, occludedBits_.data(), size_t(kOccludedWords) * 4);
+        --occludedDirty_;
+    }
     const bool haveWorld = sections_ && activeCount;
     if (remapSliceVersion_[fi] != remapVersion_) {  // this frame's slice of the texture remap is stale
         std::memcpy(remapMapped_ + size_t(fi) * kRemapCapacity, remapCpu_.data(), size_t(kRemapCapacity) * 4);
@@ -1152,6 +1171,7 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
         list_->SetComputeRootUnorderedAccessView(5, counts_->GetGPUVirtualAddress());
         list_->SetComputeRootUnorderedAccessView(6, args_->GetGPUVirtualAddress());
         list_->SetComputeRootShaderResourceView(7, activeVa);
+        list_->SetComputeRootShaderResourceView(19, occluded_->GetGPUVirtualAddress() + u64(fi) * kOccludedWords * 4);
         list_->Dispatch((activeCount + 63) / 64, 1, 1);
         if (!translucent_.empty()) {  // translucent commands in sorted order: count, scan, emit (cull.hlsl)
             const u32 groups = (u32(translucent_.size()) + 1023) / 1024;

@@ -551,6 +551,7 @@ void Terrain::collectResults(double x, double y, double z, bool unlimited) {
         const float d = distance(0, r.req.cx * 16.0, r.req.sy * 16.0, r.req.cz * 16.0, x, y, z);
         nearest = std::min(nearest, d), furthest = std::max(furthest, d);
         u32& state = detailState(r.req);
+        regions_[r.req.region].setVis(r.req.cx & 31, r.req.sy - minSy_, r.req.cz & 31, r.mesh.visibility);
         if (r.req.refresh) {  // swap the mesh of a section that stayed resident
             if (!isSlot(state) && state != Renderer::kNoSlot) continue;
             if (isSlot(state)) renderer_.removeMesh(state);
@@ -730,6 +731,7 @@ void Terrain::remesh(const std::vector<u64>& sections, bool byPlayer) {
         const i32 origin[3] = {cx * 16, sy * 16, cz * 16};
         meshGrid(padded, light, registry_, true, false, mesh, biomeColors_ ? &colors : nullptr, origin, ring);
         state = mesh.empty() ? Renderer::kNoSlot : renderer_.addMesh(mesh, 0, cx * 16, sy * 16, cz * 16);
+        r.setVis(cx & 31, ny, cz & 31, mesh.visibility);
         sectionSerial_[k] = ++meshSerial_;
         markDirty(it->second);
         markCut(it->second);
@@ -740,6 +742,154 @@ void Terrain::remesh(const std::vector<u64>& sections, bool byPlayer) {
             if (a == kAbsent) a = Renderer::kNoSlot;
         }
     }
+}
+
+namespace {
+// One run of the section occlusion graph on a snapshot of the full-detail sections around the camera.
+struct GraphInput {
+    int cam[3] = {}, R = 0, W = 0, ny = 0, minSy = 0;
+    double pos[3] = {};
+    std::vector<u64> vis;
+    std::vector<u32> slot;
+    std::vector<u8> present;
+};
+// SectionOcclusionGraph.runUpdates with smart culling: the culled slots, each with its section (cx, sy, cz).
+std::vector<std::array<int, 4>> occlusionSearch(const GraphInput& in) {
+    const int R = in.R, W = in.W, ny = in.ny;
+    const size_t n = in.vis.size();
+    std::vector<u8> dirs(n, 0), src(n, 0), seen(n, 0);
+    auto index = [&](int dx, int sy, int dz) { return (size_t(sy) * W + size_t(dz + R)) * W + size_t(dx + R); };
+    static constexpr int kStep[6][3] = {{0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}};
+    std::vector<size_t> queue;
+    queue.reserve(4096);
+    const int camSy = in.cam[1] - in.minSy;
+    if (camSy >= 0 && camSy < ny) {
+        const size_t i = index(0, camSy, 0);
+        if (in.present[i]) queue.push_back(i), seen[i] = 1;
+    } else {  // above or below the world: the top or bottom layer, entered from that side (initializeQueueForFullUpdate)
+        const bool below = camSy < 0;
+        const int sy = below ? 0 : ny - 1;
+        std::vector<std::pair<int, size_t>> start;
+        for (int dz = -R; dz <= R; ++dz)
+            for (int dx = -R; dx <= R; ++dx) {
+                const size_t i = index(dx, sy, dz);
+                if (!in.present[i]) continue;
+                const int d = below ? 1 : 0;  // the source direction: up from below, down from above
+                src[i] = u8(1 << d), seen[i] = 1;
+                dirs[i] = u8(1 << d | (dx > 0 ? 32 : dx < 0 ? 16 : 0) | (dz > 0 ? 8 : dz < 0 ? 4 : 0));
+                start.push_back({dx * dx + dz * dz, i});
+            }
+        std::sort(start.begin(), start.end());
+        for (const auto& s : start) queue.push_back(s.second);
+    }
+    const double px = in.pos[0], py = in.pos[1], pz = in.pos[2];
+    const double camCentre[3] = {in.cam[0] * 16.0 + 8, in.cam[1] * 16.0 + 8, in.cam[2] * 16.0 + 8};
+    for (size_t head = 0; head < queue.size(); ++head) {
+        const size_t i = queue[head];
+        const int sy = int(i / (size_t(W) * W)), dz = int(i / W % W) - R, dx = int(i % W) - R;
+        const bool distant = std::abs(dx) > 3 || std::abs(sy - camSy) > 3 || std::abs(dz) > 3;
+        for (int d = 0; d < 6; ++d) {
+            const int nx = dx + kStep[d][0], nyy = sy + kStep[d][1], nz = dz + kStep[d][2];
+            if (nx < -R || nx > R || nz < -R || nz > R || nyy < 0 || nyy >= ny || std::abs(nyy - camSy) > R) continue;
+            const size_t j = index(nx, nyy, nz);
+            if (!in.present[j] || (dirs[i] >> (d ^ 1) & 1)) continue;  // no turning back
+            if (src[i]) {  // through this section from a face it was entered by to face d
+                bool through = false;
+                for (int e = 0; e < 6 && !through; ++e) through = (src[i] >> e & 1) && (in.vis[i] >> ((e ^ 1) * 6 + d) & 1);
+                if (!through) continue;
+            }
+            if (distant) {  // a line from the section's corner to the camera must stay in sections already reached
+                const double ox = (in.cam[0] + dx) * 16.0, oy = (in.minSy + sy) * 16.0, oz = (in.cam[2] + dz) * 16.0;
+                const int axis = d < 2 ? 1 : d < 4 ? 2 : 0;
+                double p[3] = {ox + ((axis == 0 ? camCentre[0] > ox : camCentre[0] < ox) ? 16 : 0),
+                               oy + ((axis == 1 ? camCentre[1] > oy : camCentre[1] < oy) ? 16 : 0),
+                               oz + ((axis == 2 ? camCentre[2] > oz : camCentre[2] < oz) ? 16 : 0)};
+                double step[3] = {px - p[0], py - p[1], pz - p[2]};
+                const double len = std::sqrt(step[0] * step[0] + step[1] * step[1] + step[2] * step[2]);
+                for (double& v : step) v = v / len * 28.0;  // CEILED_SECTION_DIAGONAL
+                bool visible = true;
+                while ((p[0] - px) * (p[0] - px) + (p[1] - py) * (p[1] - py) + (p[2] - pz) * (p[2] - pz) > 3600.0) {
+                    for (int a = 0; a < 3; ++a) p[a] += step[a];
+                    const int csy = int(std::floor(p[1] / 16.0)) - in.minSy;
+                    if (csy < 0 || csy >= ny) break;
+                    const int cdx = int(std::floor(p[0] / 16.0)) - in.cam[0], cdz = int(std::floor(p[2] / 16.0)) - in.cam[2];
+                    if (cdx < -R || cdx > R || cdz < -R || cdz > R || !seen[index(cdx, csy, cdz)]) {
+                        visible = false;
+                        break;
+                    }
+                }
+                if (!visible) continue;
+            }
+            if (seen[j]) {
+                src[j] |= u8(1 << d);
+            } else {
+                seen[j] = 1, src[j] = u8(1 << d), dirs[j] = u8(dirs[i] | 1 << d);
+                queue.push_back(j);
+            }
+        }
+    }
+    std::vector<std::array<int, 4>> culled;
+    for (size_t i = 0; i < n; ++i)
+        if (!seen[i] && in.slot[i] != Renderer::kNoSlot) {
+            const int sy = int(i / (size_t(W) * W)), dz = int(i / W % W) - R, dx = int(i % W) - R;
+            culled.push_back({int(in.slot[i]), in.cam[0] + dx, sy + in.minSy, in.cam[2] + dz});
+        }
+    return culled;
+}
+}  // namespace
+
+void Terrain::updateOcclusion(double px, double py, double pz) {
+    // A finished search: its culled slots that still hold the same sections (meshes swapped meanwhile stay drawn).
+    if (graphFuture_.valid() && graphFuture_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        const std::vector<std::array<int, 4>> found = graphFuture_.get();
+        std::vector<u32> culled;
+        culled.reserve(found.size());
+        for (const auto& [s, cx, sy, cz] : found) {
+            auto it = regionIndex_.find(regionKey(cx >> 5, cz >> 5));
+            if (it != regionIndex_.end() && regions_[it->second].at(0, cx & 31, sy - minSy_, cz & 31) == u32(s)) culled.push_back(u32(s));
+        }
+        if (graphSmartCull_) renderer_.setOccluded(culled);
+    }
+    const int cam[3] = {int(std::floor(px / 16.0)), int(std::floor(py / 16.0)), int(std::floor(pz / 16.0))};
+    const double now = nowSeconds();
+    const bool moved = cam[0] != graphCam_[0] || cam[1] != graphCam_[1] || cam[2] != graphCam_[2];
+    if (!moved && smartCull_ == graphSmartCull_ && !(graphDirty_ && now - graphTime_ >= 0.1)) return;
+    if (graphFuture_.valid()) return;  // one search at a time; the next starts when it is done
+    std::copy(cam, cam + 3, graphCam_);
+    graphSmartCull_ = smartCull_, graphDirty_ = false, graphTime_ = now;
+    if (!smartCull_ || regions_.empty() || !heightBlocks_) return renderer_.setOccluded({});
+
+    // Snapshot of the full-detail sections around the camera: their VisibilitySet (empty and unmeshed sections let
+    // the view through) and slot; outside the world's regions nothing is there. The search runs in the background.
+    GraphInput in;
+    in.R = int(std::ceil(detailRadius_ / 16.0f)) + 1, in.W = 2 * in.R + 1, in.ny = heightBlocks_ / 16, in.minSy = minSy_;
+    std::copy(cam, cam + 3, in.cam);
+    in.pos[0] = px, in.pos[1] = py, in.pos[2] = pz;
+    const int R = in.R, W = in.W, ny = in.ny;
+    const size_t n = size_t(W) * W * ny;
+    in.vis.assign(n, kAllVisible), in.slot.assign(n, Renderer::kNoSlot), in.present.assign(n, 0);
+    const float reach = detailRadius_ + 16.0f;  // ChunkTrackingView.isInViewDistance: the full-detail circle
+    for (int dz = -R; dz <= R; ++dz)
+        for (int dx = -R; dx <= R; ++dx) {
+            if (float(dx * dx + dz * dz) * 256.0f > reach * reach) continue;
+            const int cx = cam[0] + dx, cz = cam[2] + dz;
+            auto it = regionIndex_.find(regionKey(cx >> 5, cz >> 5));
+            if (it == regionIndex_.end() || regions_[it->second].world < 0) continue;
+            const RegionLod& r = regions_[it->second];
+            for (int sy = 0; sy < ny && sy < r.ny[0]; ++sy) {
+                const size_t i = (size_t(sy) * W + size_t(dz + R)) * W + size_t(dx + R);
+                in.present[i] = 1;
+                const u32 s = r.at(0, cx & 31, sy, cz & 31);
+                if (isSlot(s) || s == Renderer::kNoSlot) in.vis[i] = r.visAt(cx & 31, sy, cz & 31);
+                if (isSlot(s)) in.slot[i] = s;
+            }
+        }
+    graphFuture_ = std::async(std::launch::async, [in = std::move(in)] {
+        const Timer timer;
+        std::vector<std::array<int, 4>> culled = occlusionSearch(in);
+        if (std::getenv("MCPP_GRAPH_PROFILE")) LOG("occlusion graph: %.2f ms (worker), %zu slots culled", timer.ms(), culled.size());
+        return culled;
+    });
 }
 
 void Terrain::addChunk(int cx, int cz, const std::vector<u64>& dirtySections) {
@@ -956,6 +1106,7 @@ void Terrain::update(double x, double y, double z, bool waitForDetail) {
             for (const auto& part : cutParts_) active_.insert(active_.end(), part.begin(), part.end());
             renderer_.setActive(active_);
         }
+        updateOcclusion(x, y, z);
         if (profile && tc.ms() > 1.0)
             LOG("terrain cut: %.2f ms | %zu of %zu regions walked (global %d, dirty %zu, moved %zu, min slack %.2f), %zu active",
                 tc.ms(), walked, regions_.size(), int(global), byDirty, byMove, minSlack, active_.size());

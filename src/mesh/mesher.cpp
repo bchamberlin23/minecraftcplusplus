@@ -608,8 +608,44 @@ static void fluidFaces(const u16* ids, const u8* light, const BlockRegistry& reg
             }
 }
 
+// VisGraph.resolve: which faces of the section can see each other through its cells that are not solid-render cubes
+// (a flood fill from every open edge cell); every pair when fewer than 256 cells are closed, none when all are.
+static u64 visibilitySet(const u16* ids, const BlockInfo* infos) {
+    thread_local u8 closed[4096];
+    thread_local std::vector<u16> queue;
+    int count = 0;
+    for (int y = 0; y < 16; ++y)
+        for (int z = 0; z < 16; ++z)
+            for (int x = 0; x < 16; ++x) count += closed[x | z << 4 | y << 8] = infos[ids[padIndex(x, y, z)]].occludes ? 1 : 0;
+    if (count < 256) return kAllVisible;
+    if (count == 4096) return 0;
+    u64 set = 0;
+    for (int i = 0; i < 4096; ++i) {
+        const int x0 = i & 15, z0 = (i >> 4) & 15, y0 = i >> 8;
+        if (closed[i] || !(x0 == 0 || x0 == 15 || y0 == 0 || y0 == 15 || z0 == 0 || z0 == 15)) continue;
+        u32 faces = 0;
+        queue.assign(1, u16(i));
+        closed[i] = 1;
+        for (size_t h = 0; h < queue.size(); ++h) {
+            const int c = queue[h], x = c & 15, z = (c >> 4) & 15, y = c >> 8;
+            faces |= (y == 0 ? 1u : 0u) | (y == 15 ? 2u : 0u) | (z == 0 ? 4u : 0u) | (z == 15 ? 8u : 0u) | (x == 0 ? 16u : 0u) |
+                     (x == 15 ? 32u : 0u);
+            const int next[6] = {y > 0 ? c - 256 : -1, y < 15 ? c + 256 : -1, z > 0 ? c - 16 : -1,
+                                 z < 15 ? c + 16 : -1, x > 0 ? c - 1 : -1, x < 15 ? c + 1 : -1};
+            for (int n : next)
+                if (n >= 0 && !closed[n]) closed[n] = 1, queue.push_back(u16(n));
+        }
+        for (int a = 0; a < 6; ++a)
+            if (faces >> a & 1)
+                for (int b = 0; b < 6; ++b)
+                    if (faces >> b & 1) set |= u64(1) << (a * 6 + b);
+    }
+    return set;
+}
+
 void meshGrid(const u16* ids, const u8* light, const BlockRegistry& registry, bool models, bool skirts,
               SectionMesh& out, const ColumnColors* colors, const i32* origin, const u16* ring) {
+    const u64 visibility = models && light ? visibilitySet(ids, registry.infos()) : kAllVisible;
     const bool smooth = gSmoothLighting.load(std::memory_order_relaxed), cutoutLeaves = gCutoutLeaves.load(std::memory_order_relaxed);
     const bool netherShade = gNetherShade.load(std::memory_order_relaxed);
     Scratch& sc = scratch();
@@ -878,6 +914,7 @@ void meshGrid(const u16* ids, const u8* light, const BlockRegistry& registry, bo
     }
 
     out = {};
+    out.visibility = visibility;
     size_t total = 0;
     for (int r = 0; r < 18; ++r) total += sc.buckets[r].size();
     out.cubeQuads.reserve(total);

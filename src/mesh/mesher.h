@@ -48,8 +48,11 @@ struct CubeQuad {
     u32 geo, tex, sky, block;
 };
 constexpr u32 kCubeQuadBytes = sizeof(CubeQuad);
+// VisibilitySet: bit a * 6 + b when faces a and b (Direction order: down up north south west east) see each other.
+constexpr u64 kAllVisible = (u64(1) << 36) - 1;
 struct SectionMesh {
     u32 counts[kRangeCount] = {};
+    u64 visibility = kAllVisible;  // full detail: VisGraph.resolve of its cells (coarse meshes: all)
     std::vector<CubeQuad> cubeQuads;  // ranges 0..17 back to back
     std::vector<u32> modelQuads;  // kModelQuadWords per quad
     bool empty() const { return cubeQuads.empty() && modelQuads.empty(); }

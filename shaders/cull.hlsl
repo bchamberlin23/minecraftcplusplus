@@ -5,6 +5,10 @@
 
 RWByteAddressBuffer gCounts : register(u0);  // one uint per pass
 RWByteAddressBuffer gArgs : register(u1);    // 28-byte commands: root constants (2) + DrawIndexed (5)
+StructuredBuffer<uint> gOccluded : register(t8);  // full-detail slots the section occlusion graph did not reach
+
+// SectionOcclusionGraph: a full-detail section behind closed terrain (caves under the ground) is not drawn.
+bool graphCulled(uint id) { return gSections[id].origin.w == 0 && id < (1u << 22) && (gOccluded[id >> 5] >> (id & 31) & 1) != 0; }
 
 static const uint kMaxQuadsPerDraw = 65536;  // size of the shared quad index buffer
 static const uint kCommandBytes = 28;
@@ -47,7 +51,7 @@ void CullCS(uint tid : SV_DispatchThreadID) {
     if (tid >= gMisc.x) return;
     uint id = gActive[tid];
     float3 mn, mx;
-    if (!sectionVisible(id, mn, mx)) return;
+    if (graphCulled(id) || !sectionVisible(id, mn, mx)) return;
     // Opaque and cutout: one draw for all six face ranges of the layer (they are contiguous); the rasterizer's
     // back-face culling replaces the per-direction test. Fewer, larger draws measured faster at every LOD
     // level (sptest 1440p: 74k -> 33k draws, 1.45 -> 1.05 ms). A section cross-fading draws its opaque faces with
@@ -74,7 +78,7 @@ uint translucentFaces(uint s, out uint id) {
     if (s >= gMisc.w) return 0;
     id = gActive[gMisc.x + s];
     float3 mn, mx;
-    if (!sectionVisible(id, mn, mx)) return 0;
+    if (graphCulled(id) || !sectionVisible(id, mn, mx)) return 0;
     // A face direction can only be visible if the camera is on its front side of some plane (drawn unculled).
     bool vis[6] = {mx.y > 0, mn.y < 0, mx.z > 0, mn.z < 0, mx.x > 0, mn.x < 0};
     uint mask = 0;

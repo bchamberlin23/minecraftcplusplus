@@ -258,6 +258,8 @@ public:
     // The LOD cut's slots. Sections entering or leaving it cross-fade (dithered) over fadeSeconds; a section replaced
     // by one at the same place and level (an edit, new light) swaps at once.
     void setActive(const std::vector<u32>& slots);
+    // SectionOcclusionGraph: full-detail slots the graph did not reach this time (the GPU cull skips them).
+    void setOccluded(const std::vector<u32>& slots);
     void setFadeSeconds(float seconds) { fadeSeconds_ = std::max(seconds, 0.0f); }
     void setNetherShade(bool on) { netherShade_ = on; }  // the dimension's CardinalLighting is NETHER
     void beginWorldReveal(double x, double z);  // stagger entrance fades outward on join/large teleport
@@ -422,6 +424,11 @@ private:
     ComPtr<ID3D12Resource> constants_, activeLists_;
     u8* constantsMapped_ = nullptr;
     u32* activeMapped_ = nullptr;
+    static constexpr u32 kOccludedWords = 1 << 17;  // bits for the first 4M slots
+    ComPtr<ID3D12Resource> occluded_;
+    u32* occludedMapped_ = nullptr;
+    std::vector<u32> occludedBits_;
+    u32 occludedDirty_ = 0;
     ComPtr<ID3D12Resource> indexBuffer_, texture_, cubeQuads_, modelQuads_, sections_, args_, counts_, zeros_;
     ComPtr<ID3D12Resource> colors_;  // tint colour table (ColorTable), uploaded as it grows
     size_t colorsUploaded_ = 0;
