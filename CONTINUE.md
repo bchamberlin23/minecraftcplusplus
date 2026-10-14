@@ -146,7 +146,13 @@ no lava back faces. Loom / stonecutter / smithing / mount screens audited; resid
 draws its banner preview flat (no BannerFlagModel), the smithing preview shows no head item without an equipment
 asset, mount slots use fixed type lists (not #can_equip_saddle / #can_wear_horse_armor). Boss bars / titles / action
 bar and the beam renderers audited and fixed; residual: the end crystal beam's black-to-white shading is stepped over
-its slices (one colour per quad) instead of interpolated per vertex. Not ported: filtered sign text (needs the account's profanity filter flag). The bell's raider particles (showBellParticles) are
+its slices (one colour per quad) instead of interpolated per vertex. Added: DatapackLoadFailureScreen (a local
+server stopping on its datapacks offers Safe Mode = --safeMode; tested with a broken dimension_type), the symlink
+warnings (NoticeWithLinkScreen; allowed_symlinks.txt; untested end to end: creating symlinks needs admin here).
+Screens still missing (by a sweep of client/gui/screens): TelemetryInfoScreen (the Telemetry button stays a disabled
+stub: no telemetry here), FileFixerProgressScreen / FileFixerAbortedScreen (the server process does the file fixing;
+the loading screen shows it), OutOfMemoryScreen, UnsupportedGraphicsWarningScreen (no GPU blocklist), the ban notices
+and player reporting screens (Microsoft account). Not ported: filtered sign text (needs the account's profanity filter flag). The bell's raider particles (showBellParticles) are
 invisible in 26.3 (ColorParticleOption.create(ENTITY_EFFECT, 0xFED839 + 5i) has alpha 0, which SpellParticle keeps),
 so they are not drawn here either. Toasts follow ToastInstance now (the
 server pack download toast shows its progress). Toast residuals: no toasts
