@@ -176,6 +176,14 @@ bool Renderer::PathTracer::create() {
         u.Buffer.NumElements = 1;
         r.device_->CreateUnorderedAccessView(nullptr, nullptr, &u, r.cpuDescriptor(descBase_ + kTableSize + i));
     }
+    {  // t1 space4: the entity atlas (a null 2D view until entities are traced)
+        D3D12_SHADER_RESOURCE_VIEW_DESC s{};
+        s.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        s.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        s.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        s.Texture2D.MipLevels = 1;
+        r.device_->CreateShaderResourceView(nullptr, &s, r.cpuDescriptor(descBase_ + 1));
+    }
     {  // t0 space4: build jobs (all frame slices; gPtJobs.y = first job of this frame)
         D3D12_SHADER_RESOURCE_VIEW_DESC s{};
         s.Format = DXGI_FORMAT_UNKNOWN;
@@ -790,6 +798,16 @@ bool Renderer::PathTracer::buildEntities(ID3D12GraphicsCommandList4* list, u32 f
             s.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
             r.device_->CreateShaderResourceView(res[i], &s, r.cpuDescriptor(descBase_ + 6 + i));
         }
+    }
+    if (ents.atlas && ents.atlas != entAtlasSrc_) {  // t1: the entity atlas (entity hits' albedo)
+        r.waitIdle();
+        entAtlasSrc_ = ents.atlas;
+        D3D12_SHADER_RESOURCE_VIEW_DESC s{};
+        s.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        s.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        s.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        s.Texture2D.MipLevels = 1;
+        r.device_->CreateShaderResourceView(ents.atlas, &s, r.cpuDescriptor(descBase_ + 1));
     }
     auto* k = reinterpret_cast<PtConstants*>(constantsMapped_ + size_t(fi) * kConstantBytes);
     const u32 e[4] = {u32(ents.matrices), u32(ents.instances), u32(ents.refs), ents.refCount};

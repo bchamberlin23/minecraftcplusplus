@@ -137,26 +137,77 @@ bool rtAlphaTest(uint slot, uint kind, uint prim, float2 bary, float3 pos) {
     return gTextures.SampleLevel(gSampler, uvl, 0).a >= 0.5;
 }
 
-static const uint kRtEntities = 0xFFFFFF;  // InstanceID of the entities' instance (posed triangles, no materials)
+static const uint kRtEntities = 0xFFFFFF;  // InstanceID of the entities' instance (posed triangles)
 static const uint kKindEntity = 4;
 
+// The entities' own data (EntityRenderer, entity.hlsl layouts): model quads (96 bytes: pos[4], uv[4], normal, part)
+// and this frame's upload (part matrices, instances, cutout refs, free quads of 128 bytes), and the entity atlas.
+ByteAddressBuffer gEntQuads : register(t6, space4);
+ByteAddressBuffer gEntFrame : register(t7, space4);
+Texture2D<float4> gEntAtlas : register(t1, space4);
+
 float3 rtAlbedo(RtSurface s) {
-    if (s.kind == kKindEntity) return 0.3;  // (mob textures are not looked up: a neutral grey)
+    if (s.kind == kKindEntity) {  // the entity atlas (point sampled, like EntityPS) or a block texture layer
+        float4 t;
+        if (s.layer == 0xFFFFFFFF) {
+            uint w, h;
+            gEntAtlas.GetDimensions(w, h);
+            t = gEntAtlas.Load(int3(min(uint2(frac(s.uv) * float2(w, h)), uint2(w - 1, h - 1)), 0));
+        } else {
+            t = gTextures.SampleLevel(gSampler, float3(s.uv, s.layer), 0);
+        }
+        return srgbToLinear(t.rgb * s.tint);
+    }
     return srgbToLinear(gTextures.SampleLevel(gSampler, float3(s.uv, s.layer), 0).rgb * s.tint);
 }
 
-RtSurface rtSurface(uint slot, uint kind, uint prim, float2 bary, float3 origin, float3 dir, float t) {
+// An entity triangle: quad id = geometry * 65536 + prim / 2 (EntityGenCS order: cutout refs, then free quads; its
+// vertices c1 c2 c0 c3, triangles (c1, c2, c0) and (c0, c2, c3)).
+RtSurface rtEntitySurface(uint geometry, uint prim, float2 bary, float3 pos, float3 dir) {
+    RtSurface s = (RtSurface)0;
+    s.pos = pos;
+    s.kind = kKindEntity;
+    uint id = geometry * 65536 + (prim >> 1);
+    uint3 c = (prim & 1) ? uint3(0, 2, 3) : uint3(1, 2, 0);
+    float3 w = float3(1 - bary.x - bary.y, bary.x, bary.y);
+    uint refs = gPtEntity.w & 0xFFFFF;
+    uint color, light;
+    float3 n;
+    if (id < refs) {
+        uint2 ref = gEntFrame.Load2(gPtEntity.z + id * 8);  // (model quad, instance)
+        uint q = ref.x * 96, inst = gPtEntity.y + ref.y * 32;
+        float2 uv = asfloat(gEntQuads.Load2(q + 48 + c.x * 8)) * w.x + asfloat(gEntQuads.Load2(q + 48 + c.y * 8)) * w.y +
+                    asfloat(gEntQuads.Load2(q + 48 + c.z * 8)) * w.z;
+        float4 rect = asfloat(gEntFrame.Load4(inst + 16));  // the texture's place in the atlas
+        s.uv = rect.xy + uv * rect.zw;
+        s.layer = 0xFFFFFFFF;
+        color = gEntFrame.Load(inst + 4), light = gEntFrame.Load(inst + 8);
+        uint m = gPtEntity.x + (gEntFrame.Load(inst) + gEntQuads.Load(q + 92)) * 48;  // the part's matrix
+        float3 pn = asfloat(gEntQuads.Load3(q + 80));
+        n = float3(dot(asfloat(gEntFrame.Load3(m)), pn), dot(asfloat(gEntFrame.Load3(m + 16)), pn), dot(asfloat(gEntFrame.Load3(m + 32)), pn));
+    } else {
+        uint f = gPtEntity2.y + (id - refs) * 128;
+        s.uv = asfloat(gEntFrame.Load2(f + 48 + c.x * 8)) * w.x + asfloat(gEntFrame.Load2(f + 48 + c.y * 8)) * w.y +
+               asfloat(gEntFrame.Load2(f + 48 + c.z * 8)) * w.z;
+        uint tex = gEntFrame.Load(f + 92);
+        s.layer = tex == 0xFFFFFFFF ? tex : (tex & 0xFFFF);
+        n = asfloat(gEntFrame.Load3(f + 80));
+        color = gEntFrame.Load(f + 96), light = gEntFrame.Load(f + 100);
+    }
+    s.n = dot(n, n) > 1e-8 ? normalize(n) : -dir;
+    if (dot(s.n, dir) > 0) s.n = -s.n;
+    s.tint = float3(color & 0xFF, (color >> 8) & 0xFF, (color >> 16) & 0xFF) / 255.0;  // 0xAABBGGRR
+    s.sky = float((light >> 4) & 15);
+    s.block = float(light & 15);
+    s.mat = (light & 256) ? kMatGlow : kMatDefault;  // full bright parts (eyes) glow
+    return s;
+}
+
+RtSurface rtSurface(uint slot, uint kind, uint prim, float2 bary, float3 origin, float3 dir, float t, uint geometry) {
     RtSurface s;
     s.pos = origin + dir * t;
     s.kind = kind;
-    if (slot == kRtEntities) {
-        s = (RtSurface)0;
-        s.pos = origin + dir * t;
-        s.n = -dir;
-        s.kind = kKindEntity;
-        s.sky = 15;
-        return s;
-    }
+    if (slot == kRtEntities) return rtEntitySurface(geometry, prim, bary, s.pos, dir);
     uint quad = prim >> 1;
     uint baseLayer;
     float3 uvl = rtUvLayer(slot, kind, prim, bary, s.pos, baseLayer);
@@ -207,7 +258,8 @@ bool rtClosest(float3 origin, float3 dir, float tmax, out RtSurface s) {
         return false;
     }
     s = rtSurface(q.CommittedInstanceID(), rtKind(q.CommittedInstanceContributionToHitGroupIndex(), q.CommittedGeometryIndex()),
-                  q.CommittedPrimitiveIndex(), q.CommittedTriangleBarycentrics(), origin, dir, q.CommittedRayT());
+                  q.CommittedPrimitiveIndex(), q.CommittedTriangleBarycentrics(), origin, dir, q.CommittedRayT(),
+                  q.CommittedGeometryIndex());
     return true;
 }
 
@@ -287,7 +339,8 @@ bool rtClosestThrough(float3 origin, float3 dir, float tmax, out RtSurface s, ou
         return false;
     }
     s = rtSurface(q.CommittedInstanceID(), rtKind(q.CommittedInstanceContributionToHitGroupIndex(), q.CommittedGeometryIndex()),
-                  q.CommittedPrimitiveIndex(), q.CommittedTriangleBarycentrics(), origin, dir, q.CommittedRayT());
+                  q.CommittedPrimitiveIndex(), q.CommittedTriangleBarycentrics(), origin, dir, q.CommittedRayT(),
+                  q.CommittedGeometryIndex());
     return true;
 }
 

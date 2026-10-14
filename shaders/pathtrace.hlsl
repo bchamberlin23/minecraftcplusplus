@@ -126,8 +126,7 @@ void BlasGenCS(uint id : SV_DispatchThreadID) {
 }
 
 // Entities: this frame's posed model quads and free quads (entity.hlsl layouts) -> camera-relative triangles.
-ByteAddressBuffer gEntQuads : register(t6, space4);
-ByteAddressBuffer gEntFrame : register(t7, space4);
+// (gEntQuads / gEntFrame: raytrace.hlsli)
 
 [numthreads(64, 1, 1)]
 void EntityGenCS(uint id : SV_DispatchThreadID) {

@@ -834,7 +834,7 @@ bool EntityRenderer::create(Renderer& r) {
     if (!check(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &td, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
                                                IID_PPV_ARGS(&atlas_)),
                "CreateCommittedResource(atlas)") ||
-        !r.uploadTexture(atlas_.Get(), {assets_.atlas().data()}))
+        !r.uploadTexture(atlas_.Get(), {assets_.atlas().data()}, kAtlasState))
         return false;
     atlasDescriptor_ = r.allocDescriptors(1);
     if (atlasDescriptor_ == UINT32_MAX) {
@@ -3018,7 +3018,7 @@ void EntityRenderer::uploadSlots(ID3D12GraphicsCommandList* list, u32 frame) {
         b.Transition.StateBefore = from, b.Transition.StateAfter = to;
         list->ResourceBarrier(1, &b);
     };
-    barrier(D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+    barrier(kAtlasState, D3D12_RESOURCE_STATE_COPY_DEST);
     const u32 n = std::min<u32>(u32(pendingSlots_.size()), kPerFrame);
     const std::vector<u8>& cpu = assets_.atlas();
     for (u32 i = 0; i < n; ++i) {
@@ -3033,7 +3033,7 @@ void EntityRenderer::uploadSlots(ID3D12GraphicsCommandList* list, u32 frame) {
         src.PlacedFootprint = {offset, {DXGI_FORMAT_R8G8B8A8_UNORM, 64, 64, 1, 256}};
         list->CopyTextureRegion(&dst, x, y, 0, &src, nullptr);
     }
-    barrier(D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    barrier(D3D12_RESOURCE_STATE_COPY_DEST, kAtlasState);
     pendingSlots_.erase(pendingSlots_.begin(), pendingSlots_.begin() + n);
 }
 
@@ -3472,8 +3472,8 @@ void EntityRenderer::record(const PassContext& ctx) {
 bool EntityRenderer::rtEntities(u32 frame, RtEntities& out) {
     if (!quads_ || !upload_ || (!cutoutRefs_ && !freeCount_)) return false;
     const u64 base = u64(frame) * kFrameBytes;
-    out = {quads_.Get(), upload_.Get(), base + kMatOffset, base + kInstOffset, base + kRefOffset, base + kFreeOffset,
-           cutoutRefs_, freeCount_};
+    out = {quads_.Get(), upload_.Get(), atlas_.Get(), base + kMatOffset, base + kInstOffset, base + kRefOffset,
+           base + kFreeOffset, cutoutRefs_, freeCount_};
     return true;
 }
 

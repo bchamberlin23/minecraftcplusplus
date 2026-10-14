@@ -100,7 +100,7 @@ struct Renderer::PathTracer {
     ComPtr<ID3D12PipelineState> psoEntity_;
     ComPtr<ID3D12Resource> entityVerts_, entityBlas_, entityScratch_;
     u64 entityBlasBytes_ = 0, entityScratchBytes_ = 0;
-    ID3D12Resource *entQuadsSrc_ = nullptr, *entFrameSrc_ = nullptr;
+    ID3D12Resource *entQuadsSrc_ = nullptr, *entFrameSrc_ = nullptr, *entAtlasSrc_ = nullptr;
     u32 entityQuads_ = 0;
     ComPtr<ID3D12PipelineState> psoFwd_;
     ComPtr<ID3D12Resource> hitDist_;  // R32_FLOAT specular hit distance (u19)

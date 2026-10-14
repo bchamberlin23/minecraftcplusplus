@@ -108,6 +108,7 @@ struct ShadowContext {
 struct RtEntities {
     ID3D12Resource* modelQuads = nullptr;
     ID3D12Resource* frameData = nullptr;
+    ID3D12Resource* atlas = nullptr;  // the entity texture atlas (R8G8B8A8, readable by compute: path traced hits)
     u64 matrices = 0, instances = 0, refs = 0, freeQuads = 0;
     u32 refCount = 0, freeCount = 0;
 };
@@ -327,7 +328,8 @@ public:
     D3D12_GPU_DESCRIPTOR_HANDLE gpuDescriptor(u32 index) const;
     // Fills a texture created in COPY_DEST state (all subresources, D3D12 subresource order, tightly packed
     // rows), waits for the copy and leaves it in PIXEL_SHADER_RESOURCE state. Blocks; for loading time.
-    bool uploadTexture(ID3D12Resource* texture, const std::vector<const u8*>& subresources);
+    bool uploadTexture(ID3D12Resource* texture, const std::vector<const u8*>& subresources,
+                       D3D12_RESOURCE_STATES after = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     // Same for a DEFAULT-heap buffer created in COPY_DEST state; leaves it in `after`.
     bool uploadBuffer(ID3D12Resource* buffer, const void* data, u64 size, D3D12_RESOURCE_STATES after);
     u32 width() const { return width_; }

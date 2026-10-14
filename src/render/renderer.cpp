@@ -1476,7 +1476,7 @@ void Renderer::submitAndWait() {
     waitIdle();
 }
 
-bool Renderer::uploadTexture(ID3D12Resource* texture, const std::vector<const u8*>& subresources) {
+bool Renderer::uploadTexture(ID3D12Resource* texture, const std::vector<const u8*>& subresources, D3D12_RESOURCE_STATES after) {
     const D3D12_RESOURCE_DESC td = texture->GetDesc();
     const u32 subs = u32(subresources.size());
     std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> fp(subs);
@@ -1506,7 +1506,7 @@ bool Renderer::uploadTexture(ID3D12Resource* texture, const std::vector<const u8
         src.PlacedFootprint = fp[i];
         list_->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
     }
-    transition(texture, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    transition(texture, D3D12_RESOURCE_STATE_COPY_DEST, after);
     submitAndWait();
     printDebugMessages();
     return true;

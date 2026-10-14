@@ -186,6 +186,9 @@ private:
     ComPtr<ID3D12PipelineState> psoBlob_, psoBlobMv_;  // entity shadows (RenderTypes.entityShadow)
     ComPtr<ID3D12PipelineState> psoWaterMask_, psoWaterMaskMv_;  // boat water patches: depth only
     ComPtr<ID3D12Resource> quads_, atlas_, upload_;
+    // The atlas rests readable by pixel and compute shaders (the path tracer samples it for entity hits).
+    static constexpr D3D12_RESOURCE_STATES kAtlasState =
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     u8* mapped_ = nullptr;
     u32 atlasDescriptor_ = 0;
 
