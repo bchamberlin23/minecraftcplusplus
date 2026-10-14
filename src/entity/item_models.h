@@ -38,6 +38,8 @@ struct MeshQuad {
 static_assert(sizeof(MeshQuad) == 96);
 constexpr u32 kTexItems = 0xFFFFFFFF, kTexFont = 0xFFFFFFFE, kTexSolid = 0xFFFFFFFD, kTexEntity = 0xFFFFFFFC;
 constexpr u32 kQuadNoShade = 1;
+// Corners 1 and 2 take the grey level in flags bits 8..15 instead of the colour's RGB (a vertex-colour gradient).
+constexpr u32 kQuadGreyGradient = 2;
 
 // Row-major 3x4 affine transform.
 struct Xf {

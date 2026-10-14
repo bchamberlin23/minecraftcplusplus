@@ -142,7 +142,9 @@ VSOut VisualsVS(uint vid : SV_VertexID) {
     float3 rel = float3(dot(inst.r0, p), dot(inst.r1, p), dot(inst.r2, p));
     float3 nl = unpackNormal(q.normal);
     float3 n = float3(dot(inst.r0.xyz, nl), dot(inst.r1.xyz, nl), dot(inst.r2.xyz, nl));
-    float4 tint = unpackColor(q.color) * unpackColor(inst.color);
+    uint color = q.color;
+    if ((q.flags & 2) && (corner == 1 || corner == 2)) color = (color & 0xFF000000) | ((q.flags >> 8) & 255) * 0x010101;
+    float4 tint = unpackColor(color) * unpackColor(inst.color);
     VSOut o = finish(rel, n, q.uv[corner], q.tex, tint, inst.light, inst.overlay, (q.flags & 1) == 0);
     // ItemRenderer glint: texture scrolled over the item in its own space (rotated 10 degrees).
     float2 g = q.pos[corner].xy * 0.5 + q.pos[corner].z * 0.25;

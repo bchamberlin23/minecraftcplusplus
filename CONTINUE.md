@@ -145,8 +145,8 @@ Fluid rendering audited: residuals are BlockState.isSolid and #blocks_fluid_flow
 no lava back faces. Loom / stonecutter / smithing / mount screens audited; residuals: the loom predicts no result and
 draws its banner preview flat (no BannerFlagModel), the smithing preview shows no head item without an equipment
 asset, mount slots use fixed type lists (not #can_equip_saddle / #can_wear_horse_armor). Boss bars / titles / action
-bar and the beam renderers audited and fixed; residual: the end crystal beam's black-to-white shading is stepped over
-its slices (one colour per quad) instead of interpolated per vertex. Added: DatapackLoadFailureScreen (a local
+bar and the beam renderers audited and fixed (the end crystal beam's black-to-white shading is per vertex:
+MeshQuad kQuadGreyGradient). Added: DatapackLoadFailureScreen (a local
 server stopping on its datapacks offers Safe Mode = --safeMode; tested with a broken dimension_type), the symlink
 warnings (NoticeWithLinkScreen; allowed_symlinks.txt; untested end to end: creating symlinks needs admin here).
 Screens still missing (by a sweep of client/gui/screens): TelemetryInfoScreen (the Telemetry button stays a disabled

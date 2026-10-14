@@ -2053,8 +2053,8 @@ void Visuals::Impl::buildBeams(const double cam[3], float pt) {
 }
 
 // EnderDragonRenderer.submitCrystalBeams: from `start` (already 2 up) along `delta`, an 8-sided cone (0.15 wide at the
-// start, 0.75 at the end) scrolling with the time, black at the start to white at the end (vertex colours: here
-// stepped along slices, also cut where the 16 x 256 texture wraps).
+// start, 0.75 at the end) scrolling with the time, black at the start to white at the end (vertex colours; the cone
+// is cut where the 16 x 256 texture wraps, each piece's ends keeping the gradient).
 void Visuals::Impl::crystalBeam(const double start[3], const double delta[3], float time, u32 light, const double cam[3]) {
     static int beamTex = -2;
     if (beamTex == -2) beamTex = models.texture("entity/end_crystal/end_crystal_beam");
@@ -2070,7 +2070,6 @@ void Visuals::Impl::crystalBeam(const double start[3], const double delta[3], fl
     };
     const float v0 = -time * 0.01f, v1 = length / 32.0f - time * 0.01f;
     std::vector<float> cuts = {0.0f, 1.0f};
-    for (int i = 1; i < 12; ++i) cuts.push_back(i / 12.0f);
     for (float c = std::floor(std::min(v0, v1)) + 1.0f; c < std::max(v0, v1); c += 1.0f) cuts.push_back((c - v0) / (v1 - v0));
     std::sort(cuts.begin(), cuts.end());
     const u32 first = u32(dyn.size());
@@ -2079,7 +2078,7 @@ void Visuals::Impl::crystalBeam(const double start[3], const double delta[3], fl
         if (tb - ta < 1e-5f) continue;
         const float va = v0 + (v1 - v0) * ta, vb = v0 + (v1 - v0) * tb, cell = std::floor((va + vb) * 0.5f);
         const float ra = 0.2f + 0.8f * ta, rb = 0.2f + 0.8f * tb;
-        const u32 g = u32(std::clamp((ta + tb) * 0.5f, 0.0f, 1.0f) * 255.0f + 0.5f);
+        const u32 ga = u32(std::clamp(ta, 0.0f, 1.0f) * 255.0f + 0.5f), gb = u32(std::clamp(tb, 0.0f, 1.0f) * 255.0f + 0.5f);
         float lastSin = 0.0f, lastCos = 0.75f, lastU = 0.0f;
         for (int i = 1; i <= 8 && dyn.size() < kMaxDynamic; ++i) {
             const float sn = std::sin(i * kPi * 2 / 8.0f) * 0.75f, cs = std::cos(i * kPi * 2 / 8.0f) * 0.75f, u = i / 8.0f;
@@ -2091,7 +2090,8 @@ void Visuals::Impl::crystalBeam(const double start[3], const double delta[3], fl
                 rotate(p[c][0], p[c][1], p[c][2], q.pos[c]);
                 q.uv[c][0] = tr.u0 + uv[c][0] * tr.du, q.uv[c][1] = tr.v0 + uv[c][1] * tr.dv;
             }
-            q.normal = packNormal(0, -1, 0), q.color = 0xFF000000u | g << 16 | g << 8 | g, q.tex = kTexItems, q.flags = kQuadNoShade;
+            q.normal = packNormal(0, -1, 0), q.color = 0xFF000000u | ga << 16 | ga << 8 | ga, q.tex = kTexItems;
+            q.flags = kQuadNoShade | kQuadGreyGradient | gb << 8;
             dyn.push_back(q);
             lastSin = sn, lastCos = cs, lastU = u;
         }
@@ -4020,10 +4020,16 @@ void Visuals::Impl::packList(PackSink& pack, const List& l, PackRole role, PackB
             }
             if (glint) v.color = glintOptions().white(), v.light = 240 | (240u << 16);  // alpha: the Glint Strength
             v.midUv[0] = (uv[0][0] + uv[2][0]) * 0.5f, v.midUv[1] = (uv[0][1] + uv[2][1]) * 0.5f;
+            const u32 cornerColor = v.color;
             for (int c = 0; c < 4; ++c) {
                 for (int r = 0; r < 3; ++r)
                     v.pos[r] = g.m[r * 4] * q->pos[c][0] + g.m[r * 4 + 1] * q->pos[c][1] + g.m[r * 4 + 2] * q->pos[c][2] + g.m[r * 4 + 3];
                 v.uv[0] = uv[c][0], v.uv[1] = uv[c][1];
+                if (!glint && (q->flags & kQuadGreyGradient)) {  // the second grey level on corners 1 and 2
+                    const u32 grey = (c == 1 || c == 2) ? (q->flags >> 8) & 255 : q->color & 255;
+                    v.color = (cornerColor & 0xFF000000u) | ((grey * ((g.color >> 16) & 255) / 255) << 16) |
+                              ((grey * ((g.color >> 8) & 255) / 255) << 8) | (grey * (g.color & 255) / 255);
+                }
                 verts[t].push_back(v);
             }
         }
