@@ -106,6 +106,146 @@ void interactSound(const std::string& n, const std::string& full, int x, int y, 
     if (n == "comparator") return play("block.comparator.click", 0.3f, has("mode=compare") ? 0.55f : 0.5f);  // the new mode
 }
 
+// The client side of the blocks' useItemOn / useWithoutItem: the state changes the client makes before the server's
+// answer (BlockBehaviour on a client level), and the result (1 SUCCESS: swing, 2 CONSUME); -1: not one of these.
+int predictBlockUse(Ui::State& st, const std::string& n, int x, int y, int z, int hand) {
+    Game& g = *st.game;
+    BlockRegistry& reg = *st.registry;
+    const u16 s = st.world->block(x, y, z);
+    auto prop = [&](const char* k) { return reg.property(s, k); };
+    auto set = [&](int px, int py, int pz, u16 to) {
+        if (to) g.predictBlock(px, py, pz, to);
+    };
+    const ItemStack& held = st.inventory.slots[size_t(hand == 0 ? 36 + g.selectedSlot() : 45)];
+    const std::string heldName = held.empty() ? std::string() : st.items.name(held.item);
+    const bool mayBuild = g.gameMode == 0 || g.gameMode == 1;  // Abilities.mayBuild
+    const bool iron = n.starts_with("iron_");
+    if (n.ends_with("_door") && !iron) {  // DoorBlock.useWithoutItem: cycle OPEN (the other half follows)
+        const std::string open = prop("open") == "true" ? "false" : "true";
+        set(x, y, z, reg.withProperty(s, "open", open));
+        const int oy = y + (prop("half") == "lower" ? 1 : -1);
+        const u16 other = st.world->block(x, oy, z);
+        if (reg.property(other, "hinge") == prop("hinge") && reg.name(other).substr(0, reg.name(other).find('[')) ==
+                                                                 reg.name(s).substr(0, reg.name(s).find('[')))
+            set(x, oy, z, reg.withProperty(other, "open", open));
+        return 1;
+    }
+    if (n.ends_with("_trapdoor") && !iron) {  // TrapDoorBlock.toggle
+        set(x, y, z, reg.withProperty(s, "open", prop("open") == "true" ? "false" : "true"));
+        return 1;
+    }
+    if (n.ends_with("_fence_gate")) {  // FenceGateBlock: closes, or opens turned away from the player
+        u16 to = s;
+        if (prop("open") == "true") {
+            to = reg.withProperty(s, "open", "false");
+        } else {
+            const float deg = g.player().yaw * 180.0f / 3.14159265f;  // Entity.getDirection from the yaw
+            static const char* const kDir[4] = {"south", "west", "north", "east"};
+            static const char* const kOpp[4] = {"north", "east", "south", "west"};
+            const int d = int(std::floor(deg / 90.0f + 0.5f)) & 3;
+            if (prop("facing") == kOpp[d]) to = reg.withProperty(to, "facing", kDir[d]);
+            to = reg.withProperty(to, "open", "true");
+        }
+        set(x, y, z, to);
+        return 1;
+    }
+    if (n.ends_with("_button")) {  // ButtonBlock.useWithoutItem: press (CONSUME while pressed)
+        if (prop("powered") == "true") return 2;
+        set(x, y, z, reg.withProperty(s, "powered", "true"));
+        return 1;
+    }
+    if (n == "lever") {  // LeverBlock.useWithoutItem on the client: cycle POWERED, a red dust when it turns on
+        const bool on = prop("powered") != "true";
+        set(x, y, z, reg.withProperty(s, "powered", on ? "true" : "false"));
+        if (on && g.onColoredParticle) {  // makeParticle(1.0): off the base towards the handle
+            static constexpr int kStep[6][3] = {{0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}};
+            auto face = [](std::string_view f) {
+                return f == "down" ? 0 : f == "up" ? 1 : f == "north" ? 2 : f == "south" ? 3 : f == "west" ? 4 : 5;
+            };
+            const int facing = face(prop("facing")), dir = facing ^ 1;
+            const std::string_view attach = prop("face");
+            const int connected = (attach == "floor" ? 1 : attach == "ceiling" ? 0 : facing) ^ 1;
+            const double pos[3] = {x + 0.5 + 0.1 * kStep[dir][0] + 0.2 * kStep[connected][0],
+                                   y + 0.5 + 0.1 * kStep[dir][1] + 0.2 * kStep[connected][1],
+                                   z + 0.5 + 0.1 * kStep[dir][2] + 0.2 * kStep[connected][2]};
+            g.onColoredParticle("minecraft:dust", pos, 0xFFFF0000u);
+        }
+        return 1;
+    }
+    if (n == "repeater") {  // RepeaterBlock.useWithoutItem: cycle DELAY (mayBuild)
+        if (!mayBuild) return 0;
+        const int delay = std::atoi(std::string(prop("delay")).c_str());
+        set(x, y, z, reg.withProperty(s, "delay", std::to_string(delay % 4 + 1)));
+        return 1;
+    }
+    if (n == "comparator") {  // ComparatorBlock.useWithoutItem: cycle MODE (mayBuild)
+        if (!mayBuild) return 0;
+        set(x, y, z, reg.withProperty(s, "mode", prop("mode") == "compare" ? "subtract" : "compare"));
+        return 1;
+    }
+    if (n == "cake") {
+        // CakeBlock.useItemOn: a candle on an untouched cake makes a candle cake
+        if (heldName.ends_with("candle") && prop("bites") == "0") {
+            set(x, y, z, reg.defaultState(heldName + "_cake"));
+            return 1;
+        }
+        // useWithoutItem: eats a slice when the player may eat (Player.canEat: invulnerable or hungry)
+        if (st.creative() || st.food < 20) {
+            const int bites = std::atoi(std::string(prop("bites")).c_str());
+            set(x, y, z, bites < 6 ? reg.withProperty(s, "bites", std::to_string(bites + 1)) : u16(0));
+            if (bites >= 6) g.predictBlock(x, y, z, 0);
+            return 1;
+        }
+        return held.empty() ? 2 : 0;
+    }
+    if (n.ends_with("candle") && held.empty() && prop("lit") == "true") {  // AbstractCandleBlock.extinguish
+        set(x, y, z, reg.withProperty(s, "lit", "false"));
+        if (g.onParticle) {  // a smoke puff over each wick (getParticleOffsets: one per candle, shared with the ambient)
+            const double pos[3] = {x + 0.5, y + 0.5, z + 0.5}, vel[3] = {0, 0.1, 0};
+            g.onParticle("minecraft:smoke", pos, vel);
+        }
+        return 1;
+    }
+    if (n.ends_with("candle_cake")) {
+        if (held.empty() && prop("lit") == "true") {  // CandleCakeBlock.useItemOn: an empty hand puts it out
+            set(x, y, z, reg.withProperty(s, "lit", "false"));
+            if (g.onParticle) {
+                const double pos[3] = {x + 0.5, y + 0.9, z + 0.5}, vel[3] = {0, 0.1, 0};
+                g.onParticle("minecraft:smoke", pos, vel);
+            }
+            return 1;
+        }
+        if (heldName == "flint_and_steel" || heldName == "fire_charge") return 0;  // TRY_WITH_EMPTY_HAND: the item lights it
+        if (st.creative() || st.food < 20) {  // useWithoutItem: CakeBlock.eat on a plain cake (the candle drops)
+            set(x, y, z, reg.withProperty(reg.defaultState("minecraft:cake"), "bites", "1"));
+            return 1;
+        }
+        return 0;
+    }
+    if (n == "respawn_anchor" && heldName == "glowstone") {  // RespawnAnchorBlock.useItemOn: charge (the sound: server)
+        const int charge = std::atoi(std::string(prop("charges")).c_str());
+        if (charge < 4) {
+            set(x, y, z, reg.withProperty(s, "charges", std::to_string(charge + 1)));
+            return 1;
+        }
+    }
+    if (n == "flower_pot" || n.starts_with("potted_")) {  // FlowerPotBlock
+        if (n == "flower_pot") {
+            const u16 potted = heldName.empty() ? u16(0) : reg.defaultState("minecraft:potted_" + heldName);
+            if (!potted) return 2;  // nothing to plant: useWithoutItem on an empty pot, CONSUME
+            set(x, y, z, potted);
+            return 1;
+        }
+        const std::string content = n.substr(7);
+        if (!heldName.empty() && reg.defaultState("minecraft:potted_" + heldName)) return 2;  // a plant in hand: CONSUME
+        set(x, y, z, reg.defaultState("minecraft:flower_pot"));  // useWithoutItem: the plant comes back
+        (void)content;
+        return 1;
+    }
+    if (n == "lectern") return prop("has_book") == "true" ? 1 : heldName.empty() ? 2 : -1;
+    return -1;
+}
+
 }  // namespace
 
 // --- settings ----------------------------------------------------------------------------------------------
@@ -661,14 +801,15 @@ bool Ui::init(const Init& in) {
         operatorBoxes(*s_, lines, cam, w, h);  // block_editors.cpp
         debugLines(*s_, lines, cam, w, h);     // debug_screen.cpp: chunk borders, hitboxes
     };
-    in.game->onInteract = [this](int x, int y, int z) {
+    in.game->onInteract = [this](int x, int y, int z, int hand) -> int {
         State& st = *s_;
-        if (!st.online()) return false;
-        if (openBlockEditor(st, x, y, z)) return true;  // block_editors.cpp: command, structure, jigsaw, test blocks
+        if (!st.online()) return 0;
+        if (openBlockEditor(st, x, y, z)) return 1;  // block_editors.cpp: command, structure, jigsaw, test blocks
         const std::string full = st.registry->name(st.world->block(x, y, z));
         std::string n = full.substr(full.find(':') + 1,
                                     full.find('[') == std::string::npos ? std::string::npos : full.find('[') - full.find(':') - 1);
         interactSound(n, full, x, y, z);
+        if (const int used = predictBlockUse(st, n, x, y, z, hand); used >= 0) return used;
         static const char* exact[] = {"barrel", "crafting_table", "crafter",
                                       "furnace", "blast_furnace", "smoker", "dispenser", "dropper", "hopper",
                                       "enchanting_table", "brewing_stand", "loom", "stonecutter", "grindstone",
@@ -676,12 +817,15 @@ bool Ui::init(const Init& in) {
                                       "comparator", "daylight_detector", "cake", "respawn_anchor", "jukebox", "note_block",
                                       "anvil", "chipped_anvil", "damaged_anvil", "bell", "decorated_pot", "chiseled_bookshelf"};
         for (const char* e : exact)
-            if (n == e) return true;
+            if (n == e) return n == "respawn_anchor" ? 2 : 1;  // the anchor's empty hand: CONSUME / SUCCESS_SERVER
         const bool iron = n.starts_with("iron_");
-        // chest, trapped / ender / copper chests; shelves; signs (the server opens the sign editor)
-        return n.ends_with("chest") || n.ends_with("_shelf") || n.ends_with("_sign") ||
-               n.ends_with("shulker_box") || n.ends_with("_bed") || n.ends_with("_button") || n.ends_with("_fence_gate") ||
-               (!iron && (n.ends_with("_door") || n.ends_with("_trapdoor")));
+        // shelves, signs and beds: SUCCESS_SERVER / CONSUME (the server swings the hand)
+        if (n.ends_with("_shelf") || n.ends_with("_sign") || n.ends_with("_bed")) return 2;
+        // chest, trapped / ender / copper chests
+        return n.ends_with("chest") || n.ends_with("shulker_box") || n.ends_with("_button") || n.ends_with("_fence_gate") ||
+                       (!iron && (n.ends_with("_door") || n.ends_with("_trapdoor")))
+                   ? 1
+                   : 0;
     };
     // The launch detail radius sized the geometry arena: the option goes up to it.
     // (kept as saved: a launch with a smaller --detail must not overwrite the player's choice)

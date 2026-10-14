@@ -544,6 +544,11 @@ void Visuals::setPlayer(Game& game, ui::Ui& ui, const std::string& name, std::fu
         std::shared_lock lock(m.world.world().mutex());
         m.particles->spawn(type, pos[0], pos[1], pos[2], vel[0], vel[1], vel[2]);
     };
+    game.onColoredParticle = [&m](std::string_view type, const double pos[3], u32 argb) {
+        if (!m.particles) return;
+        std::shared_lock lock(m.world.world().mutex());
+        m.particles->spawnColored(type, pos[0], pos[1], pos[2], 0, 0, 0, argb);
+    };
     game.onLevelEvent = [&m](int type, int x, int y, int z, int data) {
         if (!m.particles) return;
         std::shared_lock lock(m.world.world().mutex());

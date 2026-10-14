@@ -426,8 +426,16 @@ int Game::useItemOn(int hand) {
     // NoteBlock.useItemOn: a head (#noteblock_top_instruments) on the top face goes on to the item's own use
     const bool headOnNoteBlock = target_.face == 1 && handInTag && handInTag(hand, "minecraft:noteblock_top_instruments") &&
                                  registry_.name(world_.block(target_.x, target_.y, target_.z)).starts_with("minecraft:note_block[");
-    if (!placeOnly_ && !suppressUsingBlock && !headOnNoteBlock && onInteract && onInteract(target_.x, target_.y, target_.z))
-        return send(kUseConsume);
+    if (!placeOnly_ && !suppressUsingBlock && !headOnNoteBlock && onInteract)
+        if (const int used = onInteract(target_.x, target_.y, target_.z, hand)) {
+            if (used == 1 && onSwing) {  // InteractionResult.SUCCESS: the used hand's interact_animation
+                const int attackSwing = swingTicks;
+                swingTicks = useSwingTicksOf[hand & 1];
+                onSwing(hand & 1, useSwingTypeOf[hand & 1]);
+                swingTicks = attackSwing;
+            }
+            return send(kUseConsume);
+        }
     // RedStoneOreBlock.useItemOn on the client: its particles; SUCCESS unless a block item goes on to be placed
     if (!placeOnly_ && !suppressUsingBlock && redstoneOreInteract(target_.x, target_.y, target_.z, false) &&
         !(has(hand) && (hand == 0 ? hotbar_[selected_] : offhandBlock_) != 0))

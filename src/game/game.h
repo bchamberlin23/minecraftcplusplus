@@ -139,7 +139,9 @@ public:
     std::function<void(double blockDistance)> onSpectatorAttack;
     // Right click on a block that reacts to use (containers, doors...): true sends the use to the server as is
     // instead of placing the held block.
-    std::function<bool(int x, int y, int z)> onInteract;
+    // The targeted block's own use on the client (BlockState.useItemOn / useWithoutItem, with its local state
+    // changes): 0 does not take the click, 1 SUCCESS (the hand swings), 2 CONSUME / SUCCESS_SERVER (no local swing).
+    std::function<int(int x, int y, int z, int hand)> onInteract;
     std::function<bool(int hand, const char* tag)> handInTag;  // the hand's item is in the item tag
     // Multiplayer: every attack press (Minecraft.startAttack sends ServerboundPunchPacket: the arm swing others see,
     // attack cooldown), a right press that did not place a block or use one (the held item is used: food, bows,
@@ -216,6 +218,7 @@ public:
     std::function<void(int item, const double pos[3], const double vel[3])> onItemParticle;
     // A particle of a type by name ("minecraft:large_smoke") at a position with a velocity (the client's own effects).
     std::function<void(std::string_view type, const double pos[3], const double vel[3])> onParticle;
+    std::function<void(std::string_view type, const double pos[3], u32 argb)> onColoredParticle;  // dust and the like
     // A level event the client plays for itself (level.levelEvent(player, ...): the server skips the user).
     std::function<void(int type, int x, int y, int z, int data)> onLevelEvent;
     // ParticleTypes.BLOCK of a block state at a position with a velocity (brushing dust).
