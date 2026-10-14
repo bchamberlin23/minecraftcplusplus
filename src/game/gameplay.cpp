@@ -43,6 +43,8 @@ Gameplay::Gameplay(World& world, BlockRegistry& registry, const GameReports& rep
     attributeNames_ = registryNames(reports, "minecraft:attribute");
     for (size_t i = 0; i < attributeNames_.size(); ++i)
         if (attributeNames_[i] == "minecraft:scale") scaleAttribute_ = int(i);
+        else if (attributeNames_[i] == "minecraft:name_tag_distance") nameTagAttribute_ = int(i);
+        else if (attributeNames_[i] == "minecraft:below_name_distance") belowNameAttribute_ = int(i);
     effectNames_ = registryNames(reports, "minecraft:mob_effect");
     const char* v = std::getenv("MCPP_GAMEPLAY_VERBOSE");
     verbose_ = v && *v == '1';
@@ -171,7 +173,10 @@ Gameplay::~Gameplay() = default;
 
 void Gameplay::setEntities(ent::EntityWorld* entities) {
     entities_ = entities;
-    if (entities_) entities_->scaleAttribute = scaleAttribute_;
+    if (entities_) {
+        entities_->scaleAttribute = scaleAttribute_;
+        entities_->nameTagAttribute = nameTagAttribute_, entities_->belowNameAttribute = belowNameAttribute_;
+    }
 }
 
 // LivingEntity.getMaxHealth on the client: the synced max_health attribute, else the type's default attributes (the

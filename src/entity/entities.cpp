@@ -768,11 +768,13 @@ void EntityWorld::attach(net::Client& client) {
         e.count = u32(q.ints.size()) - e.first;
         if (r.ok) q.events.push_back(e);
     });
-    on("update_attributes", [this](net::Reader& r, EventQueue& q) {  // the scale attribute (AttributeInstance.getValue)
+    // The scale and name tag distance attributes (AttributeInstance.getValue): e.a bit 1 scale (f[0]), 2 name tag
+    // distance (f[1]), 4 below-name distance (f[2]).
+    on("update_attributes", [this](net::Reader& r, EventQueue& q) {
         Event e;
         e.type = EventType::Attributes;
         e.id = r.varInt();
-        const int scaleId = scaleAttribute.load();
+        const int scaleId = scaleAttribute.load(), nameTagId = nameTagAttribute.load(), belowNameId = belowNameAttribute.load();
         const i32 n = r.varInt();
         for (i32 i = 0; i < n && r.ok; ++i) {
             const int id = r.varInt();
@@ -787,12 +789,12 @@ void EntityWorld::attach(net::Client& client) {
                 else if (op == 1) mulBase += amount;
                 else mulTotal *= 1 + amount;
             }
-            if (id != scaleId || scaleId < 0) continue;
-            const double v = base + add;
-            e.flag = true;
-            e.f[0] = float(std::clamp((v + v * mulBase) * mulTotal, 0.0625, 16.0));  // RangedAttribute: 0.0625 .. 16
+            const double v = base + add, value = (v + v * mulBase) * mulTotal;
+            if (id == scaleId && scaleId >= 0) e.a |= 1, e.f[0] = float(std::clamp(value, 0.0625, 16.0));  // RangedAttribute ranges
+            else if (id == nameTagId && nameTagId >= 0) e.a |= 2, e.f[1] = float(std::clamp(value, 0.0, 512.0));
+            else if (id == belowNameId && belowNameId >= 0) e.a |= 4, e.f[2] = float(std::clamp(value, 0.0, 512.0));
         }
-        if (r.ok && e.flag) q.events.push_back(e);
+        if (r.ok && e.a) q.events.push_back(e);
     });
     client.onPlayPeek("set_time", [this](net::Reader& r) {  // the game time (species animations)
         const i64 t = r.i64v();
@@ -1308,13 +1310,17 @@ void EntityWorld::apply(const Event& ev, const EventQueue& q) {
         case EventType::Animate:
             if (onAnimate) onAnimate(e, ev.a);
             break;
-        case EventType::Attributes: {  // LivingEntity.getScale: sanitizeScale
-            const std::string& n = e.info ? e.info->name : std::string();
-            float s = ev.f[0];
-            if (n == "minecraft:happy_ghast") s = std::min(s, 1.0f);
-            else if (n == "minecraft:shulker") s = std::min(s, 3.0f);
-            else if (n == "minecraft:ender_dragon") s = 1.0f;
-            e.scale = s;
+        case EventType::Attributes: {
+            if (ev.a & 1) {  // LivingEntity.getScale: sanitizeScale
+                const std::string& n = e.info ? e.info->name : std::string();
+                float s = ev.f[0];
+                if (n == "minecraft:happy_ghast") s = std::min(s, 1.0f);
+                else if (n == "minecraft:shulker") s = std::min(s, 3.0f);
+                else if (n == "minecraft:ender_dragon") s = 1.0f;
+                e.scale = s;
+            }
+            if (ev.a & 2) e.nameTagDistance = ev.f[1];
+            if (ev.a & 4) e.belowNameDistance = ev.f[2];
             break;
         }
         case EventType::Passengers:

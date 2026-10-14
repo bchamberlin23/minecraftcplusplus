@@ -2584,10 +2584,14 @@ void Visuals::Impl::buildTags(const PassContext& ctx) {
         // EntityRenderDispatcher.distanceToSqr: from the entity's position (not the tag's)
         const float ox = float(p[0] - cam[0]), oy = float(p[1] - cam[1]), oz = float(p[2] - cam[2]);
         const float d2 = ox * ox + oy * oy + oz * oz;
-        // EntityRenderer: < 64 blocks; LivingEntityRenderer.shouldShowName: a sneaking one only within 32
+        // EntityRenderer.extractNameTags: the name within the name tag distance (living entities: their attribute, else
+        // 64; LivingEntityRenderer.shouldShowName: a sneaking one only within 32), the below-name score within its own
+        // distance (10)
         const bool living = (e.category == Category::Living || e.category == Category::Player) &&
                             e.info->name != "minecraft:armor_stand";  // ArmorStandRenderer: its own rule
-        if (!(d2 < 64.0f * 64.0f) || (living && discrete && d2 >= 1024.0f)) continue;
+        const bool showName = d2 < e.nameTagDistance * e.nameTagDistance && !(living && discrete && d2 >= 1024.0f);
+        const bool showScore = d2 < e.belowNameDistance * e.belowNameDistance;
+        if (!showName && !showScore) continue;
         if (fwd[0] * x + fwd[1] * y + fwd[2] * z < -1.0f) continue;  // behind the camera
         // Entity.getDisplayName: the team's prefix, colour and suffix (members: a player's name, else the UUID).
         const u32 light = lightAt(p[0], p[1] + e.info->eye, p[2]) | 512u;
@@ -2615,11 +2619,11 @@ void Visuals::Impl::buildTags(const PassContext& ctx) {
         // EntityRenderer.submitNameDisplay: the below-name score (within 10 blocks) first, the name 9 * 1.15 px above.
         float raise = 0;
         ui::Text score;
-        if (d2 < 100.0f && ui::belowNameText(member, score)) submit(tag(score), 0), raise = 9.0f * 1.15f * 0.025f;
+        if (showScore && ui::belowNameText(member, score)) submit(tag(score), 0), raise = 9.0f * 1.15f * 0.025f;
         // Entity.getName: the custom name, else the type's description
         const ui::Text name = !e.name.empty() || !res ? ui::Text(e.name)
                                                       : ui::translatable("entity." + std::string(e.info->name).replace(e.info->name.find(':'), 1, "."), {}, &res->lang());
-        submit(tag(frame ? e.itemStack->customName : ui::teamFormattedName(member, name)), raise);
+        if (showName) submit(tag(frame ? e.itemStack->customName : ui::teamFormattedName(member, name)), raise);
         ++self.stats_.tags;
     }
 }

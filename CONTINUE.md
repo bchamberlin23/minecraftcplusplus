@@ -188,7 +188,7 @@ spectated entity gets no hurt tilt / bob and FOV 1 (Java uses its own state; the
 Audited and matching: maps, name tags, tab list, sidebar, boss bars, toasts, chat, advancements. Residuals: command
 suggestions ask the server for every argument (Java lists entity / registry / position suggestions locally), no
 suggestion narration; friend toasts have no face; no resource pack load-failure toast; the advancements screen
-ignores the horizontal wheel; name tag / below-name distance attributes are not read. Boats: no client splash above a
+ignores the horizontal wheel. Boats: no client splash above a
 bubble column (onAboveBubbleColumn's local sound and particle), the rider's head / body yaw do not follow the boat's
 turn, no client outOfControlTicks (the server ejects). Server list: a favicon that is not 64x64 is kept in
 servers.dat (Java drops it), the MOTD is not sanitised (depth 16, player sprites rejected). Create World: a blank

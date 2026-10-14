@@ -196,6 +196,8 @@ struct Entity {
     int attachBlock[3] = {};    // BlockAttachedEntity.pos: the block of item frames, paintings and leash knots
     int painting = 0;           // painting_variant network id (unsent: the registry's first, VariantUtils.getAny)
     float scale = 1.0f;         // LivingEntity.getScale: the scale attribute (sanitizeScale per type)
+    // LivingEntityRenderer.extractNameTags: the name_tag_distance / below_name_distance attributes (others: 64 / 10)
+    float nameTagDistance = 64.0f, belowNameDistance = 10.0f;
     bool nameVisible = false;   // DATA_CUSTOM_NAME_VISIBLE
 
     // Animation timers (ticks).
@@ -467,7 +469,7 @@ public:
     // EnvironmentAttributes.PIGLINS_ZOMBIFY in the current dimension (piglins and hoglins shake while converting).
     bool piglinsZombify = true;
     // The minecraft:attribute network id of minecraft:scale (update_attributes; -1 unknown).
-    std::atomic<int> scaleAttribute{-1};
+    std::atomic<int> scaleAttribute{-1}, nameTagAttribute{-1}, belowNameAttribute{-1};  // attribute registry ids
     // A painting variant's size in blocks (the renderer's registry): false when unknown.
     std::function<bool(int variant, int& w, int& h)> paintingSize;
     // Painting variants sent inline (a direct holder): variant kInlinePainting + index.
