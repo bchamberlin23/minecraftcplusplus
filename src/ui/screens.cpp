@@ -1003,7 +1003,7 @@ void Ui::State::screenInput(const Window::InputEvent& e) {
             return;
         }
         Style st;  // mouseClicked: an open_url component of the message
-        if (!deathConfirm && e.type == Window::InputEvent::Button && e.down && e.code == 0 &&
+        if (!deathConfirm && e.type == Window::InputEvent::Button && e.down &&  // any button
             deathStyleAt(*this, deathMessage, mouseX, mouseY, st) && st.events && st.events->click == "open_url") {
             openConfirmLink(*this, st.events->clickValue, Screen::Death, false);
             return;

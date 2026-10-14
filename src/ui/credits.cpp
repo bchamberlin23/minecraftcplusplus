@@ -8,6 +8,7 @@
 #include "ui/ui_state.h"
 
 #include <json/json.hpp>
+#include <random>
 #include <shellapi.h>
 
 namespace ui {
@@ -31,6 +32,7 @@ struct Win {
     int modifiers = 0;
     int total = 0;
     bool finished = false;
+    bool minceraft = false;  // its LogoRenderer's own 1 in 10000 easter egg
     double lastClock = -1;
 } g;
 
@@ -177,7 +179,7 @@ void draw(UiState& s, Canvas& c) {
     float yOffs = -g.scroll;
     c.push();
     c.translate(0, yOffs);
-    blitTexture(c, s.sprites.texture("gui/title/minecraft"), logoX, logoY, 0, 0, 256, 44, 256, 64);
+    blitTexture(c, s.sprites.texture(g.minceraft ? "gui/title/minceraft" : "gui/title/minecraft"), logoX, logoY, 0, 0, 256, 44, 256, 64);
     blitTexture(c, s.sprites.texture("gui/title/edition"), float(W / 2 - 64), logoY + 44 - 7, 0, 0, 128, 14, 128, 16);
     float yPos = logoY + 100;
     for (size_t i = 0; i < g.lines.size(); ++i) {
@@ -274,6 +276,8 @@ const UiModuleRegistrar kModule({.name = "credits", .registerHandlers = handlers
 
 void openWinScreen(UiState& s, bool poem) {
     g = Win{};
+    std::random_device rd;
+    g.minceraft = std::uniform_real_distribution<float>(0.0f, 1.0f)(rd) < 1.0E-4f;
     g.poem = poem, g.base = g.speed = poem ? 0.5f : 0.75f;
     std::string player = s.fe ? s.fe->cfg.playerName : std::string();
     if (player.empty()) player = "Player";
