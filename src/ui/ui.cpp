@@ -277,6 +277,26 @@ int predictBlockUse(Ui::State& st, const std::string& n, int x, int y, int z, in
         if (inTag("minecraft:lectern_books")) return 1;
         return hand == 0 && !held.empty() ? 2 : 0;  // an empty main hand passes; other items: useWithoutItem CONSUME
     }
+    if (n == "cauldron" || n == "water_cauldron" || n == "lava_cauldron" || n == "powder_snow_cauldron") {
+        // CauldronInteractions: a matching interaction is SUCCESS on the client (its changes are the server's), else
+        // TRY_WITH_EMPTY_HAND and useWithoutItem passes on to the item's own use
+        if (heldName == "water_bucket" || heldName == "lava_bucket" || heldName == "powder_snow_bucket") return 1;
+        const int level = std::atoi(std::string(prop("level")).c_str());
+        const bool water = n == "water_cauldron";
+        const bool waterPotion = heldName == "potion" && held.potion >= 0 && held.potion == st.items.potionId("water");
+        if (n == "cauldron" && waterPotion) return 1;
+        if (heldName == "bucket" && (n == "lava_cauldron" || (n != "cauldron" && level == 3))) return 1;
+        if (water) {
+            bool patterns = false;  // a banner with pattern layers
+            for (const ItemStack::Component& c : held.added)
+                if (c.type == st.items.componentType("banner_patterns") && !c.data.empty() && c.data[0] != 0) patterns = true;
+            if (heldName == "glass_bottle" || (waterPotion && level < 3) ||
+                (inTag("minecraft:cauldron_can_remove_dye") && hasComponent(st.items, held, "dyed_color")) ||
+                (heldName.ends_with("_banner") && patterns) || (heldName.ends_with("_shulker_box") && heldName != "shulker_box"))
+                return 1;
+        }
+        return 0;
+    }
     if (n == "composter") {  // ComposterBlock: a compostable goes in (the layer: the server's); a full one is emptied
         const int level = std::atoi(std::string(prop("level")).c_str());
         if (level < 8 && !held.empty() && hasComponent(st.items, held, "compostable")) return 1;
