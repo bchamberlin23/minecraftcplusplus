@@ -128,7 +128,9 @@ lid pushing the player done (other entities are the server's). The level loading
 changes (LevelLoadTracker: event 13, the player's chunk, 30 s) and the 30 s read timeout are in; the end portal
 background is approximated (no END_PORTAL pipeline in the GUI). Network residuals: select_known_packs claims nothing
 (the server sends every registry in full), packets after a transfer in the same stream are dropped, the brand payload
-is read in the configuration phase only. Not ported: the bell's raider particles (showBellParticles), the
+is read in the configuration phase only. Pickups (a flying copy for orbs and partial stacks) and the living render
+effects (upside-down xRot, creeper flash steps / ignited swelling, invisible hurt tint, skeleton shake) audited and
+fixed; residual: remote players' eye height for the pickup target is the type's constant (no pose). Not ported: the bell's raider particles (showBellParticles), the
 darkness pulse on the player's own tick count, filtered sign text (needs the account's profanity filter flag). Toasts follow ToastInstance now (the
 server pack download toast shows its progress). Toast residuals: no toasts
 for world access / chunk load or save /
