@@ -122,6 +122,7 @@ struct Renderer::Shading {
         double axis[3][3] = {};  // right, up, forward (away from the light)
         double center[3] = {};   // snapped light-space centre: x, y and the near plane along forward
         double radius = 1, depth = 1;
+        double updated = -1;  // nowSeconds of the last update
         bool valid = false;
     };
     Cascade cascades_[4];

@@ -695,8 +695,13 @@ void Renderer::Shading::prepare(const FrameInput& in) {
     const u32 cascades = lights && light[0] + light[1] + light[2] > 0 ? set.cascades : 0;
     updateMask_ = 0;
     if (cascades) {
-        // Near cascades every frame; the outer ones alternate (static terrain, slow sun: invisible lag).
+        // Near cascades every frame; the outer ones alternate (static terrain, slow sun: invisible lag), and at high frame
+        // rates update no more often than 240 (cascade 1), 120 (2) or 60 (3) times a second: cascade 2 alone took
+        // ~1.3 ms of a 2.3 ms frame at 400 fps.
         updateMask_ = cascades <= 2 ? 3u : 3u | (cascades == 3 ? (frameCounter_ & 1 ? 4u : 0u) : (frameCounter_ & 1 ? 4u : 8u));
+        const double now = nowSeconds();
+        for (u32 c = 1; c < cascades; ++c)
+            if (now - cascades_[c].updated < 1.0 / double(480 >> c)) updateMask_ &= ~(1u << c);
         if (shadowFresh_) updateMask_ = (1u << cascades) - 1;
         double f[3] = {-lightDir[0], -lightDir[1], -lightDir[2]};
         const double hint[3] = {std::abs(f[2]) < 0.9 ? 0.0 : 1.0, 0.0, std::abs(f[2]) < 0.9 ? 1.0 : 0.0};
@@ -726,6 +731,7 @@ void Renderer::Shading::prepare(const FrameInput& in) {
                 cs.radius = radius;
                 cs.depth = 2 * radius + 64.0;
                 cs.valid = true;
+                cs.updated = now;
             }
             // Camera-relative matrix: x' = (rel . R + cam . R - cx) / radius, z' = (rel . F + cam . F - z0) / depth.
             Mat4 m;
