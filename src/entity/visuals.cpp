@@ -171,6 +171,7 @@ struct Visuals::Impl {
     std::function<int()> gameMode;
     bool ambientNight = false, ambientNether = false;
     int skyDarken = 0;
+    bool improvedTransparency = false;  // the video option: opaque particles before translucent terrain
 
     // GPU
     Renderer* renderer = nullptr;
@@ -663,7 +664,9 @@ void StagePass::draw(const PassContext& ctx) {
                 D3D12_VIEWPORT full{0, 0, float(ctx.width), float(ctx.height), 0.0f, 1.0f};
                 ctx.list->RSSetViewports(1, &full);
             }
-            if (m.particles && ctx.shading && mv) {
+            // Opaque particles before translucent terrain, which then blends over those behind it (the shader
+            // pipeline always; Shaders Off with Improved Transparency, like Fabulous' composited particle layer)
+            if (m.particles && ((ctx.shading && mv) || m.improvedTransparency)) {
                 const double cam[3] = {ctx.camX, ctx.camY, ctx.camZ};
                 auto* out = reinterpret_cast<fx::GpuParticle*>(m.frameBase + kParticleOffset);
                 m.particleTotal = m.particles->build(out, kMaxParticles, cam, m.particleOpaque);
@@ -674,7 +677,7 @@ void StagePass::draw(const PassContext& ctx) {
                     const D3D12_GPU_VIRTUAL_ADDRESS va = m.upload->GetGPUVirtualAddress() + u64(ctx.frame) * kFrameBytes;
                     ctx.list->SetGraphicsRootConstantBufferView(0, va);  // the World stage's (pipeline) constants
                     const u32 c[4] = {0, 0, 0, 0};
-                    ctx.list->SetPipelineState(m.psoPartCutMv.Get());
+                    ctx.list->SetPipelineState((mv ? m.psoPartCutMv : m.psoPartCut).Get());
                     ctx.list->SetGraphicsRoot32BitConstants(1, 4, c, 0);
                     ctx.list->DrawInstanced(m.particleOpaque * 6, 1, 0, 0);
                 }
@@ -3025,8 +3028,9 @@ void Visuals::predictUse(const Entity& e) {
                        e.pos[2] + (2 * u(m.fxRandom) - 1) * w, 0, 0, 0);
 }
 
-void Visuals::setVideo(int particleStatus, int weatherRadius) {
+void Visuals::setVideo(int particleStatus, int weatherRadius, bool improvedTransparency) {
     if (impl_->particles) impl_->particles->setVideo(particleStatus, weatherRadius);
+    impl_->improvedTransparency = improvedTransparency;
 }
 
 void Visuals::localEntityEvent(int event) {  // our own entity's events (LocalPlayer.handleEntityEvent)

@@ -157,8 +157,9 @@ entity renderer and special item model has a counterpart (0 of 161 entity types 
 fireballs / the ender eye / fireworks now draw their item models (potion tints, custom item models). Packet sweeps:
 every clientbound packet is handled except the debug/* values (development builds only subscribe to them) and the
 empty combat enter/end; every serverbound packet is sent except chat_session_update (profile keys: Microsoft).
-Video settings audit: Improved Transparency is stored but the renderer has no Fabulous-style separate translucency
-targets (its own sorting stays); the Entity Distance option reaches the local server only at launch (the integrated
+Video settings audit: Improved Transparency draws opaque particles before translucent terrain with Shaders Off (glass
+and water then blend over those behind them, like Fabulous' composite; the shader pipeline always does); off, they
+draw after it (Fancy hides them behind translucent depth, which this renderer does not write); the Entity Distance option reaches the local server only at launch (the integrated
 server reads it live); no graphics backend choice (D3D12 only). Placement prediction audited (two passes over ~40
 block families) and fixed; the client's redstone view (placement.cpp hasNeighborSignal) reads block-entity outputs
 (jukebox songs, trapped chest viewers, comparator levels) as 0 and treats opaque cubes as the conductors. Block use
@@ -221,8 +222,8 @@ game profile); the Online screen's Friends section has only In-Game Notification
 
 ## Visuals / effects
 
-- **Improved Transparency** (video option) is stored but not read; this engine's translucency path (OIT under the
-  shader pipeline) is its own.
+- **Improved Transparency** (video option): opaque particles before translucent terrain (Fabulous' layering for them);
+  translucent particles, clouds and weather keep their order after it.
 
 - **Block rendering, approximations**: face occlusion shapes come from outline / collision boxes; model faces follow
   Block.shouldRenderFace with the face shapes of slabs, stairs, carpets, farmland and dirt paths (other partial
