@@ -109,7 +109,7 @@ VSOut finish(float3 rel, float3 n, float2 uv, uint layer, uint color, uint light
     o.light = l;
     o.lightBits = light;
     float red = float(overlay & 255) / 255.0, white = float((overlay >> 8) & 255) / 255.0;
-    o.overlay = white > 0 ? float4(1, 1, 1, white) : float4(1, 0, 0, red);
+    o.overlay = red > 0 ? float4(1, 0, 0, red) : float4(1, 1, 1, white);  // OverlayTexture: the red rows ignore u
     o.fog = vanillaFog(rel, gFogParams.xy, gFogRender.xy);
     o.rawUv = 0;
     o.prevClip = 0;

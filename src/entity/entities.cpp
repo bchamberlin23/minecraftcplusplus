@@ -1940,10 +1940,11 @@ void EntityWorld::tickEntity(Entity& e) {
         if (e.peek > target) e.peek = std::clamp(e.peek - 0.05f, target, 1.0f);
         else if (e.peek < target) e.peek = std::clamp(e.peek + 0.05f, 0.0f, target);
     }
-    // Creeper swelling (Creeper.tick).
-    if (n == "minecraft:creeper") {
+    // Creeper swelling (Creeper.tick: alive; ignited swells; the client's maxSwell is the default 30).
+    if (n == "minecraft:creeper" && !e.dying) {
         e.oldSwell = e.swell;
-        e.swell = std::clamp(e.swell + (e.swellDir > 0 ? 1 : e.swellDir < 0 ? -1 : 0), 0, 30);
+        if (dataInt(e, "DATA_IS_IGNITED")) e.swellDir = 1;
+        e.swell = std::clamp(e.swell + e.swellDir, 0, 30);
     }
     tickSpecies(e, gameTime_, entities_);
 }

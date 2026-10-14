@@ -1149,13 +1149,13 @@ namespace {
 // LivingEntityRenderer.isShaking and the overrides: fully frozen, converting zombies / skeletons / zombie villagers,
 // suffocating striders.
 bool isShaking(const Entity& e, bool piglinsZombify) {
-    if (fullyFrozen(e)) return true;
-    if (!e.info) return false;
+    if (!e.info) return fullyFrozen(e);
     const std::string& n = e.info->name;
+    if (n == "minecraft:skeleton") return dataInt(e, "DATA_STRAY_CONVERSION_ID") != 0;  // Skeleton.isShaking
+    if (fullyFrozen(e)) return true;
     if (n == "minecraft:piglin" || n == "minecraft:piglin_brute" || n == "minecraft:hoglin")  // isConverting
         return piglinsZombify && !(e.mobFlags & 1) && dataInt(e, "DATA_IMMUNE_TO_ZOMBIFICATION") == 0;
     if (n == "minecraft:zombie" || n == "minecraft:husk" || n == "minecraft:drowned") return dataInt(e, "DATA_DROWNED_CONVERSION_ID") != 0;
-    if (n == "minecraft:skeleton") return dataInt(e, "DATA_STRAY_CONVERSION_ID") != 0;
     if (n == "minecraft:zombie_villager") return dataInt(e, "DATA_CONVERTING_ID") != 0;
     if (n == "minecraft:strider") return dataInt(e, "DATA_SUFFOCATING") != 0;
     return false;
@@ -1726,7 +1726,7 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         const bool player = e.category == Category::Player;
         const bool sleeping = e.pose == 2, spinAttack = (e.livingFlags & 4) != 0, fallFlying = (e.sharedFlags & 0x80) != 0;
         const float swimAmount = e.swimAmountO + (e.swimAmount - e.swimAmountO) * pt;
-        if (player && e.pose == 5) root = mul(root, translate(0, -2.0f / 16.0f, 0));
+        if (player && e.pose == 5) root = mul(root, translate(0, e.scale * -2.0f / 16.0f, 0));
         // LivingEntityRenderer.submit: a sleeping entity lies with its head on the bed's pillow.
         static constexpr int kBedStep[4][2] = {{0, 1}, {-1, 0}, {0, -1}, {1, 0}};  // Direction 2D: S, W, N, E
         if (sleeping && e.bedFacing >= 0) {
@@ -1745,6 +1745,7 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
             if (isShaking(e, world_.piglinsZombify)) bodyRot += float(std::cos(std::floor(float(e.age) + pt) * 3.25f) * kPi * 0.4f);
             if (d.anim == Anim::Pufferfish) root = mul(root, translate(0, std::cos(s.age * 0.05f) * 0.08f, 0));
             const bool upsideDown = (e.name == "Dinnerbone" || e.name == "Grumm") && (!player || (e.skinParts & 1));
+            const float xRot = upsideDown ? -pitch : pitch;  // the render state's xRot, negated upside down
             if (d.anim == Anim::Squid) {  // SquidRenderer.setupRotations
                 const float xb = e.sp.ao[kXBody] + (e.sp.a[kXBody] - e.sp.ao[kXBody]) * pt;
                 const float zb = e.sp.ao[kZBody] + (e.sp.a[kZBody] - e.sp.ao[kZBody]) * pt;
@@ -1758,7 +1759,7 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
                 float fall = std::sqrt(std::max(0.0f, (float(e.deathTime) + pt - 1.0f) / 20.0f * 1.6f));
                 root = mul(root, rotZ(std::min(fall, 1.0f) * d.flip * kDeg));
             } else if (spinAttack) {
-                root = mul(root, rotX((-90.0f - pitch) * kDeg));
+                root = mul(root, rotX((-90.0f - xRot) * kDeg));
                 root = mul(root, rotY((float(e.age) + pt) * -75.0f * kDeg));
             } else if (sleeping) {
                 static constexpr float kSleepRot[4] = {90.0f, 0.0f, 270.0f, 180.0f};  // sleepDirectionToRotation
@@ -1771,12 +1772,12 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
                 root = mul(root, translate(0, (float(bh) + 0.1f) / e.scale, 0));  // (boundingBoxHeight + 0.1) / entityScale
                 root = mul(root, rotZ(kPi));
             }
-            speciesRotations(e, d, pt, pitch, *reinterpret_cast<Mat34*>(&root));
+            speciesRotations(e, d, pt, xRot, *reinterpret_cast<Mat34*>(&root));
             // AvatarRenderer.setupRotations: gliding and swimming / crawling bodies.
             if (player && fallFlying) {
                 const float ft = float(e.fallFlyTicks) + pt;
                 const float flyScale = std::clamp(ft * ft / 100.0f, 0.0f, 1.0f);
-                if (!spinAttack) root = mul(root, rotX(flyScale * (-90.0f - pitch) * kDeg));
+                if (!spinAttack) root = mul(root, rotX(flyScale * (-90.0f - xRot) * kDeg));
                 float mv[3], look[3];
                 for (int k = 0; k < 3; ++k) mv[k] = e.moveO[k] + (e.move[k] - e.moveO[k]) * pt;
                 look[0] = -std::sin(yaw * kDeg) * std::cos(pitch * kDeg), look[2] = std::cos(yaw * kDeg) * std::cos(pitch * kDeg);
@@ -1787,9 +1788,10 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
                     root = mul(root, rotY((sgn > 0 ? 1.0f : sgn < 0 ? -1.0f : 0.0f) * std::acos(std::min(1.0f, std::abs(dot)))));
                 }
             } else if (player && swimAmount > 0) {
-                const float target = e.inWater ? -90.0f - pitch : -90.0f;
+                const float target = e.inWater ? -90.0f - xRot : -90.0f;
                 root = mul(root, rotX(swimAmount * target * kDeg));
-                if (e.pose == 3) root = mul(root, translate(0, -1.0f, 0.3f));
+                // isVisuallySwimming: the swimming pose, or the fall flying pose without gliding
+                if (e.pose == 3 || (e.pose == 1 && !fallFlying)) root = mul(root, translate(0, -1.0f, 0.3f));
             }
             if (d.special == SpShulker) {  // rotateAround(attachFace.getOpposite().getRotation(), 0, 0.5, 0)
                 M34 face = M34::identity();
@@ -1826,7 +1828,8 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
             float g = std::clamp(swelling, 0.0f, 1.0f);
             g *= g, g *= g;
             sx *= (1.0f + g * 0.4f) * wobble, sz *= (1.0f + g * 0.4f) * wobble, sy *= (1.0f + g * 0.1f) / wobble;
-            if (int(swelling * 10.0f) % 2 != 0) overlay |= u32(std::clamp(swelling, 0.5f, 1.0f) * 0.75f * 255.0f) << 8;
+            if (int(swelling * 10.0f) % 2 != 0)
+                overlay |= u32(float(int(std::clamp(swelling, 0.5f, 1.0f) * 15.0f)) / 15.0f * 0.75f * 255.0f + 0.5f) << 8;
         }
         const bool babyFallback = e.baby && d.base.babyModel < 0 && d.special != SpPlayer && d.special != SpArmorStand;
         if (babyFallback) sx *= 0.5f, sy *= 0.5f, sz *= 0.5f;
@@ -2285,8 +2288,9 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         // LivingEntityRenderer: an invisible entity's body shows only to those who see it (spectators, teammates seeing
         // friendly invisibles: translucent, 0x26 alpha); its skin layers do not; equipment, eyes and swirls stay.
         float alpha = appearanceAlpha_;
+        bool ghost = false;  // the translucent invisible body: still tinted by the overlay
         if (living && (e.sharedFlags & 0x20)) {
-            if (li == 0 && seeInvisible && seeInvisible(e)) alpha = 38.0f / 255.0f;
+            if (li == 0 && seeInvisible && seeInvisible(e)) alpha = 38.0f / 255.0f, ghost = appearanceAlpha_ < 0;
             // LivingEntityRenderer.getRenderType: an invisible glowing body is drawn only into the outline (fully
             // transparent here, which the outline pass's silhouette still picks up)
             else if (li == 0 && outlineColor && outlineColor(e) >= 0) alpha = 0.0f;
@@ -2294,7 +2298,7 @@ bool EntityRenderer::modelEntity(const Entity& e, const TypeDef& d, float pt, co
         }
         const TexRect& tr = assets_.rect(L.tex);
         const u32 layerColor = alpha >= 0 ? u32(alpha * 255.0f) << 24 | (L.color & 0xFFFFFF) : L.color;
-        GpuInstance inst{base, layerColor, (L.flags & Emissive) ? (light | 256u) : light, (L.flags & NoOverlay) || alpha >= 0 ? 0u : overlay,
+        GpuInstance inst{base, layerColor, (L.flags & Emissive) ? (light | 256u) : light, (L.flags & NoOverlay) || (alpha >= 0 && !ghost) ? 0u : overlay,
                          {tr.u0, tr.v0, tr.du, tr.dv}};
         if (L.flags & Dissolve) {  // the mask's atlas offset, as two signed 16-bit fractions
             auto q = [](float v) { return u32(u16(i16(std::clamp(v, -1.0f, 1.0f) * 32767.0f))); };
@@ -3527,7 +3531,7 @@ void EntityRenderer::packQuad(int bucket, const float pos[4][3], const float uv[
     PackVertex v{};
     v.color = color;
     v.light = (block << 4) | ((sky << 4) << 16);
-    v.overlay = (white * 15 / 255) | ((red ? 3u : 10u) << 16);
+    v.overlay = ((white * 20 + 127) / 255) | ((red ? 3u : 10u) << 16);  // back to u: white = u / 15 * 0.75 * 255
     v.normal = packNormal(n[0], n[1], n[2]);
     v.entity = -1;
     const float mid[2] = {(uv[0][0] + uv[2][0]) * 0.5f, (uv[0][1] + uv[2][1]) * 0.5f};
