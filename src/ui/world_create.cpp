@@ -519,6 +519,7 @@ void cycleWorldType(State& s) {
 Text presetName(State& s, const std::string& id) { return Text(lang(s, langKey("generator", id), pathOf(id))); }
 
 void createWorldNow(State& s);
+void confirmCreateWorld(State& s);
 
 void buildTabs(State& s) {
     FrontEndState& f = *s.fe;
@@ -602,11 +603,11 @@ void buildTabs(State& s) {
             openPage(*p, Page::DataPacks);
         });
     }
-    addButton(s, float(W / 2 - 154), float(H - 27), 150, tr(s, "selectWorld.create"), [p] { createWorldNow(*p); });
+    addButton(s, float(W / 2 - 154), float(H - 27), 150, tr(s, "selectWorld.create"), [p] { confirmCreateWorld(*p); });
     auto cancel = [p] { g.fresh ? p->openScreen(Screen::Title) : openWorlds(*p); };
     addButton(s, float(W / 2 + 4), float(H - 27), 150, tr(s, "gui.cancel"), cancel);
     f.onBack = cancel;
-    f.onEnter = [p] { createWorldNow(*p); };
+    f.onEnter = [p] { confirmCreateWorld(*p); };
 }
 
 struct TabGeom {
@@ -1070,9 +1071,9 @@ void drawGameRules(State& s, Canvas& c) {
 ListArea packList(State& s) { return {33, float(s.guiH() - kFooter), float(s.guiW() / 2 - 155), 310, 36, int(g.packsEdit.size()) + 1}; }
 
 // The selected packs asking for features beyond the vanilla set (FeatureFlags.printMissingFlags): (title, flags).
-std::vector<std::pair<std::string, std::string>> experimentalPacks() {
+std::vector<std::pair<std::string, std::string>> experimentalPacks(const std::vector<PackChoice>& packs = g.packsEdit) {
     std::vector<std::pair<std::string, std::string>> out;
-    for (const PackChoice& c : g.packsEdit) {
+    for (const PackChoice& c : packs) {
         if (!c.on) continue;
         for (const mods::Entry& e : mods::Manager::get().entries()) {
             if (e.id != c.id) continue;
@@ -1207,6 +1208,14 @@ bool copyPack(const fs::path& from, const fs::path& to) {
     return !ec;
 }
 
+// WorldOpenFlows.confirmWorldCreation: experimental features ask first (ConfirmScreen), Yes creates, No comes back.
+void confirmCreateWorld(State& s) {
+    if (experimentalPacks(g.packs).empty()) return createWorldNow(s);  // the applied selection
+    State* p = &s;
+    showConfirm(s, tr(s, "selectWorld.warning.experimental.title"), tr(s, "selectWorld.warning.experimental.question"),
+                s.res.translate("gui.yes"), [p] { createWorldNow(*p); }, s.screen, s.res.translate("gui.no"));
+}
+
 void createWorldNow(State& s) {
     FrontEndState& f = *s.fe;
     std::string name = f.createName.text.value;
@@ -1221,7 +1230,7 @@ void createWorldNow(State& s) {
     a.insert(a.end(), {L"--play", L"--world", dir.wstring(), L"--create-name", widen(name), L"--create-seed",
                        widen(f.createSeed.text.value), L"--create-mode", widen(mode), L"--create-difficulty",
                        widen(kDifficulties[debug ? 0 : hc ? 3 : f.createDifficulty]), L"--create-cheats",
-                       allowCommands(s) ? L"1" : L"0", L"--create-structures", f.createStructures ? L"1" : L"0"});
+                       allowCommands(s) ? L"1" : L"0", L"--create-structures", f.createStructures && !debug ? L"1" : L"0"});  // isGenerateStructures
     if (g.preset != "minecraft:normal") a.insert(a.end(), {L"--create-type", widen(g.preset)});
     if (g.preset == "minecraft:flat") a.insert(a.end(), {L"--create-generator", widen(flatJson(g.flat).dump())});
     if (g.preset == "minecraft:single_biome_surface") a.insert(a.end(), {L"--create-biome", widen(g.biome)});
@@ -1319,6 +1328,14 @@ void createWorldInput(State& s, const Window::InputEvent& e) {
         }
         if (e.type == E::Key && e.down && e.code == VK_TAB && s.window->keyDown(VK_CONTROL)) {  // Ctrl+Tab: next tab
             g.tab = (g.tab + (s.window->keyDown(VK_SHIFT) ? 2 : 1)) % 3;
+            s.buildButtons();
+            return;
+        }
+        // TabNavigationBar: Ctrl + a digit (the keypad's too) selects tab floorMod(n - 1, 10), clamped to the tabs
+        const bool digit = (e.code >= '0' && e.code <= '9') || (e.code >= VK_NUMPAD0 && e.code <= VK_NUMPAD9);
+        if (e.type == E::Key && e.down && digit && s.window->keyDown(VK_CONTROL)) {
+            const int n = e.code >= VK_NUMPAD0 ? e.code - VK_NUMPAD0 : e.code - '0';
+            g.tab = std::clamp(((n - 1) % 10 + 10) % 10, 0, 2);
             s.buildButtons();
             return;
         }

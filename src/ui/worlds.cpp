@@ -369,16 +369,27 @@ std::string worldFolderFor(const fs::path& saves, const std::string& name) {
     std::string base;
     for (char c : name) base += std::strchr("/\n\r\t\f`?*\\<>|\":.", c) && c ? '_' : c;
     if (base.empty()) base = "World";
-    static const char* reserved[] = {"CON", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "PRN",
-                                     "AUX", "NUL", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"};
+    static const char* reserved[] = {"CON", "COM", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "PRN",
+                                     "AUX", "NUL", "CLOCK$", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"};
     std::string upper = base;
     for (char& c : upper) c = char(std::toupper(u8(c)));
     for (const char* r : reserved)
         if (upper == r) base = "_" + base + "_";
-    std::string folder = base;
+    // COPY_COUNTER_PATTERN: a name ending in " (n)" counts on from n
+    int count = 0;
+    if (base.size() >= 3 && base.back() == ')') {
+        const size_t open = base.rfind(" (");
+        if (open != std::string::npos && base.find_first_not_of("0123456789", open + 2) == base.size() - 1) {
+            const std::string digits = base.substr(open + 2, base.size() - 1 - (open + 2));
+            count = digits.empty() || digits.size() > 9 ? 0 : std::atoi(digits.c_str());
+            base = base.substr(0, open);
+        }
+    }
     std::error_code ec;
-    for (int i = 1; fs::exists(saves / widen(folder), ec); ++i) folder = base + " (" + std::to_string(i) + ")";
-    return folder;
+    for (;; ++count) {
+        const std::string folder = count != 0 ? base + " (" + std::to_string(count) + ")" : base;
+        if (!fs::exists(saves / widen(folder), ec)) return folder;
+    }
 }
 
 // --- world list ---------------------------------------------------------------------------------------------------
