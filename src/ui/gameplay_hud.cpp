@@ -136,7 +136,9 @@ bool drawJumpBar(Ui::State& s, Canvas& c, int left, int top) {
     if (v.jumpCooldown > 0) {
         blitSprite(c, s.sprites.sprite("hud/jump_bar_cooldown"), float(left), float(top), 182, 5);
     } else {
-        const int progress = int(std::clamp(v.jumpScale, 0.0f, 1.0f) * 182.0f);  // Mth.lerpDiscrete(scale, 0, 182)
+        // Mth.lerpDiscrete(scale, 0, 182): floor(scale * 181), one more once above 0
+        const float scale = std::clamp(v.jumpScale, 0.0f, 1.0f);
+        const int progress = scale > 0 ? std::min(182, int(std::floor(scale * 181.0f)) + 1) : 0;
         if (progress > 0)
             blitSpriteRegion(c, s.sprites.sprite("hud/jump_bar_progress"), 182, 5, 0, 0, float(left), float(top), float(progress), 5);
     }

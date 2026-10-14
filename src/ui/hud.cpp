@@ -170,7 +170,10 @@ void Ui::State::tickHud() {
     tickViewEffects(eyeInWater);  // view_effects.cpp
     if (!serverAir) {
         const u16 eye = world->block(int(std::floor(p.pos[0])), int(std::floor(p.pos[1] + p.eyeHeight())), int(std::floor(p.pos[2])));
-        if (eyeInWater && !registry->name(eye).starts_with("minecraft:bubble_column") && survivalLike()) air = std::max(-20, air - 1);
+        // LivingEntity.baseTick: no drain with water breathing (the effect, conduit power, the nautilus' breath)
+        const bool breathes = hasEffect("water_breathing") || hasEffect("conduit_power") || hasEffect("breath_of_the_nautilus");
+        if (eyeInWater && !registry->name(eye).starts_with("minecraft:bubble_column") && survivalLike() && !breathes)
+            air = std::max(-20, air - 1);
         else air = std::min(maxAir, air + 4);
     }
     // Health blink (Hud.extractPlayerHealth bookkeeping).
@@ -438,7 +441,7 @@ void Ui::State::drawHud(Canvas& c) {
         const int absorb = int(std::ceil(absorption));
         const int rows = int(std::ceil((maxH + float(absorb)) / 2.0f / 10.0f));
         const int rowHeight = std::max(10 - (rows - 2), 3);
-        Jitter rnd(u64(guiTicks) * 312871ULL);
+        Jitter rnd(u64(i64(i32(u32(guiTicks) * 312871u))));  // setSeed(tickCount * 312871): an int product, sign-extended
         // Armor.
         const int armorValue = int(armor);
         if (armorValue > 0) {
