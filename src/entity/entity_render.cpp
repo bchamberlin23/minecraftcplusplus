@@ -2600,8 +2600,9 @@ void EntityRenderer::emitRopes(const double cam[3], float pt, float projY) {
             hand = eyePos + p;
         } else {
             const double r = bodyRot(*owner), s = std::sin(r), c = std::cos(r);
-            const double right = invert * 0.35, forward = 0.8;
-            hand = eyePos + V3{-c * right - s * forward, (owner->pose == 5 ? -0.1875 : 0.0) - 0.45, -s * right + c * forward};
+            const double scale = owner->scale;  // getScale
+            const double right = invert * 0.35 * scale, forward = 0.8 * scale;
+            hand = eyePos + V3{-c * right - s * forward, (owner->pose == 5 ? -0.1875 : 0.0) - 0.45 * scale, -s * right + c * forward};
         }
         const V3 hook = lerpPos(e) + V3{0, 0.25, 0};
         const V3 d = hand - hook;

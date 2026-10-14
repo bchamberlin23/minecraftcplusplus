@@ -503,7 +503,9 @@ void BlockEntityRenderer::build(const PassContext& ctx) {
                 const double dx = in.x + 0.5 - ctx.camX, dy = in.y + 0.5 - ctx.camY, dz = in.z + 0.5 - ctx.camZ;
                 // getViewDistance: beacons the render distance, end gateways 256, the rest 64 (and in view)
                 const double view = kind == Kind::Beacon ? renderChunks_ * 16.0 : kind == Kind::EndGateway ? 256.0 : kViewDistance;
-                if ((!beam && !(inside || inCascades)) || dx * dx + dy * dy + dz * dz > view * view) continue;
+                // BeaconRenderer.shouldRender: the horizontal distance only
+                const double dist2 = dx * dx + (kind == Kind::Beacon ? 0.0 : dy * dy) + dz * dz;
+                if ((!beam && !(inside || inCascades)) || dist2 > view * view) continue;
                 if (dyn_[0].size() + dyn_[1].size() + dyn_[2].size() > kMaxDyn - 4096) break;
                 const Data* data = in.data >= 0 ? &s.data[size_t(in.data)] : nullptr;
                 emitTracked(in.x, in.y, in.z, [&] { emitInstance(dyn, in, data, partial_); });
