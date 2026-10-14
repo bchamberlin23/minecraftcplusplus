@@ -880,6 +880,80 @@ bool Items::componentHash(const ItemStack::Component& c, u32& out) const {
         if (!effects.empty()) kv.emplace_back(hString("custom_effects"), hList(effects));
         if (r.boolean()) kv.emplace_back(hString("custom_name"), hString(std::string(r.str())));
         out = hMap(std::move(kv));
+    } else if (n == "tool" || n == "equippable") {
+        auto hFloat = [](float f) {
+            u32 bits;
+            std::memcpy(&bits, &f, 4);
+            return hTagged(10, bits, 4);
+        };
+        // A HolderSet (HolderSetCodec, compact list): "#tag", one id, or a list of ids
+        auto holderSet = [&](const char* registry, u32& h) {
+            const i32 cnt = r.varInt();
+            if (cnt == 0) return h = hString("#" + std::string(r.str())), r.ok;
+            std::vector<u32> ids;
+            for (i32 i = 1; i < cnt && r.ok; ++i) {
+                const std::string& id = registryName(registry, r.varInt());
+                if (id.empty()) return false;
+                ids.push_back(hString(id));
+            }
+            h = ids.size() == 1 ? ids[0] : hList(ids);
+            return r.ok;
+        };
+        std::vector<std::pair<u32, u32>> kv;
+        if (n == "tool") {  // {rules: [{blocks, speed?, correct_for_drops?}], default_mining_speed (1), damage_per_block (1),
+                            //  can_destroy_blocks_in_creative (true)}
+            std::vector<u32> rules;
+            const i32 cnt = r.varInt();
+            for (i32 i = 0; i < cnt && r.ok; ++i) {
+                u32 blocks;
+                if (!holderSet("minecraft:block", blocks)) return false;
+                std::vector<std::pair<u32, u32>> rule{{hString("blocks"), blocks}};
+                if (r.boolean()) rule.emplace_back(hString("speed"), hFloat(r.f32()));
+                if (r.boolean()) rule.emplace_back(hString("correct_for_drops"), hBool(r.boolean()));
+                rules.push_back(hMap(std::move(rule)));
+            }
+            kv.emplace_back(hString("rules"), hList(rules));
+            const float speed = r.f32();
+            const i32 damage = r.varInt();
+            const bool creative = r.boolean();
+            if (speed != 1.0f) kv.emplace_back(hString("default_mining_speed"), hFloat(speed));
+            if (damage != 1) kv.emplace_back(hString("damage_per_block"), hInt(damage));
+            if (!creative) kv.emplace_back(hString("can_destroy_blocks_in_creative"), hBool(false));
+        } else {  // equippable: slot, equip_sound, asset_id?, camera_overlay?, allowed_entities?, the flags, shearing_sound
+            static const char* kSlots[] = {"mainhand", "feet", "legs", "chest", "head", "offhand", "body", "saddle"};
+            // SoundEvent.CODEC: a registry reference (left out when it is the default) or {sound_id, range?}
+            auto sound = [&](const char* key, const char* fallback) {
+                const i32 holder = r.varInt();
+                if (holder > 0) {
+                    const std::string& id = registryName("minecraft:sound_event", holder - 1);
+                    if (id.empty()) return false;
+                    if (id != fallback) kv.emplace_back(hString(key), hString(id));
+                    return true;
+                }
+                std::vector<std::pair<u32, u32>> inline_{{hString("sound_id"), hString(std::string(r.str()))}};
+                if (r.boolean()) inline_.emplace_back(hString("range"), hFloat(r.f32()));
+                kv.emplace_back(hString(key), hMap(std::move(inline_)));
+                return r.ok;
+            };
+            const i32 slot = r.varInt();
+            if (slot < 0 || slot > 7) return false;
+            kv.emplace_back(hString("slot"), hString(kSlots[slot]));
+            if (!sound("equip_sound", "minecraft:item.armor.equip_generic")) return false;
+            if (r.boolean()) kv.emplace_back(hString("asset_id"), hString(std::string(r.str())));
+            if (r.boolean()) kv.emplace_back(hString("camera_overlay"), hString(std::string(r.str())));
+            if (r.boolean()) {
+                u32 entities;
+                if (!holderSet("minecraft:entity_type", entities)) return false;
+                kv.emplace_back(hString("allowed_entities"), entities);
+            }
+            static const std::pair<const char*, bool> kFlags[] = {{"dispensable", true}, {"swappable", true}, {"damage_on_hurt", true},
+                                                                 {"equip_on_interact", false}, {"can_be_sheared", false}};
+            for (const auto& [key, fallback] : kFlags)
+                if (const bool v = r.boolean(); v != fallback) kv.emplace_back(hString(key), hBool(v));
+            if (!sound("shearing_sound", "minecraft:item.shears.snip")) return false;
+        }
+        if (!r.ok) return false;
+        out = hMap(std::move(kv));
     } else if (n == "item_model" || n == "tooltip_style") {  // Identifier
         out = hString(std::string(r.str()));
     } else if (n == "minimum_attack_charge" || n == "potion_duration_scale") {  // a float
