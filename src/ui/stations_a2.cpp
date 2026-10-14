@@ -230,7 +230,7 @@ void stoneDrawBg(UiState& s, Canvas& c, Menu& m, const Layout&, float left, floa
         const int pos = index - stone.startIndex;
         const float px = x + float(pos % 4 * 16), py = y + float(pos / 4 * 18 + 2);
         const bool hover = inRect(s.mouseX, s.mouseY, px, py, 16, 18);
-        if (hover) s.requestCursor(UiState::CursorPointingHand);
+        if (inRect(s.mouseX, s.mouseY, px, py - 1, 16, 18)) s.requestCursor(UiState::CursorPointingHand);  // the sprite
         const char* sprite = index == selected ? "container/stonecutter/recipe_selected"
                              : hover ? "container/stonecutter/recipe_highlighted"
                                      : "container/stonecutter/recipe";
@@ -268,19 +268,20 @@ bool stoneInput(UiState& s, const InputEvent& e, Menu& m, const Layout&, float l
         }
         return true;
     }
-    if (e.type == InputEvent::Button && !e.down && e.code == 0) stone.scrolling = false;
+    if (e.type == InputEvent::Button && !e.down) stone.scrolling = false;  // mouseReleased: any button
     if (e.type == InputEvent::Button && e.down && display)  // mouseClicked: any button
         for (int index = stone.startIndex; index < stone.startIndex + 12; ++index) {
             const int pos = index - stone.startIndex;
             if (!inRect(s.mouseX, s.mouseY, left + 52 + float(pos % 4 * 16), top + 14 + float(pos / 4 * 18), 16, 18)) continue;
             // StonecutterMenu.clickMenuButton: false only for the selected recipe again (an empty cell still clicks)
             if (index == m.data[0]) return true;
-            if (index < int(vis.size())) m.data[0] = index;
+            // setupResultSlot: the client's entries carry no recipe, so the result empties until the server's
+            if (index < int(vis.size())) m.data[0] = index, m.slots[1] = ItemStack{};
             uiSound("minecraft:ui.stonecutter.select_recipe");
             sendContainerButton(s, index);
             return true;
         }
-    if (e.type != InputEvent::Button || !e.down || e.code != 0 || !display) return false;
+    if (e.type != InputEvent::Button || !e.down || !display) return false;  // the scroller: any button
     if (inRect(s.mouseX, s.mouseY, left + 119, top + 9, 12, 54)) {
         stone.scrolling = true;
         return true;
@@ -553,7 +554,7 @@ bool loomInput(UiState& s, const InputEvent& e, Menu& m, const Layout&, float le
         }
         return true;
     }
-    if (e.type == InputEvent::Button && !e.down && e.code == 0) loom.scrolling = false;
+    if (e.type == InputEvent::Button && !e.down) loom.scrolling = false;  // mouseReleased: any button
     if (e.type != InputEvent::Button || !e.down || !loom.displayPatterns) return false;  // any button picks a pattern
     for (int row = 0; row < 4; ++row)
         for (int col = 0; col < 4; ++col) {
@@ -565,8 +566,7 @@ bool loomInput(UiState& s, const InputEvent& e, Menu& m, const Layout&, float le
             sendContainerButton(s, index);
             return true;
         }
-    if (e.code != 0) return false;
-    if (inRect(s.mouseX, s.mouseY, left + 119, top + 9, 12, 56)) {
+    if (inRect(s.mouseX, s.mouseY, left + 119, top + 9, 12, 56)) {  // the scroller: any button
         loom.scrolling = true;
         return true;
     }
@@ -603,8 +603,9 @@ const StationRegistrar kLoom({"loom"}, [] {
     d.layout = loomLayout, d.opened = loomOpened, d.drawBg = loomDrawBg, d.drawTop = loomDrawTop, d.input = loomInput;
     d.resultSlot = 3, d.mayPlace = loomMayPlace, d.quickMove = loomQuickMove;
     d.partialResult = true;  // a SimpleContainer output
-    d.onTake = [](UiState&, Menu& m) {  // the banner and the dye are used
+    d.onTake = [](UiState&, Menu& m) {  // the banner and the dye are used; without either no pattern stays selected
         for (int i = 0; i < 2; ++i) m.slots[size_t(i)] = m.slots[size_t(i)].withCount(m.slots[size_t(i)].count - 1);
+        if (m.slots[0].empty() || m.slots[1].empty()) m.data[0] = -1;
     };
     return d;
 }());

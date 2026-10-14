@@ -78,7 +78,9 @@ CubeVertex pullCube(uint vid) {
 float cornerSky(CubeVertex v) { return isFluidQuad(v.q) ? fluidSky(v.q) : float((v.q.z >> (v.corner * 8)) & 0xFF) / 16.0; }
 float cornerBlock(CubeVertex v) { return isFluidQuad(v.q) ? fluidBlock(v.q) : float((v.q.w >> (v.corner * 8)) & 0xFF) / 16.0; }
 float cornerAo(CubeVertex v) {
-    return isFluidQuad(v.q) ? 1.0 : 1.0 - 0.2 * float(((v.q.y >> (12 + v.corner * 2)) & 3) + (v.q.x >> 31));
+    // FluidRenderer: no occlusion; a side's shade is also scaled by the dimension's up shade (0.9 in the nether)
+    if (isFluidQuad(v.q)) return v.face >= 2 ? gShade[0][1] : 1.0;
+    return 1.0 - 0.2 * float(((v.q.y >> (12 + v.corner * 2)) & 3) + (v.q.x >> 31));
 }
 uint colorIndex(CubeVertex v) { return ((v.q.y >> 20) << 4) | ((v.q.x >> 25) & 15); }
 // Texture coordinates + layer; coarse LOD nodes mark theirs negative for the flat-colour path (sampleTerrain).
