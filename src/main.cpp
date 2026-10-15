@@ -1324,11 +1324,12 @@ int wmain(int argc, wchar_t** argv) {
                 if (!evict.empty()) {
                     const Timer te;
                     {
-                        std::unique_lock lock(world.mutex());
+                        const World::WriteLock lock(world);
                         for (const auto& [cx, cz] : evict) world.removeChunk(cx, cz);
                     }
                     for (const auto& [cx, cz] : evict) terrain.removeChunk(cx, cz);
                     if (opt.profile) {
+                        const double evictMs = te.ms();  // before the statistics (the heap walk alone takes ~0.4 s)
                         size_t bytes = 0, columns = 0, regions = 0;
                         std::shared_lock lock(world.mutex());
                         for (const auto& r : world.regions()) {
@@ -1343,7 +1344,7 @@ int wmain(int argc, wchar_t** argv) {
                         hs.cb = sizeof(hs);
                         HeapSummary(GetProcessHeap(), 0, &hs);
                         LOG("evicted %zu chunks beyond %d in %.1f ms | world: %zu regions, %zu chunks, %.0f MB | process private %.0f MB"
-                            " | heap allocated %.0f MB, committed %.0f MB", evict.size(), keep, te.ms(), regions, columns,
+                            " | heap allocated %.0f MB, committed %.0f MB", evict.size(), keep, evictMs, regions, columns,
                             bytes / 1048576.0, pmc.PrivateUsage / 1048576.0, hs.cbAllocated / 1048576.0, hs.cbCommitted / 1048576.0);
                     }
                 }
@@ -1391,7 +1392,7 @@ int wmain(int argc, wchar_t** argv) {
                 Timer ct;
                 double insertMs = 0, lightMs = 0, waitMs = 0;
                 {
-                    std::unique_lock lock(world.mutex());
+                    const World::WriteLock lock(world);
                     waitMs = ct.ms();
                     if (!world.insertChunk(c->cx, c->cz, c->minY, c->height, c->blocks.data())) continue;
                     world.setGenExtras(c->cx, c->cz, wg::saveExtras(*c, [&registry](u16 s) { return registry.name(s); }));

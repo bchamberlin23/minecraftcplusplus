@@ -3,9 +3,11 @@
 #include "world/nbt_dom.h"
 
 #include <array>
+#include <atomic>
 #include <deque>
 #include <memory>
 #include <shared_mutex>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -95,6 +97,16 @@ public:
               LoadStats& stats, const std::string& dimension = "minecraft:overworld");
 
     std::shared_mutex& mutex() const { return mutex_; }
+    // The main thread taking the lock exclusively announces itself (WriteLock); background readers hold back while one
+    // waits (yieldToWriters). The lock lets new readers in ahead of a waiting writer: with ~30 meshing threads reading
+    // in turn it was almost never free, and chunk inserts waited 15..25 ms.
+    struct WriteLock {
+        std::unique_lock<std::shared_mutex> lock;
+        explicit WriteLock(const World& w) : lock((++w.pendingWriters_, w.mutex_)) { --w.pendingWriters_; }
+    };
+    void yieldToWriters() const {
+        while (pendingWriters_.load(std::memory_order_relaxed)) std::this_thread::yield();
+    }
 
     const Section* section(int cx, int sy, int cz, const Region** outRegion) const;  // with blocks only
     const Section* anySection(int cx, int sy, int cz, const Region** outRegion) const;
@@ -201,6 +213,7 @@ private:
     std::unordered_map<u64, Region*> lookup_;
     int minSy_ = 0, maxSy_ = 0;
     mutable std::shared_mutex mutex_;
+    mutable std::atomic<int> pendingWriters_{0};
     std::unordered_set<u64> dirtyChunks_;
     std::unordered_map<u64, NbtValue> genExtras_;
     bool trackChanges_ = true;

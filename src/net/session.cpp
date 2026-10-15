@@ -280,7 +280,7 @@ void Session::applyChunk(ChunkEvent& e) {
     }
     if (had) terrain_->removeChunk(e.cx, e.cz);  // resent, kept, saved or generated locally: replace
     {
-        std::unique_lock lock(world_.mutex());
+        const World::WriteLock lock(world_);
         world_.replaceChunk(e.cx, e.cz, e.firstSy, e.sections);
         // Surface biome (for biome colours): the highest section with blocks.
         for (size_t i = e.sections.size(); i-- > 0;)
@@ -313,7 +313,7 @@ void Session::clearWorld() {
     // in the new one. World keeps region objects alive for jobs already holding their pointers.
     terrain_->clearChunks();
     {
-        std::unique_lock lock(world_.mutex());
+        const World::WriteLock lock(world_);
         world_.clearChunks();
     }
     chunks_.clear();
@@ -324,7 +324,7 @@ void Session::forget(int cx, int cz, bool drop) {
     if (!chunks_.erase(World::chunkKey(cx, cz))) return;
     if (keepForgotten_ && !drop) return;
     {
-        std::unique_lock lock(world_.mutex());
+        const World::WriteLock lock(world_);
         world_.removeChunk(cx, cz);
     }
     terrain_->removeChunk(cx, cz);
@@ -350,7 +350,7 @@ void Session::setBlock(int x, int y, int z, u16 id, std::unordered_set<u64>& dir
 void Session::applyBlocks(const std::vector<BlockChange>& changes, bool server) {
     std::unordered_set<u64> dirty;
     {
-        std::unique_lock lock(world_.mutex());
+        const World::WriteLock lock(world_);
         for (const BlockChange& c : changes) {
             auto it = predictions_.find(posKey(c.x, c.y, c.z));
             if (it != predictions_.end()) {  // our own edit is pending: remember, apply on ack
@@ -374,7 +374,7 @@ void Session::acknowledge(int sequence) {
     std::unordered_set<u64> dirty;
     if (verbose_) LOG("net: [%.3f] block_changed_ack %d", nowSeconds(), sequence);
     {
-        std::unique_lock lock(world_.mutex());
+        const World::WriteLock lock(world_);
         ++acks_;
         for (auto it = predictions_.begin(); it != predictions_.end();) {
             if (it->second.sequence > sequence) {
@@ -397,7 +397,7 @@ void Session::acknowledge(int sequence) {
 void Session::applyLight(const LightEvent& e) {
     std::unordered_set<u64> changed;
     {
-        std::unique_lock lock(world_.mutex());
+        const World::WriteLock lock(world_);
         for (const LightSection& s : e.sections)
             if (world_.setLight(e.cx, s.sy, e.cz, s.sky, World::kLightUniform | 0, s.data.empty() ? nullptr : s.data.data()))
                 for (int d = 0; d < 7; ++d) {  // faces in neighbouring sections sample this light too
@@ -413,7 +413,7 @@ void Session::applyLight(const LightEvent& e) {
 void Session::applyBiomes(const BiomesEvent& e) {
     std::unordered_set<u64> dirty;
     {
-        std::unique_lock lock(world_.mutex());
+        const World::WriteLock lock(world_);
         for (const BiomesEvent::Column& c : e.columns) {
             if (!world_.hasChunk(c.cx, c.cz)) continue;
             for (size_t i = c.sections.size(); i-- > 0;)

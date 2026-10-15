@@ -13,6 +13,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <optional>
 
 namespace {
 std::atomic<u64> gBuildNs[5];  // profiling: level-1 grids, coarser grids + far, padding, meshing, colours
@@ -133,6 +134,16 @@ float Terrain::distance(int level, double x0, double y0, double z0, double px, d
 // their 2x2 column footprint at every block height; each coarser level merges 2x2 cells of the previous one. Chunk
 // columns the world lacks take the far columns from their level up. Pure with respect to Terrain state, so it
 // runs on worker threads.
+// A background thread holding the world's lock runs above normal priority meanwhile (declared before the lock, so it
+// ends after it): preempted with it on a busy machine (meshing, generation, the server), it kept the main thread's
+// chunk inserts waiting a scheduler quantum or more (15..120 ms hitches while chunks stream in).
+struct LockPriority {
+    HANDLE thread = GetCurrentThread();
+    int before = GetThreadPriority(thread);
+    LockPriority() { SetThreadPriority(thread, THREAD_PRIORITY_ABOVE_NORMAL); }
+    ~LockPriority() { SetThreadPriority(thread, before); }
+};
+
 void Terrain::buildRegion(const CoarseJob& job, CoarseBuild& out, bool lockWorld, int layerFrom, int layerTo) const {
     const BlockInfo* infos = registry_.infos();
     auto cubeOf = [&](u16 id) -> u16 {
@@ -171,8 +182,9 @@ void Terrain::buildRegion(const CoarseJob& job, CoarseBuild& out, bool lockWorld
     bool present[1024] = {};
     std::vector<u8> occupiedLayers(size_t(heightBlocks_ / 16), 0);
     if (job.source) {
+        std::optional<LockPriority> boost;
         std::shared_lock<std::shared_mutex> lock;
-        if (lockWorld) lock = std::shared_lock(world_.mutex());
+        if (lockWorld) boost.emplace(), lock = std::shared_lock(world_.mutex());
         for (int idx = 0; idx < 1024; ++idx) {
             const World::Column& c = job.source->columns[idx];
             present[idx] = c.count > 0;
@@ -203,8 +215,9 @@ void Terrain::buildRegion(const CoarseJob& job, CoarseBuild& out, bool lockWorld
         nodeColorsDone[level][node] = 1;
         static constexpr u16 kDefaults[BiomeColors::KindCount] = {TintGrass, TintFoliage, TintWater, TintDryFoliage};
         const int s = 1 << level;
+        std::optional<LockPriority> boost;
         std::shared_lock<std::shared_mutex> lock;
-        if (lockWorld && job.source) lock = std::shared_lock(world_.mutex());
+        if (lockWorld && job.source) boost.emplace(), lock = std::shared_lock(world_.mutex());
         u8 lastBiome = World::kUnknownBiome;
         u16 last[BiomeColors::KindCount] = {kDefaults[0], kDefaults[1], kDefaults[2], kDefaults[3]};
         for (int pz = -1; pz <= 16; ++pz)
@@ -246,8 +259,9 @@ void Terrain::buildRegion(const CoarseJob& job, CoarseBuild& out, bool lockWorld
                 const World::Region& region = *job.source;
                 for (int idx = 0; idx < 1024; ++idx) {
                     if (!present[idx]) continue;
+                    std::optional<LockPriority> boost;
                     std::shared_lock<std::shared_mutex> lock;
-                    if (lockWorld) lock = std::shared_lock(world_.mutex());  // edits may move section storage
+                    if (lockWorld) boost.emplace(), world_.yieldToWriters(), lock = std::shared_lock(world_.mutex());  // edits may move section storage
                     const World::Column c = region.columns[idx];
                     const int bx = (idx & 31) * 8, bz = (idx >> 5) * 8;
                     for (int sy = ly - 1; sy <= ly + 1; ++sy) {
@@ -497,6 +511,8 @@ void Terrain::workerMain() {
                 thread_local ColumnColors colors;
                 const Request& r = batch[first + i];
                 {
+                    const LockPriority boost;
+                    world_.yieldToWriters();
                     std::shared_lock lock(world_.mutex());  // the main thread may be editing
                     gatherSection(world_, r.cx, r.sy, r.cz, padded, light);
                     gatherRing(world_, r.cx, r.sy, r.cz, padded, ring);

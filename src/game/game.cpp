@@ -786,7 +786,7 @@ bool Game::redstoneOreInteract(int x, int y, int z, bool light) {
 void Game::edit(int x, int y, int z, u16 id) {
     std::unordered_set<u64> dirty;
     {
-        std::unique_lock lock(world_.mutex());
+        const World::WriteLock lock(world_);
         const u16 old = world_.block(x, y, z);
         if (old == id || !world_.setBlock(x, y, z, id)) return;
         const int cx = x >> 4, sy = y >> 4, cz = z >> 4;
