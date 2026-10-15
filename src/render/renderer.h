@@ -487,7 +487,8 @@ private:
     void trackTranslucent(u32 slot);
     std::vector<u32> activePos_;  // slot -> its index in active_ (UINT32_MAX: not there)
     void applyCutChange(const std::vector<u32>& entering, const std::vector<u32>& leaving);
-    u64 activeVersion_ = 0;
+    u64 activeVersion_ = 0, drawListVersion_ = ~u64(0), translucentOrder_ = 0;
+    u64 uploadedLists_[kFrames][2] = {{~u64(0), 0}, {~u64(0), 0}, {~u64(0), 0}};  // per frame slice: (cut, translucent order)
     double sortedCam_[3] = {};
     u32 segBase_[4] = {}, segCap_[4] = {};
 

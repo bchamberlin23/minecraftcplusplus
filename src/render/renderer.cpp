@@ -1012,6 +1012,7 @@ void Renderer::sortTranslucent(const CameraState& cam) {
     }
     translucent_.resize(n);
     for (size_t i = 0; i < n; ++i) translucent_[i] = u32(keyed[i]);
+    ++translucentOrder_;
 }
 
 void Renderer::render(const CameraState& cam, float viewDistance, const fs::path* screenshot) {
@@ -1117,8 +1118,11 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
             return true;
         });
         if (retiring_.size() != before) ++activeVersion_;
-        drawList_.assign(active_.begin(), active_.end());
-        for (const Retiring& r : retiring_) drawList_.push_back(r.slot);
+        if (drawListVersion_ != activeVersion_) {  // (unchanged most frames: no copy of the whole cut)
+            drawListVersion_ = activeVersion_;
+            drawList_.assign(active_.begin(), active_.end());
+            for (const Retiring& r : retiring_) drawList_.push_back(r.slot);
+        }
         fc.fade[0] = now;
         fc.fade[1] = fadeSeconds_ > 0 ? 1.0f / fadeSeconds_ : 0.0f;
         fc.fade[2] = float(fadeFrame_++ & 1023);
@@ -1196,9 +1200,13 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     Timer shadeTimer;
     if (temporal) shading_->prepare(shadeIn);
     double shadeCpu = shadeTimer.ms();
-    if (activeCount) std::memcpy(activeMapped_ + size_t(fi) * kMaxActive * 2, drawList_.data(), size_t(activeCount) * 4);
-    if (!translucent_.empty())  // right after the active list (CullCS)
-        std::memcpy(activeMapped_ + size_t(fi) * kMaxActive * 2 + activeCount, translucent_.data(), translucent_.size() * 4);
+    // This frame's slice of the lists unless it already holds this cut and this translucent order.
+    if (uploadedLists_[fi][0] != activeVersion_ || uploadedLists_[fi][1] != translucentOrder_) {
+        uploadedLists_[fi][0] = activeVersion_, uploadedLists_[fi][1] = translucentOrder_;
+        if (activeCount) std::memcpy(activeMapped_ + size_t(fi) * kMaxActive * 2, drawList_.data(), size_t(activeCount) * 4);
+        if (!translucent_.empty())  // right after the active list (CullCS)
+            std::memcpy(activeMapped_ + size_t(fi) * kMaxActive * 2 + activeCount, translucent_.data(), translucent_.size() * 4);
+    }
     const D3D12_GPU_VIRTUAL_ADDRESS activeVa = activeLists_->GetGPUVirtualAddress() + u64(fi) * kMaxActive * 2 * 4;
     if (occludedDirty_) {  // each frame in flight's copy once after a change
         std::memcpy(occludedMapped_ + size_t(fi) * kOccludedWords, occludedBits_.data(), size_t(kOccludedWords) * 4);
