@@ -7,7 +7,7 @@ file lists what changed and what is still open.
 
 The owner reported terrain popping in, flashing, and holes that first render filled. The audit found four causes in
 the streaming / LOD path; all are fixed and verified with scripted spectator runs (`build\Lead2`, the platform test
-below). Not rebuilt into `build\Lead` unless the log of this session says so.
+below). Rebuilt into `build\Lead` on October 15 (04:10, and again after the pause fix below).
 
 | Fix | What was wrong |
 |---|---|
@@ -30,11 +30,23 @@ Still open from this audit (design limits, not bugs):
 - Coarse LOD meshes carry sky light 15 and no AO, so underground coarse faces seen through cave mouths are bright.
 - The LOD swap itself (coarse ↔ detail) is instant by design; the two shapes differ, so it reads as a pop.
 
+## October 15 (later): pause shake, Ray Reconstruction
+
+| Fix | What was wrong |
+|---|---|
+| Pause shake (`Ui::beginFrame`, old open item 1) | The world camera's FOV is the option times `lerp(oldFovModifier, fovModifier, partialTick)` (`Ui::fovRadians`), and that partial tick is the HUD's own tick clock, which kept running while paused. The game's partial tick stays put on pause (and so do `oldFovModifier` / `fovModifier`, ticked by `tickHud` only unpaused), so whenever the modifier was still converging at the pause (sprint start / stop, flight toggled, a speed attribute, a bow) the FOV swung between its last two values 20 times a second: a zoom pump that reads as jitter. Standing still the two are equal, so nothing showed, which is why earlier scripted runs found nothing. The HUD's partial tick now freezes while paused, like `Minecraft.pausePartialTick`; everything else the HUD lerps between ticks (view effects, title / action bar timing) stays put too. |
+| DLSS Ray Reconstruction missing from `build\Lead` | The code (`dlss.cpp` `RayReconstruction`, `pathtrace.cpp`) was complete, but `third_party/streamline/bin/` (gitignored) was empty, so the CMake copy step shipped nothing and `build\Lead` still had the Oct 11 DLL set without `sl.dlss_d.dll` / `nvngx_dlssd.dll` (log: "DLSS Ray Reconstruction unavailable: plugin missing"). The ten runtime DLLs are restored into that folder from `build/sdk_downloads/streamline-sdk-v2.14.1.zip` (`bin/x64`), and the two RR ones were copied into `build\Lead`. A path-traced run on `build\Lead2` logs "DLSS Ray Reconstruction 310.9.1" and "path traced high, DLSS Ray Reconstruction". |
+
+Verification of the pause fix (`scratchpad/pause3.txt`): creative, `/attribute @s minecraft:movement_speed base set 0.15`,
+Escape 150 ms later, five screenshots 170 ms apart (not a multiple of the 50 ms tick) on the pause screen. Old build:
+consecutive frames differ by 0.96 / 0.48 / 0.09 / 0.39 (mean abs luma, centre); new build: 0.04, the same as a still
+scene. A flight toggle 150 ms before the pause was too small to measure either way.
+
 ## State
 
 - Branch `master`. Every commit is local; nothing is pushed (pushing was never authorized).
-- `build\Lead` (the owner's build) was rebuilt at 23:20 and includes everything below. Test builds go to
-  `build\Lead2`.
+- `build\Lead` (the owner's build) was rebuilt after the last commit of October 15 and includes everything below.
+  Test builds go to `build\Lead2`.
 - The working tree is clean apart from `docs/audit-26.3/` and `tools/audit_26_3.py`. Those are untracked and not
   ours; leave them alone.
 
@@ -55,9 +67,8 @@ old/new runs; the machine was busy at the time, so only the relative change is m
 
 ## Open items
 
-1. **Pause shaking while moving** (owner report). The fix in `fc6cf3e` was never confirmed: scripted runs could not
-   reproduce the shaking with either the old or the new build. Ask the owner whether it still happens. If it does,
-   look at the TAA/DLSS jitter and the motion vectors on paused frames.
+1. **Pause shaking while moving** (owner report). Fixed October 15: the HUD's partial tick (the dynamic FOV lerp)
+   kept running while paused. See the section above; confirm with the owner.
 2. **Coarse LOD visible close to the camera** while chunks have not arrived yet (server or local generator). Meshing
    keeps up now, so what remains is chunk arrival plus the generated-chunk apply, about 0.7 ms a frame on the main
    thread. Inserts and lighting could move off the main thread, but only once every main-thread world read takes

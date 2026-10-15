@@ -1666,7 +1666,9 @@ void Ui::beginFrame(double dt) {
         s.tickClock -= kTick;
         s.tickHud();
     }
-    s.partialTick = float(s.tickClock / kTick);
+    // Paused (Minecraft.isPaused): the partial tick stays put like the game's. It kept running: anything the HUD lerps
+    // between ticks (the dynamic FOV above all) swung between its last two values 20 times a second on the pause screen.
+    if (!s.paused) s.partialTick = float(s.tickClock / kTick);
     s.nativeMods.frame(dt);  // native mods' on_tick at 20 Hz
     s.frameMs = dt * 1000.0;
     s.frameTimes.push_back(float(dt));
