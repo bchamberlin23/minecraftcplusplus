@@ -238,8 +238,8 @@ private:
     size_t inFlight_ = 0;
     u64 epoch_ = 0;  // main thread only; copied into jobs while dispatching
     std::unordered_map<u64, u32> stamps_;  // section -> edit count
-    std::vector<u32> active_;
-    std::vector<std::vector<u32>> cutParts_;  // per region: its part of active_
+    size_t activeCount_ = 0;  // slots in the cut (cutParts_ together)
+    std::vector<std::vector<u32>> cutParts_;  // per region: its part of the cut
     TerrainStats stats_;
     bool smartCull_ = true, graphSmartCull_ = true, graphDirty_ = true;
     int graphCam_[3] = {INT32_MIN, INT32_MIN, INT32_MIN};

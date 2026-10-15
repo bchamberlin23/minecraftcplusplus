@@ -980,9 +980,9 @@ void Terrain::clearChunks() {
         std::fill(std::begin(r.colLevel), std::end(r.colLevel), u8(0));
         markCut(int(i));
     }
-    active_.clear();
     for (auto& part : cutParts_) part.clear();
-    renderer_.setActive(active_);
+    activeCount_ = 0;
+    renderer_.setActive({});
     scanned_ = false;
     farScanTime_ = -1e9;
     cutDirty_ = true;
@@ -1082,6 +1082,8 @@ void Terrain::update(double x, double y, double z, bool waitForDetail) {
     // again only when its nodes changed (markCut) or the camera moved past its slack (a level boundary).
     {
         const Timer tc;
+        thread_local std::vector<u32> oldPart, newPart, added, removed;
+        added.clear(), removed.clear();
         cutParts_.resize(regions_.size());
         cutCache_.resize(regions_.size());
         size_t walked = 0, byDirty = 0, byMove = 0;
@@ -1095,22 +1097,25 @@ void Terrain::update(double x, double y, double z, bool waitForDetail) {
             byDirty += c.dirty, byMove += !c.dirty;
             minSlack = std::min(minSlack, c.slack);
             std::vector<u32>& part = cutParts_[i];
+            oldPart.assign(part.begin(), part.end());
             part.clear();
             double slack = 1e30;
             collect(regions_[i], kMaxLevel, 0, 0, x, z, part, slack);
             c = {x, z, slack, false};
             ++walked;
+            // the region's changes only (the renderer's whole-cut update took ~1 ms of 165k slots each walk)
+            newPart.assign(part.begin(), part.end());
+            std::sort(oldPart.begin(), oldPart.end()), std::sort(newPart.begin(), newPart.end());
+            std::set_difference(newPart.begin(), newPart.end(), oldPart.begin(), oldPart.end(), std::back_inserter(added));
+            std::set_difference(oldPart.begin(), oldPart.end(), newPart.begin(), newPart.end(), std::back_inserter(removed));
+            activeCount_ += part.size(), activeCount_ -= oldPart.size();
         }
         cutDirty_ = false;
-        if (walked) {
-            active_.clear();
-            for (const auto& part : cutParts_) active_.insert(active_.end(), part.begin(), part.end());
-            renderer_.setActive(active_);
-        }
+        if (!added.empty() || !removed.empty()) renderer_.changeActive(added, removed);
         updateOcclusion(x, y, z);
         if (profile && tc.ms() > 1.0)
             LOG("terrain cut: %.2f ms | %zu of %zu regions walked (global %d, dirty %zu, moved %zu, min slack %.2f), %zu active",
-                tc.ms(), walked, regions_.size(), int(global), byDirty, byMove, minSlack, active_.size());
+                tc.ms(), walked, regions_.size(), int(global), byDirty, byMove, minSlack, activeCount_);
     }
     partMs[4] = tPart.ms();
     if (profile) {  // averages over 2000 updates
@@ -1130,7 +1135,7 @@ void Terrain::update(double x, double y, double z, bool waitForDetail) {
 
     stats_.detailResident = resident_.size();
     stats_.detailPending = wanted_.size() + inFlight_;
-    stats_.active = active_.size();
+    stats_.active = activeCount_;
     if (farGen_) {
         stats_.farRegions = 0;
         for (const RegionLod& r : regions_) stats_.farRegions += r.farData != nullptr;

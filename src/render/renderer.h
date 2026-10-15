@@ -258,6 +258,8 @@ public:
     // The LOD cut's slots. Sections entering or leaving it cross-fade (dithered) over fadeSeconds; a section replaced
     // by one at the same place and level (an edit, new light) swaps at once.
     void setActive(const std::vector<u32>& slots);
+    // The cut's changes only (each walk of a few regions; setActive is the whole cut).
+    void changeActive(const std::vector<u32>& added, const std::vector<u32>& removed);
     // SectionOcclusionGraph: full-detail slots the graph did not reach this time (the GPU cull skips them).
     void setOccluded(const std::vector<u32>& slots);
     // Two-phase occlusion culling (renderer.cpp): the indirect draws of a segment's phase, and phase B's cull.
@@ -483,6 +485,8 @@ private:
     std::vector<std::array<float, 3>> translucentCenters_;
     u64 trVersion_ = 0, trSortedVersion_ = ~u64(0);
     void trackTranslucent(u32 slot);
+    std::vector<u32> activePos_;  // slot -> its index in active_ (UINT32_MAX: not there)
+    void applyCutChange(const std::vector<u32>& entering, const std::vector<u32>& leaving);
     u64 activeVersion_ = 0;
     double sortedCam_[3] = {};
     u32 segBase_[4] = {}, segCap_[4] = {};

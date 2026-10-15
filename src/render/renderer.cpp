@@ -723,6 +723,7 @@ bool Renderer::createWorldStorage(u64 cubeQuads, u64 modelQuads, u32 slots) {
     slotCapacity_ = slots;
     slotHigh_ = 0;
     active_.clear();
+    activePos_.clear();
     drawList_.clear();
     retiring_.clear();
     cutMark_.clear();
@@ -895,21 +896,51 @@ void Renderer::beginWorldReveal(double x, double z) {
 }
 
 void Renderer::setActive(const std::vector<u32>& slots) {
-    const float now = fadeNow();
     if (cutMark_.size() < slotCapacity_) cutMark_.resize(slotCapacity_, 0);
     ++cutStamp_;
     for (u32 s : slots)
         if (s < slotCapacity_) cutMark_[s] = cutStamp_;
+    std::vector<u32> leaving;
+    for (u32 s : active_)
+        if (s < slotCapacity_ && slots_[s].inCut && cutMark_[s] != cutStamp_) leaving.push_back(s);
+    applyCutChange(slots, leaving);
+    active_ = slots;
+    activePos_.assign(slotCapacity_, UINT32_MAX);
+    for (u32 i = 0; i < u32(active_.size()); ++i)
+        if (active_[i] < slotCapacity_) activePos_[active_[i]] = i;
+    ++activeVersion_;
+}
+
+void Renderer::changeActive(const std::vector<u32>& added, const std::vector<u32>& removed) {
+    std::vector<u32> leaving;
+    for (u32 s : removed)
+        if (s < slotCapacity_ && slots_[s].inCut) leaving.push_back(s);
+    applyCutChange(added, leaving);
+    if (activePos_.size() < slotCapacity_) activePos_.resize(slotCapacity_, UINT32_MAX);
+    for (u32 s : removed) {  // swap-remove
+        if (s >= activePos_.size() || activePos_[s] == UINT32_MAX) continue;
+        const u32 i = activePos_[s], last = active_.back();
+        active_[i] = last, activePos_[last] = i;
+        active_.pop_back();
+        activePos_[s] = UINT32_MAX;
+    }
+    for (u32 s : added)
+        if (s < slotCapacity_ && activePos_[s] == UINT32_MAX) activePos_[s] = u32(active_.size()), active_.push_back(s);
+    ++activeVersion_;
+}
+
+// Sections entering (`entering`) and leaving the cut: fades, and a section entering at the place (and level) of a
+// leaving one replaces it at once.
+void Renderer::applyCutChange(const std::vector<u32>& entering, const std::vector<u32>& leavingSlots) {
+    const float now = fadeNow();
     auto key = [&](u32 s) {
         const i32* o = slots_[s].origin;
         return (u64(u32(o[0]) & 0xFFFFFF) << 40) ^ (u64(u32(o[2]) & 0xFFFFFF) << 16) ^ (u64(u32(o[1]) & 0xFFF) << 4) ^
                u64(o[3]);
     };
-    // Sections leaving the cut, by place and level: a section entering at the same place replaces it at once.
     std::unordered_map<u64, u32> leaving;
-    for (u32 s : active_)
-        if (s < slotCapacity_ && slots_[s].inCut && cutMark_[s] != cutStamp_) leaving[key(s)] = s;
-    for (u32 s : slots) {
+    for (u32 s : leavingSlots) leaving[key(s)] = s;
+    for (u32 s : entering) {
         if (s >= slotCapacity_ || slots_[s].inCut) continue;
         Slot& e = slots_[s];
         e.inCut = true;
@@ -944,8 +975,6 @@ void Renderer::setActive(const std::vector<u32>& slots) {
         trackTranslucent(s);
         retiring_.push_back({s, start + fadeSeconds_});
     }
-    active_ = slots;
-    ++activeVersion_;
 }
 
 u64 Renderer::arenaBytesUsed() const {
