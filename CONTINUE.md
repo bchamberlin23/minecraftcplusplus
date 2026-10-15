@@ -341,5 +341,15 @@ CPU (~0.55 ms) and GPU (~0.68 ms) roughly balanced (`--profile` prints the main 
   - Tried and reverted: instanced chunk draws of the terrain (one draw per pass, per-direction ranges): slower (g-buffer
     1.0 -> 1.46..1.7 ms); per-direction shadow caster ranges: no gain. --profile's per-pass GPU times are now means by
     pass name (passes that skip frames used to shift the columns).
-  - Left: DLSS / Ray Reconstruction at native (0.53 / 3.0 ms) is the user's quality choice; the path tracer itself is
-    ~2 ms for ~6 rays a pixel.
+  - Second pass: two-phase Hi-Z occlusion culling of the terrain (phase A: last frame's visible sections, a depth
+    pyramid buffer, phase B: the rest tested against it; MCPP_NO_OCCLUSION=1 turns it off; shader packs draw all at
+    once); the cut's changes reach the renderer as added / removed slots (Renderer::changeActive) and the draw list is
+    copied only when it changed; a camera exactly on an LOD boundary no longer re-walks regions every frame; path
+    tracing uses Russian roulette past each bounce surface (High trace 2.28 -> 1.81 ms, Ultra 6.29 -> 4.20 ms).
+    Steady state now: Shaders Off ~820..860 fps, High ~510, Ultra ~410, path traced ~141 (GPU-bound; run-to-run
+    variance of a few %).
+  - Measured and left: SSR is 0.165 ms of High's 0.30 ms translucent pass (fewer steps would show); shadow cascade 0
+    every frame costs 0.01 ms; entities ~0.8 us each on the CPU (200 mobs: 0.25 ms; parallelising needs the
+    renderer's shared state split); the GPU quad buffer's 1.5x growth stalls ~19 ms once; the generated chunks'
+    insert + light (~2 ms each, main thread, at least one per frame while they arrive).
+  - Left: DLSS / Ray Reconstruction at native (0.53 / 3.0 ms) is the user's quality choice.
