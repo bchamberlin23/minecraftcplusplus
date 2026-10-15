@@ -1233,7 +1233,9 @@ int wmain(int argc, wchar_t** argv) {
         if (session) terrain.setFarActive(!genDimension.empty() && session->dimension().name == genDimension);
         if (session) game.player().fastLava = session->dimension().fastLava;
         if (session) game.player().waterEvaporates = session->dimension().waterEvaporates;
-        if (haveEntities) entities.frame(dt);
+        // Paused (Minecraft.isPaused): the client level does not tick and its partial tick stays put; time kept going
+        // made whatever moved last (mobs, our hand's bob) swing between its last two positions on the pause screen.
+        if (haveEntities) entities.frame(game.paused ? 0.0 : dt);
         if (haveEntities) entities.viewEntity = game.cameraMode == 0 ? game.cameraEntity : -1;  // set_camera
         {  // GameRenderer.checkEntityPostEffect: on a camera or perspective change (first person only); the toggle key
             static int lastCamera = INT_MIN, lastMode = -1, lastToggles = 0;

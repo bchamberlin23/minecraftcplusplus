@@ -1766,7 +1766,7 @@ void Visuals::Impl::update() {
     lastTime = now;
     self.stats_.items = self.stats_.tags = self.stats_.instances = 0;
     if (game) {
-        tickClock += dt;
+        if (!game->paused) tickClock += dt;  // paused: nothing ticks (the hand kept walking with the frozen motion)
         int n = 0;
         while (tickClock >= 0.05 && n < 5) tickClock -= 0.05, ++n, tickLocal(), tickEmitters();
         if (tickClock >= 0.05) tickClock = 0;
