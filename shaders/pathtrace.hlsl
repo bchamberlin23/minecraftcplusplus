@@ -277,6 +277,12 @@ float3 bounceRadiance(RtSurface s, float dist, uint bounces, bool emissive, inou
             break;
         }
         total += weight * albedo * light;
+        // Russian roulette: the path goes on with a probability following its throughput, the survivors weighted up
+        // (unbiased; most of the further bounces' rays are saved, the denoiser takes the extra noise).
+        const float3 next = weight * albedo;
+        const float survive = clamp(max(next.r, max(next.g, next.b)), 0.25, 1.0);
+        if (rng.next() >= survive) break;
+        weight /= survive;
         float3 d = cosineDir(s.n, float2(rng.next(), rng.next()));
         RtSurface h;
         float3 trans;
