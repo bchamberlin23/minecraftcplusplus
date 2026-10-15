@@ -1090,7 +1090,8 @@ void Terrain::update(double x, double y, double z, bool waitForDetail) {
         for (size_t i = 0; i < regions_.size(); ++i) {
             CutCache& c = cutCache_[i];
             const double mx = x - c.x, mz = z - c.z;
-            if (!cutDirty_ && !c.dirty && mx * mx + mz * mz < c.slack * c.slack) continue;
+            // (<=: a camera exactly on a level boundary, slack 0, needs no new walk until it moves)
+            if (!cutDirty_ && !c.dirty && mx * mx + mz * mz <= c.slack * c.slack) continue;
             byDirty += c.dirty, byMove += !c.dirty;
             minSlack = std::min(minSlack, c.slack);
             std::vector<u32>& part = cutParts_[i];
@@ -1112,6 +1113,17 @@ void Terrain::update(double x, double y, double z, bool waitForDetail) {
                 tc.ms(), walked, regions_.size(), int(global), byDirty, byMove, minSlack, active_.size());
     }
     partMs[4] = tPart.ms();
+    if (profile) {  // averages over 2000 updates
+        static double sum[6];
+        static int frames = 0;
+        for (int i = 0; i < 5; ++i) sum[i] += partMs[i];
+        sum[5] += tTotal.ms();
+        if (++frames == 2000) {
+            LOG("terrain update avg %.3f ms | coarse %.3f, far apply %.3f, far schedule %.3f, detail %.3f, cut %.3f", sum[5] / frames,
+                sum[0] / frames, sum[1] / frames, sum[2] / frames, sum[3] / frames, sum[4] / frames);
+            std::fill(sum, sum + 6, 0.0), frames = 0;
+        }
+    }
     if (profile && tTotal.ms() > 4.0)
         LOG("terrain update %.1f ms | coarse %.1f, far apply %.1f (%d regions), far schedule %.1f, detail %.1f, cut %.1f",
             tTotal.ms(), partMs[0], partMs[1], farApplied, partMs[2], partMs[3], partMs[4]);
