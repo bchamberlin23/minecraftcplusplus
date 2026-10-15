@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "CullCS.h"
 #include "HzbCS.h"
@@ -940,6 +941,46 @@ void Renderer::applyCutChange(const std::vector<u32>& entering, const std::vecto
     };
     std::unordered_map<u64, u32> leaving;
     for (u32 s : leavingSlots) leaving[key(s)] = s;
+    // An LOD swap (full detail entering for its coarse node, or the node back for it; any two levels) is the same
+    // terrain: the newcomer shows at once and the one it replaces goes at once. Dissolving the two different shapes
+    // into each other showed as a see-through ghost. Fades are for terrain appearing from nothing or going into it
+    // (Chunk Fade). Matched by columns: a section's own node (`own`) and every coarser node holding it (`inside`).
+    constexpr int kLevels = 8;
+    auto node = [](int level, const i32* o) {
+        return u64(level) << 56 ^ u64(u32(o[0] >> (4 + level)) & 0xFFFFFFF) << 28 ^ u64(u32(o[2] >> (4 + level)) & 0xFFFFFFF);
+    };
+    std::unordered_map<u64, float> leavingOwn, leavingInside;  // node -> the latest fade-in start there (0: shown)
+    std::unordered_set<u64> enteringOwn, enteringInside;
+    for (u32 s : leavingSlots) {
+        const i32* o = slots_[s].origin;
+        const float f = std::max(slots_[s].fade, 0.0f);
+        float& own = leavingOwn.try_emplace(node(o[3], o), f).first->second;
+        own = std::max(own, f);
+        for (int l = o[3]; l < kLevels; ++l) {
+            float& in = leavingInside.try_emplace(node(l, o), f).first->second;
+            in = std::max(in, f);
+        }
+    }
+    for (u32 s : entering) {
+        if (s >= slotCapacity_) continue;
+        const i32* o = slots_[s].origin;
+        enteringOwn.insert(node(o[3], o));
+        for (int l = o[3]; l < kLevels; ++l) enteringInside.insert(node(l, o));
+    }
+    // The fade a section entering in an LOD swap continues (0: none), or -1 when it is not one.
+    auto swapFade = [&](const i32* o) {
+        float f = -1.0f;
+        if (auto it = leavingInside.find(node(o[3], o)); it != leavingInside.end()) f = it->second;
+        for (int l = o[3] + 1; l < kLevels; ++l)
+            if (auto it = leavingOwn.find(node(l, o)); it != leavingOwn.end()) f = std::max(f, it->second);
+        return f;
+    };
+    auto swappedOut = [&](const i32* o) {
+        if (enteringInside.count(node(o[3], o))) return true;
+        for (int l = o[3] + 1; l < kLevels; ++l)
+            if (enteringOwn.count(node(l, o))) return true;
+        return false;
+    };
     for (u32 s : entering) {
         if (s >= slotCapacity_ || slots_[s].inCut) continue;
         Slot& e = slots_[s];
@@ -955,6 +996,8 @@ void Renderer::applyCutChange(const std::vector<u32>& entering, const std::vecto
             e.retiring = false;
             std::erase_if(retiring_, [&](const Retiring& r) { return r.slot == s; });
             setFade(s, now - (1.0f - fadeProgress(e.fade, now)) * fadeSeconds_);
+        } else if (const float f = swapFade(e.origin); f >= 0.0f) {
+            setFade(s, f);
         } else {
             setFade(s, entranceTime(e, now));
         }
@@ -963,7 +1006,7 @@ void Renderer::applyCutChange(const std::vector<u32>& entering, const std::vecto
     for (auto& [k, s] : leaving) {
         Slot& l = slots_[s];
         l.inCut = false;
-        if (fadeSeconds_ <= 0) {
+        if (fadeSeconds_ <= 0 || swappedOut(l.origin)) {
             trackTranslucent(s);
             if (l.freeLater) freeSlot(s);
             continue;
