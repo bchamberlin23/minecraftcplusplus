@@ -14,6 +14,7 @@ cbuffer Frame : register(b0) {
     float4 gFade;        // x = fade clock (seconds), y = 1 / fade duration, z = frame index, w = temporal AA on
     float4 gShade[2];    // CardinalLighting by face: down up north south, west east
     float4 gFogRender;   // the render distance fog (cylindrical): x = start, y = end (gFogParams.xy: environmental)
+    uint4 gHzbInfo;      // occlusion culling: xy = scene depth size, z = pyramid levels (0: off)
 };
 #include "lightmap.hlsli"
 #include "fog.hlsli"

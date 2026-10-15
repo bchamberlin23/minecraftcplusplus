@@ -18,6 +18,7 @@
 #include <unordered_map>
 
 #include "CullCS.h"
+#include "HzbCS.h"
 #include "TranslucentCountCS.h"
 #include "TranslucentEmitCS.h"
 #include "TranslucentScanCS.h"
@@ -55,8 +56,9 @@ struct FrameConstants {
     float fade[4];  // x = fade clock (seconds), y = 1 / fade duration
     float shade[2][4];  // cardinal shade by face: down up north south, west east
     float fogRender[4];  // render distance fog (cylindrical): start, end
+    u32 hzb[4];  // occlusion culling: scene depth width, height, pyramid levels (0: off)
 };
-static_assert(sizeof(FrameConstants) == 496);
+static_assert(sizeof(FrameConstants) == 512);
 
 struct GpuSection {
     i32 origin[4];  // xyz in blocks, w = LOD level
@@ -238,6 +240,7 @@ bool Renderer::init(HWND hwnd, u32 width, u32 height, bool debug, bool vsync) {
     occluded_->Map(0, nullptr, reinterpret_cast<void**>(&occludedMapped_));
     std::memset(occludedMapped_, 0, size_t(kOccludedWords) * 4 * kFrames);
     occludedBits_.assign(kOccludedWords, 0);
+    visBits_ = createBuffer(u64(kOccludedWords) * 4, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
     remap_ = createBuffer(u64(kRemapCapacity) * 4 * kFrames, D3D12_HEAP_TYPE_UPLOAD);
     remap_->Map(0, nullptr, reinterpret_cast<void**>(&remapMapped_));
     remapCpu_.resize(kRemapCapacity);
@@ -398,7 +401,7 @@ bool Renderer::createPipelines() {
     ptRanges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
     for (auto& pr : ptRanges) pr.NumDescriptors = PathTracer::kTableSize, pr.RegisterSpace = 4;
 
-    D3D12_ROOT_PARAMETER params[20]{};
+    D3D12_ROOT_PARAMETER params[22]{};
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;  // b1: quadOffset, sectionIndex
     params[0].Constants.ShaderRegister = 1;
     params[0].Constants.Num32BitValues = 2;
@@ -447,6 +450,10 @@ bool Renderer::createPipelines() {
     params[18].Descriptor.ShaderRegister = 4;
     params[19].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;  // t8: slots the section occlusion graph culls (bits)
     params[19].Descriptor.ShaderRegister = 8;
+    params[20].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;  // u2: the depth pyramid (occlusion culling)
+    params[20].Descriptor.ShaderRegister = 2;
+    params[21].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;  // u3: sections drawn last frame (bits)
+    params[21].Descriptor.ShaderRegister = 3;
 
     D3D12_STATIC_SAMPLER_DESC samplers[7]{};
     D3D12_STATIC_SAMPLER_DESC& samp = samplers[0];
@@ -477,7 +484,7 @@ bool Renderer::createPipelines() {
     }
 
     D3D12_ROOT_SIGNATURE_DESC rd{};
-    rd.NumParameters = 20;
+    rd.NumParameters = 22;
     rd.pParameters = params;
     rd.NumStaticSamplers = 7;
     rd.pStaticSamplers = samplers;
@@ -543,6 +550,9 @@ bool Renderer::createPipelines() {
     cd.pRootSignature = rootSig_.Get();
     cd.CS = {g_CullCS, sizeof(g_CullCS)};
     if (!check(device_->CreateComputePipelineState(&cd, IID_PPV_ARGS(&psoCull_)), "CreateComputePipelineState"))
+        return false;
+    cd.CS = {g_HzbCS, sizeof(g_HzbCS)};
+    if (!check(device_->CreateComputePipelineState(&cd, IID_PPV_ARGS(&psoHzb_)), "CreateComputePipelineState"))
         return false;
     const D3D12_SHADER_BYTECODE translucent[3] = {{g_TranslucentCountCS, sizeof(g_TranslucentCountCS)},
                                                   {g_TranslucentScanCS, sizeof(g_TranslucentScanCS)},
@@ -1092,6 +1102,21 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
         std::memcpy(fc.shade, shade, sizeof(shade));
     }
     fc.misc[0] = activeCount;
+    occlusion_ = false;
+    if (sections_ && activeCount && !packActive && (shaded || plainAa) && shading_ && shading_->sceneDepth_ && visBits_ &&
+        !std::getenv("MCPP_NO_OCCLUSION")) {
+        u32 w = (shading_->width_ + 1) / 2, h = (shading_->height_ + 1) / 2, levels = 1;
+        u64 floats = u64(w) * h;
+        while (w > 1 || h > 1) w = std::max((w + 1) / 2, 1u), h = std::max((h + 1) / 2, 1u), floats += u64(w) * h, ++levels;
+        if (floats > hzbFloats_) {
+            hzb_ = createBuffer(floats * 4, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+            hzbFloats_ = hzb_ ? floats : 0;
+        }
+        if (hzb_) {
+            occlusion_ = true, hzbLevels_ = levels;
+            fc.hzb[0] = shading_->width_, fc.hzb[1] = shading_->height_, fc.hzb[2] = levels;
+        }
+    }
     sortTranslucent(cam);
     fc.misc[3] = u32(translucent_.size());
     fc.misc[2] = textureFiltering_;
@@ -1176,7 +1201,7 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
 
     if (haveWorld) {
         transition(counts_.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
-        list_->CopyBufferRegion(counts_.Get(), 0, zeros_.Get(), 0, 16);
+        list_->CopyBufferRegion(counts_.Get(), 0, zeros_.Get(), 0, 32);  // both occlusion phases
         transition(counts_.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         transition(args_.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         list_->SetComputeRootSignature(rootSig_.Get());
@@ -1187,6 +1212,11 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
         list_->SetComputeRootUnorderedAccessView(6, args_->GetGPUVirtualAddress());
         list_->SetComputeRootShaderResourceView(7, activeVa);
         list_->SetComputeRootShaderResourceView(19, occluded_->GetGPUVirtualAddress() + u64(fi) * kOccludedWords * 4);
+        occludedVa_ = occluded_->GetGPUVirtualAddress() + u64(fi) * kOccludedWords * 4;
+        if (visBits_) list_->SetComputeRootUnorderedAccessView(21, visBits_->GetGPUVirtualAddress());
+        if (hzb_) list_->SetComputeRootUnorderedAccessView(20, hzb_->GetGPUVirtualAddress());
+        const u32 mode[2] = {occlusion_ ? 1u : 0u, 0};  // phase A: the sections drawn last frame
+        list_->SetComputeRoot32BitConstants(0, 2, mode, 0);
         list_->Dispatch((activeCount + 63) / 64, 1, 1);
         if (!translucent_.empty()) {  // translucent commands in sorted order: count, scan, emit (cull.hlsl)
             const u32 groups = (u32(translucent_.size()) + 1023) / 1024;
@@ -1297,12 +1327,11 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
     }
     bindWorld();
     {
-        auto pass = [&](ID3D12PipelineState* pso, int seg, ID3D12Resource* quads) {
+        auto pass = [&](ID3D12PipelineState* pso, int seg, ID3D12Resource* quads, u32 phase = 0) {
             if (!haveWorld) return;
             list_->SetPipelineState(pso);
             list_->SetGraphicsRootShaderResourceView(2, quads->GetGPUVirtualAddress());
-            list_->ExecuteIndirect(cmdSig_.Get(), segCap_[seg], args_.Get(), u64(segBase_[seg]) * kCommandBytes,
-                                   counts_.Get(), u64(seg) * 4);
+            drawSegment(list_.Get(), seg, phase);
         };
         if (plainAa) shading_->mark(list_.Get(), "sky");
         pass(psoOpaque_.Get(), 0, cubeQuads_.Get());
@@ -1311,6 +1340,14 @@ void Renderer::render(const CameraState& cam, float viewDistance, const fs::path
         if (plainAa) shading_->mark(list_.Get(), "cutout");
         pass(psoModel_.Get(), 3, modelQuads_.Get());
         if (plainAa) shading_->mark(list_.Get(), "models");
+        if (occlusion_) {  // what the sections drawn so far hide stays undrawn
+            occlusionPhaseB(list_.Get(), cb, activeVa, activeCount);
+            bindWorld();
+            pass(psoOpaque_.Get(), 0, cubeQuads_.Get(), 1);
+            pass(psoCutout_.Get(), 1, cubeQuads_.Get(), 1);
+            pass(psoModel_.Get(), 3, modelQuads_.Get(), 1);
+            if (plainAa) shading_->mark(list_.Get(), "occlusion phase B");
+        }
         if (!passes_[1].empty()) {
             runPasses(PassStage::World, pc);
             bindWorld();
@@ -1569,6 +1606,58 @@ void Renderer::preparePasses(const PassContext& ctx) {
 
 void Renderer::runShadowPasses(const ShadowContext& sc) {
     for (RenderPass* p : passes_[int(PassStage::World)]) p->drawShadow(sc);
+}
+
+void Renderer::drawSegment(ID3D12GraphicsCommandList* list, int seg, u32 phase) {
+    const u32 cap = seg == 2 ? segCap_[seg] : segCap_[seg] / 2;  // opaque / cutout / models: half per occlusion phase
+    list->ExecuteIndirect(cmdSig_.Get(), cap, args_.Get(), u64(segBase_[seg] + phase * (segCap_[seg] / 2)) * kCommandBytes,
+                          counts_.Get(), u64(phase * 4 + seg) * 4);
+}
+
+// Two-phase occlusion culling, between the terrain passes: the depth pyramid of what phase A drew (the sections
+// visible last frame), then the cull again (mode 2) testing every section against it; phase B's commands draw the
+// newly visible ones and the visibility bits are what the next frame's phase A draws.
+void Renderer::occlusionPhaseB(ID3D12GraphicsCommandList* list, D3D12_GPU_VIRTUAL_ADDRESS cb, D3D12_GPU_VIRTUAL_ADDRESS activeVa,
+                               u32 activeCount) {
+    ID3D12Resource* depth = shading_->sceneDepth_.Get();
+    auto state = [&](ID3D12Resource* res, D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to) {
+        D3D12_RESOURCE_BARRIER b{};
+        b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        b.Transition.pResource = res;
+        b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        b.Transition.StateBefore = from, b.Transition.StateAfter = to;
+        list->ResourceBarrier(1, &b);
+    };
+    D3D12_RESOURCE_BARRIER uav{};
+    uav.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    const D3D12_RESOURCE_STATES read = D3D12_RESOURCE_STATE_DEPTH_READ | D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
+    state(depth, D3D12_RESOURCE_STATE_DEPTH_WRITE, read);
+    shading_->bindCompute(list, cb);
+    list->SetComputeRootUnorderedAccessView(20, hzb_->GetGPUVirtualAddress());
+    list->SetPipelineState(psoHzb_.Get());
+    u32 w = (shading_->width_ + 1) / 2, h = (shading_->height_ + 1) / 2;
+    for (u32 level = 0; level < hzbLevels_; ++level) {
+        const u32 c[2] = {level, 0};
+        list->SetComputeRoot32BitConstants(0, 2, c, 0);
+        list->Dispatch((w + 7) / 8, (h + 7) / 8, 1);
+        list->ResourceBarrier(1, &uav);
+        w = std::max((w + 1) / 2, 1u), h = std::max((h + 1) / 2, 1u);
+    }
+    state(counts_.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    state(args_.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    list->SetPipelineState(psoCull_.Get());
+    list->SetComputeRootShaderResourceView(3, sections_->GetGPUVirtualAddress());
+    list->SetComputeRootUnorderedAccessView(5, counts_->GetGPUVirtualAddress());
+    list->SetComputeRootUnorderedAccessView(6, args_->GetGPUVirtualAddress());
+    list->SetComputeRootShaderResourceView(7, activeVa);
+    list->SetComputeRootShaderResourceView(19, occludedVa_);
+    list->SetComputeRootUnorderedAccessView(21, visBits_->GetGPUVirtualAddress());
+    const u32 mode[2] = {2, 0};
+    list->SetComputeRoot32BitConstants(0, 2, mode, 0);
+    list->Dispatch((activeCount + 63) / 64, 1, 1);
+    state(counts_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+    state(args_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+    state(depth, read, D3D12_RESOURCE_STATE_DEPTH_WRITE);
 }
 
 void Renderer::runPasses(PassStage stage, const PassContext& ctx) {

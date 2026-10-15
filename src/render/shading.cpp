@@ -874,11 +874,10 @@ void Renderer::Shading::record(ID3D12GraphicsCommandList* list, const FrameInput
         D3D12_INDEX_BUFFER_VIEW ibv{r.indexBuffer_->GetGPUVirtualAddress(), kQuadIndexCapacity * 6 * 4, DXGI_FORMAT_R32_UINT};
         list->IASetIndexBuffer(&ibv);
     };
-    auto worldPass = [&](ID3D12PipelineState* pso, int seg, ID3D12Resource* quads) {
+    auto worldPass = [&](ID3D12PipelineState* pso, int seg, ID3D12Resource* quads, u32 phase = 0) {
         list->SetPipelineState(pso);
         list->SetGraphicsRootShaderResourceView(RootQuads, quads->GetGPUVirtualAddress());
-        list->ExecuteIndirect(r.cmdSig_.Get(), r.segCap_[seg], r.args_.Get(), u64(r.segBase_[seg]) * kCommandBytes,
-                              r.counts_.Get(), u64(seg) * 4);
+        r.drawSegment(list, seg, phase);
     };
     auto runStage = [&](PassStage stage) {
         if (r.passes_[int(stage)].empty()) return;
@@ -994,6 +993,21 @@ void Renderer::Shading::record(ID3D12GraphicsCommandList* list, const FrameInput
         worldPass(psoGbuf_.Get(), 0, r.cubeQuads_.Get());
         worldPass(psoGbufCutout_.Get(), 1, r.cubeQuads_.Get());
         worldPass(psoGbufModel_.Get(), 3, r.modelQuads_.Get());
+        if (r.occlusion_) {  // what the sections drawn so far hide stays undrawn
+            mark(list, "g-buffer");
+            r.occlusionPhaseB(list, cb, activeVa, activeCount);
+            mark(list, "occlusion cull");
+            const D3D12_CPU_DESCRIPTOR_HANDLE t[2] = {rtv(0), rtv(1)};
+            list->OMSetRenderTargets(2, t, FALSE, &dsv);
+            list->RSSetViewports(1, &viewport);
+            list->RSSetScissorRects(1, &scissor);
+            bindGraphics(list, cb);
+            passConstants(list, false, zero8);
+            bindWorldBuffers();
+            worldPass(psoGbuf_.Get(), 0, r.cubeQuads_.Get(), 1);
+            worldPass(psoGbufCutout_.Get(), 1, r.cubeQuads_.Get(), 1);
+            worldPass(psoGbufModel_.Get(), 3, r.modelQuads_.Get(), 1);
+        }
     }
     mark(list, "g-buffer");
 

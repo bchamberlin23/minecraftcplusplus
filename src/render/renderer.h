@@ -260,6 +260,10 @@ public:
     void setActive(const std::vector<u32>& slots);
     // SectionOcclusionGraph: full-detail slots the graph did not reach this time (the GPU cull skips them).
     void setOccluded(const std::vector<u32>& slots);
+    // Two-phase occlusion culling (renderer.cpp): the indirect draws of a segment's phase, and phase B's cull.
+    void drawSegment(ID3D12GraphicsCommandList* list, int seg, u32 phase);
+    void occlusionPhaseB(ID3D12GraphicsCommandList* list, D3D12_GPU_VIRTUAL_ADDRESS cb, D3D12_GPU_VIRTUAL_ADDRESS activeVa,
+                         u32 activeCount);
     void setFadeSeconds(float seconds) { fadeSeconds_ = std::max(seconds, 0.0f); }
     void setNetherShade(bool on) { netherShade_ = on; }  // the dimension's CardinalLighting is NETHER
     void beginWorldReveal(double x, double z);  // stagger entrance fades outward on join/large teleport
@@ -429,6 +433,12 @@ private:
     u32* occludedMapped_ = nullptr;
     std::vector<u32> occludedBits_;
     u32 occludedDirty_ = 0;
+    D3D12_GPU_VIRTUAL_ADDRESS occludedVa_ = 0;
+    ComPtr<ID3D12Resource> hzb_, visBits_;
+    ComPtr<ID3D12PipelineState> psoHzb_;
+    u64 hzbFloats_ = 0;
+    u32 hzbLevels_ = 0;
+    bool occlusion_ = false;  // this frame
     ComPtr<ID3D12Resource> indexBuffer_, texture_, cubeQuads_, modelQuads_, sections_, args_, counts_, zeros_;
     ComPtr<ID3D12Resource> colors_;  // tint colour table (ColorTable), uploaded as it grows
     size_t colorsUploaded_ = 0;
