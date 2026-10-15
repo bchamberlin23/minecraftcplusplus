@@ -353,3 +353,19 @@ CPU (~0.55 ms) and GPU (~0.68 ms) roughly balanced (`--profile` prints the main 
     renderer's shared state split); the GPU quad buffer's 1.5x growth stalls ~19 ms once; the generated chunks'
     insert + light (~2 ms each, main thread, at least one per frame while they arrive).
   - Left: DLSS / Ray Reconstruction at native (0.53 / 3.0 ms) is the user's quality choice.
+- Playing, not viewing (October 14, late): the viewer numbers above hid the play-mode costs. Test: a copy of Hills
+  with allowCommands = 1 (nbtlib), `--play`, /gamemode spectator, fly speed up (wheel), sprint forward ~10 s,
+  `--profile` (its "profile: main thread" line splits the frame) and MCPP_STREAM_PROFILE=1 (detail streaming:
+  nearest unmeshed section, queue sizes). Flying with BSL: 54 -> ~290 fps. What it took:
+  - Shader packs converted every cloud face to pack vertices every frame (5.3 ms): now only when the mesh / colour
+    changes, the drift in the model-view matrix (PackDraw::translate, PackDraw::gpuVertices).
+  - The detail mesher waited behind coarse region rebuilds (0.2..0.9 s each, same thread): coarse rebuilds have their
+    own thread and Jobs::parallelFor takes callers concurrently (newest batch first). Every arriving chunk forced a
+    whole detail rescan (2..3 ms a frame): its sections go to Terrain::fresh_ instead.
+  - Chunk inserts on the main thread waited 15..120 ms for the world lock: preempted below-normal readers, and the
+    SRW lock let new readers in ahead of the waiting writer. World::WriteLock / yieldToWriters and LockPriority.
+  - LOD swaps (detail <-> coarse, any levels) no longer cross-fade: the dissolve of two different shapes read as a
+    see-through ghost. Chunk Fade is only for terrain appearing from / going into nothing.
+  - Left: render CPU ~1.5 ms, terrain ~0.9 ms, chunk applies ~0.7 ms a frame while flying; p99 frame ~12 ms.
+  - Benchmarks drift with whatever else runs (the owner trains models and plays other games): compare builds
+    interleaved, never against older numbers.
