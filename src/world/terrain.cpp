@@ -51,6 +51,7 @@ Terrain::Terrain(const World& world, const BlockRegistry& registry, Renderer& re
         if (infos[id].occludes) solidFill_ = u16(id);
     syncRegions();
     worker_ = std::thread([this] { workerMain(); });
+    coarseWorker_ = std::thread([this] { coarseMain(); });
 }
 
 int Terrain::regionAt(int rx, int rz) {
@@ -103,6 +104,7 @@ Terrain::CoarseJob Terrain::coarseJob(int region) const {
 Terrain::~Terrain() {
     stopBackground();
     worker_.join();
+    coarseWorker_.join();
     for (auto& t : farThreads_) t.join();
 }
 
@@ -456,24 +458,32 @@ bool Terrain::buildCoarse() {
     return true;
 }
 
+// Coarse rebuilds of regions whose chunks changed (each 0.2..0.9 s while chunks stream in): on their own thread, so
+// full-detail meshing never waits behind one (it did: flying, the full detail fell 250 blocks behind).
+void Terrain::coarseMain() {
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+    for (;;) {
+        std::unique_lock lock(mutex_);
+        cv_.wait(lock, [&] { return quit_ || !coarseQueue_.empty(); });
+        if (quit_) return;
+        const CoarseJob job = coarseQueue_.back();
+        coarseQueue_.pop_back();
+        lock.unlock();
+        CoarseBuild build;
+        buildRegion(job, build, true);
+        lock.lock();
+        coarseDone_.push_back(std::move(build));
+    }
+}
+
 void Terrain::workerMain() {
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
     std::vector<Request> batch;
     for (;;) {
         {
             std::unique_lock lock(mutex_);
-            cv_.wait(lock, [&] { return quit_ || !queue_.empty() || !coarseQueue_.empty(); });
+            cv_.wait(lock, [&] { return quit_ || !queue_.empty(); });
             if (quit_) return;
-            if (queue_.empty()) {  // full-detail work first; coarse rebuilds when idle
-                const CoarseJob job = coarseQueue_.back();
-                coarseQueue_.pop_back();
-                lock.unlock();
-                CoarseBuild build;
-                buildRegion(job, build, true);
-                lock.lock();
-                coarseDone_.push_back(std::move(build));
-                continue;
-            }
             batch.swap(queue_);
             queue_.clear();
         }
@@ -606,6 +616,7 @@ void Terrain::rescan(double x, double y, double z) {
     resident_.resize(keep);
 
     wanted_.clear();
+    fresh_.clear();
     const int reach = int(load / 16) + 1;
     const int ccx = int(std::floor(x / 16)), ccz = int(std::floor(z / 16));
     for (int cz = ccz - reach; cz <= ccz + reach; ++cz)
@@ -625,11 +636,15 @@ void Terrain::rescan(double x, double y, double z) {
 
 void Terrain::dispatch() {
     std::lock_guard lock(mutex_);
-    if (busy_ || inFlight_ >= kBatch * 2 || (wanted_.empty() && refresh_.empty())) return;
+    if (busy_ || inFlight_ >= kBatch * 2 || (wanted_.empty() && fresh_.empty() && refresh_.empty())) return;
+    if (!freshSorted_) {
+        std::sort(fresh_.begin(), fresh_.end(), [](const Request& a, const Request& b) { return a.dist > b.dist; });
+        freshSorted_ = true;
+    }
     size_t n = 0;
     // Reserve most of each batch for new nearby detail during a chunk burst. Corrections
     // must not keep newly arrived player chunks behind a stack of neighbour refreshes.
-    const size_t refreshLimit = wanted_.empty() ? kBatch : kBatch / 4;
+    const size_t refreshLimit = wanted_.empty() && fresh_.empty() ? kBatch : kBatch / 4;
     while (n < refreshLimit && !refresh_.empty()) {
         Request& w = refresh_.back();
         refreshQueued_.erase(Lighting::sectionKey(w.cx, w.sy, w.cz));
@@ -640,10 +655,11 @@ void Terrain::dispatch() {
         refresh_.pop_back();
         ++n;
     }
-    while (n < kBatch && !wanted_.empty()) {
-        Request& w = wanted_.back();
-        if (detailState(w) != kNotReady) {  // meshed by an edit since the scan
-            wanted_.pop_back();
+    while (n < kBatch && (!wanted_.empty() || !fresh_.empty())) {
+        std::vector<Request>& from = fresh_.empty() || (!wanted_.empty() && wanted_.back().dist < fresh_.back().dist) ? wanted_ : fresh_;
+        Request& w = from.back();
+        if (detailState(w) != kNotReady) {  // meshed by an edit since the scan (or queued twice)
+            from.pop_back();
             continue;
         }
         ++n;
@@ -651,8 +667,8 @@ void Terrain::dispatch() {
         w.stamp = stamp == stamps_.end() ? 0 : stamp->second;
         w.epoch = epoch_;
         detailState(w) = kInFlight;
-        queue_.push_back(wanted_.back());
-        wanted_.pop_back();
+        queue_.push_back(from.back());
+        from.pop_back();
     }
     if (n == 0) return;
     inFlight_ += n;
@@ -908,6 +924,11 @@ void Terrain::addChunk(int cx, int cz, const std::vector<u64>& dirtySections) {
             u32& a = r.at(level, (cx & 31) >> level, ny, (cz & 31) >> level);
             if (a == kAbsent) a = Renderer::kNoSlot;
         }
+        // Its sections join the queue at once (a whole rescan per arriving chunk took 2..3 ms a frame while they stream).
+        if (state == kNotReady && scanned_) {
+            const float d = distance(0, cx * 16.0, (ny + minSy_) * 16.0, cz * 16.0, scanX_, scanY_, scanZ_);
+            if (d <= std::min(detailRadius_ + kLoadMargin, loadRadiusLimit_)) fresh_.push_back({it->second, cx, ny + minSy_, cz, d}), freshSorted_ = false;
+        }
     }
     markDirty(it->second);
     for (u64 k : dirtySections) {
@@ -920,7 +941,6 @@ void Terrain::addChunk(int cx, int cz, const std::vector<u64>& dirtySections) {
         if ((isSlot(state) || state == Renderer::kNoSlot) && refreshQueued_.insert(k).second)
             refresh_.push_back({rit->second, scx, ssy, scz, 0.0f, 0, true});
     }
-    scanned_ = false;  // the next update streams the new sections in
     markCut(it->second);
 }
 
@@ -961,6 +981,7 @@ void Terrain::clearChunks() {
     }
     pendingUpload_.clear();
     wanted_.clear();
+    fresh_.clear();
     refresh_.clear();
     refreshQueued_.clear();
     resident_.clear();
@@ -1073,10 +1094,20 @@ void Terrain::update(double x, double y, double z, bool waitForDetail) {
         dispatch();
         if (!waitForDetail) break;
         std::unique_lock lock(mutex_);
-        if (wanted_.empty() && !busy_ && done_.empty() && pendingUpload_.empty()) break;
+        if (wanted_.empty() && fresh_.empty() && !busy_ && done_.empty() && pendingUpload_.empty()) break;
         cv_.wait_for(lock, std::chrono::milliseconds(2), [&] { return !done_.empty(); });
     }
     partMs[3] = tPart.ms(), tPart = Timer();
+    if (static const bool streamLog = std::getenv("MCPP_STREAM_PROFILE") != nullptr; streamLog) {
+        static double lastLog = 0;
+        if (const double now = nowSeconds(); now - lastLog > 0.5) {
+            lastLog = now;
+            float nearest = 1e30f;  // the nearest section still without its full-detail mesh (wanted_ is sorted far -> near)
+            for (const Request& w : wanted_) nearest = std::min(nearest, distance(0, w.cx * 16.0, w.sy * 16.0, w.cz * 16.0, x, y, z));
+            LOG("detail stream: nearest unmeshed %.0f blocks | %zu wanted, %zu in flight, %zu to upload, %zu resident",
+                nearest, wanted_.size(), inFlight_, pendingUpload_.size(), resident_.size());
+        }
+    }
 
     // The cut depends only on camera position and residency, not on view direction. Incremental: a region is walked
     // again only when its nodes changed (markCut) or the camera moved past its slack (a level boundary).
@@ -1134,7 +1165,7 @@ void Terrain::update(double x, double y, double z, bool waitForDetail) {
             tTotal.ms(), partMs[0], partMs[1], farApplied, partMs[2], partMs[3], partMs[4]);
 
     stats_.detailResident = resident_.size();
-    stats_.detailPending = wanted_.size() + inFlight_;
+    stats_.detailPending = wanted_.size() + fresh_.size() + inFlight_;
     stats_.active = activeCount_;
     if (farGen_) {
         stats_.farRegions = 0;

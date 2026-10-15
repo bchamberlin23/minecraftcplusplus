@@ -191,6 +191,7 @@ private:
     void rescan(double x, double y, double z);
     void dispatch();
     void workerMain();
+    void coarseMain();
     // The cut of one region: a 2D quadtree walk by horizontal distance (all 16-block layers share it), taking
     // every layer's node at each chosen position.
     // Appends the region's nodes for a camera at (px, pz); slack = how far the camera can move horizontally before
@@ -220,6 +221,8 @@ private:
     std::unordered_map<u64, int> regionIndex_;  // (rx, rz) -> index
     std::vector<Request> resident_;             // level-0 sections currently meshed
     std::vector<Request> wanted_;               // sorted far -> near; dispatched from the back
+    std::vector<Request> fresh_;                // sections of chunks that arrived since the scan (the same order)
+    bool freshSorted_ = true;
     std::vector<Request> refresh_;              // resident sections to re-mesh (neighbours of new chunks)
     std::unordered_set<u64> refreshQueued_;     // coalesce repeated light/edge updates before dispatch
     std::vector<Result> pendingUpload_;         // finished meshes waiting for upload budget
@@ -246,7 +249,7 @@ private:
     double graphTime_ = 0;
     std::future<std::vector<std::array<int, 4>>> graphFuture_;  // the search running in the background
 
-    std::thread worker_;
+    std::thread worker_, coarseWorker_;
     std::mutex mutex_;
     std::condition_variable cv_;
     std::vector<Request> queue_;
