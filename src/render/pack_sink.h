@@ -48,6 +48,8 @@ struct PackDraw {
     ID3D12Resource* texture = nullptr;  // Texture2D (RGBA8) when not the block atlas; nullptr = white
     const PackVertex* vertices = nullptr;
     u32 vertexCount = 0;
+    u64 gpuVertices = 0;                       // GPU virtual address of the vertices already in a buffer (instead of `vertices`)
+    float translate[3] = {0, 0, 0};            // model translation: in the model-view matrix (Iris's clouds)
     i32 entityId = -1, blockEntityId = -1, itemId = -1;  // entityId / blockEntityId / currentRenderedItemId uniforms
     float entityColor[4] = {0, 0, 0, 0};               // entityColor uniform (hurt / flash overlay)
 };

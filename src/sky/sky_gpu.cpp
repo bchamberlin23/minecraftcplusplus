@@ -436,40 +436,58 @@ void SkyGpu::drawPack(const PassContext& ctx, bool late) {
         return;
     }
     if (f.clouds && f.cloudFaces && sink.vanillaClouds()) {
+        // The mesh as pack quads, converted only when it or its colour changes (every face every frame took ~5 ms of
+        // the main thread); the drift is the draw's model translation, as Iris draws clouds.
         const u32 n = u32(std::min<size_t>(f.cloudFaces->size(), kMaxCloudFaces));
-        static const float kShade[6] = {0.7f, 1.0f, 0.8f, 0.8f, 0.9f, 0.9f};
-        static const u32 kCorner[6] = {0, 1, 2, 2, 3, 0};
-        static const float kNormal[6][3] = {{0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}};
-        v.reserve(size_t(n) * 6);
-        const u32 alpha = u32(std::clamp(f.cloudColor[3], 0.0f, 1.0f) * 255.0f) << 24;
-        for (u32 i = 0; i < n; ++i) {
-            const u32 face = (*f.cloudFaces)[i];
-            const int cx = int(face << 20) >> 20, cz = int(face << 8) >> 20;
-            const u32 flags = face >> 24, dir = std::min(flags & 7, 5u);
-            const bool inside = (flags & 16) != 0;
-            const float shade = kShade[dir];
-            auto chan = [&](float c) { return u32(std::clamp(c * shade, 0.0f, 1.0f) * 255.0f); };
-            const u32 color = alpha | chan(f.cloudColor[0]) | chan(f.cloudColor[1]) << 8 | chan(f.cloudColor[2]) << 16;
-            for (u32 c : kCorner) {
-                const u32 index = dir * 4 + (inside ? 3 - c : c);
-                PackVertex p{};
-                p.pos[0] = float((0xF03CC3u >> index) & 1) * 12.0f + float(cx) * 12.0f + f.cloudOffset[0];
-                p.pos[1] = float((0x6666F0u >> index) & 1) * 4.0f + f.cloudOffset[1];
-                p.pos[2] = float((0xC3F066u >> index) & 1) * 12.0f + float(cz) * 12.0f + f.cloudOffset[2];
-                p.color = color;
-                p.light = 240u << 16;
-                p.overlay = 10u << 16;
-                p.normal = packNormal(kNormal[dir][0], kNormal[dir][1], kNormal[dir][2]);
-                p.entity = -1;
-                v.push_back(p);
+        u64 key = f.cloudVersion << 32;
+        for (int k = 0; k < 4; ++k) key ^= u64(std::clamp(f.cloudColor[k], 0.0f, 1.0f) * 255.0f) << (k * 8);
+        PackClouds& pc = packClouds_[ctx.frame];  // this slot's previous frame has completed
+        if (pc.key != key || pc.count != n * 4) {
+            const u64 bytes = u64(n) * 4 * sizeof(PackVertex);
+            if (bytes > pc.capacity) {
+                pc.capacity = bytes + bytes / 2;
+                pc.buffer = buffer(renderer_->device(), pc.capacity, D3D12_HEAP_TYPE_UPLOAD);
+                pc.mapped = nullptr;
+                if (!pc.buffer || FAILED(pc.buffer->Map(0, nullptr, reinterpret_cast<void**>(&pc.mapped)))) pc = {};
+            }
+            if (pc.mapped) {
+                static const float kShade[6] = {0.7f, 1.0f, 0.8f, 0.8f, 0.9f, 0.9f};
+                static const float kNormal[6][3] = {{0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}};
+                const u32 alpha = u32(std::clamp(f.cloudColor[3], 0.0f, 1.0f) * 255.0f) << 24;
+                PackVertex* out = reinterpret_cast<PackVertex*>(pc.mapped);
+                for (u32 i = 0; i < n; ++i) {
+                    const u32 face = (*f.cloudFaces)[i];
+                    const int cx = int(face << 20) >> 20, cz = int(face << 8) >> 20;
+                    const u32 flags = face >> 24, dir = std::min(flags & 7, 5u);
+                    const bool inside = (flags & 16) != 0;
+                    const float shade = kShade[dir];
+                    auto chan = [&](float c) { return u32(std::clamp(c * shade, 0.0f, 1.0f) * 255.0f); };
+                    const u32 color = alpha | chan(f.cloudColor[0]) | chan(f.cloudColor[1]) << 8 | chan(f.cloudColor[2]) << 16;
+                    for (u32 c = 0; c < 4; ++c) {
+                        const u32 index = dir * 4 + (inside ? 3 - c : c);
+                        PackVertex p{};
+                        p.pos[0] = float((0xF03CC3u >> index) & 1) * 12.0f + float(cx) * 12.0f;
+                        p.pos[1] = float((0x6666F0u >> index) & 1) * 4.0f;
+                        p.pos[2] = float((0xC3F066u >> index) & 1) * 12.0f + float(cz) * 12.0f;
+                        p.color = color;
+                        p.light = 240u << 16;
+                        p.overlay = 10u << 16;
+                        p.normal = packNormal(kNormal[dir][0], kNormal[dir][1], kNormal[dir][2]);
+                        p.entity = -1;
+                        *out++ = p;
+                    }
+                }
+                pc.key = key, pc.count = n * 4;
             }
         }
-        PackDraw d;
-        d.role = PackRole::Clouds, d.blend = PackBlend::Translucent, d.renderStage = 20 /* CLOUDS */;
-        d.depthTest = true, d.depthWrite = true, d.cull = false, d.quads = false;
-        d.vertices = v.data(), d.vertexCount = u32(v.size());
-        sink.draw(d);
-        v.clear();
+        if (pc.mapped && pc.count) {
+            PackDraw d;
+            d.role = PackRole::Clouds, d.blend = PackBlend::Translucent, d.renderStage = 20 /* CLOUDS */;
+            d.depthTest = true, d.depthWrite = true, d.cull = false, d.quads = true;
+            d.gpuVertices = pc.buffer->GetGPUVirtualAddress(), d.vertexCount = pc.count;
+            std::copy(f.cloudOffset, f.cloudOffset + 3, d.translate);
+            sink.draw(d);
+        }
     }
     if (!f.weather.empty()) {
         for (size_t i = 0; i < f.weather.size(); ++i) {

@@ -39,6 +39,13 @@ private:
     void drawLate(const PassContext& ctx);
     // A shader pack is active (ctx.pack): vanilla geometry for its gbuffers_skybasic / skytextured / clouds / weather.
     void drawPack(const PassContext& ctx, bool late);
+    struct PackClouds {  // shader packs: the cloud mesh as pack vertices (one per frame slot), rebuilt when it changes
+        ComPtr<ID3D12Resource> buffer;
+        u8* mapped = nullptr;
+        u64 capacity = 0, key = ~u64(0);
+        u32 count = 0;
+    };
+    PackClouds packClouds_[Renderer::kFrames];
     void writeConstants(const PassContext& ctx);
     u32 putVertices(const std::vector<Sky::Frame::Vertex>& v);  // into this frame's slot; returns first index
     void bindCommon(ID3D12GraphicsCommandList* list);

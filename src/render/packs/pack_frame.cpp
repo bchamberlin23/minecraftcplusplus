@@ -473,9 +473,10 @@ struct Renderer::Packs::Frame {
 
     // Built-in matrices of a pass kind: 0 gbuffers, 1 shadow, 2 full screen, 3 hand.
     M4 shadowModel = M4::identity();  // shadow casters drawn from last frame's vertices: the camera's motion
-    void setPassMatrices(int kind) {
+    void setPassMatrices(int kind, const float* model = nullptr) {
         UniformStore& u = p.uniforms;
         M4 mv = kind == 1 ? mul(shadowMV, shadowModel) : kind == 2 ? M4::identity() : gbView;
+        if (model && (model[0] != 0 || model[1] != 0 || model[2] != 0)) mv = mul(mv, translate(model[0], model[1], model[2]));
         M4 pr = kind == 1 ? shadowP : kind == 2 ? ortho(0, 1, 0, 1, -1, 1) : gbProj;
         if (kind == 3) {  // hand: Iris's hand projection (70 degrees, depth squeezed by MC_HAND_DEPTH)
             M4 hp = perspective(70.0f * 0.0174532925f, float(p.width) / float(std::max(p.height, 1u)), kNear,
@@ -1752,14 +1753,18 @@ void Renderer::Packs::record(ID3D12GraphicsCommandList* list, const FrameInput& 
 
 // PackSink: generic geometry from the extension passes, drawn with the role's program right away.
 void Renderer::Packs::draw(const PackDraw& d) {
-    if (!pipe_ || !frame_ || !d.vertexCount || !d.vertices) return;
+    if (!pipe_ || !frame_ || !d.vertexCount || (!d.vertices && !d.gpuVertices)) return;
     Frame& f = *frame_;
-    // Vertices go straight into this frame's upload slice; quads stay quads (shared quad index buffer).
+    // Vertices go straight into this frame's upload slice (unless already on the GPU); quads stay quads (shared quad
+    // index buffer).
     const u32 count = d.quads ? d.vertexCount & ~3u : d.vertexCount;
     if (!count) return;
-    u8* dst;
-    const D3D12_GPU_VIRTUAL_ADDRESS va = f.uploadAlloc(u64(count) * sizeof(PackVertex), &dst);
-    std::memcpy(dst, d.vertices, size_t(count) * sizeof(PackVertex));
+    D3D12_GPU_VIRTUAL_ADDRESS va = d.gpuVertices;
+    if (!va) {
+        u8* dst;
+        va = f.uploadAlloc(u64(count) * sizeof(PackVertex), &dst);
+        std::memcpy(dst, d.vertices, size_t(count) * sizeof(PackVertex));
+    }
     const Batch::Range range{va, count, d.quads};
     if (inStage_) {  // inside an extension stage: batched until the stage ends (the passes keep their own bindings)
         for (Batch& bt : batches_) {
@@ -1767,7 +1772,8 @@ void Renderer::Packs::draw(const PackDraw& d) {
             if (a.role == d.role && a.blend == d.blend && a.renderStage == d.renderStage && a.depthTest == d.depthTest &&
                 a.depthWrite == d.depthWrite && a.depthEqual == d.depthEqual && a.hand == d.hand && a.cull == d.cull && a.blockAtlas == d.blockAtlas && a.texture == d.texture &&
                 a.entityId == d.entityId && a.blockEntityId == d.blockEntityId && a.itemId == d.itemId &&
-                std::memcmp(a.entityColor, d.entityColor, sizeof(a.entityColor)) == 0) {
+                std::memcmp(a.entityColor, d.entityColor, sizeof(a.entityColor)) == 0 &&
+                std::memcmp(a.translate, d.translate, sizeof(a.translate)) == 0) {
                 bt.ranges.push_back(range);
                 return;
             }
@@ -1797,7 +1803,7 @@ void Renderer::Packs::drawRanges(const PackDraw& d, const Batch::Range* ranges, 
     u.setInt("currentRenderedItemId", d.itemId);
     u.setVec("entityColor", d.entityColor[0], d.entityColor[1], d.entityColor[2], d.entityColor[3], 4);
     const bool hand = d.role == PackRole::Hand || d.role == PackRole::HandTranslucent || d.hand;
-    if (!shadow) f.setPassMatrices(hand ? 3 : 0);
+    if (!shadow) f.setPassMatrices(hand ? 3 : 0, d.translate);
     if (!shadow) f.bindGbufferTargets(*b, depth != 0);
     // gtexture: the draw's texture (a view in this frame's slice), the atlas, or white.
     u32 gtex = d.blockAtlas ? p.atlas.srv : p.white.srv;
