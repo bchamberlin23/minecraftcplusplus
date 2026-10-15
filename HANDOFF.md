@@ -1,7 +1,34 @@
-# Handoff — October 14, 2026
+# Handoff — October 15, 2026
 
-This covers the state at the end of the October 14 sessions. `CONTINUE.md` keeps the long-running notes; this file
-lists what changed today and what is still open.
+This covers the state at the end of the October 14 and 15 sessions. `CONTINUE.md` keeps the long-running notes; this
+file lists what changed and what is still open.
+
+## October 15: pop-in and flashing audit (play mode)
+
+The owner reported terrain popping in, flashing, and holes that first render filled. The audit found four causes in
+the streaming / LOD path; all are fixed and verified with scripted spectator runs (`build\Lead2`, the platform test
+below). Not rebuilt into `build\Lead` unless the log of this session says so.
+
+| Fix | What was wrong |
+|---|---|
+| Detail gated by the coarse rebuild (`Terrain::setColumnLevel`) | A chunk's full-detail sections could only replace the level-1 node once the region's coarse build had refreshed the refine table, i.e. 1.5–4 s after the *last* chunk of the region arrived. Until then the far terrain's guess (no carvers, no player edits) stayed on screen, then whole groups of chunks popped at once. `addChunk` now updates the column's level and the level-1 refine entry at once; `applyCoarse` keeps columns that arrived during a build. |
+| Chunk re-sends flashed to coarse (`Terrain::addChunk`, `Session::applyChunk`) | The server resends chunks the client generated locally or kept after unload (singleplayer keeps forgotten chunks). The old path dropped every mesh of the chunk and streamed it again, so the area showed its coarse node for several frames. Resident sections are now re-meshed in place (the origin match in `Renderer::applyCutChange` makes the swap instant), vanished sections go, new ones stream. |
+| Fade dither was per-frame white noise (`common.hlsli`, `packs/adapter.hlsli`) | Meant to average out under TAA, but DLSS / FSR treat a pixel flipping between two surfaces as a disocclusion: every appearing section sparkled and far terrain speckled at the horizon (old open item 3). Now an 8x8 ordered screen door, fixed in screen space, so each pixel switches once. |
+| Occlusion graph with the camera outside the world's regions (`Terrain::updateOcclusion`) | Columns in regions the world had no chunk for were absent from the search, the camera's included: nothing was reached and every full-detail section was culled until a chunk arrived (teleports, flying ahead of the server). They are open space now, like unloaded sections. |
+
+Verification (`%TEMP%\mcpp-work`, `saves/FlyBase` → `FlTest`, `--play --shaders off`, scripted): a 31x31 stone
+platform placed over water with `/fill`, teleport 2000 blocks away (the chunks evict and regenerate pristine), teleport
+back. Old build, 3 s after the return: coarse LOD around the camera, no platform, a torn patch of exposed sea floor.
+New build: full detail with the platform. The 40 s spectator flight (`MCPP_STREAM_PROFILE=1`) stays at 0 wanted
+sections, ~460 fps, no errors.
+
+Still open from this audit (design limits, not bugs):
+- Far terrain has no carvers: ravines and cave mouths beyond the generated radius show filled until their chunk
+  arrives (`ChunkGenerator::generateCoarse` fills cavities deeper than 32 blocks on purpose).
+- Locally generated chunks are pristine: a player's edits in chunks the client evicted show only when the server
+  resends them (now an instant in-place swap). Reading them from the save's region files on demand would help.
+- Coarse LOD meshes carry sky light 15 and no AO, so underground coarse faces seen through cave mouths are bright.
+- The LOD swap itself (coarse ↔ detail) is instant by design; the two shapes differ, so it reads as a pop.
 
 ## State
 
@@ -35,8 +62,8 @@ old/new runs; the machine was busy at the time, so only the relative change is m
    keeps up now, so what remains is chunk arrival plus the generated-chunk apply, about 0.7 ms a frame on the main
    thread. Inserts and lighting could move off the main thread, but only once every main-thread world read takes
    the shared lock.
-3. **Far LOD fade-in speckle at the horizon.** This is Chunk Fade's white-noise dither on terrain that is genuinely
-   new, smeared by the upscaler. Consider fog instead, or no fade beyond the render distance.
+3. **Far LOD fade-in speckle at the horizon.** Fixed October 15 (the dither is an ordered screen door now). If a
+   dissolve at the horizon still reads badly, consider fog instead, or no fade beyond the render distance.
 4. **Remaining main-thread costs while flying:**
    - render CPU about 1.5 ms (`ent::StagePass` 0.4–1.9 ms)
    - terrain about 0.9 ms

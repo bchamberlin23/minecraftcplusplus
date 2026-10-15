@@ -41,16 +41,15 @@ bool fadedOut(float2 pixel) {
     float fade = gSections[gDraw.sectionIndex].fade;
     if (fade == 0) return false;
     float t = fadeProgress(fade);
-    float d;
-    if (gFade.w > 0) {  // white noise, new each frame: an even dissolve the temporal accumulation smooths
-        uint h = uint(pixel.x) * 1973u + uint(pixel.y) * 9277u + uint(gFade.z) * 26699u;
-        h = (h ^ 61u) ^ (h >> 16), h *= 9u, h ^= h >> 4, h *= 0x27d4eb2du, h ^= h >> 15;  // Wang hash
-        d = float(h & 0xFFFFFFu) / 16777216.0;
-    } else {  // no temporal accumulation: an even 4x4 ordered screen door
-        static const float kBayer[16] = {0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5};
-        uint2 q = uint2(pixel) & 3;
-        d = (kBayer[q.y * 4 + q.x] + 0.5) / 16.0;
-    }
+    // An 8x8 ordered screen door, the same every frame: each pixel switches once as the fade passes its threshold.
+    // White noise redrawn every frame (meant to average out under TAA) sparkled instead: the upscalers (DLSS in
+    // particular) treat a pixel that flips between two surfaces as a disocclusion, so every appearing section
+    // flashed and far terrain speckled at the horizon.
+    static const float kBayer[64] = {0,  32, 8,  40, 2,  34, 10, 42, 48, 16, 56, 24, 50, 18, 58, 26, 12, 44, 4,  36, 14, 46,
+                                     6,  38, 60, 28, 52, 20, 62, 30, 54, 22, 3,  35, 11, 43, 1,  33, 9,  41, 51, 19, 59, 27,
+                                     49, 17, 57, 25, 15, 47, 7,  39, 13, 45, 5,  37, 63, 31, 55, 23, 61, 29, 53, 21};
+    uint2 q = uint2(pixel) & 7;
+    float d = (kBayer[q.y * 8 + q.x] + 0.5) / 64.0;
     return fade > 0 ? d >= t : d < t;
 }
 

@@ -387,6 +387,10 @@ void Terrain::applyCoarse(CoarseBuild& b, bool replace) {
         return;
     }
     std::copy(std::begin(b.colLevel), std::end(b.colLevel), r.colLevel);
+    // Chunks that arrived while the build ran have world data now: their full detail may show (see addChunk).
+    if (source)
+        for (int idx = 0; idx < 1024; ++idx)
+            if (source->columns[idx].count) r.colLevel[idx] = 0;
     for (int level = 1; level <= kMaxLevel; ++level) {
         const int per = 32 >> level;
         r.refine[level].assign(size_t(per) * per, 0);
@@ -892,7 +896,10 @@ void Terrain::updateOcclusion(double px, double py, double pz) {
     if (!smartCull_ || regions_.empty() || !heightBlocks_) return renderer_.setOccluded({});
 
     // Snapshot of the full-detail sections around the camera: their VisibilitySet (empty and unmeshed sections let
-    // the view through) and slot; outside the world's regions nothing is there. The search runs in the background.
+    // the view through) and slot. Columns the world has no region for are open space to the search, like its unloaded
+    // sections (Java's ViewArea has a RenderSection everywhere): with the camera's own column left out, nothing was
+    // reached and every full-detail section vanished until its chunk arrived (a teleport, flying ahead of the server).
+    // The search runs in the background.
     GraphInput in;
     in.R = int(std::ceil(detailRadius_ / 16.0f)) + 1, in.W = 2 * in.R + 1, in.ny = heightBlocks_ / 16, in.minSy = minSy_;
     std::copy(cam, cam + 3, in.cam);
@@ -905,12 +912,12 @@ void Terrain::updateOcclusion(double px, double py, double pz) {
         for (int dx = -R; dx <= R; ++dx) {
             if (float(dx * dx + dz * dz) * 256.0f > reach * reach) continue;
             const int cx = cam[0] + dx, cz = cam[2] + dz;
+            for (int sy = 0; sy < ny; ++sy) in.present[(size_t(sy) * W + size_t(dz + R)) * W + size_t(dx + R)] = 1;
             auto it = regionIndex_.find(regionKey(cx >> 5, cz >> 5));
             if (it == regionIndex_.end() || regions_[it->second].world < 0) continue;
             const RegionLod& r = regions_[it->second];
             for (int sy = 0; sy < ny && sy < r.ny[0]; ++sy) {
                 const size_t i = (size_t(sy) * W + size_t(dz + R)) * W + size_t(dx + R);
-                in.present[i] = 1;
                 const u32 s = r.at(0, cx & 31, sy, cz & 31);
                 if (isSlot(s) || s == Renderer::kNoSlot) in.vis[i] = r.visAt(cx & 31, sy, cz & 31);
                 if (isSlot(s)) in.slot[i] = s;
@@ -924,6 +931,23 @@ void Terrain::updateOcclusion(double px, double py, double pz) {
     });
 }
 
+// The finest LOD with data for a chunk column changed (a chunk arrived or left): the level-1 node holding it refines
+// into full detail only when all four of its columns have world data. Only that decision is updated here; the coarser
+// levels keep the last coarse build's table until the next one (their children may not have been built yet).
+void Terrain::setColumnLevel(RegionLod& r, int idx, u8 level) {
+    r.colLevel[idx] = level;
+    if (r.refine[1].empty()) return;
+    const int nx = (idx & 31) >> 1, nz = (idx >> 5) >> 1;
+    u8 m = 0;
+    for (int dz = 0; dz < 2; ++dz)
+        for (int dx = 0; dx < 2; ++dx) m = std::max(m, r.colLevel[(nz * 2 + dz) * 32 + nx * 2 + dx]);
+    r.refine[1][size_t(nz) * 16 + nx] = m;
+}
+
+// A chunk was added to the world, or replaced: the server resends chunks the client generated or kept, with the
+// changes the save or the local generator did not have. Sections with a resident mesh are re-meshed in place (the
+// swap is instant: Renderer::applyCutChange matches the origin), new ones stream, vanished ones go. Dropping the whole
+// chunk and streaming it again showed its coarse node for a few frames every time (a flash).
 void Terrain::addChunk(int cx, int cz, const std::vector<u64>& dirtySections) {
     syncRegions();
     auto it = regionIndex_.find(regionKey(cx >> 5, cz >> 5));
@@ -931,21 +955,47 @@ void Terrain::addChunk(int cx, int cz, const std::vector<u64>& dirtySections) {
     const World::Column* col = world_.column(cx, cz, &wr);
     if (it == regionIndex_.end() || !col) return;
     RegionLod& r = regions_[size_t(it->second)];
-    for (int k = 0; k < col->count; ++k) {
-        const int ny = col->minY + k - minSy_;
-        if (!wr->sections[col->first + k].paletteSize || ny < 0 || ny >= r.ny[0]) continue;
+    bool vanished = false;
+    for (int ny = 0; ny < r.ny[0]; ++ny) {
+        const int sy = ny + minSy_, k = sy - col->minY;
+        const bool has = k >= 0 && k < col->count && wr->sections[col->first + k].paletteSize;
         u32& state = r.at(0, cx & 31, ny, cz & 31);
-        if (state == kAbsent) state = kNotReady;
+        const u64 key = Lighting::sectionKey(cx, sy, cz);
+        if (!has) {  // no blocks here any more
+            if (state == kAbsent) continue;
+            if (state == kInFlight) ++stamps_[key];  // the result is dropped
+            if (isSlot(state)) renderer_.removeMesh(state);
+            vanished |= isSlot(state) || state == Renderer::kNoSlot;
+            state = kAbsent;
+            continue;
+        }
+        if (isSlot(state) || state == Renderer::kNoSlot) {  // resident: new blocks or light at the same place
+            ++stamps_[key];  // a re-mesh in flight read the old blocks
+            if (refreshQueued_.insert(key).second) refresh_.push_back({it->second, cx, sy, cz, 0.0f, 0, true});
+        } else if (state == kInFlight) {  // being meshed from the old blocks: once more
+            ++stamps_[key];
+            state = kNotReady;
+        } else if (state == kAbsent) {
+            state = kNotReady;
+        }
         for (int level = 1; level <= kMaxLevel; ++level) {
             u32& a = r.at(level, (cx & 31) >> level, ny, (cz & 31) >> level);
             if (a == kAbsent) a = Renderer::kNoSlot;
         }
         // Its sections join the queue at once (a whole rescan per arriving chunk took 2..3 ms a frame while they stream).
         if (state == kNotReady && scanned_) {
-            const float d = distance(0, cx * 16.0, (ny + minSy_) * 16.0, cz * 16.0, scanX_, scanY_, scanZ_);
-            if (d <= std::min(detailRadius_ + kLoadMargin, loadRadiusLimit_)) fresh_.push_back({it->second, cx, ny + minSy_, cz, d}), freshSorted_ = false;
+            const float d = distance(0, cx * 16.0, sy * 16.0, cz * 16.0, scanX_, scanY_, scanZ_);
+            if (d <= std::min(detailRadius_ + kLoadMargin, loadRadiusLimit_)) fresh_.push_back({it->second, cx, sy, cz, d}), freshSorted_ = false;
         }
     }
+    if (vanished)
+        std::erase_if(resident_, [&](const Request& q) {
+            return q.cx == cx && q.cz == cz && r.at(0, cx & 31, q.sy - minSy_, cz & 31) == kAbsent;
+        });
+    // Its full detail may show as soon as it is meshed. Waiting for the next coarse build (1.5..4 s after the last
+    // chunk of the region arrived) kept the far terrain's guess of it on screen, without its caves, ravines or the
+    // player's changes, and then switched whole groups of chunks at once.
+    setColumnLevel(r, ((cz & 31) << 5) | (cx & 31), 0);
     markDirty(it->second);
     for (u64 k : dirtySections) {
         int scx, ssy, scz;
@@ -971,6 +1021,7 @@ void Terrain::removeChunk(int cx, int cz) {
         state = kAbsent;
     }
     std::erase_if(resident_, [&](const Request& q) { return q.cx == cx && q.cz == cz; });
+    setColumnLevel(r, ((cz & 31) << 5) | (cx & 31), r.farData ? u8(r.farData->level) : u8(0));  // no detail refinement there
     markDirty(it->second);
     markCut(it->second);
 }

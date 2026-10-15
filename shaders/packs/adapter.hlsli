@@ -19,14 +19,17 @@ cbuffer McppFrame : register(b2) {
     float4 mcppFade;       // the renderer's section cross-fade: x = clock (s), y = 1 / duration, z = frame index
 };
 
-// Sections entering / leaving the LOD cut cross-fade with complementary dither (common.hlsli fadedOut; packs
-// accumulate temporally, so the noise moves every frame).
+// Sections entering / leaving the LOD cut cross-fade with complementary dither (common.hlsli fadedOut): an 8x8
+// ordered screen door that stays put, so each pixel switches once. Noise redrawn every frame sparkled through the
+// packs' temporal passes.
 bool mcppFadedOut(float2 pixel, float fade) {
     if (fade == 0 || mcppFade.y == 0) return false;
     float t = saturate((mcppFade.x - abs(fade)) * mcppFade.y);
-    uint h = uint(pixel.x) * 1973u + uint(pixel.y) * 9277u + uint(mcppFade.z) * 26699u;
-    h = (h ^ 61u) ^ (h >> 16), h *= 9u, h ^= h >> 4, h *= 0x27d4eb2du, h ^= h >> 15;
-    float d = float(h & 0xFFFFFFu) / 16777216.0;
+    static const float kBayer[64] = {0,  32, 8,  40, 2,  34, 10, 42, 48, 16, 56, 24, 50, 18, 58, 26, 12, 44, 4,  36, 14, 46,
+                                     6,  38, 60, 28, 52, 20, 62, 30, 54, 22, 3,  35, 11, 43, 1,  33, 9,  41, 51, 19, 59, 27,
+                                     49, 17, 57, 25, 15, 47, 7,  39, 13, 45, 5,  37, 63, 31, 55, 23, 61, 29, 53, 21};
+    uint2 q = uint2(pixel) & 7;
+    float d = (kBayer[q.y * 8 + q.x] + 0.5) / 64.0;
     return fade > 0 ? d >= t : d < t;
 }
 struct McppDrawConstants {

@@ -273,12 +273,8 @@ void Session::handle(Event& e) {
 void Session::applyChunk(ChunkEvent& e) {
     Timer t;
     const u64 key = World::chunkKey(e.cx, e.cz);
-    bool had;
-    {
-        std::shared_lock lock(world_.mutex());
-        had = world_.hasChunk(e.cx, e.cz);
-    }
-    if (had) terrain_->removeChunk(e.cx, e.cz);  // resent, kept, saved or generated locally: replace
+    // A chunk the world has (resent, kept, saved or generated locally) is replaced in place: Terrain::addChunk re-meshes
+    // its resident sections where they are instead of dropping them first (which showed its coarse node meanwhile).
     {
         const World::WriteLock lock(world_);
         world_.replaceChunk(e.cx, e.cz, e.firstSy, e.sections);

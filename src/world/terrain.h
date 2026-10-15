@@ -202,6 +202,8 @@ private:
         if (size_t(region) < cutCache_.size()) cutCache_[size_t(region)].dirty = true;
         graphDirty_ = true;
     }
+    // colLevel of chunk column idx (z * 32 + x) changed: keeps the level-1 refine table in step.
+    void setColumnLevel(RegionLod& r, int idx, u8 level);
     // SectionOcclusionGraph (full detail): from the camera's section through the faces each section lets the view
     // pass between; the slots it does not reach go to Renderer::setOccluded. Run when the camera enters another
     // section or (at most 10 times a second) when sections changed.
