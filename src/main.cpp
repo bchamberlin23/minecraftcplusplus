@@ -899,6 +899,10 @@ int wmain(int argc, wchar_t** argv) {
         };
         ui.setFrontEnd(fe);
     }
+    // The game's default hotbar (grass, dirt, stone...) is the offline viewer's: a world joined through a server
+    // starts with an empty hotbar until the server's inventory arrives (it showed for a moment while joining).
+    if (opt.play || !opt.connect.empty() || menu)
+        for (int i = 0; i < 9; ++i) game.setHotbarBlock(i, 0);
     if (!ui.init({&registry, &renderer, &window, &game, &world, &terrain, opt.detail})) return 1;
     ui.setMenuBlur([&postEffects](const PassContext& ctx, float radius) { postEffects.blur(ctx, radius); });
     if (session) ui.attachSession(netClient.get(), session.get());
