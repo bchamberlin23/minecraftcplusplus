@@ -139,6 +139,11 @@ void initProcess(int argc, wchar_t** argv) {
             g_args.emplace_back(a);
         }
     }
+    // Started by a double-click: Windows opened a terminal for this process alone. A game needs none: let it go (it
+    // outlived the game in Windows Terminal) and log to the file below; a run from a shell keeps logging there.
+    DWORD consoleProcesses[2];
+    if (GetConsoleWindow() && !isFileOrPipe(GetStdHandle(STD_OUTPUT_HANDLE)) && GetConsoleProcessList(consoleProcesses, 2) == 1)
+        FreeConsole();
     // No console window and no redirected output (started from a shortcut or by minecraftCplusplusW.exe): log to a file.
     if (!GetConsoleWindow() && !isFileOrPipe(GetStdHandle(STD_OUTPUT_HANDLE))) openLogFile();
     setLogSink(sink);
