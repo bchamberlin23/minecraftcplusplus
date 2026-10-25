@@ -1,0 +1,129 @@
+name,reference,cpp_string_evidence,status
+angry_villager,net/minecraft/core/particles/ParticleTypes.java:14,src/fx/particles.cpp:39,explicit particle kind; behavior needs review
+block,net/minecraft/core/particles/ParticleTypes.java:15,src/fx/particles.cpp:33; src/fx/particles.cpp:52; src/fx/particles.cpp:678; src/fx/particles.cpp:732; src/fx/particles.cpp:781,explicit particle kind; behavior needs review
+block_marker,net/minecraft/core/particles/ParticleTypes.java:16,src/fx/particles.cpp:52,generic particle kind; specialized behavior absent
+bubble,net/minecraft/core/particles/ParticleTypes.java:19,src/fx/particles.cpp:39,explicit particle kind; behavior needs review
+sulfur_bubbles,net/minecraft/core/particles/ParticleTypes.java:20,,generic particle kind; specialized behavior absent
+noxious_gas,net/minecraft/core/particles/ParticleTypes.java:21,,generic particle kind; specialized behavior absent
+noxious_gas_cloud,net/minecraft/core/particles/ParticleTypes.java:22,,generic particle kind; specialized behavior absent
+geyser,net/minecraft/core/particles/ParticleTypes.java:23,src/fx/particles.cpp:56,generic particle kind; specialized behavior absent
+geyser_base,net/minecraft/core/particles/ParticleTypes.java:24,src/fx/particles.cpp:56,generic particle kind; specialized behavior absent
+geyser_poof,net/minecraft/core/particles/ParticleTypes.java:27,src/fx/particles.cpp:56,generic particle kind; specialized behavior absent
+geyser_plume,net/minecraft/core/particles/ParticleTypes.java:30,src/fx/particles.cpp:56,generic particle kind; specialized behavior absent
+cloud,net/minecraft/core/particles/ParticleTypes.java:33,src/fx/particles.cpp:49,explicit particle kind; behavior needs review
+copper_fire_flame,net/minecraft/core/particles/ParticleTypes.java:34,src/fx/particles.cpp:37,explicit particle kind; behavior needs review
+crit,net/minecraft/core/particles/ParticleTypes.java:35,src/fx/particles.cpp:38,explicit particle kind; behavior needs review
+damage_indicator,net/minecraft/core/particles/ParticleTypes.java:36,src/fx/particles.cpp:38,explicit particle kind; behavior needs review
+dragon_breath,net/minecraft/core/particles/ParticleTypes.java:37,src/fx/particles.cpp:55,generic particle kind; specialized behavior absent
+dripping_lava,net/minecraft/core/particles/ParticleTypes.java:40,,generic particle kind; specialized behavior absent
+falling_lava,net/minecraft/core/particles/ParticleTypes.java:41,,generic particle kind; specialized behavior absent
+landing_lava,net/minecraft/core/particles/ParticleTypes.java:42,,generic particle kind; specialized behavior absent
+dripping_water,net/minecraft/core/particles/ParticleTypes.java:43,,generic particle kind; specialized behavior absent
+falling_water,net/minecraft/core/particles/ParticleTypes.java:44,,generic particle kind; specialized behavior absent
+dust,net/minecraft/core/particles/ParticleTypes.java:45,src/fx/particles.cpp:48; src/fx/particles.cpp:53,explicit particle kind; behavior needs review
+dust_color_transition,net/minecraft/core/particles/ParticleTypes.java:46,src/fx/particles.cpp:48; src/fx/particles.cpp:53,explicit particle kind; behavior needs review
+effect,net/minecraft/core/particles/ParticleTypes.java:49,src/fx/particles.cpp:44; src/fx/particles.cpp:54,explicit particle kind; behavior needs review
+elder_guardian,net/minecraft/core/particles/ParticleTypes.java:50,,generic particle kind; specialized behavior absent
+enchanted_hit,net/minecraft/core/particles/ParticleTypes.java:51,src/fx/particles.cpp:38,explicit particle kind; behavior needs review
+enchant,net/minecraft/core/particles/ParticleTypes.java:52,src/fx/particles.cpp:43,explicit particle kind; behavior needs review
+end_rod,net/minecraft/core/particles/ParticleTypes.java:53,,generic particle kind; specialized behavior absent
+entity_effect,net/minecraft/core/particles/ParticleTypes.java:54,src/fx/particles.cpp:45; src/fx/particles.cpp:54,explicit particle kind; behavior needs review
+explosion_emitter,net/minecraft/core/particles/ParticleTypes.java:57,src/fx/particles.cpp:35,explicit particle kind; behavior needs review
+explosion,net/minecraft/core/particles/ParticleTypes.java:58,src/fx/particles.cpp:35; src/fx/particles.cpp:886,explicit particle kind; behavior needs review
+gust,net/minecraft/core/particles/ParticleTypes.java:59,,generic particle kind; specialized behavior absent
+small_gust,net/minecraft/core/particles/ParticleTypes.java:60,,generic particle kind; specialized behavior absent
+gust_emitter_large,net/minecraft/core/particles/ParticleTypes.java:61,,generic particle kind; specialized behavior absent
+gust_emitter_small,net/minecraft/core/particles/ParticleTypes.java:62,,generic particle kind; specialized behavior absent
+sonic_boom,net/minecraft/core/particles/ParticleTypes.java:63,,generic particle kind; specialized behavior absent
+falling_dust,net/minecraft/core/particles/ParticleTypes.java:64,src/fx/particles.cpp:34; src/fx/particles.cpp:52,explicit particle kind; behavior needs review
+firework,net/minecraft/core/particles/ParticleTypes.java:67,,generic particle kind; specialized behavior absent
+fishing,net/minecraft/core/particles/ParticleTypes.java:68,,generic particle kind; specialized behavior absent
+flame,net/minecraft/core/particles/ParticleTypes.java:69,src/fx/particles.cpp:36; src/fx/particles.cpp:1000,explicit particle kind; behavior needs review
+infested,net/minecraft/core/particles/ParticleTypes.java:70,src/fx/particles.cpp:45,explicit particle kind; behavior needs review
+cherry_leaves,net/minecraft/core/particles/ParticleTypes.java:71,src/fx/particles.cpp:40; src/fx/particles.cpp:1000; src/fx/particles.cpp:1015,explicit particle kind; behavior needs review
+pale_oak_leaves,net/minecraft/core/particles/ParticleTypes.java:72,src/fx/particles.cpp:40; src/fx/particles.cpp:1000; src/fx/particles.cpp:1016,explicit particle kind; behavior needs review
+red_poplar_leaves,net/minecraft/core/particles/ParticleTypes.java:73,src/fx/particles.cpp:41,explicit particle kind; behavior needs review
+orange_poplar_leaves,net/minecraft/core/particles/ParticleTypes.java:74,src/fx/particles.cpp:41,explicit particle kind; behavior needs review
+yellow_poplar_leaves,net/minecraft/core/particles/ParticleTypes.java:75,src/fx/particles.cpp:42,explicit particle kind; behavior needs review
+tinted_leaves,net/minecraft/core/particles/ParticleTypes.java:76,src/fx/particles.cpp:42; src/fx/particles.cpp:54; src/fx/particles.cpp:1000,explicit particle kind; behavior needs review
+sculk_soul,net/minecraft/core/particles/ParticleTypes.java:79,,generic particle kind; specialized behavior absent
+sculk_charge,net/minecraft/core/particles/ParticleTypes.java:80,src/fx/particles.cpp:55,generic particle kind; specialized behavior absent
+sculk_charge_pop,net/minecraft/core/particles/ParticleTypes.java:83,,generic particle kind; specialized behavior absent
+soul_fire_flame,net/minecraft/core/particles/ParticleTypes.java:84,src/fx/particles.cpp:37; src/fx/particles.cpp:1000,explicit particle kind; behavior needs review
+soul,net/minecraft/core/particles/ParticleTypes.java:85,,generic particle kind; specialized behavior absent
+flash,net/minecraft/core/particles/ParticleTypes.java:86,src/fx/particles.cpp:55,generic particle kind; specialized behavior absent
+happy_villager,net/minecraft/core/particles/ParticleTypes.java:87,src/fx/particles.cpp:46,explicit particle kind; behavior needs review
+composter,net/minecraft/core/particles/ParticleTypes.java:88,src/fx/particles.cpp:47,explicit particle kind; behavior needs review
+heart,net/minecraft/core/particles/ParticleTypes.java:89,src/fx/particles.cpp:39,explicit particle kind; behavior needs review
+instant_effect,net/minecraft/core/particles/ParticleTypes.java:90,src/fx/particles.cpp:44; src/fx/particles.cpp:54,explicit particle kind; behavior needs review
+item,net/minecraft/core/particles/ParticleTypes.java:93,src/fx/particles.cpp:57,network arguments explicitly unsupported
+vibration,net/minecraft/core/particles/ParticleTypes.java:94,src/fx/particles.cpp:57,network arguments explicitly unsupported
+trail,net/minecraft/core/particles/ParticleTypes.java:97,src/fx/particles.cpp:57,generic particle kind; specialized behavior absent
+pause_mob_growth,net/minecraft/core/particles/ParticleTypes.java:98,,generic particle kind; specialized behavior absent
+reset_mob_growth,net/minecraft/core/particles/ParticleTypes.java:99,,generic particle kind; specialized behavior absent
+item_slime,net/minecraft/core/particles/ParticleTypes.java:100,,generic particle kind; specialized behavior absent
+item_cobweb,net/minecraft/core/particles/ParticleTypes.java:101,,generic particle kind; specialized behavior absent
+item_snowball,net/minecraft/core/particles/ParticleTypes.java:102,,generic particle kind; specialized behavior absent
+large_smoke,net/minecraft/core/particles/ParticleTypes.java:103,src/fx/particles.cpp:36,explicit particle kind; behavior needs review
+lava,net/minecraft/core/particles/ParticleTypes.java:104,src/fx/particles.cpp:48; src/fx/particles.cpp:1001; src/fx/particles.cpp:1021; src/fx/particles.cpp:1126,explicit particle kind; behavior needs review
+mycelium,net/minecraft/core/particles/ParticleTypes.java:105,src/fx/particles.cpp:46,explicit particle kind; behavior needs review
+note,net/minecraft/core/particles/ParticleTypes.java:106,src/fx/particles.cpp:48,explicit particle kind; behavior needs review
+poof,net/minecraft/core/particles/ParticleTypes.java:107,src/fx/particles.cpp:34,explicit particle kind; behavior needs review
+portal,net/minecraft/core/particles/ParticleTypes.java:108,src/fx/particles.cpp:42,explicit particle kind; behavior needs review
+rain,net/minecraft/core/particles/ParticleTypes.java:109,src/fx/particles.cpp:34; src/fx/particles.cpp:1099,explicit particle kind; behavior needs review
+smoke,net/minecraft/core/particles/ParticleTypes.java:110,src/fx/particles.cpp:35; src/fx/particles.cpp:983; src/fx/particles.cpp:1000; src/fx/particles.cpp:1099,explicit particle kind; behavior needs review
+white_smoke,net/minecraft/core/particles/ParticleTypes.java:111,src/fx/particles.cpp:36,explicit particle kind; behavior needs review
+sneeze,net/minecraft/core/particles/ParticleTypes.java:112,src/fx/particles.cpp:49,explicit particle kind; behavior needs review
+spit,net/minecraft/core/particles/ParticleTypes.java:113,,generic particle kind; specialized behavior absent
+squid_ink,net/minecraft/core/particles/ParticleTypes.java:114,,generic particle kind; specialized behavior absent
+sweep_attack,net/minecraft/core/particles/ParticleTypes.java:115,,generic particle kind; specialized behavior absent
+totem_of_undying,net/minecraft/core/particles/ParticleTypes.java:116,,generic particle kind; specialized behavior absent
+underwater,net/minecraft/core/particles/ParticleTypes.java:117,,generic particle kind; specialized behavior absent
+splash,net/minecraft/core/particles/ParticleTypes.java:118,src/fx/particles.cpp:34,explicit particle kind; behavior needs review
+witch,net/minecraft/core/particles/ParticleTypes.java:119,src/fx/particles.cpp:46,explicit particle kind; behavior needs review
+bubble_pop,net/minecraft/core/particles/ParticleTypes.java:120,src/fx/particles.cpp:40,explicit particle kind; behavior needs review
+current_down,net/minecraft/core/particles/ParticleTypes.java:121,,generic particle kind; specialized behavior absent
+bubble_column_up,net/minecraft/core/particles/ParticleTypes.java:122,,generic particle kind; specialized behavior absent
+nautilus,net/minecraft/core/particles/ParticleTypes.java:123,src/fx/particles.cpp:43,explicit particle kind; behavior needs review
+dolphin,net/minecraft/core/particles/ParticleTypes.java:124,src/fx/particles.cpp:47,explicit particle kind; behavior needs review
+campfire_cosy_smoke,net/minecraft/core/particles/ParticleTypes.java:125,src/fx/particles.cpp:43; src/fx/particles.cpp:1001; src/fx/particles.cpp:1199,explicit particle kind; behavior needs review
+campfire_signal_smoke,net/minecraft/core/particles/ParticleTypes.java:126,src/fx/particles.cpp:44; src/fx/particles.cpp:1199,explicit particle kind; behavior needs review
+dripping_honey,net/minecraft/core/particles/ParticleTypes.java:127,,generic particle kind; specialized behavior absent
+falling_honey,net/minecraft/core/particles/ParticleTypes.java:128,,generic particle kind; specialized behavior absent
+landing_honey,net/minecraft/core/particles/ParticleTypes.java:129,,generic particle kind; specialized behavior absent
+falling_nectar,net/minecraft/core/particles/ParticleTypes.java:130,,generic particle kind; specialized behavior absent
+falling_spore_blossom,net/minecraft/core/particles/ParticleTypes.java:131,,generic particle kind; specialized behavior absent
+ash,net/minecraft/core/particles/ParticleTypes.java:132,,generic particle kind; specialized behavior absent
+crimson_spore,net/minecraft/core/particles/ParticleTypes.java:133,,generic particle kind; specialized behavior absent
+warped_spore,net/minecraft/core/particles/ParticleTypes.java:134,,generic particle kind; specialized behavior absent
+spore_blossom_air,net/minecraft/core/particles/ParticleTypes.java:135,,generic particle kind; specialized behavior absent
+dripping_obsidian_tear,net/minecraft/core/particles/ParticleTypes.java:136,,generic particle kind; specialized behavior absent
+falling_obsidian_tear,net/minecraft/core/particles/ParticleTypes.java:137,,generic particle kind; specialized behavior absent
+landing_obsidian_tear,net/minecraft/core/particles/ParticleTypes.java:138,,generic particle kind; specialized behavior absent
+reverse_portal,net/minecraft/core/particles/ParticleTypes.java:139,,generic particle kind; specialized behavior absent
+white_ash,net/minecraft/core/particles/ParticleTypes.java:140,,generic particle kind; specialized behavior absent
+small_flame,net/minecraft/core/particles/ParticleTypes.java:141,src/fx/particles.cpp:37,explicit particle kind; behavior needs review
+snowflake,net/minecraft/core/particles/ParticleTypes.java:142,src/fx/particles.cpp:49,explicit particle kind; behavior needs review
+dripping_dripstone_lava,net/minecraft/core/particles/ParticleTypes.java:143,,generic particle kind; specialized behavior absent
+falling_dripstone_lava,net/minecraft/core/particles/ParticleTypes.java:144,,generic particle kind; specialized behavior absent
+dripping_dripstone_water,net/minecraft/core/particles/ParticleTypes.java:145,,generic particle kind; specialized behavior absent
+falling_dripstone_water,net/minecraft/core/particles/ParticleTypes.java:146,,generic particle kind; specialized behavior absent
+glow_squid_ink,net/minecraft/core/particles/ParticleTypes.java:147,,generic particle kind; specialized behavior absent
+glow,net/minecraft/core/particles/ParticleTypes.java:148,,generic particle kind; specialized behavior absent
+wax_on,net/minecraft/core/particles/ParticleTypes.java:149,,generic particle kind; specialized behavior absent
+wax_off,net/minecraft/core/particles/ParticleTypes.java:150,,generic particle kind; specialized behavior absent
+electric_spark,net/minecraft/core/particles/ParticleTypes.java:151,,generic particle kind; specialized behavior absent
+scrape,net/minecraft/core/particles/ParticleTypes.java:152,,generic particle kind; specialized behavior absent
+shriek,net/minecraft/core/particles/ParticleTypes.java:153,src/fx/particles.cpp:55,generic particle kind; specialized behavior absent
+egg_crack,net/minecraft/core/particles/ParticleTypes.java:156,src/fx/particles.cpp:47,explicit particle kind; behavior needs review
+dust_plume,net/minecraft/core/particles/ParticleTypes.java:157,,generic particle kind; specialized behavior absent
+trial_spawner_detection,net/minecraft/core/particles/ParticleTypes.java:158,,generic particle kind; specialized behavior absent
+trial_spawner_detection_ominous,net/minecraft/core/particles/ParticleTypes.java:159,,generic particle kind; specialized behavior absent
+vault_connection,net/minecraft/core/particles/ParticleTypes.java:160,,generic particle kind; specialized behavior absent
+dust_pillar,net/minecraft/core/particles/ParticleTypes.java:161,src/fx/particles.cpp:33; src/fx/particles.cpp:52,explicit particle kind; behavior needs review
+ominous_spawning,net/minecraft/core/particles/ParticleTypes.java:164,,generic particle kind; specialized behavior absent
+raid_omen,net/minecraft/core/particles/ParticleTypes.java:165,src/fx/particles.cpp:45,explicit particle kind; behavior needs review
+trial_omen,net/minecraft/core/particles/ParticleTypes.java:166,src/fx/particles.cpp:45,explicit particle kind; behavior needs review
+block_crumble,net/minecraft/core/particles/ParticleTypes.java:167,src/fx/particles.cpp:33; src/fx/particles.cpp:53,explicit particle kind; behavior needs review
+firefly,net/minecraft/core/particles/ParticleTypes.java:170,,generic particle kind; specialized behavior absent
+sulfur_cube_goo,net/minecraft/core/particles/ParticleTypes.java:171,,generic particle kind; specialized behavior absent

@@ -1,0 +1,11 @@
+name,reference,cpp_string_evidence,status
+straight_trunk_placer,net/minecraft/world/level/levelgen/feature/trunkplacers/TrunkPlacerType.java:8,src/worldgen/features_trees.cpp:1532,name found; not proof of behavior
+forking_trunk_placer,net/minecraft/world/level/levelgen/feature/trunkplacers/TrunkPlacerType.java:9,src/worldgen/features_trees.cpp:1533,name found; not proof of behavior
+giant_trunk_placer,net/minecraft/world/level/levelgen/feature/trunkplacers/TrunkPlacerType.java:10,src/worldgen/features_trees.cpp:1534,name found; not proof of behavior
+mega_jungle_trunk_placer,net/minecraft/world/level/levelgen/feature/trunkplacers/TrunkPlacerType.java:11,src/worldgen/features_trees.cpp:1535,name found; not proof of behavior
+dark_oak_trunk_placer,net/minecraft/world/level/levelgen/feature/trunkplacers/TrunkPlacerType.java:12,src/worldgen/features_trees.cpp:1536,name found; not proof of behavior
+fancy_trunk_placer,net/minecraft/world/level/levelgen/feature/trunkplacers/TrunkPlacerType.java:13,src/worldgen/features_trees.cpp:1537,name found; not proof of behavior
+bending_trunk_placer,net/minecraft/world/level/levelgen/feature/trunkplacers/TrunkPlacerType.java:14,src/worldgen/features_trees.cpp:1538,name found; not proof of behavior
+upwards_branching_trunk_placer,net/minecraft/world/level/levelgen/feature/trunkplacers/TrunkPlacerType.java:15,src/worldgen/features_trees.cpp:1539,name found; not proof of behavior
+cherry_trunk_placer,net/minecraft/world/level/levelgen/feature/trunkplacers/TrunkPlacerType.java:18,src/worldgen/features_trees.cpp:1540,name found; not proof of behavior
+poplar_trunk_placer,net/minecraft/world/level/levelgen/feature/trunkplacers/TrunkPlacerType.java:19,src/worldgen/features_trees.cpp:1541,name found; not proof of behavior

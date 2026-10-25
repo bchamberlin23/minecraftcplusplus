@@ -1,0 +1,11 @@
+name,reference,cpp_string_evidence,status
+custom_model_data,net/minecraft/client/renderer/item/properties/select/SelectItemModelProperties.java:12,src/ui/items.cpp:356,name found; not proof of behavior
+main_hand,net/minecraft/client/renderer/item/properties/select/SelectItemModelProperties.java:13,,name absent; inspect generic/data-driven implementation
+charge_type,net/minecraft/client/renderer/item/properties/select/SelectItemModelProperties.java:14,src/entity/item_models.cpp:535,name found; not proof of behavior
+trim_material,net/minecraft/client/renderer/item/properties/select/SelectItemModelProperties.java:15,,name absent; inspect generic/data-driven implementation
+block_state,net/minecraft/client/renderer/item/properties/select/SelectItemModelProperties.java:16,src/ui/items.cpp:380; src/worldgen/features.cpp:1532,name found; not proof of behavior
+display_context,net/minecraft/client/renderer/item/properties/select/SelectItemModelProperties.java:17,src/entity/item_models.cpp:548,name found; not proof of behavior
+local_time,net/minecraft/client/renderer/item/properties/select/SelectItemModelProperties.java:18,,name absent; inspect generic/data-driven implementation
+context_entity_type,net/minecraft/client/renderer/item/properties/select/SelectItemModelProperties.java:19,,name absent; inspect generic/data-driven implementation
+context_dimension,net/minecraft/client/renderer/item/properties/select/SelectItemModelProperties.java:20,,name absent; inspect generic/data-driven implementation
+component,net/minecraft/client/renderer/item/properties/select/SelectItemModelProperties.java:21,src/assets/game_reports.cpp:53; src/assets/game_reports.cpp:82; src/assets/game_reports.cpp:102; src/audio/game_sounds.cpp:222; src/entity/entity_assets.cpp:170; src/ui/icons.cpp:261,name found; not proof of behavior

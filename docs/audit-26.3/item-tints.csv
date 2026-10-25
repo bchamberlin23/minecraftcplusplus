@@ -1,0 +1,8 @@
+name,reference,cpp_string_evidence,status
+custom_model_data,net/minecraft/client/color/item/ItemTintSources.java:13,src/ui/items.cpp:356,name found; not proof of behavior
+constant,net/minecraft/client/color/item/ItemTintSources.java:14,src/entity/item_models.cpp:508; src/sky/environment.cpp:325; src/sky/environment.cpp:326; src/ui/icons.cpp:232; src/worldgen/carvers.cpp:207; src/worldgen/carvers.cpp:266; src/worldgen/carvers.cpp:368; src/worldgen/density.cpp:1492; src/worldgen/features.cpp:458; src/worldgen/features.cpp:507; src/worldgen/features.cpp:598,name found; not proof of behavior
+dye,net/minecraft/client/color/item/ItemTintSources.java:15,src/entity/item_models.cpp:509; src/ui/icons.cpp:233; src/ui/items.cpp:345,name found; not proof of behavior
+grass,net/minecraft/client/color/item/ItemTintSources.java:16,src/assets/assets.cpp:993; src/assets/assets.cpp:1012; src/entity/item_models.cpp:510; src/render/shading.cpp:118; src/ui/icons.cpp:235,name found; not proof of behavior
+firework,net/minecraft/client/color/item/ItemTintSources.java:17,,name absent; inspect generic/data-driven implementation
+potion,net/minecraft/client/color/item/ItemTintSources.java:18,src/ui/creative.cpp:67; src/ui/creative.cpp:68; src/ui/icons.cpp:234; src/ui/items.cpp:53; src/ui/items.cpp:183; src/ui/items.cpp:225; src/ui/stations_b.cpp:426,name found; not proof of behavior
+team,net/minecraft/client/color/item/ItemTintSources.java:19,,name absent; inspect generic/data-driven implementation

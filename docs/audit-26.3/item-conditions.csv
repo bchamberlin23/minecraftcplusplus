@@ -1,0 +1,14 @@
+name,reference,cpp_string_evidence,status
+custom_model_data,net/minecraft/client/renderer/item/properties/conditional/ConditionalItemModelProperties.java:13,src/ui/items.cpp:356,name found; not proof of behavior
+using_item,net/minecraft/client/renderer/item/properties/conditional/ConditionalItemModelProperties.java:14,src/entity/item_models.cpp:530,name found; not proof of behavior
+broken,net/minecraft/client/renderer/item/properties/conditional/ConditionalItemModelProperties.java:15,src/ui/stats.cpp:49; src/ui/stats.cpp:117,name found; not proof of behavior
+damaged,net/minecraft/client/renderer/item/properties/conditional/ConditionalItemModelProperties.java:16,src/ui/icons.cpp:262,name found; not proof of behavior
+fishing_rod/cast,net/minecraft/client/renderer/item/properties/conditional/ConditionalItemModelProperties.java:17,,name absent; inspect generic/data-driven implementation
+has_component,net/minecraft/client/renderer/item/properties/conditional/ConditionalItemModelProperties.java:18,src/ui/icons.cpp:261,name found; not proof of behavior
+bundle/has_selected_item,net/minecraft/client/renderer/item/properties/conditional/ConditionalItemModelProperties.java:19,,name absent; inspect generic/data-driven implementation
+selected,net/minecraft/client/renderer/item/properties/conditional/ConditionalItemModelProperties.java:20,,name absent; inspect generic/data-driven implementation
+carried,net/minecraft/client/renderer/item/properties/conditional/ConditionalItemModelProperties.java:21,,name absent; inspect generic/data-driven implementation
+extended_view,net/minecraft/client/renderer/item/properties/conditional/ConditionalItemModelProperties.java:22,,name absent; inspect generic/data-driven implementation
+keybind_down,net/minecraft/client/renderer/item/properties/conditional/ConditionalItemModelProperties.java:23,,name absent; inspect generic/data-driven implementation
+view_entity,net/minecraft/client/renderer/item/properties/conditional/ConditionalItemModelProperties.java:24,,name absent; inspect generic/data-driven implementation
+component,net/minecraft/client/renderer/item/properties/conditional/ConditionalItemModelProperties.java:25,src/assets/game_reports.cpp:53; src/assets/game_reports.cpp:82; src/assets/game_reports.cpp:102; src/audio/game_sounds.cpp:222; src/entity/entity_assets.cpp:170; src/ui/icons.cpp:261,name found; not proof of behavior

@@ -1,0 +1,13 @@
+name,reference,cpp_string_evidence,status
+blob_foliage_placer,net/minecraft/world/level/levelgen/feature/foliageplacers/FoliagePlacerType.java:8,src/worldgen/features_trees.cpp:1903,name found; not proof of behavior
+spruce_foliage_placer,net/minecraft/world/level/levelgen/feature/foliageplacers/FoliagePlacerType.java:9,src/worldgen/features_trees.cpp:1904,name found; not proof of behavior
+pine_foliage_placer,net/minecraft/world/level/levelgen/feature/foliageplacers/FoliagePlacerType.java:10,src/worldgen/features_trees.cpp:1905,name found; not proof of behavior
+acacia_foliage_placer,net/minecraft/world/level/levelgen/feature/foliageplacers/FoliagePlacerType.java:11,src/worldgen/features_trees.cpp:1906,name found; not proof of behavior
+bush_foliage_placer,net/minecraft/world/level/levelgen/feature/foliageplacers/FoliagePlacerType.java:12,src/worldgen/features_trees.cpp:1907,name found; not proof of behavior
+fancy_foliage_placer,net/minecraft/world/level/levelgen/feature/foliageplacers/FoliagePlacerType.java:13,src/worldgen/features_trees.cpp:1908,name found; not proof of behavior
+jungle_foliage_placer,net/minecraft/world/level/levelgen/feature/foliageplacers/FoliagePlacerType.java:14,src/worldgen/features_trees.cpp:1909,name found; not proof of behavior
+mega_pine_foliage_placer,net/minecraft/world/level/levelgen/feature/foliageplacers/FoliagePlacerType.java:15,src/worldgen/features_trees.cpp:1910,name found; not proof of behavior
+dark_oak_foliage_placer,net/minecraft/world/level/levelgen/feature/foliageplacers/FoliagePlacerType.java:16,src/worldgen/features_trees.cpp:1911,name found; not proof of behavior
+random_spread_foliage_placer,net/minecraft/world/level/levelgen/feature/foliageplacers/FoliagePlacerType.java:17,src/worldgen/features_trees.cpp:1912,name found; not proof of behavior
+cherry_foliage_placer,net/minecraft/world/level/levelgen/feature/foliageplacers/FoliagePlacerType.java:20,src/worldgen/features_trees.cpp:1913,name found; not proof of behavior
+poplar_foliage_placer,net/minecraft/world/level/levelgen/feature/foliageplacers/FoliagePlacerType.java:21,src/worldgen/features_trees.cpp:1914,name found; not proof of behavior

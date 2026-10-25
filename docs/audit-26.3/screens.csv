@@ -1,0 +1,129 @@
+class,reference,status
+PopupScreen,net/minecraft/client/gui/components/PopupScreen.java,generic confirmation/loading/message equivalent; specialized flow incomplete
+AccessibilityOnboardingScreen,net/minecraft/client/gui/screens/AccessibilityOnboardingScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+StatsScreen,net/minecraft/client/gui/screens/achievement/StatsScreen.java,partial/native equivalent: src/ui/stats.cpp
+AdvancementsScreen,net/minecraft/client/gui/screens/advancements/AdvancementsScreen.java,partial/native equivalent: src/ui/advancements.cpp
+AlertScreen,net/minecraft/client/gui/screens/AlertScreen.java,generic confirmation/loading/message equivalent; specialized flow incomplete
+BackupConfirmScreen,net/minecraft/client/gui/screens/BackupConfirmScreen.java,generic confirmation/loading/message equivalent; specialized flow incomplete
+ChatScreen,net/minecraft/client/gui/screens/ChatScreen.java,partial/native equivalent: src/ui/hud.cpp; src/ui/chat_ext.cpp
+ConfirmLinkScreen,net/minecraft/client/gui/screens/ConfirmLinkScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+ConfirmScreen,net/minecraft/client/gui/screens/ConfirmScreen.java,generic confirmation/loading/message equivalent; specialized flow incomplete
+ConnectScreen,net/minecraft/client/gui/screens/ConnectScreen.java,generic confirmation/loading/message equivalent; specialized flow incomplete
+CreateBuffetWorldScreen,net/minecraft/client/gui/screens/CreateBuffetWorldScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+CreateFlatWorldScreen,net/minecraft/client/gui/screens/CreateFlatWorldScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+CreditsAndAttributionScreen,net/minecraft/client/gui/screens/CreditsAndAttributionScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+DatapackLoadFailureScreen,net/minecraft/client/gui/screens/DatapackLoadFailureScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+DeathScreen,net/minecraft/client/gui/screens/DeathScreen.java,partial/native equivalent: src/ui/screens.cpp
+DebugOptionsScreen,net/minecraft/client/gui/screens/debug/DebugOptionsScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+GameModeSwitcherScreen,net/minecraft/client/gui/screens/debug/GameModeSwitcherScreen.java,partial/native equivalent: src/ui/bed_gamemode.cpp
+ButtonListDialogScreen,net/minecraft/client/gui/screens/dialog/ButtonListDialogScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+DialogListDialogScreen,net/minecraft/client/gui/screens/dialog/DialogListDialogScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+DialogScreen,net/minecraft/client/gui/screens/dialog/DialogScreen.java,shared Java infrastructure; no independent player-facing screen
+MultiButtonDialogScreen,net/minecraft/client/gui/screens/dialog/MultiButtonDialogScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+ServerLinksDialogScreen,net/minecraft/client/gui/screens/dialog/ServerLinksDialogScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+SimpleDialogScreen,net/minecraft/client/gui/screens/dialog/SimpleDialogScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+WaitingForResponseScreen,net/minecraft/client/gui/screens/dialog/WaitingForResponseScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+DirectJoinServerScreen,net/minecraft/client/gui/screens/DirectJoinServerScreen.java,partial/native equivalent: src/ui/servers.cpp
+DisconnectedScreen,net/minecraft/client/gui/screens/DisconnectedScreen.java,generic confirmation/loading/message equivalent; specialized flow incomplete
+ErrorScreen,net/minecraft/client/gui/screens/ErrorScreen.java,generic confirmation/loading/message equivalent; specialized flow incomplete
+FileFixerAbortedScreen,net/minecraft/client/gui/screens/FileFixerAbortedScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+FriendsListConfirmScreen,net/minecraft/client/gui/screens/friends/FriendsListConfirmScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+FriendsOverlayScreen,net/minecraft/client/gui/screens/friends/FriendsOverlayScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+GenericMessageScreen,net/minecraft/client/gui/screens/GenericMessageScreen.java,generic confirmation/loading/message equivalent; specialized flow incomplete
+GenericWaitingScreen,net/minecraft/client/gui/screens/GenericWaitingScreen.java,generic confirmation/loading/message equivalent; specialized flow incomplete
+InBedChatScreen,net/minecraft/client/gui/screens/InBedChatScreen.java,partial/native equivalent: src/ui/bed_gamemode.cpp
+AbstractCommandBlockEditScreen,net/minecraft/client/gui/screens/inventory/AbstractCommandBlockEditScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+AbstractContainerScreen,net/minecraft/client/gui/screens/inventory/AbstractContainerScreen.java,shared Java infrastructure; no independent player-facing screen
+AbstractFurnaceScreen,net/minecraft/client/gui/screens/inventory/AbstractFurnaceScreen.java,shared Java infrastructure; no independent player-facing screen
+AbstractMountInventoryScreen,net/minecraft/client/gui/screens/inventory/AbstractMountInventoryScreen.java,shared Java infrastructure; no independent player-facing screen
+AbstractRecipeBookScreen,net/minecraft/client/gui/screens/inventory/AbstractRecipeBookScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+AbstractSignEditScreen,net/minecraft/client/gui/screens/inventory/AbstractSignEditScreen.java,shared Java infrastructure; no independent player-facing screen
+AnvilScreen,net/minecraft/client/gui/screens/inventory/AnvilScreen.java,partial/native equivalent: src/ui/stations_a.cpp
+BeaconScreen,net/minecraft/client/gui/screens/inventory/BeaconScreen.java,partial/native equivalent: src/ui/stations_b.cpp
+BlastFurnaceScreen,net/minecraft/client/gui/screens/inventory/BlastFurnaceScreen.java,partial/native equivalent: src/ui/screens.cpp
+BookEditScreen,net/minecraft/client/gui/screens/inventory/BookEditScreen.java,partial/native equivalent: src/ui/signs_books.cpp
+BookSignScreen,net/minecraft/client/gui/screens/inventory/BookSignScreen.java,partial/native equivalent: src/ui/signs_books.cpp
+BookViewScreen,net/minecraft/client/gui/screens/inventory/BookViewScreen.java,partial/native equivalent: src/ui/signs_books.cpp
+BrewingStandScreen,net/minecraft/client/gui/screens/inventory/BrewingStandScreen.java,partial/native equivalent: src/ui/stations_b.cpp
+CartographyTableScreen,net/minecraft/client/gui/screens/inventory/CartographyTableScreen.java,partial/native equivalent: src/ui/stations_a2.cpp
+CommandBlockEditScreen,net/minecraft/client/gui/screens/inventory/CommandBlockEditScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+ContainerScreen,net/minecraft/client/gui/screens/inventory/ContainerScreen.java,partial/native equivalent: src/ui/screens.cpp
+CrafterScreen,net/minecraft/client/gui/screens/inventory/CrafterScreen.java,partial/native equivalent: src/ui/stations_a2.cpp
+CraftingScreen,net/minecraft/client/gui/screens/inventory/CraftingScreen.java,partial/native equivalent: src/ui/screens.cpp (recipe book missing)
+CreativeModeInventoryScreen,net/minecraft/client/gui/screens/inventory/CreativeModeInventoryScreen.java,partial/native equivalent: src/ui/creative.cpp
+DispenserScreen,net/minecraft/client/gui/screens/inventory/DispenserScreen.java,partial/native equivalent: src/ui/screens.cpp
+EnchantmentScreen,net/minecraft/client/gui/screens/inventory/EnchantmentScreen.java,partial/native equivalent: src/ui/stations_a.cpp
+FurnaceScreen,net/minecraft/client/gui/screens/inventory/FurnaceScreen.java,partial/native equivalent: src/ui/screens.cpp (recipe book missing)
+GrindstoneScreen,net/minecraft/client/gui/screens/inventory/GrindstoneScreen.java,partial/native equivalent: src/ui/stations_a.cpp
+HangingSignEditScreen,net/minecraft/client/gui/screens/inventory/HangingSignEditScreen.java,partial/native equivalent: src/ui/signs_books.cpp
+HopperScreen,net/minecraft/client/gui/screens/inventory/HopperScreen.java,partial/native equivalent: src/ui/screens.cpp
+HorseInventoryScreen,net/minecraft/client/gui/screens/inventory/HorseInventoryScreen.java,partial/native equivalent: src/ui/stations_b.cpp
+InventoryScreen,net/minecraft/client/gui/screens/inventory/InventoryScreen.java,partial/native equivalent: src/ui/screens.cpp (recipe book missing)
+ItemCombinerScreen,net/minecraft/client/gui/screens/inventory/ItemCombinerScreen.java,shared Java infrastructure; no independent player-facing screen
+JigsawBlockEditScreen,net/minecraft/client/gui/screens/inventory/JigsawBlockEditScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+LecternScreen,net/minecraft/client/gui/screens/inventory/LecternScreen.java,partial/native equivalent: src/ui/stations_b.cpp
+LoomScreen,net/minecraft/client/gui/screens/inventory/LoomScreen.java,partial/native equivalent: src/ui/stations_a2.cpp
+MerchantScreen,net/minecraft/client/gui/screens/inventory/MerchantScreen.java,partial/native equivalent: src/ui/stations_b.cpp
+MinecartCommandBlockEditScreen,net/minecraft/client/gui/screens/inventory/MinecartCommandBlockEditScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+NautilusInventoryScreen,net/minecraft/client/gui/screens/inventory/NautilusInventoryScreen.java,partial/native equivalent: src/ui/stations_b.cpp
+ShulkerBoxScreen,net/minecraft/client/gui/screens/inventory/ShulkerBoxScreen.java,partial/native equivalent: src/ui/screens.cpp
+SignEditScreen,net/minecraft/client/gui/screens/inventory/SignEditScreen.java,partial/native equivalent: src/ui/signs_books.cpp
+SmithingScreen,net/minecraft/client/gui/screens/inventory/SmithingScreen.java,partial/native equivalent: src/ui/stations_b.cpp
+SmokerScreen,net/minecraft/client/gui/screens/inventory/SmokerScreen.java,partial/native equivalent: src/ui/screens.cpp (recipe book missing)
+StonecutterScreen,net/minecraft/client/gui/screens/inventory/StonecutterScreen.java,partial/native equivalent: src/ui/stations_a2.cpp
+StructureBlockEditScreen,net/minecraft/client/gui/screens/inventory/StructureBlockEditScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+TestBlockEditScreen,net/minecraft/client/gui/screens/inventory/TestBlockEditScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+TestInstanceBlockEditScreen,net/minecraft/client/gui/screens/inventory/TestInstanceBlockEditScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+LevelLoadingScreen,net/minecraft/client/gui/screens/LevelLoadingScreen.java,generic confirmation/loading/message equivalent; specialized flow incomplete
+ManageServerScreen,net/minecraft/client/gui/screens/ManageServerScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+CodeOfConductScreen,net/minecraft/client/gui/screens/multiplayer/CodeOfConductScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+JoinMultiplayerScreen,net/minecraft/client/gui/screens/multiplayer/JoinMultiplayerScreen.java,partial/native equivalent: src/ui/servers.cpp
+RestrictionsScreen,net/minecraft/client/gui/screens/multiplayer/RestrictionsScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+SafetyScreen,net/minecraft/client/gui/screens/multiplayer/SafetyScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+ServerReconfigScreen,net/minecraft/client/gui/screens/multiplayer/ServerReconfigScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+WarningScreen,net/minecraft/client/gui/screens/multiplayer/WarningScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+NoticeWithLinkScreen,net/minecraft/client/gui/screens/NoticeWithLinkScreen.java,generic confirmation/loading/message equivalent; specialized flow incomplete
+AccessibilityOptionsScreen,net/minecraft/client/gui/screens/options/AccessibilityOptionsScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+ChatOptionsScreen,net/minecraft/client/gui/screens/options/ChatOptionsScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+ControlsScreen,net/minecraft/client/gui/screens/options/controls/ControlsScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+KeyBindsScreen,net/minecraft/client/gui/screens/options/controls/KeyBindsScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+FontOptionsScreen,net/minecraft/client/gui/screens/options/FontOptionsScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+InWorldGameRulesScreen,net/minecraft/client/gui/screens/options/InWorldGameRulesScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+LanguageSelectScreen,net/minecraft/client/gui/screens/options/LanguageSelectScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+MouseSettingsScreen,net/minecraft/client/gui/screens/options/MouseSettingsScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+OnlineOptionsScreen,net/minecraft/client/gui/screens/options/OnlineOptionsScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+OptionsScreen,net/minecraft/client/gui/screens/options/OptionsScreen.java,partial/native equivalent: src/ui/screens.cpp (small settings subset)
+OptionsSubScreen,net/minecraft/client/gui/screens/options/OptionsSubScreen.java,shared Java infrastructure; no independent player-facing screen
+SkinCustomizationScreen,net/minecraft/client/gui/screens/options/SkinCustomizationScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+SoundOptionsScreen,net/minecraft/client/gui/screens/options/SoundOptionsScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+UnsupportedGraphicsWarningScreen,net/minecraft/client/gui/screens/options/UnsupportedGraphicsWarningScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+VideoSettingsScreen,net/minecraft/client/gui/screens/options/VideoSettingsScreen.java,partial/native equivalent: src/ui/video_screen.cpp (custom renderer options)
+OutOfMemoryScreen,net/minecraft/client/gui/screens/OutOfMemoryScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+PackSelectionScreen,net/minecraft/client/gui/screens/packs/PackSelectionScreen.java,partial/native equivalent: src/ui/mods_screen.cpp (custom equivalent)
+PauseScreen,net/minecraft/client/gui/screens/PauseScreen.java,partial/native equivalent: src/ui/screens.cpp (does not pause local server)
+PresetFlatWorldScreen,net/minecraft/client/gui/screens/PresetFlatWorldScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+PrivacyConfirmLinkScreen,net/minecraft/client/gui/screens/PrivacyConfirmLinkScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+ProgressScreen,net/minecraft/client/gui/screens/ProgressScreen.java,generic confirmation/loading/message equivalent; specialized flow incomplete
+RecoverWorldDataScreen,net/minecraft/client/gui/screens/RecoverWorldDataScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+AbstractReportScreen,net/minecraft/client/gui/screens/reporting/AbstractReportScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+ChatReportScreen,net/minecraft/client/gui/screens/reporting/ChatReportScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+ChatSelectionScreen,net/minecraft/client/gui/screens/reporting/ChatSelectionScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+NameReportScreen,net/minecraft/client/gui/screens/reporting/NameReportScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+ReportPlayerScreen,net/minecraft/client/gui/screens/reporting/ReportPlayerScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+ReportReasonSelectionScreen,net/minecraft/client/gui/screens/reporting/ReportReasonSelectionScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+SkinReportScreen,net/minecraft/client/gui/screens/reporting/SkinReportScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+Screen,net/minecraft/client/gui/screens/Screen.java,shared Java infrastructure; no independent player-facing screen
+SocialInteractionsScreen,net/minecraft/client/gui/screens/social/SocialInteractionsScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+TelemetryInfoScreen,net/minecraft/client/gui/screens/telemetry/TelemetryInfoScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+TitleScreen,net/minecraft/client/gui/screens/TitleScreen.java,partial/native equivalent: src/ui/title.cpp (services/credits missing)
+WinScreen,net/minecraft/client/gui/screens/WinScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+WorldOptionsScreen,net/minecraft/client/gui/screens/WorldOptionsScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+AbstractGameRulesScreen,net/minecraft/client/gui/screens/worldselection/AbstractGameRulesScreen.java,shared Java infrastructure; no independent player-facing screen
+ConfirmExperimentalFeaturesScreen,net/minecraft/client/gui/screens/worldselection/ConfirmExperimentalFeaturesScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+CreateWorldScreen,net/minecraft/client/gui/screens/worldselection/CreateWorldScreen.java,partial/native equivalent: src/ui/worlds.cpp (one-page subset)
+EditWorldScreen,net/minecraft/client/gui/screens/worldselection/EditWorldScreen.java,partial/native equivalent: src/ui/worlds.cpp (rename/open-folder subset)
+ExperimentsScreen,net/minecraft/client/gui/screens/worldselection/ExperimentsScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+FileFixerProgressScreen,net/minecraft/client/gui/screens/worldselection/FileFixerProgressScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+OptimizeWorldScreen,net/minecraft/client/gui/screens/worldselection/OptimizeWorldScreen.java,missing native screen/flow; see AUDIT.md for priority and scope
+SelectWorldScreen,net/minecraft/client/gui/screens/worldselection/SelectWorldScreen.java,partial/native equivalent: src/ui/worlds.cpp
+WorldCreationGameRulesScreen,net/minecraft/client/gui/screens/worldselection/WorldCreationGameRulesScreen.java,missing native screen/flow; see AUDIT.md for priority and scope

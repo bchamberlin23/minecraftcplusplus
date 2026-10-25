@@ -1,0 +1,11 @@
+name,reference,cpp_string_evidence,status
+custom_model_data,net/minecraft/client/renderer/item/properties/numeric/RangeSelectItemModelProperties.java:13,src/ui/items.cpp:356,name found; not proof of behavior
+bundle/fullness,net/minecraft/client/renderer/item/properties/numeric/RangeSelectItemModelProperties.java:14,,name absent; inspect generic/data-driven implementation
+damage,net/minecraft/client/renderer/item/properties/numeric/RangeSelectItemModelProperties.java:15,src/ui/icons.cpp:269; src/ui/items.cpp:344; src/ui/items.cpp:436,name found; not proof of behavior
+cooldown,net/minecraft/client/renderer/item/properties/numeric/RangeSelectItemModelProperties.java:16,,name absent; inspect generic/data-driven implementation
+time,net/minecraft/client/renderer/item/properties/numeric/RangeSelectItemModelProperties.java:17,src/assets/assets.cpp:732; src/ui/command_tree.cpp:45; src/ui/command_tree.cpp:255,name found; not proof of behavior
+compass,net/minecraft/client/renderer/item/properties/numeric/RangeSelectItemModelProperties.java:18,src/ui/creative_tabs.inc:267; src/ui/creative_tabs.inc:366,name found; not proof of behavior
+crossbow/pull,net/minecraft/client/renderer/item/properties/numeric/RangeSelectItemModelProperties.java:19,src/entity/item_models.cpp:575,name found; not proof of behavior
+use_cycle,net/minecraft/client/renderer/item/properties/numeric/RangeSelectItemModelProperties.java:20,src/entity/item_models.cpp:576,name found; not proof of behavior
+use_duration,net/minecraft/client/renderer/item/properties/numeric/RangeSelectItemModelProperties.java:21,src/entity/item_models.cpp:574,name found; not proof of behavior
+count,net/minecraft/client/renderer/item/properties/numeric/RangeSelectItemModelProperties.java:22,src/ui/text.cpp:140; src/ui/text.cpp:224; src/ui/text.cpp:224; src/ui/text.cpp:224; src/worldgen/carvers.cpp:414; src/worldgen/features.cpp:1584; src/worldgen/features.cpp:1584; src/worldgen/features.cpp:1604; src/worldgen/structures.cpp:557,name found; not proof of behavior

@@ -1,0 +1,187 @@
+{
+  "generated_utc": "2026-10-11T19:42:55.355954+00:00",
+  "reference_root": "C:\\Users\\Admin\\Desktop\\Minecraft Split Screen\\decompiled-26.3",
+  "version": {
+    "id": "26.3",
+    "name": "26.3",
+    "world_version": 5023,
+    "series_id": "main",
+    "protocol_version": 777,
+    "pack_version": {
+      "resource_major": 97,
+      "resource_minor": 1,
+      "data_major": 121,
+      "data_minor": 0
+    },
+    "build_time": "2026-09-15T11:20:48+00:00",
+    "java_component": "java-runtime-epsilon",
+    "java_version": 25,
+    "stable": true,
+    "use_editor": false
+  },
+  "git_head": "c69e6c3a74b18f4dfc077e5426a4e8bf75d8ab3f",
+  "working_tree_status": " M shaders/terrain.hlsl\n M src/render/range_allocator.h\n M src/render/renderer.cpp\n M src/render/renderer.h\n M src/world/terrain.cpp\n?? docs/\n?? tools/audit_26_3.py\n",
+  "cpp_source_files": 241,
+  "cpp_source_lines": 91022,
+  "shader_files": 18,
+  "reference_java_files": 7301,
+  "static_settings": 113,
+  "settings_with_cpp_persistence": 8,
+  "declared_keybindings": 53,
+  "hotbar_keybindings": 9,
+  "reference_client_screens": 128,
+  "reference_realms_screens": 28,
+  "reviewed_findings": 85,
+  "reviewed_priorities": {
+    "P1": 28,
+    "P2": 54,
+    "P3": 3
+  },
+  "packets": {
+    "common": {
+      "Clientbound": {
+        "total": 14,
+        "without_direct_evidence": 9
+      },
+      "Serverbound": {
+        "total": 6,
+        "without_direct_evidence": 1
+      }
+    },
+    "configuration": {
+      "Clientbound": {
+        "total": 6,
+        "without_direct_evidence": 2
+      },
+      "Serverbound": {
+        "total": 3,
+        "without_direct_evidence": 0
+      }
+    },
+    "cookie": {
+      "Clientbound": {
+        "total": 1,
+        "without_direct_evidence": 0
+      },
+      "Serverbound": {
+        "total": 1,
+        "without_direct_evidence": 0
+      }
+    },
+    "game": {
+      "Clientbound": {
+        "total": 129,
+        "without_direct_evidence": 44
+      },
+      "Serverbound": {
+        "total": 61,
+        "without_direct_evidence": 24
+      }
+    },
+    "handshake": {
+      "Clientbound": {
+        "total": 0,
+        "without_direct_evidence": 0
+      },
+      "Serverbound": {
+        "total": 1,
+        "without_direct_evidence": 1
+      }
+    },
+    "login": {
+      "Clientbound": {
+        "total": 5,
+        "without_direct_evidence": 0
+      },
+      "Serverbound": {
+        "total": 4,
+        "without_direct_evidence": 1
+      }
+    },
+    "ping": {
+      "Clientbound": {
+        "total": 1,
+        "without_direct_evidence": 1
+      },
+      "Serverbound": {
+        "total": 1,
+        "without_direct_evidence": 1
+      }
+    },
+    "status": {
+      "Clientbound": {
+        "total": 1,
+        "without_direct_evidence": 1
+      },
+      "Serverbound": {
+        "total": 1,
+        "without_direct_evidence": 1
+      }
+    }
+  },
+  "registries": {
+    "particles": {
+      "total": 128,
+      "without_name_evidence": 63,
+      "generic_kind_types": 73
+    },
+    "components": {
+      "total": 122,
+      "without_name_evidence": 61,
+      "unsupported_decoder_types": 32
+    },
+    "features": {
+      "total": 58,
+      "without_name_evidence": 0
+    },
+    "processors": {
+      "total": 11,
+      "without_name_evidence": 0
+    },
+    "structures": {
+      "total": 16,
+      "without_name_evidence": 3
+    },
+    "menus": {
+      "total": 25,
+      "without_name_evidence": 6
+    },
+    "item-special-renderers": {
+      "total": 13,
+      "without_name_evidence": 1
+    },
+    "entity-renderers": {
+      "total": 150,
+      "without_name_evidence": 41
+    },
+    "block-entity-renderers": {
+      "total": 26,
+      "without_name_evidence": 15
+    },
+    "trunk-placers": {
+      "total": 10,
+      "without_name_evidence": 0
+    },
+    "foliage-placers": {
+      "total": 12,
+      "without_name_evidence": 0
+    },
+    "item-conditions": {
+      "total": 13,
+      "without_name_evidence": 7
+    },
+    "item-ranges": {
+      "total": 10,
+      "without_name_evidence": 2
+    },
+    "item-selects": {
+      "total": 10,
+      "without_name_evidence": 5
+    },
+    "item-tints": {
+      "total": 7,
+      "without_name_evidence": 2
+    }
+  },
+  "warning": "Static inventories measure source evidence only. A matched name is not proof of parity, and absence can be generic/indirect support. Dynamic options families are excluded from static_settings."
+}

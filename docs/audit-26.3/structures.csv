@@ -1,0 +1,17 @@
+name,reference,cpp_string_evidence,status
+buried_treasure,net/minecraft/world/level/levelgen/structure/StructureType.java:24,src/worldgen/pieces_scattered.cpp:957,name found; not proof of behavior
+desert_pyramid,net/minecraft/world/level/levelgen/structure/StructureType.java:25,src/worldgen/pieces_scattered.cpp:953,name found; not proof of behavior
+end_city,net/minecraft/world/level/levelgen/structure/StructureType.java:26,,reviewed absent native structure factory; delegated in server play; WORLD-01
+fortress,net/minecraft/world/level/levelgen/structure/StructureType.java:27,,reviewed absent native structure factory; delegated in server play; WORLD-01
+igloo,net/minecraft/world/level/levelgen/structure/StructureType.java:28,src/worldgen/pieces_scattered.cpp:956,name found; not proof of behavior
+jigsaw,net/minecraft/world/level/levelgen/structure/StructureType.java:29,src/ui/creative_tabs.inc:355; src/worldgen/jigsaw.cpp:531; src/worldgen/jigsaw.h:54; src/worldgen/structure_core.cpp:64; src/worldgen/structure_core.h:292; src/worldgen/structure_core.h:416; src/worldgen/structure_core.h:442; src/worldgen/structure_template.cpp:169; src/worldgen/structure_template.cpp:376,name found; not proof of behavior
+jungle_temple,net/minecraft/world/level/levelgen/structure/StructureType.java:30,src/worldgen/pieces_scattered.cpp:954,name found; not proof of behavior
+mineshaft,net/minecraft/world/level/levelgen/structure/StructureType.java:31,src/worldgen/pieces_mineshaft.cpp:600,name found; not proof of behavior
+nether_fossil,net/minecraft/world/level/levelgen/structure/StructureType.java:32,,reviewed absent native structure factory; delegated in server play; WORLD-01
+ocean_monument,net/minecraft/world/level/levelgen/structure/StructureType.java:33,src/worldgen/pieces_monument.cpp:1558,name found; not proof of behavior
+ocean_ruin,net/minecraft/world/level/levelgen/structure/StructureType.java:34,src/worldgen/pieces_ocean.cpp:531,name found; not proof of behavior
+ruined_portal,net/minecraft/world/level/levelgen/structure/StructureType.java:35,src/worldgen/pieces_ocean.cpp:537,name found; not proof of behavior
+shipwreck,net/minecraft/world/level/levelgen/structure/StructureType.java:36,src/worldgen/gentest_structures.cpp:232; src/worldgen/pieces_ocean.cpp:183; src/worldgen/pieces_ocean.cpp:534,name found; not proof of behavior
+stronghold,net/minecraft/world/level/levelgen/structure/StructureType.java:37,src/worldgen/pieces_stronghold.cpp:874,name found; not proof of behavior
+swamp_hut,net/minecraft/world/level/levelgen/structure/StructureType.java:38,src/worldgen/pieces_scattered.cpp:955,name found; not proof of behavior
+woodland_mansion,net/minecraft/world/level/levelgen/structure/StructureType.java:39,src/worldgen/pieces_mansion.cpp:609,name found; not proof of behavior

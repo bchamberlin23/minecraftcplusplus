@@ -1,0 +1,12 @@
+name,reference,cpp_string_evidence,status
+blackstone_replace,net/minecraft/world/level/levelgen/structure/templatesystem/StructureProcessorTypes.java:8,src/worldgen/structure_template.cpp:572,name found; not proof of behavior
+block_age,net/minecraft/world/level/levelgen/structure/templatesystem/StructureProcessorTypes.java:9,src/worldgen/structure_template.cpp:571,name found; not proof of behavior
+block_ignore,net/minecraft/world/level/levelgen/structure/templatesystem/StructureProcessorTypes.java:10,src/worldgen/features_misc.cpp:2345; src/worldgen/structure_template.cpp:554,name found; not proof of behavior
+block_rot,net/minecraft/world/level/levelgen/structure/templatesystem/StructureProcessorTypes.java:11,src/worldgen/features_misc.cpp:2324; src/worldgen/structure_template.cpp:543,name found; not proof of behavior
+capped,net/minecraft/world/level/levelgen/structure/templatesystem/StructureProcessorTypes.java:12,src/worldgen/pieces_ocean.cpp:17; src/worldgen/structure_template.cpp:565,name found; not proof of behavior
+gravity,net/minecraft/world/level/levelgen/structure/templatesystem/StructureProcessorTypes.java:13,src/game/gameplay.cpp:395; src/game/riding.cpp:514; src/worldgen/structure_template.cpp:559,name found; not proof of behavior
+jigsaw_replacement,net/minecraft/world/level/levelgen/structure/templatesystem/StructureProcessorTypes.java:14,src/worldgen/structure_template.cpp:574,name found; not proof of behavior
+lava_submerged_block,net/minecraft/world/level/levelgen/structure/templatesystem/StructureProcessorTypes.java:15,src/worldgen/structure_template.cpp:573,name found; not proof of behavior
+nop,net/minecraft/world/level/levelgen/structure/templatesystem/StructureProcessorTypes.java:16,src/worldgen/features_misc.cpp:2348; src/worldgen/structure_template.cpp:575,name found; not proof of behavior
+protected_blocks,net/minecraft/world/level/levelgen/structure/templatesystem/StructureProcessorTypes.java:17,src/worldgen/features_misc.cpp:2328; src/worldgen/pieces_ocean.cpp:324; src/worldgen/structure_template.cpp:549,name found; not proof of behavior
+rule,net/minecraft/world/level/levelgen/structure/templatesystem/StructureProcessorTypes.java:18,src/worldgen/features.cpp:1542; src/worldgen/features_misc.cpp:2331; src/worldgen/pieces_ocean.cpp:20; src/worldgen/pieces_ocean.cpp:323; src/worldgen/structure_template.cpp:526,name found; not proof of behavior

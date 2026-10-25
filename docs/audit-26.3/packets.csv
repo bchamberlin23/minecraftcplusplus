@@ -1,0 +1,236 @@
+phase,flow,name,class,reference,direct_cpp_handler_or_send,status
+common,Clientbound,clear_dialog,ClientboundClearDialogPacket,net/minecraft/network/protocol/common/CommonPacketTypes.java:9,,no direct handler/send found; inspect indirect routing
+common,Clientbound,custom_payload,ClientboundCustomPayloadPacket,net/minecraft/network/protocol/common/CommonPacketTypes.java:10,src/net/client.cpp:310,direct evidence; manual review required
+common,Clientbound,custom_report_details,ClientboundCustomReportDetailsPacket,net/minecraft/network/protocol/common/CommonPacketTypes.java:11,,no direct handler/send found; inspect indirect routing
+common,Clientbound,disconnect,ClientboundDisconnectPacket,net/minecraft/network/protocol/common/CommonPacketTypes.java:12,src/net/client.cpp:258,direct evidence; manual review required
+common,Clientbound,keep_alive,ClientboundKeepAlivePacket,net/minecraft/network/protocol/common/CommonPacketTypes.java:13,src/net/client.cpp:250,direct evidence; manual review required
+common,Clientbound,ping,ClientboundPingPacket,net/minecraft/network/protocol/common/CommonPacketTypes.java:14,src/net/client.cpp:254,direct evidence; manual review required
+common,Clientbound,resource_pack_pop,ClientboundResourcePackPopPacket,net/minecraft/network/protocol/common/CommonPacketTypes.java:15,,no direct handler/send found; inspect indirect routing
+common,Clientbound,resource_pack_push,ClientboundResourcePackPushPacket,net/minecraft/network/protocol/common/CommonPacketTypes.java:16,src/net/client.cpp:266,direct evidence; manual review required
+common,Clientbound,post_effects,ClientboundPostEffectsPacket,net/minecraft/network/protocol/common/CommonPacketTypes.java:17,,no direct handler/send found; inspect indirect routing
+common,Clientbound,server_links,ClientboundServerLinksPacket,net/minecraft/network/protocol/common/CommonPacketTypes.java:18,,no direct handler/send found; inspect indirect routing
+common,Clientbound,show_dialog,ClientboundShowDialogPacket,net/minecraft/network/protocol/common/CommonPacketTypes.java:19,,no direct handler/send found; inspect indirect routing
+common,Clientbound,store_cookie,ClientboundStoreCookiePacket,net/minecraft/network/protocol/common/CommonPacketTypes.java:20,,no direct handler/send found; inspect indirect routing
+common,Clientbound,transfer,ClientboundTransferPacket,net/minecraft/network/protocol/common/CommonPacketTypes.java:21,,no direct handler/send found; inspect indirect routing
+common,Clientbound,update_tags,ClientboundUpdateTagsPacket,net/minecraft/network/protocol/common/CommonPacketTypes.java:22,,no direct handler/send found; inspect indirect routing
+common,Serverbound,client_information,ServerboundClientInformationPacket,net/minecraft/network/protocol/common/CommonPacketTypes.java:23,src/net/client.cpp:242,direct evidence; manual review required
+common,Serverbound,custom_payload,ServerboundCustomPayloadPacket,net/minecraft/network/protocol/common/CommonPacketTypes.java:24,src/net/client.cpp:231; src/net/client.cpp:318; src/net/client.cpp:327,direct evidence; manual review required
+common,Serverbound,keep_alive,ServerboundKeepAlivePacket,net/minecraft/network/protocol/common/CommonPacketTypes.java:25,src/net/client.cpp:253,direct evidence; manual review required
+common,Serverbound,pong,ServerboundPongPacket,net/minecraft/network/protocol/common/CommonPacketTypes.java:26,src/net/client.cpp:257,direct evidence; manual review required
+common,Serverbound,resource_pack,ServerboundResourcePackPacket,net/minecraft/network/protocol/common/CommonPacketTypes.java:27,src/net/client.cpp:272,direct evidence; manual review required
+common,Serverbound,custom_click_action,ServerboundCustomClickActionPacket,net/minecraft/network/protocol/common/CommonPacketTypes.java:28,,no direct handler/send found; inspect indirect routing
+configuration,Clientbound,code_of_conduct,ClientboundCodeOfConductPacket,net/minecraft/network/protocol/configuration/ConfigurationPacketTypes.java:9,src/net/client.cpp:329,direct evidence; manual review required
+configuration,Clientbound,finish_configuration,ClientboundFinishConfigurationPacket,net/minecraft/network/protocol/configuration/ConfigurationPacketTypes.java:10,src/net/client.cpp:333,direct evidence; manual review required
+configuration,Clientbound,registry_data,ClientboundRegistryDataPacket,net/minecraft/network/protocol/configuration/ConfigurationPacketTypes.java:11,src/net/client.cpp:291,direct evidence; manual review required
+configuration,Clientbound,reset_chat,ClientboundResetChatPacket,net/minecraft/network/protocol/configuration/ConfigurationPacketTypes.java:12,,no direct handler/send found; inspect indirect routing
+configuration,Clientbound,select_known_packs,ClientboundSelectKnownPacks,net/minecraft/network/protocol/configuration/ConfigurationPacketTypes.java:13,src/net/client.cpp:286,direct evidence; manual review required
+configuration,Clientbound,update_enabled_features,ClientboundUpdateEnabledFeaturesPacket,net/minecraft/network/protocol/configuration/ConfigurationPacketTypes.java:14,,no direct handler/send found; inspect indirect routing
+configuration,Serverbound,accept_code_of_conduct,ServerboundAcceptCodeOfConductPacket,net/minecraft/network/protocol/configuration/ConfigurationPacketTypes.java:15,src/net/client.cpp:332,direct evidence; manual review required
+configuration,Serverbound,finish_configuration,ServerboundFinishConfigurationPacket,net/minecraft/network/protocol/configuration/ConfigurationPacketTypes.java:16,src/net/client.cpp:334,direct evidence; manual review required
+configuration,Serverbound,select_known_packs,ServerboundSelectKnownPacks,net/minecraft/network/protocol/configuration/ConfigurationPacketTypes.java:17,src/net/client.cpp:290,direct evidence; manual review required
+cookie,Clientbound,cookie_request,ClientboundCookieRequestPacket,net/minecraft/network/protocol/cookie/CookiePacketTypes.java:9,src/net/client.cpp:208; src/net/client.cpp:261,direct evidence; manual review required
+cookie,Serverbound,cookie_response,ServerboundCookieResponsePacket,net/minecraft/network/protocol/cookie/CookiePacketTypes.java:10,src/net/client.cpp:212; src/net/client.cpp:265,direct evidence; manual review required
+game,Clientbound,bundle,ClientboundBundlePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:9,,no direct handler/send found; inspect indirect routing
+game,Clientbound,bundle_delimiter,ClientboundBundleDelimiterPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:10,,no direct handler/send found; inspect indirect routing
+game,Clientbound,add_entity,ClientboundAddEntityPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:11,src/entity/entities.cpp:364; src/sky/sky.cpp:336,direct evidence; manual review required
+game,Clientbound,animate,ClientboundAnimatePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:12,src/entity/entities.cpp:545,direct evidence; manual review required
+game,Clientbound,award_stats,ClientboundAwardStatsPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:13,src/ui/stats.cpp:199,direct evidence; manual review required
+game,Clientbound,block_changed_ack,ClientboundBlockChangedAckPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:14,src/net/client.cpp:419,direct evidence; manual review required
+game,Clientbound,block_destruction,ClientboundBlockDestructionPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:15,src/game/gameplay.cpp:334,direct evidence; manual review required
+game,Clientbound,block_entity_data,ClientboundBlockEntityDataPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:16,src/blockentity/block_entities.cpp:709,direct evidence; manual review required
+game,Clientbound,block_event,ClientboundBlockEventPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:17,src/blockentity/block_entities.cpp:718,direct evidence; manual review required
+game,Clientbound,block_update,ClientboundBlockUpdatePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:18,src/net/client.cpp:390,direct evidence; manual review required
+game,Clientbound,boss_event,ClientboundBossEventPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:19,src/render/packs/pack_api.cpp:191; src/ui/mp_hud.cpp:249,direct evidence; manual review required
+game,Clientbound,change_difficulty,ClientboundChangeDifficultyPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:20,,no direct handler/send found; inspect indirect routing
+game,Clientbound,chunk_batch_finished,ClientboundChunkBatchFinishedPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:21,src/net/client.cpp:415,direct evidence; manual review required
+game,Clientbound,chunk_batch_start,ClientboundChunkBatchStartPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:22,,no direct handler/send found; inspect indirect routing
+game,Clientbound,chunks_biomes,ClientboundChunksBiomesPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:23,,no direct handler/send found; inspect indirect routing
+game,Clientbound,clear_titles,ClientboundClearTitlesPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:24,src/ui/ui.cpp:782,direct evidence; manual review required
+game,Clientbound,command_suggestions,ClientboundCommandSuggestionsPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:25,src/ui/chat_ext.cpp:236,direct evidence; manual review required
+game,Clientbound,commands,ClientboundCommandsPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:26,src/ui/chat_ext.cpp:224,direct evidence; manual review required
+game,Clientbound,container_close,ClientboundContainerClosePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:27,src/ui/ui.cpp:634,direct evidence; manual review required
+game,Clientbound,container_set_content,ClientboundContainerSetContentPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:28,src/ui/ui.cpp:594,direct evidence; manual review required
+game,Clientbound,container_set_data,ClientboundContainerSetDataPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:29,src/ui/ui.cpp:628,direct evidence; manual review required
+game,Clientbound,container_set_slot,ClientboundContainerSetSlotPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:30,src/ui/ui.cpp:615,direct evidence; manual review required
+game,Clientbound,cooldown,ClientboundCooldownPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:31,,no direct handler/send found; inspect indirect routing
+game,Clientbound,custom_chat_completions,ClientboundCustomChatCompletionsPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:32,,no direct handler/send found; inspect indirect routing
+game,Clientbound,damage_event,ClientboundDamageEventPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:33,src/entity/entities.cpp:553; src/game/gameplay.cpp:288,direct evidence; manual review required
+game,Clientbound,debug/block_value,ClientboundDebugBlockValuePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:34,,no direct handler/send found; inspect indirect routing
+game,Clientbound,debug/chunk_value,ClientboundDebugChunkValuePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:35,,no direct handler/send found; inspect indirect routing
+game,Clientbound,debug/entity_value,ClientboundDebugEntityValuePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:36,,no direct handler/send found; inspect indirect routing
+game,Clientbound,debug/event,ClientboundDebugEventPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:37,,no direct handler/send found; inspect indirect routing
+game,Clientbound,debug_sample,ClientboundDebugSamplePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:38,,no direct handler/send found; inspect indirect routing
+game,Clientbound,delete_chat,ClientboundDeleteChatPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:39,,no direct handler/send found; inspect indirect routing
+game,Clientbound,disguised_chat,ClientboundDisguisedChatPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:40,src/net/client.cpp:489; src/ui/ui.cpp:749,direct evidence; manual review required
+game,Clientbound,entity_event,ClientboundEntityEventPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:41,src/entity/entities.cpp:559,direct evidence; manual review required
+game,Clientbound,entity_position_sync,ClientboundEntityPositionSyncPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:42,src/entity/entities.cpp:422,direct evidence; manual review required
+game,Clientbound,explode,ClientboundExplodePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:43,src/fx/particles.cpp:186; src/ui/ui.cpp:487,direct evidence; manual review required
+game,Clientbound,add_transient_block,ClientboundAddTransientBlockPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:44,,no direct handler/send found; inspect indirect routing
+game,Clientbound,forget_level_chunk,ClientboundForgetLevelChunkPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:45,src/net/client.cpp:412,direct evidence; manual review required
+game,Clientbound,game_event,ClientboundGameEventPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:46,src/fx/particles.cpp:213; src/net/client.cpp:463; src/sky/sky.cpp:362,direct evidence; manual review required
+game,Clientbound,game_test_highlight_pos,ClientboundGameTestHighlightPosPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:47,,no direct handler/send found; inspect indirect routing
+game,Clientbound,mount_screen_open,ClientboundMountScreenOpenPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:48,src/ui/stations_b.cpp:668,direct evidence; manual review required
+game,Clientbound,hurt_animation,ClientboundHurtAnimationPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:49,src/entity/entities.cpp:546; src/game/gameplay.cpp:281,direct evidence; manual review required
+game,Clientbound,initialize_border,ClientboundInitializeBorderPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:50,,no direct handler/send found; inspect indirect routing
+game,Clientbound,level_chunk_with_light,ClientboundLevelChunkWithLightPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:51,src/blockentity/block_entities.cpp:687; src/net/client.cpp:353,direct evidence; manual review required
+game,Clientbound,level_event,ClientboundLevelEventPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:52,src/audio/audio.cpp:410; src/fx/particles.cpp:175,direct evidence; manual review required
+game,Clientbound,level_particles,ClientboundLevelParticlesPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:53,src/fx/particles.cpp:144,direct evidence; manual review required
+game,Clientbound,light_update,ClientboundLightUpdatePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:54,src/net/client.cpp:407,direct evidence; manual review required
+game,Clientbound,login,ClientboundLoginPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:55,src/game/gameplay.cpp:179; src/net/client.cpp:429; src/render/packs/pack_api.cpp:168; src/sky/sky.cpp:386; src/ui/mp_hud.cpp:176,direct evidence; manual review required
+game,Clientbound,low_disk_space_warning,ClientboundLowDiskSpaceWarningPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:56,,no direct handler/send found; inspect indirect routing
+game,Clientbound,map_item_data,ClientboundMapItemDataPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:57,src/ui/stations_a2.cpp:117,direct evidence; manual review required
+game,Clientbound,merchant_offers,ClientboundMerchantOffersPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:58,src/ui/stations_b.cpp:632,direct evidence; manual review required
+game,Clientbound,move_entity_pos,ClientboundMoveEntityPacket.Pos,net/minecraft/network/protocol/game/GamePacketTypes.java:59,src/entity/entities.cpp:419,direct evidence; manual review required
+game,Clientbound,move_entity_pos_rot,ClientboundMoveEntityPacket.PosRot,net/minecraft/network/protocol/game/GamePacketTypes.java:60,src/entity/entities.cpp:420,direct evidence; manual review required
+game,Clientbound,move_minecart_along_track,ClientboundMoveMinecartPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:61,,no direct handler/send found; inspect indirect routing
+game,Clientbound,move_entity_rot,ClientboundMoveEntityPacket.Rot,net/minecraft/network/protocol/game/GamePacketTypes.java:62,src/entity/entities.cpp:421,direct evidence; manual review required
+game,Clientbound,move_vehicle,ClientboundMoveVehiclePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:63,src/game/gameplay.cpp:205,direct evidence; manual review required
+game,Clientbound,open_book,ClientboundOpenBookPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:64,src/ui/signs_books.cpp:868,direct evidence; manual review required
+game,Clientbound,open_screen,ClientboundOpenScreenPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:65,src/ui/ui.cpp:642,direct evidence; manual review required
+game,Clientbound,open_sign_editor,ClientboundOpenSignEditorPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:66,src/ui/signs_books.cpp:861,direct evidence; manual review required
+game,Clientbound,place_ghost_recipe,ClientboundPlaceGhostRecipePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:67,,no direct handler/send found; inspect indirect routing
+game,Clientbound,player_abilities,ClientboundPlayerAbilitiesPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:68,src/net/client.cpp:460,direct evidence; manual review required
+game,Clientbound,game_rule_values,ClientboundGameRuleValuesPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:69,,no direct handler/send found; inspect indirect routing
+game,Clientbound,player_chat,ClientboundPlayerChatPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:70,src/net/client.cpp:474; src/ui/ui.cpp:710,direct evidence; manual review required
+game,Clientbound,player_combat_end,ClientboundPlayerCombatEndPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:71,,no direct handler/send found; inspect indirect routing
+game,Clientbound,player_combat_enter,ClientboundPlayerCombatEnterPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:72,,no direct handler/send found; inspect indirect routing
+game,Clientbound,player_combat_kill,ClientboundPlayerCombatKillPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:73,src/ui/ui.cpp:465,direct evidence; manual review required
+game,Clientbound,player_info_remove,ClientboundPlayerInfoRemovePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:74,src/entity/entities.cpp:529; src/ui/mp_hud.cpp:234,direct evidence; manual review required
+game,Clientbound,player_info_update,ClientboundPlayerInfoUpdatePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:75,src/entity/entities.cpp:499; src/ui/mp_hud.cpp:184,direct evidence; manual review required
+game,Clientbound,player_look_at,ClientboundPlayerLookAtPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:76,,no direct handler/send found; inspect indirect routing
+game,Clientbound,player_position,ClientboundPlayerPositionPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:77,src/net/client.cpp:421,direct evidence; manual review required
+game,Clientbound,player_rotation,ClientboundPlayerRotationPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:78,,no direct handler/send found; inspect indirect routing
+game,Clientbound,recipe_book_add,ClientboundRecipeBookAddPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:79,,no direct handler/send found; inspect indirect routing
+game,Clientbound,recipe_book_remove,ClientboundRecipeBookRemovePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:80,,no direct handler/send found; inspect indirect routing
+game,Clientbound,recipe_book_settings,ClientboundRecipeBookSettingsPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:81,,no direct handler/send found; inspect indirect routing
+game,Clientbound,remove_entities,ClientboundRemoveEntitiesPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:82,src/entity/entities.cpp:378; src/game/gameplay.cpp:215,direct evidence; manual review required
+game,Clientbound,remove_mob_effect,ClientboundRemoveMobEffectPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:83,src/game/gameplay.cpp:233; src/ui/ui.cpp:588,direct evidence; manual review required
+game,Clientbound,respawn,ClientboundRespawnPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:84,src/game/gameplay.cpp:188; src/net/client.cpp:429; src/net/client.cpp:431; src/sky/sky.cpp:387; src/ui/bed_gamemode.cpp:98; src/ui/ui.cpp:572,direct evidence; manual review required
+game,Clientbound,rotate_head,ClientboundRotateHeadPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:85,src/entity/entities.cpp:464,direct evidence; manual review required
+game,Clientbound,section_blocks_update,ClientboundSectionBlocksUpdatePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:86,src/net/client.cpp:395,direct evidence; manual review required
+game,Clientbound,select_advancements_tab,ClientboundSelectAdvancementsTabPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:87,src/ui/advancements.cpp:458,direct evidence; manual review required
+game,Clientbound,server_data,ClientboundServerDataPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:88,,no direct handler/send found; inspect indirect routing
+game,Clientbound,set_action_bar_text,ClientboundSetActionBarTextPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:89,src/ui/ui.cpp:769,direct evidence; manual review required
+game,Clientbound,set_border_center,ClientboundSetBorderCenterPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:90,,no direct handler/send found; inspect indirect routing
+game,Clientbound,set_border_lerp_size,ClientboundSetBorderLerpSizePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:91,,no direct handler/send found; inspect indirect routing
+game,Clientbound,set_border_size,ClientboundSetBorderSizePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:92,,no direct handler/send found; inspect indirect routing
+game,Clientbound,set_border_warning_delay,ClientboundSetBorderWarningDelayPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:93,,no direct handler/send found; inspect indirect routing
+game,Clientbound,set_border_warning_distance,ClientboundSetBorderWarningDistancePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:94,,no direct handler/send found; inspect indirect routing
+game,Clientbound,set_camera,ClientboundSetCameraPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:97,,no direct handler/send found; inspect indirect routing
+game,Clientbound,set_chunk_cache_center,ClientboundSetChunkCacheCenterPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:98,,no direct handler/send found; inspect indirect routing
+game,Clientbound,set_chunk_cache_radius,ClientboundSetChunkCacheRadiusPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:99,src/net/client.cpp:469,direct evidence; manual review required
+game,Clientbound,set_default_spawn_position,ClientboundSetDefaultSpawnPositionPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:100,,no direct handler/send found; inspect indirect routing
+game,Clientbound,set_display_objective,ClientboundSetDisplayObjectivePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:103,src/ui/mp_hud.cpp:308,direct evidence; manual review required
+game,Clientbound,set_entity_data,ClientboundSetEntityDataPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:104,src/entity/entities.cpp:471; src/game/gameplay.cpp:297; src/render/packs/pack_api.cpp:175; src/ui/bed_gamemode.cpp:55; src/ui/ui.cpp:505,direct evidence; manual review required
+game,Clientbound,set_entity_link,ClientboundSetEntityLinkPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:105,,no direct handler/send found; inspect indirect routing
+game,Clientbound,set_entity_motion,ClientboundSetEntityMotionPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:106,src/entity/entities.cpp:457; src/ui/ui.cpp:476,direct evidence; manual review required
+game,Clientbound,set_equipment,ClientboundSetEquipmentPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:107,src/entity/entities.cpp:480,direct evidence; manual review required
+game,Clientbound,set_experience,ClientboundSetExperiencePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:108,src/ui/ui.cpp:500,direct evidence; manual review required
+game,Clientbound,set_health,ClientboundSetHealthPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:109,src/game/gameplay.cpp:269; src/ui/ui.cpp:454,direct evidence; manual review required
+game,Clientbound,set_held_slot,ClientboundSetHeldSlotPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:110,src/net/client.cpp:467; src/ui/ui.cpp:679,direct evidence; manual review required
+game,Clientbound,set_objective,ClientboundSetObjectivePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:111,src/ui/mp_hud.cpp:287,direct evidence; manual review required
+game,Clientbound,set_passengers,ClientboundSetPassengersPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:112,src/entity/entities.cpp:574; src/game/gameplay.cpp:195; src/ui/stations_b.cpp:619,direct evidence; manual review required
+game,Clientbound,set_player_team,ClientboundSetPlayerTeamPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:113,src/ui/mp_hud.cpp:334,direct evidence; manual review required
+game,Clientbound,set_score,ClientboundSetScorePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:114,src/ui/mp_hud.cpp:315,direct evidence; manual review required
+game,Clientbound,set_simulation_distance,ClientboundSetSimulationDistancePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:115,,no direct handler/send found; inspect indirect routing
+game,Clientbound,set_subtitle_text,ClientboundSetSubtitleTextPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:116,src/ui/ui.cpp:765,direct evidence; manual review required
+game,Clientbound,set_time,ClientboundSetTimePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:117,src/sky/sky.cpp:344,direct evidence; manual review required
+game,Clientbound,set_title_text,ClientboundSetTitleTextPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:118,src/ui/ui.cpp:758,direct evidence; manual review required
+game,Clientbound,set_titles_animation,ClientboundSetTitlesAnimationPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:119,src/ui/ui.cpp:773,direct evidence; manual review required
+game,Clientbound,sound_entity,ClientboundSoundEntityPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:120,src/audio/audio.cpp:395,direct evidence; manual review required
+game,Clientbound,sound,ClientboundSoundPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:121,src/audio/audio.cpp:382,direct evidence; manual review required
+game,Clientbound,start_configuration,ClientboundStartConfigurationPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:122,src/net/client.cpp:493,direct evidence; manual review required
+game,Clientbound,stop_sound,ClientboundStopSoundPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:123,src/audio/audio.cpp:430,direct evidence; manual review required
+game,Clientbound,swing_animation,ClientboundSwingAnimationPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:124,src/entity/entities.cpp:538,direct evidence; manual review required
+game,Clientbound,system_chat,ClientboundSystemChatPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:125,src/net/client.cpp:471; src/ui/ui.cpp:689,direct evidence; manual review required
+game,Clientbound,tab_list,ClientboundTabListPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:126,src/ui/mp_hud.cpp:242,direct evidence; manual review required
+game,Clientbound,tag_query,ClientboundTagQueryPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:127,,no direct handler/send found; inspect indirect routing
+game,Clientbound,take_item_entity,ClientboundTakeItemEntityPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:128,src/entity/entities.cpp:566,direct evidence; manual review required
+game,Clientbound,teleport_entity,ClientboundTeleportEntityPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:129,src/entity/entities.cpp:447,direct evidence; manual review required
+game,Clientbound,test_instance_block_status,ClientboundTestInstanceBlockStatus,net/minecraft/network/protocol/game/GamePacketTypes.java:130,,no direct handler/send found; inspect indirect routing
+game,Clientbound,update_advancements,ClientboundUpdateAdvancementsPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:131,src/ui/advancements.cpp:382,direct evidence; manual review required
+game,Clientbound,update_attributes,ClientboundUpdateAttributesPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:132,src/entity/entities.cpp:584; src/game/gameplay.cpp:240; src/ui/ui.cpp:543,direct evidence; manual review required
+game,Clientbound,update_mob_effect,ClientboundUpdateMobEffectPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:133,src/game/gameplay.cpp:226; src/ui/ui.cpp:580,direct evidence; manual review required
+game,Clientbound,update_recipes,ClientboundUpdateRecipesPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:134,src/ui/stations_a2.cpp:96,direct evidence; manual review required
+game,Clientbound,projectile_power,ClientboundProjectilePowerPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:135,,no direct handler/send found; inspect indirect routing
+game,Clientbound,waypoint,ClientboundTrackedWaypointPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:136,,no direct handler/send found; inspect indirect routing
+game,Serverbound,accept_teleportation,ServerboundAcceptTeleportationPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:137,src/net/client.cpp:505,direct evidence; manual review required
+game,Serverbound,attack,ServerboundAttackPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:138,src/entity/entities.cpp:1160,direct evidence; manual review required
+game,Serverbound,block_entity_tag_query,ServerboundBlockEntityTagQueryPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:139,,no direct handler/send found; inspect indirect routing
+game,Serverbound,bundle_item_selected,ServerboundSelectBundleItemPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:140,,no direct handler/send found; inspect indirect routing
+game,Serverbound,change_difficulty,ServerboundChangeDifficultyPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:141,,no direct handler/send found; inspect indirect routing
+game,Serverbound,change_game_mode,ServerboundChangeGameModePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:142,src/ui/bed_gamemode.cpp:47,direct evidence; manual review required
+game,Serverbound,chat_ack,ServerboundChatAckPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:143,src/ui/ui.cpp:742,direct evidence; manual review required
+game,Serverbound,chat_command,ServerboundChatCommandPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:144,src/ui/chat_ext.cpp:352; src/ui/signs_books.cpp:733; src/ui/ui.cpp:237,direct evidence; manual review required
+game,Serverbound,chat_command_signed,ServerboundChatCommandSignedPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:145,,no direct handler/send found; inspect indirect routing
+game,Serverbound,chat,ServerboundChatPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:146,src/ui/ui.cpp:259,direct evidence; manual review required
+game,Serverbound,chat_session_update,ServerboundChatSessionUpdatePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:147,,no direct handler/send found; inspect indirect routing
+game,Serverbound,chunk_batch_received,ServerboundChunkBatchReceivedPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:148,src/net/client.cpp:418,direct evidence; manual review required
+game,Serverbound,client_command,ServerboundClientCommandPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:149,src/ui/screens.cpp:466; src/ui/stats.cpp:409,direct evidence; manual review required
+game,Serverbound,client_tick_end,ServerboundClientTickEndPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:150,src/net/client.cpp:517,direct evidence; manual review required
+game,Serverbound,command_suggestion,ServerboundCommandSuggestionPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:151,src/ui/chat_ext.cpp:208,direct evidence; manual review required
+game,Serverbound,configuration_acknowledged,ServerboundConfigurationAcknowledgedPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:152,src/net/client.cpp:494,direct evidence; manual review required
+game,Serverbound,container_button_click,ServerboundContainerButtonClickPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:155,src/ui/modules.cpp:48,direct evidence; manual review required
+game,Serverbound,container_click,ServerboundContainerClickPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:156,src/ui/screens.cpp:397,direct evidence; manual review required
+game,Serverbound,container_close,ServerboundContainerClosePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:157,src/ui/ui.cpp:178,direct evidence; manual review required
+game,Serverbound,container_slot_state_changed,ServerboundContainerSlotStateChangedPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:158,src/ui/stations_b.cpp:469,direct evidence; manual review required
+game,Serverbound,debug_subscription_request,ServerboundDebugSubscriptionRequestPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:161,,no direct handler/send found; inspect indirect routing
+game,Serverbound,edit_book,ServerboundEditBookPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:164,src/ui/signs_books.cpp:574,direct evidence; manual review required
+game,Serverbound,entity_tag_query,ServerboundEntityTagQueryPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:165,,no direct handler/send found; inspect indirect routing
+game,Serverbound,interact,ServerboundInteractPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:166,src/entity/entities.cpp:1173,direct evidence; manual review required
+game,Serverbound,jigsaw_generate,ServerboundJigsawGeneratePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:167,,no direct handler/send found; inspect indirect routing
+game,Serverbound,lock_difficulty,ServerboundLockDifficultyPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:168,,no direct handler/send found; inspect indirect routing
+game,Serverbound,move_player_pos,ServerboundMovePlayerPacket.Pos,net/minecraft/network/protocol/game/GamePacketTypes.java:169,,no direct handler/send found; inspect indirect routing
+game,Serverbound,move_player_pos_rot,ServerboundMovePlayerPacket.PosRot,net/minecraft/network/protocol/game/GamePacketTypes.java:170,src/net/client.cpp:514,direct evidence; manual review required
+game,Serverbound,move_player_rot,ServerboundMovePlayerPacket.Rot,net/minecraft/network/protocol/game/GamePacketTypes.java:171,src/net/session.cpp:406,direct evidence; manual review required
+game,Serverbound,move_player_status_only,ServerboundMovePlayerPacket.StatusOnly,net/minecraft/network/protocol/game/GamePacketTypes.java:172,,no direct handler/send found; inspect indirect routing
+game,Serverbound,move_vehicle,ServerboundMoveVehiclePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:173,src/game/riding.cpp:236,direct evidence; manual review required
+game,Serverbound,paddle_boat,ServerboundPaddleBoatPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:174,src/game/riding.cpp:474,direct evidence; manual review required
+game,Serverbound,pick_item_from_block,ServerboundPickItemFromBlockPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:175,src/ui/ui.cpp:405,direct evidence; manual review required
+game,Serverbound,pick_item_from_entity,ServerboundPickItemFromEntityPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:176,,no direct handler/send found; inspect indirect routing
+game,Serverbound,place_recipe,ServerboundPlaceRecipePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:177,,no direct handler/send found; inspect indirect routing
+game,Serverbound,player_abilities,ServerboundPlayerAbilitiesPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:178,src/net/session.cpp:375,direct evidence; manual review required
+game,Serverbound,player_action,ServerboundPlayerActionPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:179,src/net/client.cpp:527,direct evidence; manual review required
+game,Serverbound,player_command,ServerboundPlayerCommandPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:180,src/game/gameplay.cpp:371; src/game/riding.cpp:204; src/net/session.cpp:384; src/ui/bed_gamemode.cpp:192; src/ui/stations_b.cpp:609,direct evidence; manual review required
+game,Serverbound,player_input,ServerboundPlayerInputPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:181,src/net/session.cpp:368,direct evidence; manual review required
+game,Serverbound,player_loaded,ServerboundPlayerLoadedPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:182,src/net/client.cpp:519,direct evidence; manual review required
+game,Serverbound,punch,ServerboundPunchPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:183,src/entity/entities.cpp:1162; src/net/session.cpp:91,direct evidence; manual review required
+game,Serverbound,recipe_book_change_settings,ServerboundRecipeBookChangeSettingsPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:184,,no direct handler/send found; inspect indirect routing
+game,Serverbound,recipe_book_seen_recipe,ServerboundRecipeBookSeenRecipePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:187,,no direct handler/send found; inspect indirect routing
+game,Serverbound,rename_item,ServerboundRenameItemPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:188,src/ui/stations_a.cpp:73,direct evidence; manual review required
+game,Serverbound,seen_advancements,ServerboundSeenAdvancementsPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:189,src/ui/advancements.cpp:337,direct evidence; manual review required
+game,Serverbound,select_trade,ServerboundSelectTradePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:190,src/ui/stations_b.cpp:211,direct evidence; manual review required
+game,Serverbound,set_beacon,ServerboundSetBeaconPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:191,src/ui/stations_b.cpp:367,direct evidence; manual review required
+game,Serverbound,set_carried_item,ServerboundSetCarriedItemPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:192,src/net/client.cpp:545,direct evidence; manual review required
+game,Serverbound,set_command_block,ServerboundSetCommandBlockPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:193,,no direct handler/send found; inspect indirect routing
+game,Serverbound,set_command_minecart,ServerboundSetCommandMinecartPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:194,,no direct handler/send found; inspect indirect routing
+game,Serverbound,set_creative_mode_slot,ServerboundSetCreativeModeSlotPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:195,src/net/client.cpp:559; src/ui/creative.cpp:358; src/ui/screens.cpp:407; src/ui/ui.cpp:187,direct evidence; manual review required
+game,Serverbound,set_game_rule,ServerboundSetGameRulePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:196,,no direct handler/send found; inspect indirect routing
+game,Serverbound,set_jigsaw_block,ServerboundSetJigsawBlockPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:197,,no direct handler/send found; inspect indirect routing
+game,Serverbound,set_structure_block,ServerboundSetStructureBlockPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:198,,no direct handler/send found; inspect indirect routing
+game,Serverbound,set_test_block,ServerboundSetTestBlockPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:199,,no direct handler/send found; inspect indirect routing
+game,Serverbound,test_instance_block_action,ServerboundTestInstanceBlockActionPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:200,,no direct handler/send found; inspect indirect routing
+game,Serverbound,sign_update,ServerboundSignUpdatePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:203,src/ui/signs_books.cpp:287,direct evidence; manual review required
+game,Serverbound,spectator_action,ServerboundSpectatorActionPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:204,,no direct handler/send found; inspect indirect routing
+game,Serverbound,teleport_to_entity,ServerboundTeleportToEntityPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:205,,no direct handler/send found; inspect indirect routing
+game,Serverbound,use_item_on,ServerboundUseItemOnPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:206,src/net/client.cpp:539,direct evidence; manual review required
+game,Serverbound,use_item,ServerboundUseItemPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:207,src/net/session.cpp:486,direct evidence; manual review required
+game,Clientbound,reset_score,ClientboundResetScorePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:208,src/ui/mp_hud.cpp:325,direct evidence; manual review required
+game,Clientbound,ticking_state,ClientboundTickingStatePacket,net/minecraft/network/protocol/game/GamePacketTypes.java:209,,no direct handler/send found; inspect indirect routing
+game,Clientbound,ticking_step,ClientboundTickingStepPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:210,,no direct handler/send found; inspect indirect routing
+game,Clientbound,set_cursor_item,ClientboundSetCursorItemPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:211,src/ui/ui.cpp:660,direct evidence; manual review required
+game,Clientbound,set_player_inventory,ClientboundSetPlayerInventoryPacket,net/minecraft/network/protocol/game/GamePacketTypes.java:212,src/ui/ui.cpp:665,direct evidence; manual review required
+handshake,Serverbound,intention,ClientIntentionPacket,net/minecraft/network/protocol/handshake/HandshakePacketTypes.java:9,,no direct handler/send found; inspect indirect routing
+login,Clientbound,custom_query,ClientboundCustomQueryPacket,net/minecraft/network/protocol/login/LoginPacketTypes.java:9,src/net/client.cpp:203,direct evidence; manual review required
+login,Clientbound,login_finished,ClientboundLoginFinishedPacket,net/minecraft/network/protocol/login/LoginPacketTypes.java:10,src/net/client.cpp:223,direct evidence; manual review required
+login,Clientbound,hello,ClientboundHelloPacket,net/minecraft/network/protocol/login/LoginPacketTypes.java:11,src/net/client.cpp:213,direct evidence; manual review required
+login,Clientbound,login_compression,ClientboundLoginCompressionPacket,net/minecraft/network/protocol/login/LoginPacketTypes.java:12,src/net/client.cpp:201,direct evidence; manual review required
+login,Clientbound,login_disconnect,ClientboundLoginDisconnectPacket,net/minecraft/network/protocol/login/LoginPacketTypes.java:13,src/net/client.cpp:220,direct evidence; manual review required
+login,Serverbound,custom_query_answer,ServerboundCustomQueryAnswerPacket,net/minecraft/network/protocol/login/LoginPacketTypes.java:14,src/net/client.cpp:207,direct evidence; manual review required
+login,Serverbound,hello,ServerboundHelloPacket,net/minecraft/network/protocol/login/LoginPacketTypes.java:15,src/net/client.cpp:171,direct evidence; manual review required
+login,Serverbound,key,ServerboundKeyPacket,net/minecraft/network/protocol/login/LoginPacketTypes.java:16,,no direct handler/send found; inspect indirect routing
+login,Serverbound,login_acknowledged,ServerboundLoginAcknowledgedPacket,net/minecraft/network/protocol/login/LoginPacketTypes.java:17,src/net/client.cpp:227,direct evidence; manual review required
+ping,Clientbound,pong_response,ClientboundPongResponsePacket,net/minecraft/network/protocol/ping/PingPacketTypes.java:9,,no direct handler/send found; inspect indirect routing
+ping,Serverbound,ping_request,ServerboundPingRequestPacket,net/minecraft/network/protocol/ping/PingPacketTypes.java:10,,no direct handler/send found; inspect indirect routing
+status,Clientbound,status_response,ClientboundStatusResponsePacket,net/minecraft/network/protocol/status/StatusPacketTypes.java:9,,no direct handler/send found; inspect indirect routing
+status,Serverbound,status_request,ServerboundStatusRequestPacket,net/minecraft/network/protocol/status/StatusPacketTypes.java:10,,no direct handler/send found; inspect indirect routing

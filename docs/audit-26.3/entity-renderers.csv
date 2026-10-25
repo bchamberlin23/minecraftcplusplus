@@ -1,0 +1,151 @@
+name,reference,cpp_string_evidence,status
+acacia_boat,net/minecraft/client/renderer/entity/EntityRenderers.java:65,,generic boat/raft/minecart branch; behavior needs review
+acacia_chest_boat,net/minecraft/client/renderer/entity/EntityRenderers.java:66,,generic boat/raft/minecart branch; behavior needs review
+allay,net/minecraft/client/renderer/entity/EntityRenderers.java:67,,default name-based model/texture and Head animation; species behavior incomplete; VIS-01
+area_effect_cloud,net/minecraft/client/renderer/entity/EntityRenderers.java:68,src/entity/entity_render.cpp:307,name found; not proof of behavior
+armadillo,net/minecraft/client/renderer/entity/EntityRenderers.java:69,src/entity/entity_render.cpp:269,name found; not proof of behavior
+armor_stand,net/minecraft/client/renderer/entity/EntityRenderers.java:70,src/entity/entity_render.cpp:274; src/entity/entity_render.cpp:315,name found; not proof of behavior
+arrow,net/minecraft/client/renderer/entity/EntityRenderers.java:71,src/entity/entity_render.cpp:286,name found; not proof of behavior
+axolotl,net/minecraft/client/renderer/entity/EntityRenderers.java:72,src/entity/entity_render.cpp:238,name found; not proof of behavior
+bamboo_chest_raft,net/minecraft/client/renderer/entity/EntityRenderers.java:73,,generic boat/raft/minecart branch; behavior needs review
+bamboo_raft,net/minecraft/client/renderer/entity/EntityRenderers.java:74,,generic boat/raft/minecart branch; behavior needs review
+bat,net/minecraft/client/renderer/entity/EntityRenderers.java:75,,default name-based model/texture and Head animation; species behavior incomplete; VIS-01
+bee,net/minecraft/client/renderer/entity/EntityRenderers.java:76,src/entity/entity_render.cpp:270,name found; not proof of behavior
+birch_boat,net/minecraft/client/renderer/entity/EntityRenderers.java:77,,generic boat/raft/minecart branch; behavior needs review
+birch_chest_boat,net/minecraft/client/renderer/entity/EntityRenderers.java:78,,generic boat/raft/minecart branch; behavior needs review
+blaze,net/minecraft/client/renderer/entity/EntityRenderers.java:79,,default name-based model/texture and Head animation; species behavior incomplete; VIS-01
+block_display,net/minecraft/client/renderer/entity/EntityRenderers.java:80,src/entity/entity_render.cpp:307,explicit Kind::None; display rendering absent; VIS-03
+bogged,net/minecraft/client/renderer/entity/EntityRenderers.java:81,src/entity/entity_render.cpp:202,name found; not proof of behavior
+breeze,net/minecraft/client/renderer/entity/EntityRenderers.java:82,,default name-based model/texture and Head animation; species behavior incomplete; VIS-01
+breeze_wind_charge,net/minecraft/client/renderer/entity/EntityRenderers.java:83,src/entity/entity_render.cpp:290,name found; not proof of behavior
+camel,net/minecraft/client/renderer/entity/EntityRenderers.java:84,src/entity/entity_render.cpp:267,name found; not proof of behavior
+camel_husk,net/minecraft/client/renderer/entity/EntityRenderers.java:85,src/entity/entity_render.cpp:268,name found; not proof of behavior
+cat,net/minecraft/client/renderer/entity/EntityRenderers.java:86,src/entity/entity_render.cpp:228,name found; not proof of behavior
+cave_spider,net/minecraft/client/renderer/entity/EntityRenderers.java:87,src/entity/entity_render.cpp:206,name found; not proof of behavior
+cherry_boat,net/minecraft/client/renderer/entity/EntityRenderers.java:88,,generic boat/raft/minecart branch; behavior needs review
+cherry_chest_boat,net/minecraft/client/renderer/entity/EntityRenderers.java:89,,generic boat/raft/minecart branch; behavior needs review
+chest_minecart,net/minecraft/client/renderer/entity/EntityRenderers.java:90,,generic boat/raft/minecart branch; behavior needs review
+chicken,net/minecraft/client/renderer/entity/EntityRenderers.java:91,src/entity/entity_render.cpp:226; src/entity/entity_render.cpp:388,name found; not proof of behavior
+cod,net/minecraft/client/renderer/entity/EntityRenderers.java:92,src/entity/entity_render.cpp:248,name found; not proof of behavior
+command_block_minecart,net/minecraft/client/renderer/entity/EntityRenderers.java:93,,generic boat/raft/minecart branch; behavior needs review
+copper_golem,net/minecraft/client/renderer/entity/EntityRenderers.java:94,src/entity/entity_render.cpp:264,name found; not proof of behavior
+cow,net/minecraft/client/renderer/entity/EntityRenderers.java:95,src/entity/entity_render.cpp:220; src/entity/entity_render.cpp:388,name found; not proof of behavior
+creaking,net/minecraft/client/renderer/entity/EntityRenderers.java:96,,default name-based model/texture and Head animation; species behavior incomplete; VIS-01
+creeper,net/minecraft/client/renderer/entity/EntityRenderers.java:97,src/entity/entity_render.cpp:205,name found; not proof of behavior
+cushion,net/minecraft/client/renderer/entity/EntityRenderers.java:98,,default texture path absent in vanilla 26.3 JAR; box fallback; VIS-01
+dark_oak_boat,net/minecraft/client/renderer/entity/EntityRenderers.java:99,,generic boat/raft/minecart branch; behavior needs review
+dark_oak_chest_boat,net/minecraft/client/renderer/entity/EntityRenderers.java:100,,generic boat/raft/minecart branch; behavior needs review
+dolphin,net/minecraft/client/renderer/entity/EntityRenderers.java:101,src/entity/entity_render.cpp:266,name found; not proof of behavior
+dragon_fireball,net/minecraft/client/renderer/entity/EntityRenderers.java:108,src/entity/entity_render.cpp:304,name found; not proof of behavior
+drowned,net/minecraft/client/renderer/entity/EntityRenderers.java:109,src/entity/entity_render.cpp:187,name found; not proof of behavior
+egg,net/minecraft/client/renderer/entity/EntityRenderers.java:110,src/entity/entity_render.cpp:298,name found; not proof of behavior
+elder_guardian,net/minecraft/client/renderer/entity/EntityRenderers.java:111,src/entity/entity_render.cpp:260,name found; not proof of behavior
+enderman,net/minecraft/client/renderer/entity/EntityRenderers.java:112,src/entity/entity_render.cpp:210,name found; not proof of behavior
+endermite,net/minecraft/client/renderer/entity/EntityRenderers.java:113,,default name-based model/texture and Head animation; species behavior incomplete; VIS-01
+ender_dragon,net/minecraft/client/renderer/entity/EntityRenderers.java:114,src/entity/entity_render.cpp:273,name found; not proof of behavior
+ender_pearl,net/minecraft/client/renderer/entity/EntityRenderers.java:115,src/entity/entity_render.cpp:298,name found; not proof of behavior
+end_crystal,net/minecraft/client/renderer/entity/EntityRenderers.java:116,src/entity/entity_render.cpp:294,name found; not proof of behavior
+evoker,net/minecraft/client/renderer/entity/EntityRenderers.java:117,src/entity/entity_render.cpp:216,name found; not proof of behavior
+evoker_fangs,net/minecraft/client/renderer/entity/EntityRenderers.java:118,src/entity/entity_render.cpp:218,name found; not proof of behavior
+experience_bottle,net/minecraft/client/renderer/entity/EntityRenderers.java:119,src/entity/entity_render.cpp:298,name found; not proof of behavior
+experience_orb,net/minecraft/client/renderer/entity/EntityRenderers.java:120,src/entity/entity_render.cpp:306,name found; not proof of behavior
+eye_of_ender,net/minecraft/client/renderer/entity/EntityRenderers.java:121,src/entity/entity_render.cpp:301,name found; not proof of behavior
+falling_block,net/minecraft/client/renderer/entity/EntityRenderers.java:122,src/entity/entity_render.cpp:296,name found; not proof of behavior
+fireball,net/minecraft/client/renderer/entity/EntityRenderers.java:123,src/entity/entity_render.cpp:302,name found; not proof of behavior
+firework_rocket,net/minecraft/client/renderer/entity/EntityRenderers.java:124,src/entity/entity_render.cpp:298,name found; not proof of behavior
+fishing_bobber,net/minecraft/client/renderer/entity/EntityRenderers.java:125,src/entity/entity_render.cpp:305,name found; not proof of behavior
+fox,net/minecraft/client/renderer/entity/EntityRenderers.java:126,src/entity/entity_render.cpp:237,name found; not proof of behavior
+frog,net/minecraft/client/renderer/entity/EntityRenderers.java:127,src/entity/entity_render.cpp:240,name found; not proof of behavior
+furnace_minecart,net/minecraft/client/renderer/entity/EntityRenderers.java:128,,generic boat/raft/minecart branch; behavior needs review
+ghast,net/minecraft/client/renderer/entity/EntityRenderers.java:129,src/entity/entity_render.cpp:261,name found; not proof of behavior
+happy_ghast,net/minecraft/client/renderer/entity/EntityRenderers.java:130,src/entity/entity_render.cpp:262,name found; not proof of behavior
+giant,net/minecraft/client/renderer/entity/EntityRenderers.java:131,src/entity/entity_render.cpp:199,name found; not proof of behavior
+glow_item_frame,net/minecraft/client/renderer/entity/EntityRenderers.java:132,src/entity/entity_render.cpp:310,explicit Kind::None; decoration rendering absent; VIS-02
+goat,net/minecraft/client/renderer/entity/EntityRenderers.java:139,src/entity/entity_render.cpp:242,name found; not proof of behavior
+guardian,net/minecraft/client/renderer/entity/EntityRenderers.java:140,src/entity/entity_render.cpp:259,name found; not proof of behavior
+hoglin,net/minecraft/client/renderer/entity/EntityRenderers.java:141,src/entity/entity_render.cpp:243,name found; not proof of behavior
+hopper_minecart,net/minecraft/client/renderer/entity/EntityRenderers.java:142,,generic boat/raft/minecart branch; behavior needs review
+horse,net/minecraft/client/renderer/entity/EntityRenderers.java:143,src/entity/entity_render.cpp:230; src/entity/entity_render.cpp:916,name found; not proof of behavior
+husk,net/minecraft/client/renderer/entity/EntityRenderers.java:144,src/entity/entity_render.cpp:186,name found; not proof of behavior
+illusioner,net/minecraft/client/renderer/entity/EntityRenderers.java:145,src/entity/entity_render.cpp:216,name found; not proof of behavior
+interaction,net/minecraft/client/renderer/entity/EntityRenderers.java:146,src/entity/entity_render.cpp:307,intentionally invisible; not a missing visible renderer
+iron_golem,net/minecraft/client/renderer/entity/EntityRenderers.java:147,src/entity/entity_render.cpp:219,name found; not proof of behavior
+item,net/minecraft/client/renderer/entity/EntityRenderers.java:148,src/entity/entity_render.cpp:295,name found; not proof of behavior
+item_display,net/minecraft/client/renderer/entity/EntityRenderers.java:149,src/entity/entity_render.cpp:308,explicit Kind::None; display rendering absent; VIS-03
+item_frame,net/minecraft/client/renderer/entity/EntityRenderers.java:150,src/entity/entity_render.cpp:310,explicit Kind::None; decoration rendering absent; VIS-02
+jungle_boat,net/minecraft/client/renderer/entity/EntityRenderers.java:151,,generic boat/raft/minecart branch; behavior needs review
+jungle_chest_boat,net/minecraft/client/renderer/entity/EntityRenderers.java:152,,generic boat/raft/minecart branch; behavior needs review
+leash_knot,net/minecraft/client/renderer/entity/EntityRenderers.java:153,src/entity/entity_render.cpp:293,name found; not proof of behavior
+lightning_bolt,net/minecraft/client/renderer/entity/EntityRenderers.java:154,src/entity/entity_render.cpp:308,explicit Kind::None; special geometry absent; VIS-04
+lingering_potion,net/minecraft/client/renderer/entity/EntityRenderers.java:155,src/entity/entity_render.cpp:300,name found; not proof of behavior
+llama,net/minecraft/client/renderer/entity/EntityRenderers.java:156,src/entity/entity_render.cpp:234; src/entity/entity_render.cpp:716; src/entity/entity_render.cpp:914,name found; not proof of behavior
+llama_spit,net/minecraft/client/renderer/entity/EntityRenderers.java:157,src/entity/entity_render.cpp:291,name found; not proof of behavior
+magma_cube,net/minecraft/client/renderer/entity/EntityRenderers.java:158,src/entity/entity_render.cpp:257,name found; not proof of behavior
+mangrove_boat,net/minecraft/client/renderer/entity/EntityRenderers.java:159,,generic boat/raft/minecart branch; behavior needs review
+mangrove_chest_boat,net/minecraft/client/renderer/entity/EntityRenderers.java:160,,generic boat/raft/minecart branch; behavior needs review
+marker,net/minecraft/client/renderer/entity/EntityRenderers.java:161,src/entity/entity_render.cpp:307,intentionally invisible; not a missing visible renderer
+minecart,net/minecraft/client/renderer/entity/EntityRenderers.java:162,src/entity/entity_render.cpp:283,generic boat/raft/minecart branch; behavior needs review
+mooshroom,net/minecraft/client/renderer/entity/EntityRenderers.java:163,src/entity/entity_render.cpp:221,name found; not proof of behavior
+nautilus,net/minecraft/client/renderer/entity/EntityRenderers.java:170,,default name-based model/texture and Head animation; species behavior incomplete; VIS-01
+oak_boat,net/minecraft/client/renderer/entity/EntityRenderers.java:171,,generic boat/raft/minecart branch; behavior needs review
+oak_chest_boat,net/minecraft/client/renderer/entity/EntityRenderers.java:172,,generic boat/raft/minecart branch; behavior needs review
+ocelot,net/minecraft/client/renderer/entity/EntityRenderers.java:173,src/entity/entity_render.cpp:229,name found; not proof of behavior
+ominous_item_spawner,net/minecraft/client/renderer/entity/EntityRenderers.java:174,src/entity/entity_render.cpp:308,explicit Kind::None; special geometry absent; VIS-04
+painting,net/minecraft/client/renderer/entity/EntityRenderers.java:175,src/entity/entity_render.cpp:310,explicit Kind::None; decoration rendering absent; VIS-02
+pale_oak_boat,net/minecraft/client/renderer/entity/EntityRenderers.java:176,,generic boat/raft/minecart branch; behavior needs review
+pale_oak_chest_boat,net/minecraft/client/renderer/entity/EntityRenderers.java:177,,generic boat/raft/minecart branch; behavior needs review
+panda,net/minecraft/client/renderer/entity/EntityRenderers.java:178,src/entity/entity_render.cpp:239,name found; not proof of behavior
+parched,net/minecraft/client/renderer/entity/EntityRenderers.java:179,src/entity/entity_render.cpp:204,name found; not proof of behavior
+parrot,net/minecraft/client/renderer/entity/EntityRenderers.java:180,src/entity/entity_render.cpp:236,name found; not proof of behavior
+phantom,net/minecraft/client/renderer/entity/EntityRenderers.java:181,src/entity/entity_render.cpp:258,name found; not proof of behavior
+pig,net/minecraft/client/renderer/entity/EntityRenderers.java:182,src/entity/entity_render.cpp:222; src/entity/entity_render.cpp:388,name found; not proof of behavior
+pillager,net/minecraft/client/renderer/entity/EntityRenderers.java:193,src/entity/entity_render.cpp:216,name found; not proof of behavior
+polar_bear,net/minecraft/client/renderer/entity/EntityRenderers.java:194,src/entity/entity_render.cpp:241,name found; not proof of behavior
+poplar_boat,net/minecraft/client/renderer/entity/EntityRenderers.java:195,,generic boat/raft/minecart branch; behavior needs review
+poplar_chest_boat,net/minecraft/client/renderer/entity/EntityRenderers.java:196,,generic boat/raft/minecart branch; behavior needs review
+pufferfish,net/minecraft/client/renderer/entity/EntityRenderers.java:197,src/entity/entity_render.cpp:250,name found; not proof of behavior
+rabbit,net/minecraft/client/renderer/entity/EntityRenderers.java:198,src/entity/entity_render.cpp:235,name found; not proof of behavior
+ravager,net/minecraft/client/renderer/entity/EntityRenderers.java:199,src/entity/entity_render.cpp:217,name found; not proof of behavior
+salmon,net/minecraft/client/renderer/entity/EntityRenderers.java:200,src/entity/entity_render.cpp:249,name found; not proof of behavior
+sheep,net/minecraft/client/renderer/entity/EntityRenderers.java:201,src/entity/entity_render.cpp:223,name found; not proof of behavior
+shulker,net/minecraft/client/renderer/entity/EntityRenderers.java:202,,default name-based model/texture and Head animation; species behavior incomplete; VIS-01
+shulker_bullet,net/minecraft/client/renderer/entity/EntityRenderers.java:203,src/entity/entity_render.cpp:289,name found; not proof of behavior
+silverfish,net/minecraft/client/renderer/entity/EntityRenderers.java:204,,default name-based model/texture and Head animation; species behavior incomplete; VIS-01
+skeleton,net/minecraft/client/renderer/entity/EntityRenderers.java:205,src/entity/entity_render.cpp:200,name found; not proof of behavior
+slime,net/minecraft/client/renderer/entity/EntityRenderers.java:216,src/entity/entity_render.cpp:253,name found; not proof of behavior
+small_fireball,net/minecraft/client/renderer/entity/EntityRenderers.java:217,src/entity/entity_render.cpp:303,name found; not proof of behavior
+sniffer,net/minecraft/client/renderer/entity/EntityRenderers.java:218,src/entity/entity_render.cpp:245,name found; not proof of behavior
+snowball,net/minecraft/client/renderer/entity/EntityRenderers.java:219,src/entity/entity_render.cpp:298,name found; not proof of behavior
+snow_golem,net/minecraft/client/renderer/entity/EntityRenderers.java:220,src/entity/entity_render.cpp:263,name found; not proof of behavior
+spawner_minecart,net/minecraft/client/renderer/entity/EntityRenderers.java:221,,generic boat/raft/minecart branch; behavior needs review
+spectral_arrow,net/minecraft/client/renderer/entity/EntityRenderers.java:222,src/entity/entity_render.cpp:287,name found; not proof of behavior
+spider,net/minecraft/client/renderer/entity/EntityRenderers.java:223,src/entity/entity_render.cpp:206,name found; not proof of behavior
+splash_potion,net/minecraft/client/renderer/entity/EntityRenderers.java:224,src/entity/entity_render.cpp:300,name found; not proof of behavior
+spruce_boat,net/minecraft/client/renderer/entity/EntityRenderers.java:225,,generic boat/raft/minecart branch; behavior needs review
+spruce_chest_boat,net/minecraft/client/renderer/entity/EntityRenderers.java:226,,generic boat/raft/minecart branch; behavior needs review
+stray,net/minecraft/client/renderer/entity/EntityRenderers.java:233,src/entity/entity_render.cpp:201,name found; not proof of behavior
+strider,net/minecraft/client/renderer/entity/EntityRenderers.java:234,src/entity/entity_render.cpp:252,name found; not proof of behavior
+sulfur_cube,net/minecraft/client/renderer/entity/EntityRenderers.java:235,,default texture path absent in vanilla 26.3 JAR; box fallback; VIS-01
+tadpole,net/minecraft/client/renderer/entity/EntityRenderers.java:236,,default name-based model/texture and Head animation; species behavior incomplete; VIS-01
+text_display,net/minecraft/client/renderer/entity/EntityRenderers.java:237,src/entity/entity_render.cpp:308,explicit Kind::None; display rendering absent; VIS-03
+tnt,net/minecraft/client/renderer/entity/EntityRenderers.java:238,src/entity/entity_render.cpp:297; src/entity/entity_render.cpp:297,name found; not proof of behavior
+tnt_minecart,net/minecraft/client/renderer/entity/EntityRenderers.java:239,,generic boat/raft/minecart branch; behavior needs review
+trader_llama,net/minecraft/client/renderer/entity/EntityRenderers.java:240,src/entity/entity_render.cpp:234; src/entity/entity_render.cpp:717; src/entity/entity_render.cpp:717,name found; not proof of behavior
+trident,net/minecraft/client/renderer/entity/EntityRenderers.java:241,src/entity/entity_render.cpp:288; src/entity/entity_render.cpp:884,name found; not proof of behavior
+tropical_fish,net/minecraft/client/renderer/entity/EntityRenderers.java:242,src/entity/entity_render.cpp:251,name found; not proof of behavior
+turtle,net/minecraft/client/renderer/entity/EntityRenderers.java:243,src/entity/entity_render.cpp:265,name found; not proof of behavior
+vex,net/minecraft/client/renderer/entity/EntityRenderers.java:244,src/entity/entity_render.cpp:217,name found; not proof of behavior
+villager,net/minecraft/client/renderer/entity/EntityRenderers.java:245,src/entity/entity_render.cpp:214,name found; not proof of behavior
+vindicator,net/minecraft/client/renderer/entity/EntityRenderers.java:246,src/entity/entity_render.cpp:216,name found; not proof of behavior
+wandering_trader,net/minecraft/client/renderer/entity/EntityRenderers.java:247,src/entity/entity_render.cpp:215,name found; not proof of behavior
+warden,net/minecraft/client/renderer/entity/EntityRenderers.java:248,src/entity/entity_render.cpp:271,name found; not proof of behavior
+wind_charge,net/minecraft/client/renderer/entity/EntityRenderers.java:249,src/entity/entity_render.cpp:290,name found; not proof of behavior
+witch,net/minecraft/client/renderer/entity/EntityRenderers.java:250,src/entity/entity_render.cpp:213,name found; not proof of behavior
+wither,net/minecraft/client/renderer/entity/EntityRenderers.java:251,src/entity/entity_render.cpp:272,name found; not proof of behavior
+wither_skeleton,net/minecraft/client/renderer/entity/EntityRenderers.java:252,src/entity/entity_render.cpp:203,name found; not proof of behavior
+wither_skull,net/minecraft/client/renderer/entity/EntityRenderers.java:253,src/entity/entity_render.cpp:292,name found; not proof of behavior
+wolf,net/minecraft/client/renderer/entity/EntityRenderers.java:254,src/entity/entity_render.cpp:227,name found; not proof of behavior
+zoglin,net/minecraft/client/renderer/entity/EntityRenderers.java:255,src/entity/entity_render.cpp:244,name found; not proof of behavior
+zombie,net/minecraft/client/renderer/entity/EntityRenderers.java:256,src/entity/entity_render.cpp:185,name found; not proof of behavior
+zombie_nautilus,net/minecraft/client/renderer/entity/EntityRenderers.java:267,,default texture path absent in vanilla 26.3 JAR; box fallback; VIS-01
+zombie_villager,net/minecraft/client/renderer/entity/EntityRenderers.java:268,src/entity/entity_render.cpp:190,name found; not proof of behavior

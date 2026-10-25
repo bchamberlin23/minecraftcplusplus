@@ -1,0 +1,26 @@
+name,reference,cpp_string_evidence,status
+generic_9x1,net/minecraft/world/inventory/MenuType.java:12,,generic_9xN prefix routing present; station behavior needs fixtures; ITEM-11
+generic_9x2,net/minecraft/world/inventory/MenuType.java:13,,generic_9xN prefix routing present; station behavior needs fixtures; ITEM-11
+generic_9x3,net/minecraft/world/inventory/MenuType.java:14,,generic_9xN prefix routing present; station behavior needs fixtures; ITEM-11
+generic_9x4,net/minecraft/world/inventory/MenuType.java:15,,generic_9xN prefix routing present; station behavior needs fixtures; ITEM-11
+generic_9x5,net/minecraft/world/inventory/MenuType.java:16,,generic_9xN prefix routing present; station behavior needs fixtures; ITEM-11
+generic_9x6,net/minecraft/world/inventory/MenuType.java:17,,generic_9xN prefix routing present; station behavior needs fixtures; ITEM-11
+generic_3x3,net/minecraft/world/inventory/MenuType.java:18,src/ui/screens.cpp:86,name found; not proof of behavior
+crafter_3x3,net/minecraft/world/inventory/MenuType.java:19,src/ui/screens.cpp:86; src/ui/stations_b.cpp:513,name found; not proof of behavior
+anvil,net/minecraft/world/inventory/MenuType.java:20,src/ui/creative_tabs.inc:207; src/ui/modules.h:6; src/ui/modules.h:72; src/ui/stations_a.cpp:136; src/ui/ui.cpp:431; src/worldgen/pieces_mineshaft.cpp:23,name found; not proof of behavior
+beacon,net/minecraft/world/inventory/MenuType.java:21,src/assets/assets.cpp:964; src/render/shading.cpp:98; src/ui/creative_tabs.inc:208; src/ui/stations_b.cpp:396; src/ui/ui.cpp:429; src/worldgen/features_blocks.cpp:92,name found; not proof of behavior
+blast_furnace,net/minecraft/world/inventory/MenuType.java:22,src/assets/assets.cpp:985; src/fx/particles.cpp:1024; src/ui/creative_tabs.inc:207; src/ui/screens.cpp:81; src/ui/screens.cpp:212; src/ui/screens.cpp:257; src/ui/screens.cpp:666; src/ui/screens.cpp:696; src/ui/ui.cpp:427,name found; not proof of behavior
+brewing_stand,net/minecraft/world/inventory/MenuType.java:23,src/assets/assets.cpp:977; src/ui/creative_tabs.inc:208; src/ui/stations_b.cpp:448; src/ui/ui.cpp:428; src/worldgen/features_blocks.cpp:93,name found; not proof of behavior
+crafting,net/minecraft/world/inventory/MenuType.java:24,src/ui/screens.cpp:75; src/ui/screens.cpp:207; src/ui/screens.cpp:256; src/ui/screens.cpp:695,name found; not proof of behavior
+enchantment,net/minecraft/world/inventory/MenuType.java:25,src/net/client.cpp:295; src/ui/items.cpp:144; src/ui/stations_a.cpp:589,name found; not proof of behavior
+furnace,net/minecraft/world/inventory/MenuType.java:26,src/assets/assets.cpp:985; src/fx/particles.cpp:1024; src/ui/creative_tabs.inc:206; src/ui/creative_tabs.inc:248; src/ui/screens.cpp:81; src/ui/screens.cpp:212; src/ui/screens.cpp:257; src/ui/screens.cpp:666; src/ui/screens.cpp:696; src/ui/ui.cpp:427,name found; not proof of behavior
+grindstone,net/minecraft/world/inventory/MenuType.java:27,src/ui/creative_tabs.inc:206; src/ui/stations_a.cpp:154; src/ui/ui.cpp:428,name found; not proof of behavior
+hopper,net/minecraft/world/inventory/MenuType.java:28,src/ui/creative_tabs.inc:247; src/ui/screens.cpp:91; src/ui/ui.cpp:427; src/worldgen/features_blocks.cpp:97; src/worldgen/features_misc.cpp:1934; src/worldgen/structure_core.cpp:50,name found; not proof of behavior
+lectern,net/minecraft/world/inventory/MenuType.java:29,src/blockentity/block_entities.cpp:346; src/ui/creative_tabs.inc:215; src/ui/creative_tabs.inc:246; src/ui/signs_books.cpp:2; src/ui/signs_books.cpp:879; src/ui/signs_books.h:3; src/ui/ui.cpp:429,name found; not proof of behavior
+loom,net/minecraft/world/inventory/MenuType.java:30,src/ui/creative_tabs.inc:206; src/ui/stations_a2.cpp:527; src/ui/ui.cpp:428,name found; not proof of behavior
+merchant,net/minecraft/world/inventory/MenuType.java:31,src/ui/modules.h:6; src/ui/stations_b.cpp:226; src/ui/stations_b.cpp:659,name found; not proof of behavior
+shulker_box,net/minecraft/world/inventory/MenuType.java:32,src/blockentity/block_entities.cpp:335; src/blockentity/block_entities.cpp:336; src/blockentity/block_entities.cpp:337; src/entity/item_models.cpp:616; src/ui/creative_tabs.inc:142; src/ui/creative_tabs.inc:223; src/ui/icons.cpp:289; src/ui/icons.cpp:404; src/ui/items.cpp:52; src/ui/screens.cpp:64; src/ui/screens.cpp:65; src/ui/screens.cpp:66; src/ui/screens.cpp:67; src/ui/screens.cpp:73; src/ui/ui.cpp:437; src/worldgen/features_misc.cpp:1934; src/worldgen/structure_core.cpp:50,name found; not proof of behavior
+smithing,net/minecraft/world/inventory/MenuType.java:33,src/ui/stations_a.cpp:247,name found; not proof of behavior
+smoker,net/minecraft/world/inventory/MenuType.java:34,src/assets/assets.cpp:985; src/fx/particles.cpp:1024; src/ui/creative_tabs.inc:206; src/ui/screens.cpp:81; src/ui/screens.cpp:212; src/ui/screens.cpp:257; src/ui/screens.cpp:666; src/ui/screens.cpp:696; src/ui/ui.cpp:427,name found; not proof of behavior
+cartography_table,net/minecraft/world/inventory/MenuType.java:35,src/ui/creative_tabs.inc:206; src/ui/stations_a2.cpp:648; src/ui/ui.cpp:429,name found; not proof of behavior
+stonecutter,net/minecraft/world/inventory/MenuType.java:36,src/ui/creative_tabs.inc:205; src/ui/stations_a2.cpp:272; src/ui/ui.cpp:428,name found; not proof of behavior

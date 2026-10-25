@@ -1,0 +1,27 @@
+name,reference,cpp_string_evidence,status
+sign,net/minecraft/client/renderer/blockentity/BlockEntityRenderers.java:35,,native family/suffix routing present; item/profile fidelity needs review; VIS-14
+hanging_sign,net/minecraft/client/renderer/blockentity/BlockEntityRenderers.java:36,,native family/suffix routing present; item/profile fidelity needs review; VIS-14
+mob_spawner,net/minecraft/client/renderer/blockentity/BlockEntityRenderers.java:37,,reviewed missing native special renderer Kind; VIS-10 through VIS-13
+piston,net/minecraft/client/renderer/blockentity/BlockEntityRenderers.java:38,,reviewed missing native special renderer Kind; VIS-10 through VIS-13
+chest,net/minecraft/client/renderer/blockentity/BlockEntityRenderers.java:39,src/blockentity/block_entities.cpp:295,name found; not proof of behavior
+ender_chest,net/minecraft/client/renderer/blockentity/BlockEntityRenderers.java:40,src/blockentity/block_entities.cpp:295; src/blockentity/block_entities.cpp:301,name found; not proof of behavior
+trapped_chest,net/minecraft/client/renderer/blockentity/BlockEntityRenderers.java:41,src/blockentity/block_entities.cpp:295; src/blockentity/block_entities.cpp:300,name found; not proof of behavior
+enchanting_table,net/minecraft/client/renderer/blockentity/BlockEntityRenderers.java:42,src/blockentity/block_entities.cpp:344,name found; not proof of behavior
+lectern,net/minecraft/client/renderer/blockentity/BlockEntityRenderers.java:43,src/blockentity/block_entities.cpp:346,name found; not proof of behavior
+end_portal,net/minecraft/client/renderer/blockentity/BlockEntityRenderers.java:44,,reviewed missing native special renderer Kind; VIS-10 through VIS-13
+end_gateway,net/minecraft/client/renderer/blockentity/BlockEntityRenderers.java:45,,reviewed missing native special renderer Kind; VIS-10 through VIS-13
+beacon,net/minecraft/client/renderer/blockentity/BlockEntityRenderers.java:46,,reviewed missing native special renderer Kind; VIS-10 through VIS-13
+skull,net/minecraft/client/renderer/blockentity/BlockEntityRenderers.java:47,,native family/suffix routing present; item/profile fidelity needs review; VIS-14
+banner,net/minecraft/client/renderer/blockentity/BlockEntityRenderers.java:48,,native family/suffix routing present; item/profile fidelity needs review; VIS-14
+structure_block,net/minecraft/client/renderer/blockentity/BlockEntityRenderers.java:49,,reviewed missing native special renderer Kind; VIS-10 through VIS-13
+test_instance_block,net/minecraft/client/renderer/blockentity/BlockEntityRenderers.java:50,,reviewed missing native special renderer Kind; VIS-10 through VIS-13
+shulker_box,net/minecraft/client/renderer/blockentity/BlockEntityRenderers.java:51,src/blockentity/block_entities.cpp:335; src/blockentity/block_entities.cpp:336; src/blockentity/block_entities.cpp:337,name found; not proof of behavior
+conduit,net/minecraft/client/renderer/blockentity/BlockEntityRenderers.java:52,src/blockentity/block_entities.cpp:342,name found; not proof of behavior
+bell,net/minecraft/client/renderer/blockentity/BlockEntityRenderers.java:53,src/blockentity/block_entities.cpp:338,name found; not proof of behavior
+campfire,net/minecraft/client/renderer/blockentity/BlockEntityRenderers.java:54,src/blockentity/block_entities.cpp:348,name found; not proof of behavior
+brushable_block,net/minecraft/client/renderer/blockentity/BlockEntityRenderers.java:55,,reviewed missing native special renderer Kind; VIS-10 through VIS-13
+decorated_pot,net/minecraft/client/renderer/blockentity/BlockEntityRenderers.java:56,src/blockentity/block_entities.cpp:340,name found; not proof of behavior
+trial_spawner,net/minecraft/client/renderer/blockentity/BlockEntityRenderers.java:57,,reviewed missing native special renderer Kind; VIS-10 through VIS-13
+vault,net/minecraft/client/renderer/blockentity/BlockEntityRenderers.java:58,,reviewed missing native special renderer Kind; VIS-10 through VIS-13
+copper_golem_statue,net/minecraft/client/renderer/blockentity/BlockEntityRenderers.java:59,src/blockentity/block_entities.cpp:352,name found; not proof of behavior
+shelf,net/minecraft/client/renderer/blockentity/BlockEntityRenderers.java:60,,native family/suffix routing present; item/profile fidelity needs review; VIS-14

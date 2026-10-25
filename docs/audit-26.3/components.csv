@@ -1,0 +1,123 @@
+name,reference,cpp_string_evidence,status
+custom_data,net/minecraft/core/component/DataComponents.java:116,src/ui/items.cpp:341,explicit skip/decode branch; semantics need review
+max_stack_size,net/minecraft/core/component/DataComponents.java:117,src/ui/items.cpp:344; src/ui/items.cpp:438,explicit skip/decode branch; semantics need review
+max_damage,net/minecraft/core/component/DataComponents.java:120,src/ui/items.cpp:344; src/ui/items.cpp:437,explicit skip/decode branch; semantics need review
+damage,net/minecraft/core/component/DataComponents.java:123,src/ui/items.cpp:344; src/ui/items.cpp:436,explicit skip/decode branch; semantics need review
+unbreakable,net/minecraft/core/component/DataComponents.java:126,src/ui/items.cpp:346,explicit skip/decode branch; semantics need review
+use_effects,net/minecraft/core/component/DataComponents.java:127,src/ui/items.cpp:353,explicit skip/decode branch; semantics need review
+custom_name,net/minecraft/core/component/DataComponents.java:130,src/ui/items.cpp:341; src/ui/items.cpp:434,explicit skip/decode branch; semantics need review
+minimum_attack_charge,net/minecraft/core/component/DataComponents.java:133,src/ui/items.cpp:350,explicit skip/decode branch; semantics need review
+damage_type,net/minecraft/core/component/DataComponents.java:136,,unsupported: skipValue falls through to false
+item_name,net/minecraft/core/component/DataComponents.java:139,src/ui/items.cpp:341; src/ui/items.cpp:435,explicit skip/decode branch; semantics need review
+item_model,net/minecraft/core/component/DataComponents.java:142,src/ui/items.cpp:352,explicit skip/decode branch; semantics need review
+lore,net/minecraft/core/component/DataComponents.java:145,src/ui/items.cpp:354; src/ui/items.cpp:463,explicit skip/decode branch; semantics need review
+rarity,net/minecraft/core/component/DataComponents.java:148,src/ui/items.cpp:345; src/ui/items.cpp:439,explicit skip/decode branch; semantics need review
+enchantments,net/minecraft/core/component/DataComponents.java:149,src/ui/items.cpp:283; src/ui/items.cpp:355; src/ui/items.cpp:441; src/ui/items.cpp:442; src/ui/items.cpp:448,explicit skip/decode branch; semantics need review
+can_place_on,net/minecraft/core/component/DataComponents.java:152,src/ui/items.cpp:395,explicit skip/decode branch; semantics need review
+can_break,net/minecraft/core/component/DataComponents.java:155,src/ui/items.cpp:395,explicit skip/decode branch; semantics need review
+attribute_modifiers,net/minecraft/core/component/DataComponents.java:158,,unsupported: skipValue falls through to false
+custom_model_data,net/minecraft/core/component/DataComponents.java:161,src/ui/items.cpp:356,explicit skip/decode branch; semantics need review
+tooltip_display,net/minecraft/core/component/DataComponents.java:164,src/ui/items.cpp:359; src/ui/items.cpp:457,explicit skip/decode branch; semantics need review
+repair_cost,net/minecraft/core/component/DataComponents.java:167,src/ui/items.cpp:344,explicit skip/decode branch; semantics need review
+creative_slot_lock,net/minecraft/core/component/DataComponents.java:170,src/ui/items.cpp:346,explicit skip/decode branch; semantics need review
+enchantment_glint_override,net/minecraft/core/component/DataComponents.java:171,src/ui/items.cpp:351; src/ui/items.cpp:440,explicit skip/decode branch; semantics need review
+intangible_projectile,net/minecraft/core/component/DataComponents.java:174,src/ui/items.cpp:341,explicit skip/decode branch; semantics need review
+food,net/minecraft/core/component/DataComponents.java:175,,unsupported: skipValue falls through to false
+consumable,net/minecraft/core/component/DataComponents.java:178,,unsupported: skipValue falls through to false
+use_remainder,net/minecraft/core/component/DataComponents.java:181,,unsupported: skipValue falls through to false
+use_cooldown,net/minecraft/core/component/DataComponents.java:184,,unsupported: skipValue falls through to false
+damage_resistant,net/minecraft/core/component/DataComponents.java:187,,unsupported: skipValue falls through to false
+tool,net/minecraft/core/component/DataComponents.java:190,src/ui/items.cpp:390,explicit skip/decode branch; semantics need review
+weapon,net/minecraft/core/component/DataComponents.java:191,,unsupported: skipValue falls through to false
+attack_range,net/minecraft/core/component/DataComponents.java:194,,unsupported: skipValue falls through to false
+enchantable,net/minecraft/core/component/DataComponents.java:197,src/ui/items.cpp:345,explicit skip/decode branch; semantics need review
+equippable,net/minecraft/core/component/DataComponents.java:200,,unsupported: skipValue falls through to false
+repairable,net/minecraft/core/component/DataComponents.java:203,,unsupported: skipValue falls through to false
+glider,net/minecraft/core/component/DataComponents.java:206,src/ui/items.cpp:346,explicit skip/decode branch; semantics need review
+tooltip_style,net/minecraft/core/component/DataComponents.java:207,src/ui/items.cpp:352,explicit skip/decode branch; semantics need review
+death_protection,net/minecraft/core/component/DataComponents.java:210,,unsupported: skipValue falls through to false
+blocks_attacks,net/minecraft/core/component/DataComponents.java:213,,unsupported: skipValue falls through to false
+piercing_weapon,net/minecraft/core/component/DataComponents.java:216,,unsupported: skipValue falls through to false
+kinetic_weapon,net/minecraft/core/component/DataComponents.java:219,,unsupported: skipValue falls through to false
+attack_animation,net/minecraft/core/component/DataComponents.java:222,,unsupported: skipValue falls through to false
+interact_animation,net/minecraft/core/component/DataComponents.java:225,,unsupported: skipValue falls through to false
+additional_trade_cost,net/minecraft/core/component/DataComponents.java:228,src/ui/items.cpp:344,explicit skip/decode branch; semantics need review
+block_transformer,net/minecraft/core/component/DataComponents.java:229,,unsupported: skipValue falls through to false
+villager_food,net/minecraft/core/component/DataComponents.java:232,,unsupported: skipValue falls through to false
+stored_enchantments,net/minecraft/core/component/DataComponents.java:235,src/ui/items.cpp:283; src/ui/items.cpp:355; src/ui/items.cpp:441,explicit skip/decode branch; semantics need review
+dye,net/minecraft/core/component/DataComponents.java:238,src/ui/items.cpp:345,explicit skip/decode branch; semantics need review
+dyed_color,net/minecraft/core/component/DataComponents.java:239,src/ui/items.cpp:360; src/ui/items.cpp:462,explicit skip/decode branch; semantics need review
+map_id,net/minecraft/core/component/DataComponents.java:242,src/ui/items.cpp:344,explicit skip/decode branch; semantics need review
+map_decorations,net/minecraft/core/component/DataComponents.java:243,src/ui/items.cpp:341,explicit skip/decode branch; semantics need review
+map_post_processing,net/minecraft/core/component/DataComponents.java:244,src/ui/items.cpp:345,explicit skip/decode branch; semantics need review
+charged_projectiles,net/minecraft/core/component/DataComponents.java:247,src/ui/items.cpp:369,explicit skip/decode branch; semantics need review
+bundle_contents,net/minecraft/core/component/DataComponents.java:250,src/ui/items.cpp:369,explicit skip/decode branch; semantics need review
+potion_contents,net/minecraft/core/component/DataComponents.java:253,src/ui/items.cpp:361; src/ui/items.cpp:466,explicit skip/decode branch; semantics need review
+potion_duration_scale,net/minecraft/core/component/DataComponents.java:256,src/ui/items.cpp:350,explicit skip/decode branch; semantics need review
+suspicious_stew_effects,net/minecraft/core/component/DataComponents.java:259,src/ui/items.cpp:262; src/ui/items.cpp:364; src/ui/items.cpp:449,explicit skip/decode branch; semantics need review
+writable_book_content,net/minecraft/core/component/DataComponents.java:262,src/ui/items.cpp:365,explicit skip/decode branch; semantics need review
+written_book_content,net/minecraft/core/component/DataComponents.java:265,src/ui/items.cpp:366,explicit skip/decode branch; semantics need review
+trim,net/minecraft/core/component/DataComponents.java:268,src/ui/items.cpp:381,explicit skip/decode branch; semantics need review
+debug_stick_state,net/minecraft/core/component/DataComponents.java:271,src/ui/items.cpp:341,explicit skip/decode branch; semantics need review
+entity_data,net/minecraft/core/component/DataComponents.java:274,src/ui/items.cpp:371,explicit skip/decode branch; semantics need review
+bucket_entity_data,net/minecraft/core/component/DataComponents.java:277,src/ui/items.cpp:342,explicit skip/decode branch; semantics need review
+block_entity_data,net/minecraft/core/component/DataComponents.java:280,src/ui/items.cpp:371,explicit skip/decode branch; semantics need review
+instrument,net/minecraft/core/component/DataComponents.java:285,src/ui/items.cpp:146; src/ui/items.cpp:259; src/ui/items.cpp:382; src/ui/items.cpp:455,explicit skip/decode branch; semantics need review
+provides_trim_material,net/minecraft/core/component/DataComponents.java:288,,unsupported: skipValue falls through to false
+ominous_bottle_amplifier,net/minecraft/core/component/DataComponents.java:291,src/ui/items.cpp:345,explicit skip/decode branch; semantics need review
+jukebox_playable,net/minecraft/core/component/DataComponents.java:294,,unsupported: skipValue falls through to false
+provides_banner_patterns,net/minecraft/core/component/DataComponents.java:297,src/ui/items.cpp:413,explicit skip/decode branch; semantics need review
+recipes,net/minecraft/core/component/DataComponents.java:303,src/ui/items.cpp:342,explicit skip/decode branch; semantics need review
+lodestone_tracker,net/minecraft/core/component/DataComponents.java:306,src/ui/items.cpp:372,explicit skip/decode branch; semantics need review
+firework_explosion,net/minecraft/core/component/DataComponents.java:309,src/ui/items.cpp:378,explicit skip/decode branch; semantics need review
+fireworks,net/minecraft/core/component/DataComponents.java:312,src/ui/items.cpp:379,explicit skip/decode branch; semantics need review
+profile,net/minecraft/core/component/DataComponents.java:315,,unsupported: skipValue falls through to false
+note_block_sound,net/minecraft/core/component/DataComponents.java:318,src/ui/items.cpp:352,explicit skip/decode branch; semantics need review
+banner_patterns,net/minecraft/core/component/DataComponents.java:321,src/ui/items.cpp:411,explicit skip/decode branch; semantics need review
+base_color,net/minecraft/core/component/DataComponents.java:324,src/ui/items.cpp:345,explicit skip/decode branch; semantics need review
+pot_decorations,net/minecraft/core/component/DataComponents.java:327,src/ui/items.cpp:412,explicit skip/decode branch; semantics need review
+container,net/minecraft/core/component/DataComponents.java:330,src/ui/items.cpp:370,explicit skip/decode branch; semantics need review
+block_state,net/minecraft/core/component/DataComponents.java:333,src/ui/items.cpp:380,explicit skip/decode branch; semantics need review
+bees,net/minecraft/core/component/DataComponents.java:336,,unsupported: skipValue falls through to false
+sulfur_cube_content,net/minecraft/core/component/DataComponents.java:337,,unsupported: skipValue falls through to false
+lock,net/minecraft/core/component/DataComponents.java:340,src/ui/items.cpp:342,explicit skip/decode branch; semantics need review
+container_loot,net/minecraft/core/component/DataComponents.java:341,src/ui/items.cpp:342,explicit skip/decode branch; semantics need review
+break_sound,net/minecraft/core/component/DataComponents.java:342,,unsupported: skipValue falls through to false
+compostable,net/minecraft/core/component/DataComponents.java:345,,unsupported: skipValue falls through to false
+cooking_fuel,net/minecraft/core/component/DataComponents.java:348,,unsupported: skipValue falls through to false
+brewing_fuel,net/minecraft/core/component/DataComponents.java:351,,unsupported: skipValue falls through to false
+mob_visibility,net/minecraft/core/component/DataComponents.java:354,,unsupported: skipValue falls through to false
+villager/variant,net/minecraft/core/component/DataComponents.java:357,,generic slash-name varint branch; codec needs review
+wolf/variant,net/minecraft/core/component/DataComponents.java:360,,generic slash-name varint branch; codec needs review
+wolf/sound_variant,net/minecraft/core/component/DataComponents.java:363,,generic slash-name varint branch; codec needs review
+wolf/collar,net/minecraft/core/component/DataComponents.java:366,,generic slash-name varint branch; codec needs review
+fox/variant,net/minecraft/core/component/DataComponents.java:369,,generic slash-name varint branch; codec needs review
+salmon/size,net/minecraft/core/component/DataComponents.java:372,,generic slash-name varint branch; codec needs review
+parrot/variant,net/minecraft/core/component/DataComponents.java:375,,generic slash-name varint branch; codec needs review
+tropical_fish/pattern,net/minecraft/core/component/DataComponents.java:378,,generic slash-name varint branch; codec needs review
+tropical_fish/base_color,net/minecraft/core/component/DataComponents.java:381,,generic slash-name varint branch; codec needs review
+tropical_fish/pattern_color,net/minecraft/core/component/DataComponents.java:384,,generic slash-name varint branch; codec needs review
+mooshroom/variant,net/minecraft/core/component/DataComponents.java:387,,generic slash-name varint branch; codec needs review
+rabbit/variant,net/minecraft/core/component/DataComponents.java:390,,generic slash-name varint branch; codec needs review
+pig/variant,net/minecraft/core/component/DataComponents.java:393,,generic slash-name varint branch; codec needs review
+pig/sound_variant,net/minecraft/core/component/DataComponents.java:396,,generic slash-name varint branch; codec needs review
+cow/variant,net/minecraft/core/component/DataComponents.java:399,,generic slash-name varint branch; codec needs review
+cow/sound_variant,net/minecraft/core/component/DataComponents.java:402,,generic slash-name varint branch; codec needs review
+chicken/variant,net/minecraft/core/component/DataComponents.java:405,,generic slash-name varint branch; codec needs review
+chicken/sound_variant,net/minecraft/core/component/DataComponents.java:408,,generic slash-name varint branch; codec needs review
+zombie_nautilus/variant,net/minecraft/core/component/DataComponents.java:411,,generic slash-name varint branch; codec needs review
+frog/variant,net/minecraft/core/component/DataComponents.java:414,,generic slash-name varint branch; codec needs review
+horse/variant,net/minecraft/core/component/DataComponents.java:417,,generic slash-name varint branch; codec needs review
+painting/variant,net/minecraft/core/component/DataComponents.java:420,src/ui/items.cpp:295; src/ui/items.cpp:410; src/ui/items.cpp:456,explicit skip/decode branch; semantics need review
+llama/variant,net/minecraft/core/component/DataComponents.java:423,,generic slash-name varint branch; codec needs review
+axolotl/variant,net/minecraft/core/component/DataComponents.java:426,,generic slash-name varint branch; codec needs review
+cat/variant,net/minecraft/core/component/DataComponents.java:429,,generic slash-name varint branch; codec needs review
+cat/sound_variant,net/minecraft/core/component/DataComponents.java:432,,generic slash-name varint branch; codec needs review
+cat/collar,net/minecraft/core/component/DataComponents.java:435,,generic slash-name varint branch; codec needs review
+sheep/color,net/minecraft/core/component/DataComponents.java:438,,generic slash-name varint branch; codec needs review
+shulker/color,net/minecraft/core/component/DataComponents.java:441,,generic slash-name varint branch; codec needs review
+provides_pottery_pattern,net/minecraft/core/component/DataComponents.java:444,,unsupported: skipValue falls through to false
+sign_text_front,net/minecraft/core/component/DataComponents.java:447,,unsupported: skipValue falls through to false
+sign_text_back,net/minecraft/core/component/DataComponents.java:450,,unsupported: skipValue falls through to false
+waxed,net/minecraft/core/component/DataComponents.java:453,src/ui/items.cpp:346,explicit skip/decode branch; semantics need review
+cushion/color,net/minecraft/core/component/DataComponents.java:454,,generic slash-name varint branch; codec needs review
