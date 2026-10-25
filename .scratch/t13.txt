@@ -1,0 +1,8 @@
+17 chat /gamemode creative
+17.2 chat /time set noon
+17.4 look 0 10
+18 chat /posteffect add @s minecraft:invert
+19 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t13_invert.png
+19.5 chat /posteffect clear @s
+20.5 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t13_clear.png
+21 quit

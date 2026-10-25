@@ -1,0 +1,19 @@
+17 chat /gamemode creative
+17.2 chat /fill ~-8 ~-2 ~-8 ~8 ~4 ~8 water
+18 chat /summon nautilus ~ ~1 ~2 {equipment:{saddle:{id:"minecraft:saddle",count:1}},Owner:[I;990597095,-145670183,-1381521981,760045405]}
+19 chat /ride @s mount @e[type=nautilus,limit=1,sort=nearest]
+19.5 look 0 0
+20 log nautilus-start
+20.1 key w down
+21 log nautilus-1s
+22 log nautilus-2s
+22.05 key space down
+22.6 key space up
+23 log nautilus-dash
+23.2 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t12_nautilus.png
+23.3 key w up
+23.5 chat /ride @s dismount
+24 chat /summon nautilus ~ ~1 ~2 {equipment:{saddle:{id:"minecraft:saddle",count:1}}}
+25 chat /ride @s mount @e[type=nautilus,limit=1,sort=nearest,distance=..3]
+26 chat /ride @s dismount
+27 quit

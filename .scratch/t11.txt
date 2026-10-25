@@ -1,0 +1,36 @@
+17 chat /gamemode survival
+17.2 chat /time set noon
+17.3 chat /effect give @s resistance 60 5
+17.4 look 0 0
+18 chat /summon camel ~ ~ ~3 {equipment:{saddle:{id:"minecraft:saddle",count:1}},Tame:1b}
+19 chat /ride @s mount @e[type=camel,limit=1,sort=nearest]
+20 log camel-start
+20.1 key w down
+20.5 key space down
+21.2 key space up
+21.6 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t11_camel_cooldown.png
+21.7 log camel-dash
+22.0 key space down
+22.6 key space up
+23 log camel-no-second-dash
+24.5 key space down
+24.9 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t11_camel_charge.png
+25.2 key space up
+25.6 log camel-second-dash
+26 key w up
+26.2 chat /ride @s dismount
+26.5 chat /kill @e[type=camel]
+27 chat /gamemode creative
+27.2 chat /fill ~-8 ~-2 ~-8 ~8 ~4 ~8 water
+28 chat /summon nautilus ~ ~1 ~2 {equipment:{saddle:{id:"minecraft:saddle",count:1}},Tame:1b}
+29 chat /ride @s mount @e[type=nautilus,limit=1,sort=nearest]
+29.5 look 0 0
+30 log nautilus-start
+30.1 key w down
+31 log nautilus-1s
+32 log nautilus-2s
+32.1 look 0 -45
+33 log nautilus-3s-up
+33.1 key w up
+33.3 chat /ride @s dismount
+34 quit

@@ -1,0 +1,25 @@
+17 chat /gamemode creative
+17.2 chat /time set noon
+17.4 look 0 10
+18 chat /particle dripping_lava ~-1 ~3 ~3 0.6 0 0.6 0 30
+18.1 chat /particle dripping_water ~1 ~3 ~3 0.6 0 0.6 0 30
+18.2 chat /particle falling_honey ~ ~3 ~4 0.5 0 0.5 0 20
+19.5 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t9_drip1.png
+21.2 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t9_drip2.png
+23 chat /particle gust_emitter_large ~ ~1.5 ~5
+23.2 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t9_gust.png
+25 chat /particle sonic_boom ~ ~1.5 ~4
+25.2 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t9_boom.png
+27 chat /particle shriek{delay:0} ~ ~ ~3
+27.1 chat /particle shriek{delay:5} ~ ~ ~3
+27.2 chat /particle shriek{delay:10} ~ ~ ~3
+28 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t9_shriek.png
+30 chat /particle sculk_charge{roll:0.0} ~ ~1.5 ~3 0.5 0.3 0.5 0.02 30
+30.1 chat /particle sculk_soul ~ ~1 ~3 0.5 0.3 0.5 0.05 15
+30.2 chat /particle glow ~-1 ~1.5 ~3 0.3 0.3 0.3 0 30
+30.3 chat /particle wax_on ~1 ~1.5 ~3 0.3 0.3 0.3 1 30
+30.6 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t9_sculk.png
+31 chat /time set midnight
+31.2 chat /particle firefly ~ ~1.5 ~4 2 1 2 0 40
+36 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t9_firefly.png
+37 quit

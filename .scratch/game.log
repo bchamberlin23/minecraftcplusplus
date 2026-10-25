@@ -1,0 +1,81 @@
+cpu threads 32 | jar 26.3 | world fxtest | load radius 0 | detail radius 32 chunks
+mods        20.4 ms  0 resource packs, 0 data packs, 0 Fabric mods, 0 native mods enabled (C:\Users\Admin\AppData\Roaming\minecraftCplusplus\mods)
+File 'C:\Users\Admin\Desktop\minecraftCplusplus\.claude\worktrees\agent-a8ca273d18b9f83e0\build\fx\sl.interposer.dll' is signed by NVIDIA and the signature was verified.
+server  starting the local server for fxtest on port 49315
+assets     214.8 ms  1992 textures from the installed game
+ui: 469 GUI sprites
+ui          32.8 ms  fonts, GUI sprites and 1658 items from the game
+audio       71.9 ms  1991 sound events, 4941 files (index 30.1 ms), 1991 network sound ids, XAudio2
+ui: unifont 114432 glyphs in 45 ms
+entities  122.7 ms  361 model layers, 15070 quads, 1531 textures in a 4096x1568 atlas, 161 entity types
+entities: 3 of 161 entity types fall back to a box: cushion sulfur_cube zombie_nautilus
+extracting block hardness and tags with the game's code (one time, ~5 s)...
+particles: 128 particle types
+visuals    20.5 ms  item models, font and particles from the game
+blockent    11.1 ms  font for sign text
+world      164.8 ms  16 regions, 5520 chunks, 53452 sections, 71 MB read, 1148 block states
+ui: unifont 114432 glyphs in 37 ms
+ui: unifont 114432 glyphs in 27 ms
+xess: XeSS-SR 2.0.2, XeSS-FG 1.3.1 (up to 1 generated frames), XeLL 1.3.2
+streamline warning: [17-23-35][streamline][warn][tid:28748][1s:972ms:517us]dlss_gEntry.cpp:1144[slGetData] slDLSSGGetState must be synchronized with the present thread, if not already, especially if using DLSS-G inputs-processing completion fence and value!
+streamline: DLSS Frame Generation 310.9.1, up to 5 generated frames per rendered frame
+fsr: upscaler providers: 3.1.5, 2.3.4 | frame generation providers: 3.1.6
+upscalers: NVIDIA DLSS SL 2.14.1, DLSS 310.9.1 | AMD FSR SDK 2.3.0 | Intel XeSS XeSS-SR 2.0.2 | frame generation: DLSS Frame Generation (up to 6x) FSR Frame Generation (up to 2x) XeSS Frame Generation (up to 2x) | low latency: NVIDIA Reflex | 1347 ms
+shaders: materials for 1992 textures: 16 foliage, 92 plants, 59 emissive, 3 water, 36 glass/ice
+sky: 67 biomes, 4 timelines, 4 dimension types from the game data
+sky         62.4 ms  sky, clouds and weather ready
+sky: day time 318085, game time 9650, clear
+lod build 241.2 ms wall | cpu: level-1 grids 617 ms, coarser + far 548 ms, padding 718 ms, colours 27 ms, meshing 2445 ms
+lod        325.4 ms  20011 coarse nodes (levels 1-5) for the whole world
+detail     487.3 ms  39765 full-detail sections around the camera
+total     3110.7 ms  launch to first frame | 428 / 1435 MB geometry arena on NVIDIA GeForce RTX 5070 Ti
+features: 171 placed features in 11 steps ready in 15.5 ms
+features      16.7 ms
+structures: 52 structures (3 of unsupported types), 18 sets ready in 2.3 ms
+worldgen    58.0 ms  seed 424242, generating missing chunks in the background
+ui: script C:\Users\Admin\Desktop\minecraftCplusplus\.claude\worktrees\agent-a8ca273d18b9f83e0\.scratch\t14.txt, 7 steps
+video: shaders off: no upscaling | 1280x720 | Reflex On
+server: [17:23:39] [Server thread/INFO]: Preparing level "fxtest"
+server: [17:23:39] [Server thread/INFO]: Preparing spawn area: 100%
+server: [17:23:39] [Server thread/INFO]: Done (0.221s)! For help, type "help"
+net: logged in as fuelhuell (protocol 777)
+server: [17:23:40] [Server thread/INFO]: System chat: fuelhuell joined the game
+net: joined minecraft:overworld (y -64..319), game mode 1
+sky: dimension minecraft:overworld
+sky: server time: game 9660, day clock 318095 (rate 1.00)
+server     936.2 ms  playing through the local server as fuelhuell
+ui: update_advancements: malformed packet
+net: first chunk applied (0, 3)
+audio: music minecraft:music.overworld.forest
+[chat] sent command /gamemode creative
+[chat] sent command /time set noon
+[chat] Set minecraft:overworld to time marker minecraft:noon
+[chat] sent command /fill ~-3 ~ ~-3 ~3 ~4 ~3 water
+[chat] Successfully filled 245 block(s)
+screenshot written to C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t14_water.png
+[chat] sent command /fill ~-4 ~-1 ~-4 ~4 ~5 ~4 air
+[chat] Successfully filled 516 block(s)
+net: connect 180.1 ms, login 869.8 ms, first chunk 966.0 ms after start | 637 chunks decoded: avg 0.018 ms, max 0.270 ms | 637 applied: avg 0.207 ms, max 5.134 ms
+net: 0 edits sent, 0 acks, 0 corrected by the server, 1377 server block changes applied
+audio: 50 sounds played (51 from the server), 16 decoded in 17.8 ms, 0 dropped, 0 stolen | main-thread update avg 0.0007 ms, max 0.587 ms, 1 of 8202 frames over 0.1 ms | cave moodiness 0.000
+frames  8197 | avg 358 fps (2.80 ms) | p99 frame 10.93 ms | gpu avg 1.95 ms, p99 3.16 ms | 95824 draws, 74535 nodes/frame
+detail  42771 sections resident, 0 pending | 106362 nodes in the cut
+far     686 regions generated, 3196 pending | 825 / 1435 MB geometry arena
+far     level 2: 131 regions, 427.6 ms each
+far     level 3: 138 regions, 127.3 ms each
+far     level 4: 168 regions, 40.5 ms each
+far     level 5: 674 regions, 24.3 ms each
+upscalers: Reflex On (sim start -> GPU done 5.2 ms, GPU busy 3.26 ms, 64 frames)
+upscalers: 8202 frames presented (rendered + generated)
+sky     cpu 0.017 ms/frame avg | gpu 0.010 ms avg (sky 0.005, clouds + weather 0.004)
+block entities: 0.003 ms average CPU per frame; last 256 frames 0.003 ms avg (max 0.016), 4 tracked in 3 sections, 72 static quads
+visuals: last 512 frames: CPU 0.047 ms avg, p99 0.237, max 0.353 (particles sim+build 0.009 ms) | 39 particles, 11 items, 0 name tags per frame
+entities: 0.016 ms average CPU per frame (cull + animate + upload), 4 entities drawn on average
+entities: last 256 frames: 3 entities, 146 model quads drawn | render CPU 0.013 ms avg (max 0.069) + packets/ticks 0.005 ms avg
+server: [17:24:02] [Server thread/INFO]: Stopping server
+server     860.3 ms  local server saved and stopped
+File 'C:\Users\Admin\Desktop\minecraftCplusplus\.claude\worktrees\agent-a8ca273d18b9f83e0\build\fx/sl.common.dll' is signed by NVIDIA and the signature was verified.
+File 'C:\Users\Admin\Desktop\minecraftCplusplus\.claude\worktrees\agent-a8ca273d18b9f83e0\build\fx/sl.dlss.dll' is signed by NVIDIA and the signature was verified.
+File 'C:\Users\Admin\Desktop\minecraftCplusplus\.claude\worktrees\agent-a8ca273d18b9f83e0\build\fx/sl.dlss_g.dll' is signed by NVIDIA and the signature was verified.
+File 'C:\Users\Admin\Desktop\minecraftCplusplus\.claude\worktrees\agent-a8ca273d18b9f83e0\build\fx/sl.pcl.dll' is signed by NVIDIA and the signature was verified.
+File 'C:\Users\Admin\Desktop\minecraftCplusplus\.claude\worktrees\agent-a8ca273d18b9f83e0\build\fx/sl.reflex.dll' is signed by NVIDIA and the signature was verified.

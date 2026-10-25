@@ -1,0 +1,7 @@
+17 chat /gamemode creative
+17.2 chat /time set noon
+17.4 look 0 0
+18 chat /fill ~-3 ~ ~-3 ~3 ~4 ~3 water
+22 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t14_water.png
+22.5 chat /fill ~-4 ~-1 ~-4 ~4 ~5 ~4 air
+23 quit

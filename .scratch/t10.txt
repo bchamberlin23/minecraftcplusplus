@@ -1,0 +1,36 @@
+17 chat /gamemode creative
+17.2 chat /time set noon
+17.4 look 0 0
+18 chat /summon happy_ghast ~ ~1 ~5 {equipment:{body:{id:"minecraft:white_harness",count:1}}}
+19 chat /ride @s mount @e[type=happy_ghast,limit=1,sort=nearest]
+20 log ghast-start
+20.1 key w down
+23 log ghast-after-3s
+23.1 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t10_ghast.png
+23.2 key w up
+23.5 chat /ride @s dismount
+24 chat /kill @e[type=happy_ghast]
+24.5 chat /tp @s ~ ~ ~
+25 chat /summon camel ~ ~ ~3 {equipment:{saddle:{id:"minecraft:saddle",count:1}},Tame:1b}
+26 chat /ride @s mount @e[type=camel,limit=1,sort=nearest]
+27 log camel-start
+27.1 key w down
+28 log camel-walk
+28.1 key space down
+28.8 key space up
+29 log camel-dash-0.2s
+29.2 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t10_camel.png
+29.6 log camel-dash-0.8s
+30 key w up
+30.2 chat /ride @s dismount
+30.5 chat /kill @e[type=camel]
+31 chat /fill ~-8 ~-2 ~-8 ~8 ~4 ~8 water
+32 chat /summon nautilus ~ ~ ~2 {equipment:{saddle:{id:"minecraft:saddle",count:1}},Tame:1b}
+33 chat /ride @s mount @e[type=nautilus,limit=1,sort=nearest]
+34 log nautilus-start
+34.1 key w down
+36 log nautilus-2s
+36.1 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t10_nautilus.png
+36.2 key w up
+36.5 chat /ride @s dismount
+37 quit

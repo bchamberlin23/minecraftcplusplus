@@ -1,0 +1,15 @@
+18 chat /gamemode creative
+18.5 chat /time set noon
+19 chat /effect give @s blindness 30
+21 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t5_blind.png
+21.5 chat /effect clear @s
+22 chat /effect give @s darkness 30
+24 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t5_dark1.png
+26 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t5_dark2.png
+27 chat /effect clear @s
+27.5 chat /time set midnight
+29 chat /effect give @s night_vision 30
+31 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t5_nv.png
+31.5 chat /effect clear @s
+32 chat /time set noon
+33 quit

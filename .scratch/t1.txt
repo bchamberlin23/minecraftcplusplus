@@ -1,0 +1,11 @@
+5 log t5
+15 log t15
+25 log t25
+26 chat /time set noon
+28 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t1_base.png
+30 chat /effect give @s blindness 30
+33 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t1_blind.png
+34 chat /effect clear @s
+35 chat /effect give @s darkness 30
+38 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t1_dark.png
+40 quit

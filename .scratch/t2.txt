@@ -1,0 +1,36 @@
+8 chat /time set midnight
+8.5 chat /spreadplayers ~ ~ 0 1 false @s
+11 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t2_night.png
+11.5 chat /effect give @s night_vision 60
+13 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t2_nv.png
+14 chat /effect clear @s
+14.5 chat /effect give @s nausea 60
+23 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t2_nausea.png
+23.5 chat /effect clear @s
+24 chat /time set noon
+24.5 chat /item replace entity @s armor.head with carved_pumpkin
+26 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t2_pumpkin.png
+26.5 chat /item replace entity @s armor.head with air
+27 chat /setblock ~ ~1 ~ stone
+28.5 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t2_inwall.png
+29 chat /setblock ~ ~1 ~ air
+30 chat /fill ~-3 ~ ~-3 ~3 ~4 ~3 water
+31.5 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t2_water1.png
+40 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t2_water2.png
+41 chat /fill ~-4 ~-1 ~-4 ~4 ~5 ~4 air
+42 chat /fill ~-3 ~ ~-3 ~3 ~4 ~3 lava
+43.5 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t2_lava.png
+44 chat /fill ~-4 ~-1 ~-4 ~4 ~5 ~4 air
+45 chat /fill ~-4 ~-1 ~-4 ~4 ~-1 ~4 stone
+46 chat /gamemode survival
+46.5 chat /effect give @s fire_resistance 120
+47 chat /setblock ~ ~ ~ fire
+49 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t2_fire.png
+50 chat /setblock ~ ~ ~ air
+50.5 chat /setblock ~ ~ ~ nether_portal
+50.6 chat /setblock ~ ~1 ~ nether_portal
+52.5 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t2_portal.png
+53 chat /setblock ~ ~ ~ air
+53.1 chat /setblock ~ ~1 ~ air
+53.5 chat /gamemode creative
+54 quit

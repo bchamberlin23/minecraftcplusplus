@@ -1,0 +1,21 @@
+18 chat /gamemode creative
+18.5 chat /time set noon
+19 chat /fill ~-1 ~-1 ~-1 ~1 ~2 ~1 stone
+21 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t4_inwall.png
+21.5 chat /fill ~-1 ~-1 ~-1 ~1 ~2 ~1 air
+22 chat /effect give @s blindness 30
+24 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t4_blind.png
+24.5 chat /effect clear @s
+25 chat /effect give @s darkness 30
+27 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t4_dark.png
+27.5 chat /effect clear @s
+28 chat /fill ~-3 ~ ~-3 ~3 ~4 ~3 water
+33 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t4_water.png
+34 chat /fill ~-4 ~-1 ~-4 ~4 ~5 ~4 air
+35 chat /fill ~-3 ~ ~-3 ~3 ~4 ~3 lava
+37 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t4_lava.png
+37.5 chat /fill ~-4 ~-1 ~-4 ~4 ~5 ~4 air
+38 chat /effect give @s nausea 60
+47 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t4_nausea.png
+47.5 chat /effect clear @s
+48 quit

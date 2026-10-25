@@ -1,0 +1,16 @@
+18 chat /gamemode creative
+18.5 chat /time set noon
+19 chat /setblock ~ ~1 ~ stone
+21 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t3_inwall.png
+21.5 chat /setblock ~ ~1 ~ air
+22 chat /fill ~-3 ~ ~-3 ~3 ~4 ~3 water
+24 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t3_water1.png
+33 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t3_water2.png
+34 chat /fill ~-4 ~-1 ~-4 ~4 ~5 ~4 air
+35 chat /time set midnight
+38 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t3_night.png
+38.5 chat /effect give @s night_vision 60
+40 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t3_nv.png
+40.5 chat /effect clear @s
+41 chat /time set noon
+42 quit

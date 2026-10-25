@@ -1,0 +1,14 @@
+17 chat /gamemode creative
+17.2 chat /time set noon
+17.4 look 0 15
+17.5 chat /item replace entity @s hotbar.0 with sea_lantern
+17.6 chat /item replace entity @s hotbar.1 with prismarine
+17.7 chat /item replace entity @s hotbar.2 with magma_block
+17.8 chat /item replace entity @s hotbar.3 with command_block
+17.9 chat /item replace entity @s hotbar.4 with fire_coral
+18 select 0
+18.2 chat /particle minecraft:vibration{destination:{type:"block",pos:[3,114,0]},arrival_in_ticks:120} ~ ~1.2 ~2 0 0 0 0 1
+19 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t7_a.png
+19.6 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t7_b.png
+21.3 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t7_c.png
+22 quit

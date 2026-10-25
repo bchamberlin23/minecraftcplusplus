@@ -1,0 +1,15 @@
+17 chat /gamemode creative
+17.2 chat /time set noon
+17.5 look 0 15
+18 chat /particle minecraft:item{item:"minecraft:diamond"} ~ ~1.5 ~2 0.3 0.3 0.3 0.05 60
+18.3 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t6_item.png
+20 chat /particle minecraft:vibration{destination:{type:"block",pos:[3,114,0]},arrival_in_ticks:80} ~ ~1.5 ~3 0 0 0 0 1
+20.1 chat /particle minecraft:vibration{destination:{type:"block",pos:[-8,116,0]},arrival_in_ticks:80} ~ ~1.5 ~3 0 0 0 0 1
+21 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t6_vib1.png
+22.5 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t6_vib2.png
+25 chat /particle minecraft:dust_color_transition{from_color:[1.0,0.0,0.0],to_color:[0.0,0.0,1.0],scale:2.0} ~ ~1.5 ~3 0.6 0.6 0.6 0 80
+25.2 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t6_dust1.png
+25.8 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t6_dust2.png
+27 chat /particle minecraft:item_slime ~ ~1.5 ~2 0.3 0.3 0.3 0 40
+27.2 shot C:/Users/Admin/Desktop/minecraftCplusplus/.claude/worktrees/agent-a8ca273d18b9f83e0/.scratch/shots/t6_slime.png
+28 quit

@@ -1,0 +1,15 @@
+fov:70
+renderDistance:32
+guiScale:0
+mouseSensitivity:0.5
+shaders:high
+upscaler:dlss
+upscaleQuality:performance
+sharpness:0.35
+frameGeneration:off
+lowLatency:on
+vsync:false
+maxFps:0
+shaderPack:
+bobView:true
+attackIndicator:1
